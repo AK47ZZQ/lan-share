@@ -3,6 +3,8 @@
 > **状态：已全部交付（2026-08-29）。** P0-P3 全部完成；"每日自动备份"按用户决策不做，
 > 托盘小工具暂缓。本文保留作为设计决策记录；日常使用看 README，开发看 docs/DEVELOPMENT.md，
 > 接口看 docs/API.md，安全模型看 docs/SECURITY.md，历史看 CHANGELOG.md。
+> 修订（2026-08-29 晚）：`:8767` 的 basic_auth 第一道门已按用户要求移除（浏览器弹窗体验差），
+> 公网与局域网认证完全统一到应用层登录页，见 CHANGELOG。
 
 > 前提：单管理员自用；公网（樱花FRP）入口与局域网功能完全对等。
 > 现有代码：`server.py`（FastAPI）+ `Caddyfile`（Caddy v2）+ `static/`（原生 HTML/JS）。

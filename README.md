@@ -30,7 +30,7 @@ SHARE_ROOT=D:/test-data python -m uvicorn server:app --port 8768
 | 入口 | 地址 | 认证 |
 |------|------|------|
 | 局域网 | `https://192.168.1.100:8765` | 应用层登录 |
-| 公网（樱花FRP） | `https://your-frp-domain.com:xxxxx`（→ Caddy :8767） | basic_auth 第一道门 + 应用层登录 |
+| 公网（樱花FRP） | `https://your-frp-domain.com:xxxxx`（→ Caddy :8767） | 应用层登录（与局域网一致） |
 | WebDAV | `https://192.168.1.100:8765/dav/` | Basic（管理员账号） |
 
 > 自签证书：浏览器首次访问点"继续访问"即可；首次进入会引导创建管理员账号。
@@ -62,8 +62,8 @@ SHARE_ROOT=D:/test-data python -m uvicorn server:app --port 8768
 ## 架构
 
 ```
-外网设备 ──樱花FRP──▶ Caddy :8767 (HTTPS, basic_auth第一道门*, 剥离入站XFF)
-内网设备 ──局域网──▶ Caddy :8765 (HTTPS)
+外网设备 ──樱花FRP──▶ Caddy :8767 (HTTPS, 剥离入站XFF)
+内网设备 ──局域网──▶ Caddy :8765 (HTTPS)   ← 两端口配置完全一致，认证统一在应用层
                         │
                         ├─ /files/*  → forward_auth(/authcheck) 后 file_server 静态直连
                         │               （大文件下载不经过 Python）
@@ -75,8 +75,6 @@ SHARE_ROOT=D:/test-data python -m uvicorn server:app --port 8768
                         └─ /static/*  → 前端（原生 HTML/CSS/JS，CSP: script-src 'self'）
 ```
 
-\* basic_auth 豁免 `/s/*` 与 `/api/share/*`，保证分享收件人可用。
-
 **技术栈**：Caddy v2.11（原生无插件）、FastAPI + uvicorn、SQLite（标准库）、
 原生 HTML/CSS/JS（事件委托，零构建）、Pillow、qrcode、ffmpeg（可选，视频缩略图）。
 密码哈希用标准库 scrypt——**除既有依赖外不引入任何新 pip 包**。
@@ -86,7 +84,7 @@ SHARE_ROOT=D:/test-data python -m uvicorn server:app --port 8768
 ```
 lan-share/                  ← 本目录（C:\lan-share 是指向这里的 junction）
 ├── server.py               FastAPI 后端（全部后端逻辑）
-├── Caddyfile               反代/TLS/forward_auth/basic_auth
+├── Caddyfile               反代/TLS/forward_auth（8765 局域网与 8767 公网配置一致）
 ├── static/                 前端（index/login/up/share 四页 + 同名 .js + favicon.svg）
 ├── docs/                   API / SECURITY / DEVELOPMENT 文档
 ├── backup/v1/              v1 备份与回滚说明

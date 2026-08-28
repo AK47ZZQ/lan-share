@@ -1,5 +1,13 @@
 # 更新日志
 
+## 2026-08-29（晚）— 移除公网 basic_auth
+
+- `:8767` 公网入口不再弹浏览器 basic_auth 登录框，与 `:8765` 一样直接进 Web UI 登录页
+- 两个端口配置合并为同一 Caddy 站点块（`certs/san.cnf` 不变，需重启 lan-share-caddy 生效）
+- 未登录行为：页面 307 → `/login`，`/api/*` 401，`/files/*` 由 forward_auth 拦截 401；
+  扫描器/爆破由应用层登录防爆破（按账号 5 次锁 15 分钟）+ 限速（登录 10/分）抵御
+- 文档同步：README 架构图/入口表、SECURITY.md 网络层、PLAN.md 加修订注记
+
 ## 2026-08-29 — UI/UX 精修
 
 - 新增 SVG favicon 与 theme-color，四页统一品牌标识
