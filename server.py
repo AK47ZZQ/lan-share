@@ -753,6 +753,54 @@ async def create_directory(request: Request, path: str, _user=Depends(require_us
     return {"ok": True, "path": rel}
 
 
+class MoveBody(BaseModel):
+    sources: list[str]
+    dest_dir: str = ""
+
+
+def _unique_dest(dest: Path) -> Path:
+    """目标重名时自动追加 (2)、(3)…（保留扩展名），不覆盖任何文件。"""
+    if not dest.exists():
+        return dest
+    stem, suffix = dest.stem, dest.suffix
+    for i in range(2, 1000):
+        cand = dest.with_name(f"{stem} ({i}){suffix}")
+        if not cand.exists():
+            return cand
+    raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
+
+
+@app.post("/api/move")
+async def move_items(request: Request, body: MoveBody, _user=Depends(require_user)):
+    """批量移动到目标目录。同盘 rename，硬链接去重与秒传指纹不受影响。"""
+    if not body.sources:
+        raise HTTPException(status_code=400, detail="未选择要移动的文件")
+    dest_dir = safe_path(body.dest_dir)
+    if not dest_dir.is_dir():
+        raise HTTPException(status_code=404, detail="目标目录不存在")
+    results = []
+    for src in body.sources:
+        try:
+            target = safe_path(src)
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="源文件不存在")
+            if target.parent == dest_dir:
+                raise HTTPException(status_code=400, detail="已在目标目录")
+            if target == dest_dir or (target.is_dir() and target in dest_dir.parents):
+                # 只有"目录移进自己的后代"会成环；移到祖先目录是合法操作
+                raise HTTPException(status_code=400, detail="不能移动到自身的子目录")
+            final = _unique_dest(dest_dir / target.name)
+            os.replace(target, final)
+            final_rel = str(final.relative_to(SHARE_ROOT)).replace("\\", "/")
+            results.append({"src": src, "ok": True, "dest": final_rel})
+            audit("move", src, f"→ {final_rel}", client_ip(request))
+        except HTTPException as e:
+            results.append({"src": src, "ok": False, "error": e.detail})
+        except OSError as e:
+            results.append({"src": src, "ok": False, "error": str(e)})
+    return {"ok": True, "results": results}
+
+
 def _move_to_trash(target: Path, orig_path: str):
     """把文件/目录移入回收站并登记（界面删除与 WebDAV 删除/覆盖共用）。"""
     trash_root = SHARE_ROOT / ".trash"

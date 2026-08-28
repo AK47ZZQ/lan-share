@@ -2,6 +2,8 @@
 let currentPath='',currentFiles=[],selectedPaths=new Set(),ctxMenu=null,selectMode=false;
 let sortKey='name',sortAsc=true,activeTab='files',activeFilter='all',searchQuery='';
 let uploadSessions={};  // 分块上传会话：key = dir/name/size → session id（页面内断点续传）
+let cutPaths=new Set(),moveCtx=null,dragItems=null,internalDrag=false;  // 剪切/移动/拖拽状态
+const canDrag=matchMedia('(hover: hover) and (pointer: fine)').matches;  // 仅桌面启用拖拽
 
 // ─── SVG 图标 ───
 const SVG={
@@ -16,6 +18,7 @@ const SVG={
   inbox:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
   image:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>',
   clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
+  move:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z"/><path d="M12 11v6"/><path d="m9 14 3 3 3-3"/></svg>',
 };
 
 // ─── API ───
@@ -228,8 +231,10 @@ function renderFiles(stagger){
     const dataAttrs=`data-act="${act}" data-p="${esc(f.path)}" data-n="${esc(f.name)}" data-d="${f.is_dir?1:0}"`;
     const longPress=activeTab==='files'&&!selectMode?` data-press="1" data-p="${esc(f.path)}" data-d="${f.is_dir?1:0}"`:'';
     const selected=selectedPaths.has(f.path)?' selected':'';
+    const cut=cutPaths.has(f.path)?' cut-item':'';
+    const dragAttr=canDrag&&!selectMode?' draggable="true"':'';
     const delay=stagger?` style="animation-delay:${Math.min(idx*22,240)}ms"`:'';
-    return `<div class="file-card${f.is_dir?' folder':''}${selected}" ${dataAttrs}${longPress}${delay}>
+    return `<div class="file-card${f.is_dir?' folder':''}${selected}${cut}" ${dataAttrs}${longPress}${dragAttr}${delay}>
       <div class="file-check">✓</div>
       ${icon}
       <div class="file-info">
@@ -257,13 +262,13 @@ window.addEventListener('popstate',()=>{if(activeTab==='files')loadDir(decodeURI
 let pressTimer=null;
 function showCtx(x,y,path,isDir){
   removeCtx();
-  const mw=190,mh=isDir?130:230;
+  const mw=190,mh=isDir?175:275;
   if(x+mw>window.innerWidth)x=window.innerWidth-mw-10;
   if(y+mh>window.innerHeight)y=window.innerHeight-mh-10;
   const it=(act,p,extra,icon,label,danger)=>`<div class="ctx-item${danger?' danger':''}" data-act="${act}" data-p="${esc(p)}"${extra}><span class="ci">${icon}</span>${label}</div>`;
   const items=isDir
-    ?it('loadDir',path,'',SVG.open,'打开')+it('showRenameModal',path,'',SVG.rename,'重命名')+'<div class="ctx-sep"></div>'+it('deleteItem',path,' data-d="1"',SVG.trash,'删除',true)
-    :it('downloadFile',path,'',SVG.download,'下载')+it('preview',path,` data-n="${esc(path.split('/').pop())}"`,SVG.eye,'预览')+it('shareFile',path,'',SVG.share,'分享')+it('showRenameModal',path,'',SVG.rename,'重命名')+'<div class="ctx-sep"></div>'+it('deleteItem',path,' data-d="0"',SVG.trash,'删除',true);
+    ?it('loadDir',path,'',SVG.open,'打开')+it('showRenameModal',path,'',SVG.rename,'重命名')+it('moveItem',path,'',SVG.move,'移动到…')+'<div class="ctx-sep"></div>'+it('deleteItem',path,' data-d="1"',SVG.trash,'删除',true)
+    :it('downloadFile',path,'',SVG.download,'下载')+it('preview',path,` data-n="${esc(path.split('/').pop())}"`,SVG.eye,'预览')+it('shareFile',path,'',SVG.share,'分享')+it('showRenameModal',path,'',SVG.rename,'重命名')+it('moveItem',path,'',SVG.move,'移动到…')+'<div class="ctx-sep"></div>'+it('deleteItem',path,' data-d="0"',SVG.trash,'删除',true);
   ctxMenu=document.createElement('div');ctxMenu.className='ctx-menu';ctxMenu.style.left=x+'px';ctxMenu.style.top=y+'px';ctxMenu.innerHTML=items;document.body.appendChild(ctxMenu);
   setTimeout(()=>document.addEventListener('click',removeCtx,{once:true}),10);
 }
@@ -304,6 +309,65 @@ async function batchDownload(){
     document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),200);
   }catch(e){toast(e.message,true)}
 }
+
+// ─── 移动文件 ───
+// A: "移动到…"目录选择器（右键/批量栏入口）；B: 剪切→导航→粘贴；C: 桌面拖拽到文件夹卡片
+function batchMove(){if(!selectedPaths.size)return;showDirPicker([...selectedPaths])}
+function batchCut(){if(!selectedPaths.size)return;cutPaths=new Set(selectedPaths);exitSelectMode();syncPasteBar();toast(`✂️ 已剪切 ${cutPaths.size} 项，导航到目标文件夹后粘贴`)}
+function moveItem(path){showDirPicker([path])}
+function showDirPicker(sources){moveCtx={sources,path:currentPath};renderDirPicker()}
+function renderDirPicker(){
+  const {sources}=moveCtx;
+  api('GET',`/api/files/${moveCtx.path}`).then(r=>r.json()).then(j=>{
+    // 目标候选排除：源自身、源的子目录（防成环）
+    const dirs=j.items.filter(d=>d.is_dir&&!sources.includes(d.path)&&!sources.some(s=>d.path.startsWith(s+'/')));
+    const rows=dirs.map(d=>`<div class="dir-row" data-act="dirNav" data-dp="${esc(d.path)}">${SVG.folder}<span class="dn">${esc(d.name)}</span><span class="dn-arr">›</span></div>`).join('');
+    // 目录导航会重新渲染弹窗：先清掉旧 overlay 防止叠层
+    document.querySelectorAll('.modal-overlay').forEach(o=>o.remove());
+    showModal(`<h3>${SVG.move} 移动 ${sources.length} 项</h3>
+      <div class="dir-crumb">目标：/${esc(moveCtx.path)||'（根目录）'}</div>
+      ${moveCtx.path!==''?`<div class="dir-row" data-act="dirUp">${SVG.open}<span class="dn">.. 上一级</span></div>`:''}
+      <div class="dir-list">${rows||'<div class="dir-empty">此目录下没有文件夹</div>'}</div>
+      <div class="actions"><button class="btn btn-ghost" data-act="newFolderInPicker">＋ 新建文件夹</button><button class="btn btn-primary" data-act="doMoveHere">移到这里</button></div>`);
+  }).catch(e=>{toast(e.message,true);closeModal()});
+}
+function dirNav(el){moveCtx.path=el.dataset.dp;renderDirPicker()}
+function dirUp(){moveCtx.path=moveCtx.path.split('/').slice(0,-1).join('/');renderDirPicker()}
+async function newFolderInPicker(){
+  const name=prompt('新文件夹名称：');
+  if(!name||!name.trim())return;
+  const p=moveCtx.path?moveCtx.path+'/'+name.trim():name.trim();
+  try{await api('POST',`/api/mkdir/${p}`);toast('✅ 文件夹已创建');renderDirPicker()}catch(e){toast(e.message,true)}
+}
+function doMoveHere(){execMove(moveCtx.sources,moveCtx.path)}
+// 过滤掉无意义移动（已在目标目录 / 移到自身内部），返回真正需要移动的
+function filterMovable(srcs,dest){
+  return srcs.filter(s=>s!==dest&&!dest.startsWith(s+'/')&&s.split('/').slice(0,-1).join('/')!==dest);
+}
+async function execMove(sources,dest){
+  const srcs=filterMovable(sources,dest);
+  if(!srcs.length){toast('所选项目已在该文件夹中',true);closeModal();return 0}
+  try{
+    const r=await(await api('POST','/api/move',{sources:srcs,dest_dir:dest})).json();
+    const ok=r.results.filter(x=>x.ok).length,fail=r.results.length-ok;
+    if(ok)toast(`✅ 已移动 ${ok} 项`+(fail?`，${fail} 项失败`:''));
+    else r.results.forEach(x=>toast(x.error,true));
+    closeModal();
+    cutPaths.clear();syncPasteBar();
+    if(selectMode)exitSelectMode();
+    loadDir(currentPath);
+    return ok;
+  }catch(e){toast(e.message,true);return 0}
+}
+function syncPasteBar(){
+  const bar=document.getElementById('paste-bar');
+  if(!bar)return;
+  if(!cutPaths.size){bar.classList.remove('show');return}
+  document.getElementById('paste-info').textContent=`✂️ 已剪切 ${cutPaths.size} 项`;
+  bar.classList.add('show');
+}
+function cancelCut(){cutPaths.clear();syncPasteBar();if(activeTab==='files')renderFiles()}
+function doPaste(){execMove([...cutPaths],currentPath)}
 
 // ─── Preview ───
 function previewFile(path,name){
@@ -401,14 +465,44 @@ function showProgress(name,pct){const w=document.getElementById('progress-wrap')
 function setProgress(pct){document.getElementById('progress-fill').style.width=pct+'%'}
 function hideProgress(){document.getElementById('progress-wrap').classList.remove('show');document.getElementById('progress-fill').style.width='0'}
 
-// Drag & drop
-document.body.addEventListener('dragover',(e)=>{e.preventDefault();document.getElementById('upload-area').classList.add('dragover');document.getElementById('upload-area').style.display='block'});
+// Drag & drop（外部文件上传）；内部拖拽（C：文件卡片拖到文件夹）已在 file-list 上拦截
+document.body.addEventListener('dragover',(e)=>{
+  if(internalDrag)return;
+  e.preventDefault();document.getElementById('upload-area').classList.add('dragover');document.getElementById('upload-area').style.display='block'});
 document.body.addEventListener('dragleave',(e)=>{if(!e.relatedTarget)document.getElementById('upload-area').classList.remove('dragover')});
 document.body.addEventListener('drop',async(e)=>{
+  if(internalDrag){e.preventDefault();return}
   e.preventDefault();document.getElementById('upload-area').classList.remove('dragover');
   for(const f of e.dataTransfer.files)await uploadFile(f);
   loadDir(currentPath);loadDisk();
 });
+
+// C: 桌面拖拽文件到文件夹卡片完成移动（file-list 内部 dragstart 标记 internalDrag）
+document.getElementById('file-list').addEventListener('dragstart',e=>{
+  const card=e.target.closest('.file-card');if(!card)return;
+  internalDrag=true;dragItems=[card.dataset.p];
+  e.dataTransfer.setData('text/plain','lan-share-move');
+  e.dataTransfer.effectAllowed='move';
+});
+document.getElementById('file-list').addEventListener('dragend',()=>{internalDrag=false;dragItems=null;clearDropHint()});
+document.getElementById('file-list').addEventListener('dragover',e=>{
+  if(!dragItems)return;
+  const card=e.target.closest('.file-card.folder');if(!card)return;
+  const dest=card.dataset.p;
+  // 无效目标（拖进自身/自身子目录/所在文件夹）不响应
+  if(dragItems.every(s=>s===dest||dest.startsWith(s+'/')||s.split('/').slice(0,-1).join('/')===dest))return;
+  e.preventDefault();e.dataTransfer.dropEffect='move';
+  if(!card.classList.contains('drop-hint')){clearDropHint();card.classList.add('drop-hint')}
+});
+document.getElementById('file-list').addEventListener('drop',e=>{
+  if(!dragItems)return;
+  const card=e.target.closest('.file-card.folder');if(!card)return;
+  e.preventDefault();e.stopPropagation();
+  const dest=card.dataset.p,srcs=dragItems;
+  dragItems=null;internalDrag=false;clearDropHint();
+  execMove(srcs,dest);
+});
+function clearDropHint(){document.querySelectorAll('.file-card.drop-hint').forEach(el=>el.classList.remove('drop-hint'))}
 
 // ─── Shares ───
 async function showShares(){
@@ -617,6 +711,15 @@ const ACTIONS={
   selectAll:()=>toggleSelectAll(),
   batchDownload:()=>batchDownload(),
   batchDelete:()=>batchDelete(),
+  batchMove:()=>batchMove(),
+  batchCut:()=>batchCut(),
+  moveItem:el=>moveItem(el.dataset.p),
+  dirNav:el=>dirNav(el),
+  dirUp:()=>dirUp(),
+  newFolderInPicker:()=>newFolderInPicker(),
+  doMoveHere:()=>doMoveHere(),
+  doPaste:()=>doPaste(),
+  cancelCut:()=>cancelCut(),
   showMkdirModal:()=>showMkdirModal(),
   doMkdir:()=>doMkdir(),
   logout:()=>logout(),

@@ -147,6 +147,25 @@ a{color:var(--accent);text-decoration:none}
 .batch-bar .btn-ghost{background:var(--surface2);color:var(--text)}
 .batch-bar .btn:active{transform:scale(.95)}
 
+/* ─── 移动文件：剪切高亮 / 拖放提示 / 粘贴条 / 目录选择器 ─── */
+.file-card.cut-item{opacity:.45}
+.file-card.drop-hint{outline:2px dashed var(--accent);outline-offset:-3px;background:rgba(109,156,255,.14)}
+.paste-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:86px;background:rgba(15,20,34,.95);backdrop-filter:blur(20px);border:1px solid rgba(109,156,255,.35);border-radius:14px;padding:8px 10px 8px 16px;display:none;align-items:center;gap:10px;z-index:12;box-shadow:var(--shadow-btn);max-width:calc(100vw - 20px)}
+.paste-bar.show{display:flex}
+.paste-bar span{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.paste-bar .btn{padding:8px 14px;font-size:13px;border-radius:10px;border:none;cursor:pointer;font-weight:600;flex-shrink:0;white-space:nowrap}
+.paste-bar .pb-primary{background:var(--accent-grad);color:#fff}
+.paste-bar .pb-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.dir-crumb{font-size:12px;color:var(--text2);padding:6px 2px;word-break:break-all}
+.dir-list{max-height:50vh;overflow-y:auto;margin:8px 0 4px;border:1px solid var(--border);border-radius:12px}
+.dir-row{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;border-bottom:1px solid var(--border);font-size:14px;transition:background .12s}
+.dir-row:last-child{border-bottom:none}
+.dir-row:hover{background:var(--surface2)}
+.dir-row svg{width:18px;height:18px;color:var(--accent);flex-shrink:0}
+.dir-row .dn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dir-row .dn-arr{color:var(--text2)}
+.dir-empty{padding:18px;text-align:center;color:var(--text2);font-size:13px}
+
 /* Upload area */
 .upload-area{margin:10px 12px;padding:30px 16px;border:2px dashed rgba(255,255,255,.14);border-radius:18px;text-align:center;color:var(--text2);cursor:pointer;transition:all .25s cubic-bezier(.2,.7,.3,1);background:rgba(255,255,255,.02)}
 .upload-area .up-icon{font-size:0;margin-bottom:8px}
@@ -368,8 +387,16 @@ a{color:var(--accent);text-decoration:none}
   <div class="batch-count"><span id="batch-n">0</span> 项</div>
   <button class="btn btn-ghost" id="selall-btn" data-act="selectAll">全选</button>
   <button class="btn btn-ghost" data-act="exitSelectMode">取消</button>
+  <button class="btn btn-ghost" data-act="batchMove" title="移动到…"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z"/><path d="M12 11v6"/><path d="m9 14 3 3 3-3"/></svg></button>
+  <button class="btn btn-ghost" data-act="batchCut" title="剪切"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88"/><path d="M14.47 14.48 20 20"/><path d="M8.12 8.12 12 12"/></svg></button>
   <button class="btn btn-ghost" data-act="batchDownload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg></button>
   <button class="btn btn-danger" data-act="batchDelete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+</div>
+
+<div class="paste-bar" id="paste-bar">
+  <span id="paste-info"></span>
+  <button class="btn pb-primary" data-act="doPaste">粘贴到此处</button>
+  <button class="btn pb-ghost" data-act="cancelCut">取消</button>
 </div>
 
 <div class="toast" id="toast"></div>

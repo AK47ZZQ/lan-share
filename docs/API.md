@@ -34,6 +34,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速） |
 | POST | `/api/upload/finish/{sid}` | 🔑 | 合并 + SHA256/大小校验 → 入库去重；`{path, size, sha256, deduped}` |
 | POST | `/api/mkdir/{path}` | 🔑 | 逐段清洗后创建目录 |
+| POST | `/api/move` | 🔑 | `{sources:[路径], dest_dir}` 批量移动；同盘 rename（硬链接/指纹不受影响）。逐项返回 `{results:[{src, ok, dest\|error}]}`；重名自动 `(2)` 改名，移入自身子目录 400，已在目标目录 400 |
 | POST | `/api/rename` | 🔑 | `{path, new_name}` |
 | DELETE | `/api/files/{path}` | 🔑 | 移入回收站（非物理删除） |
 | GET | `/preview/{path}` | 🔑 | 内联预览，支持 Range（音视频拖动） |
