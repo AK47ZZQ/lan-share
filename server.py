@@ -537,6 +537,36 @@ async def change_password(request: Request, response: Response, body: PasswordBo
     return {"ok": True}
 
 
+class UsernameBody(BaseModel):
+    new_username: str
+    password: str
+
+
+@app.post("/api/auth/username")
+async def change_username(request: Request, body: UsernameBody,
+                          user=Depends(require_user)):
+    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    if not await run_in_threadpool(verify_password, body.password, row["password_hash"]):
+        audit("username_change_fail", row["username"], ip=client_ip(request))
+        raise HTTPException(status_code=403, detail="密码错误")
+    new_name = body.new_username.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    if len(new_name) > 64 or re.search(r"[\s\u0000-\u001f\u007f]", new_name):
+        raise HTTPException(status_code=400,
+                            detail="用户名不能含空白/控制字符，且不超过 64 字符")
+    if new_name == row["username"]:
+        raise HTTPException(status_code=400, detail="新用户名与当前相同")
+    if _db().execute("SELECT 1 FROM users WHERE username=?", (new_name,)).fetchone():
+        raise HTTPException(status_code=409, detail="该用户名已被占用")
+    with _db_lock:
+        _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, row["id"]))
+        _db().commit()
+    # 会话按 user_id 关联，改名不影响登录态；旧用户名的防爆破计数自然失效
+    audit("username_change", row["username"], f"→ {new_name}", client_ip(request))
+    return {"ok": True, "username": new_name}
+
+
 # ─── 文件 API（需登录）─────────────────────────────────────
 
 @app.get("/api/files/{path:path}")

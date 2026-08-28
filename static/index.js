@@ -565,10 +565,28 @@ async function emptyTrash(){
   try{await api('DELETE','/api/trash');toast('已清空');showTrash()}catch(e){toast(e.message,true)}
 }
 
-// ─── Password ───
-function showPasswordModal(){
-  showModal(`<h3>🔑 修改密码</h3><label>原密码</label><input type="password" id="pw-old"><label>新密码（至少 8 位）</label><input type="password" id="pw-new"><div class="actions"><button class="btn btn-ghost" data-act="closeModal">取消</button><button class="btn btn-primary" data-act="doChangePassword">确认修改</button></div>`);
-  document.getElementById('pw-old').focus();
+// ─── Account ───
+function showAccountModal(){
+  showModal(`<h3>🔑 账号设置</h3>
+  <label>用户名</label><input type="text" id="acc-name" maxlength="64" autocomplete="username">
+  <label>当前密码（确认修改用户名）</label><input type="password" id="acc-pw" autocomplete="current-password">
+  <div class="actions"><button class="btn btn-primary" data-act="doChangeUsername">保存用户名</button></div>
+  <hr style="border:none;border-top:1px solid rgba(128,128,128,.25);margin:18px 0">
+  <label>原密码</label><input type="password" id="pw-old" autocomplete="current-password">
+  <label>新密码（至少 8 位）</label><input type="password" id="pw-new" autocomplete="new-password">
+  <div class="actions"><button class="btn btn-ghost" data-act="closeModal">取消</button><button class="btn btn-primary" data-act="doChangePassword">修改密码</button></div>`);
+  api('GET','/api/auth/me').then(r=>r.json()).then(j=>{const el=document.getElementById('acc-name');el.value=j.username||''}).catch(()=>{});
+  document.getElementById('acc-name').focus();
+}
+async function doChangeUsername(){
+  const name=document.getElementById('acc-name').value.trim(), pw=document.getElementById('acc-pw').value;
+  if(!name){toast('用户名不能为空',true);return}
+  if(!pw){toast('请输入当前密码确认',true);return}
+  try{
+    const r=await api('POST','/api/auth/username',{new_username:name,password:pw});
+    const j=await r.json();
+    closeModal();toast('✅ 用户名已改为 '+j.username+'（登录态不变）');
+  }catch(e){toast(e.message,true)}
 }
 async function doChangePassword(){
   const old=document.getElementById('pw-old').value, nw=document.getElementById('pw-new').value;
@@ -607,7 +625,8 @@ const ACTIONS={
   showPhoneQR:()=>showPhoneQR(),
   showDiskDetail:()=>showDiskDetail(),
   toggleSearch:()=>toggleSearch(),
-  showPasswordModal:()=>showPasswordModal(),
+  showAccountModal:()=>showAccountModal(),
+  doChangeUsername:()=>doChangeUsername(),
   doChangePassword:()=>doChangePassword(),
   closeModal:()=>closeModal(),
   loadDir:el=>loadDir(el.dataset.p||''),
