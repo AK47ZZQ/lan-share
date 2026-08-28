@@ -581,7 +581,7 @@ async function showDiskDetail(){
       <div class="disk-legend">
         ${legendHtml}
       </div>
-      <div style="margin-top:16px"><button class="btn btn-ghost" style="width:100%;justify-content:center;display:flex;padding:10px;border-radius:12px" data-act="closeModal">关闭</button></div>`);
+      <div class="actions" style="margin-top:16px"><button class="btn btn-ghost" data-act="closeModal">关闭</button></div>`);
   }catch(e){toast(e.message,true)}
 }
 
