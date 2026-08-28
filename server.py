@@ -1071,17 +1071,41 @@ async def recent_files(limit: int = Query(default=20, le=100), _user=Depends(req
     return files[:limit]
 
 
+def _scan_share_sizes():
+    """网盘内容统计：返回 (去重后的物理占用, 各一级目录/根文件的逻辑大小)。
+    NTFS 硬链接去重的同一份内容按物理只计一次；隐藏（点前缀）路径全部排除。"""
+    seen = set()
+    physical = 0
+    categories = {}
+    for f in SHARE_ROOT.rglob("*"):
+        try:
+            if not f.is_file():
+                continue
+            rel = f.relative_to(SHARE_ROOT)
+            st = f.stat()
+        except OSError:
+            continue
+        if any(p.startswith(".") for p in rel.parts):
+            continue
+        key = (st.st_dev, st.st_ino)
+        if key not in seen:
+            seen.add(key)
+            physical += st.st_size
+        top = rel.parts[0] if len(rel.parts) > 1 else "(根目录文件)"
+        categories[top] = categories.get(top, 0) + st.st_size
+    return physical, categories
+
+
 @app.get("/api/disk")
 async def disk_info(_user=Depends(require_user)):
     usage = shutil.disk_usage(str(SHARE_ROOT))
-    share_size = sum(f.stat().st_size for f in SHARE_ROOT.rglob("*")
-                     if f.is_file() and not any(p.startswith(".") for p in f.relative_to(SHARE_ROOT).parts))
+    share_physical, _cats = _scan_share_sizes()
     return {
         "total": human_size(usage.total),
         "used": human_size(usage.used),
         "free": human_size(usage.free),
         "free_bytes": usage.free,
-        "share_size": human_size(share_size),
+        "share_size": human_size(share_physical),
         "warning": usage.free < 15 * 1024**3,
     }
 
@@ -1089,20 +1113,15 @@ async def disk_info(_user=Depends(require_user)):
 @app.get("/api/disk/detail")
 async def disk_detail(_user=Depends(require_user)):
     usage = shutil.disk_usage(str(SHARE_ROOT))
-    categories = {}
-    for child in sorted(SHARE_ROOT.iterdir()):
-        if child.is_dir() and not child.name.startswith("."):
-            size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
-            categories[child.name] = {"size": size, "size_human": human_size(size)}
-    root_files = sum(f.stat().st_size for f in SHARE_ROOT.iterdir()
-                     if f.is_file() and not f.name.startswith("."))
-    if root_files:
-        categories["(根目录文件)"] = {"size": root_files, "size_human": human_size(root_files)}
+    share_physical, cat_sizes = _scan_share_sizes()
+    categories = {name: {"size": size, "size_human": human_size(size)}
+                  for name, size in cat_sizes.items()}
     return {
         "total": usage.total, "total_human": human_size(usage.total),
         "used": usage.used, "used_human": human_size(usage.used),
         "free": usage.free, "free_human": human_size(usage.free),
         "warning": usage.free < 15 * 1024**3,
+        "share_size": share_physical, "share_size_human": human_size(share_physical),
         "categories": categories,
     }
 

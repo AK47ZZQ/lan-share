@@ -552,24 +552,31 @@ async function revokeShare(token){
 async function showDiskDetail(){
   try{
     const r=await(await api('GET','/api/disk/detail')).json();
-    const cats=r.categories;const total=r.used;
+    const cats=r.categories;
     const colors=['#6d9cff','#34d399','#fb923c','#fb7185','#a78bfa','#fbbf24','#22d3ee','#f472b6'];
     let segmentsHtml='',legendHtml='',i=0;
+    // 网盘内容构成条：各文件夹占「网盘合计」的比例（不是占整个 C 盘）
     const sorted=Object.entries(cats).sort((a,b)=>b[1].size-a[1].size);
     for(const [name,data] of sorted){
-      const pct=total>0?(data.size/total*100):0;
+      const pct=r.share_size>0?(data.size/r.share_size*100):0;
       const c=colors[i%colors.length];i++;
       if(pct>0.5)segmentsHtml+=`<div style="width:${pct}%;background:${c};height:100%;min-width:3px" title="${esc(name)} ${data.size_human}"></div>`;
       legendHtml+=`<div class="disk-legend-item"><div style="width:10px;height:10px;border-radius:3px;background:${c};flex-shrink:0"></div><span style="color:var(--text2);flex:1">${esc(name)}</span><span style="font-weight:600">${data.size_human}</span></div>`;
     }
-    const usedPct=total>0?(r.used/total*100).toFixed(1):'0';
+    // C 盘用量：已用 / 总容量
+    const usedPct=r.total>0?(r.used/r.total*100).toFixed(1):'0';
     showModal(`<h3>💾 磁盘用量</h3>
-      <div style="text-align:center;padding:8px 0 16px">
+      <div style="text-align:center;padding:8px 0 4px">
         <div style="font-size:32px;font-weight:800;letter-spacing:-.5px">${r.free_human}</div>
-        <div style="color:var(--text2);font-size:13px;margin-top:4px">可用 / ${r.total_human} 总计 · 已用 ${usedPct}%</div>
+        <div style="color:var(--text2);font-size:13px;margin-top:4px">可用 / ${r.total_human} 总计 · C 盘已用 ${usedPct}%</div>
       </div>
-      <div style="height:14px;background:var(--surface3);border-radius:7px;overflow:hidden;display:flex;margin-bottom:18px">
-        ${segmentsHtml}
+      <div class="disk-bar-label">C 盘用量（已用 ${r.used_human}）</div>
+      <div style="height:14px;background:var(--surface3);border-radius:7px;overflow:hidden;display:flex;margin-bottom:16px">
+        <div style="width:${usedPct}%;background:var(--accent-grad);height:100%"></div>
+      </div>
+      <div class="disk-bar-label">网盘内容构成 · 合计 ${r.share_size_human}${r.warning?' · ⚠️ 剩余空间不足 15GB':''}</div>
+      <div style="height:14px;background:var(--surface3);border-radius:7px;overflow:hidden;display:flex;margin-bottom:14px">
+        ${segmentsHtml||'<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:11px">空</div>'}
       </div>
       <div class="disk-legend">
         ${legendHtml}
