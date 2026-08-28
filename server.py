@@ -270,7 +270,8 @@ def login_locked_remaining(username: str) -> int:
     """账号连续失败 LOGIN_MAX_FAILS 次后的剩余锁定秒数，0 = 未锁。"""
     now = time.time()
     with _rate_lock:
-        q = _login_fails.get(username, [])
+        # key 与 record_login_fail 一致：小写化，防大小写变体绕过锁定
+        q = _login_fails.get(username.strip().lower(), [])
         while q and q[0] <= now - LOGIN_LOCK_SECONDS:
             q.pop(0)
         if len(q) >= LOGIN_MAX_FAILS:
@@ -280,7 +281,8 @@ def login_locked_remaining(username: str) -> int:
 
 def record_login_fail(username: str):
     with _rate_lock:
-        _login_fails.setdefault(username, []).append(time.time())
+        # key 统一小写：Windows/SQLite 侧用户名大小写变体不能绕过锁定
+        _login_fails.setdefault(username.strip().lower(), []).append(time.time())
 
 
 def client_ip(request: Request) -> str:
@@ -478,7 +480,7 @@ async def login(body: AuthBody, request: Request, response: Response):
         audit("login_fail", body.username, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     with _rate_lock:
-        _login_fails.pop(body.username, None)
+        _login_fails.pop(body.username.strip().lower(), None)
     audit("login", body.username, ip=client_ip(request))
     set_session_cookie(response, request, row["id"])
     return {"ok": True, "username": row["username"]}
@@ -521,7 +523,15 @@ class PasswordBody(BaseModel):
 async def change_password(request: Request, response: Response, body: PasswordBody,
                           user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）
+    remaining = login_locked_remaining(row["username"])
+    if remaining:
+        audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
+        raise HTTPException(status_code=429,
+                            detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await run_in_threadpool(verify_password, body.old_password, row["password_hash"]):
+        record_login_fail(row["username"])
+        audit("password_change_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="新密码至少 8 位")
@@ -546,7 +556,14 @@ class UsernameBody(BaseModel):
 async def change_username(request: Request, body: UsernameBody,
                           user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）
+    remaining = login_locked_remaining(row["username"])
+    if remaining:
+        audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
+        raise HTTPException(status_code=429,
+                            detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await run_in_threadpool(verify_password, body.password, row["password_hash"]):
+        record_login_fail(row["username"])
         audit("username_change_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="密码错误")
     new_name = body.new_username.strip()
@@ -557,7 +574,7 @@ async def change_username(request: Request, body: UsernameBody,
                             detail="用户名不能含空白/控制字符，且不超过 64 字符")
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
-    if _db().execute("SELECT 1 FROM users WHERE username=?", (new_name,)).fetchone():
+    if _db().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE", (new_name,)).fetchone():
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     with _db_lock:
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, row["id"]))
@@ -758,23 +775,13 @@ class MoveBody(BaseModel):
     dest_dir: str = ""
 
 
-def _unique_dest(dest: Path) -> Path:
-    """目标重名时自动追加 (2)、(3)…（保留扩展名），不覆盖任何文件。"""
-    if not dest.exists():
-        return dest
-    stem, suffix = dest.stem, dest.suffix
-    for i in range(2, 1000):
-        cand = dest.with_name(f"{stem} ({i}){suffix}")
-        if not cand.exists():
-            return cand
-    raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
-
-
 @app.post("/api/move")
 async def move_items(request: Request, body: MoveBody, _user=Depends(require_user)):
     """批量移动到目标目录。同盘 rename，硬链接去重与秒传指纹不受影响。"""
     if not body.sources:
         raise HTTPException(status_code=400, detail="未选择要移动的文件")
+    if len(body.sources) > 500:
+        raise HTTPException(status_code=400, detail="单次最多移动 500 项")
     dest_dir = safe_path(body.dest_dir)
     if not dest_dir.is_dir():
         raise HTTPException(status_code=404, detail="目标目录不存在")
@@ -789,9 +796,21 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             if target == dest_dir or (target.is_dir() and target in dest_dir.parents):
                 # 只有"目录移进自己的后代"会成环；移到祖先目录是合法操作
                 raise HTTPException(status_code=400, detail="不能移动到自身的子目录")
-            final = _unique_dest(dest_dir / target.name)
-            os.replace(target, final)
-            final_rel = str(final.relative_to(SHARE_ROOT)).replace("\\", "/")
+            # os.rename 在 Windows 下目标已存在必抛 FileExistsError（原子防覆盖，
+            # 无 _unique_dest 预检 + os.replace 的并发竞态窗口）
+            placed = None
+            final = dest_dir / target.name
+            for i in range(1, 1000):
+                cand = final if i == 1 else final.with_name(f"{final.stem} ({i}){final.suffix}")
+                try:
+                    os.rename(target, cand)
+                    placed = cand
+                    break
+                except FileExistsError:
+                    continue
+            if placed is None:
+                raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
+            final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
             results.append({"src": src, "ok": True, "dest": final_rel})
             audit("move", src, f"→ {final_rel}", client_ip(request))
         except HTTPException as e:
@@ -1097,7 +1116,8 @@ def _scan_share_sizes():
 
 
 @app.get("/api/disk")
-async def disk_info(_user=Depends(require_user)):
+def disk_info(_user=Depends(require_user)):
+    # 同步 def：FastAPI 自动放线程池，rglob 扫描不阻塞事件循环（大目录时尤其重要）
     usage = shutil.disk_usage(str(SHARE_ROOT))
     share_physical, _cats = _scan_share_sizes()
     return {
@@ -1111,7 +1131,7 @@ async def disk_info(_user=Depends(require_user)):
 
 
 @app.get("/api/disk/detail")
-async def disk_detail(_user=Depends(require_user)):
+def disk_detail(_user=Depends(require_user)):
     usage = shutil.disk_usage(str(SHARE_ROOT))
     share_physical, cat_sizes = _scan_share_sizes()
     categories = {name: {"size": size, "size_human": human_size(size)}

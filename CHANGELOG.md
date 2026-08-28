@@ -1,5 +1,21 @@
 # 更新日志
 
+## 2026-08-29（晚）— 全面对抗式审查（第四轮）
+
+覆盖当日全部新增：/api/move、改名/改密、basic_auth 移除、调试账号、前端移动交互。修复：
+
+- 🔴 改密/改用户名的**密码确认失败不计入防爆破**——会话被劫持后可在限速窗口内无限试密码。
+  现在确认失败记入账号锁定（5 次锁 15 分钟），且锁定期内登录也一并 429
+- 🔴 防爆破锁定 key 大小写变体可绕过——`record_login_fail`/`login_locked_remaining` 统一小写化
+- 🟠 `/api/move` 重名改名的预检+`os.replace` 存在并发覆盖窗口——改为 `os.rename`（Windows 下
+  目标存在必抛错）原子防覆盖；`sources` 增加 ≤500 项上限
+- 🟠 改名重名检查 SQLite 默认大小写敏感，"admin"/"Admin" 可共存——`COLLATE NOCASE`
+- 🟡 磁盘统计端点同步 rglob 阻塞事件循环——改 `def` 线程池执行
+- 🟢 已确认无需修：`blobs.sample_path` 在源文件被移动后自愈（登记新源），硬链接关系随 rename 保留
+
+审查确认无恙：`/files/*` forward_auth、CSRF Origin 中间件、XFF 剥离、限速分桶、分享票据一次性、
+zip/缩略图路径校验、前端 `esc()` 转义全覆盖。文档同步：README/SECURITY/API/DEVELOPMENT。
+
 ## 2026-08-29（晚）— 修复磁盘用量显示
 
 - 🐞 磁盘详情弹窗两处计算错误：分类占比误用「整个 C 盘已用」作分母导致条形图全空、

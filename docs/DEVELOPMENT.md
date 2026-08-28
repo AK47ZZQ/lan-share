@@ -20,20 +20,25 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 
 1. **沙箱先行**：所有改动先在 `SHARE_ROOT=测试目录` 的 8768 实例上验证，
    再 `net stop/start` 上线；`test-sandbox/` 目录用完即删，不要提交。
-2. **回归清单**（改后端必跑）：setup→login→上传（直传+分块+秒传）→列表/搜索→分享
-   （密码对/错/锁定）→票据下载→删除→回收站恢复→WebDAV PROPFIND/PUT→401 未认证探测。
-3. **前端改动**用真实浏览器点一遍主要链路（登录、浏览、上传、预览、弹窗），
+2. **回归清单**（改后端必跑）：setup→login→上传（直传+分块+秒传）→列表/搜索→移动（A/B/C 三入口
+   + 重名/成环/同目录边界）→分享（密码对/错/锁定）→票据下载→删除→回收站恢复→改名/改密
+   （含防爆破联动）→WebDAV PROPFIND/PUT→401 未认证探测。
+3. **前端改动**用真实浏览器点一遍主要链路（登录、浏览、上传、预览、弹窗、拖拽），
    注意移动端视口（390×844）。
+4. **调试账号**：接口调试用 `debug` 账号登录（凭据见 `docs/DEBUG-ACCOUNT.md`，不入库），
+   审计日志可与管理员操作区分。
 
 ## 代码结构
 
 ```
 server.py        全部后端。区块顺序：配置 → DB → 密码/会话 → 限速/CSRF中间件 →
-                 文件工具 → 认证API → 文件API → 分块上传 → 回收站 → zip/重命名 →
-                 缩略图 → 搜索/最近/磁盘 → 分享 → 定时清理 → WebDAV → 照片 → 页面路由
-static/index.js  主界面逻辑（状态 + 渲染 + API + ACTIONS 事件分发表）
+                 文件工具 → 认证API（登录/登出/改密/改用户名）→ 文件API → 移动(/api/move) →
+                 分块上传 → 回收站 → zip/重命名 → 缩略图 → 搜索/最近/磁盘 → 分享 →
+                 定时清理 → WebDAV → 照片 → 页面路由
+static/index.js  主界面逻辑（状态 + 渲染 + API + ACTIONS 事件分发表；
+                 文件移动三入口 = 目录选择器 / 剪切粘贴 / 拖拽，均在"移动文件"区块）
 static/*.html    纯结构 + 样式，零内联脚本
-docs/            API.md / SECURITY.md / 本文档
+docs/            API.md / SECURITY.md / DEVELOPMENT.md / GIT.md / DEBUG-ACCOUNT.md(不入库)
 ```
 
 ## 前端约定（CSP 硬约束）
@@ -67,6 +72,10 @@ docs/            API.md / SECURITY.md / 本文档
 | Caddy 原生无插件 | rate_limit / HMAC 签头都是第三方模块，别在 Caddyfile 里用 |
 | NTFSADS | 文件名带冒号会写进备用数据流，`clean_filename` 已拦截，别绕过它 |
 | junction | `Path.resolve()` 会穿透 junction，路径校验用 `absolute()` + 词法边界（safe_path 已处理） |
+| os.replace 覆盖 | `os.replace` 目标存在会**静默覆盖**——移动/重命名类操作用 `os.rename`（Windows 下目标存在必抛 FileExistsError，天然防覆盖竞态），/api/move 已按此实现 |
+| SQLite 大小写 | `UNIQUE` 约束与 `=` 比较默认大小写敏感——用户名类查询用 `COLLATE NOCASE`，防爆破 key 统一小写 |
+| 弹窗叠层 | `showModal` 是追加式——弹窗内导航重渲染前必须先清旧 `.modal-overlay`（目录选择器曾踩坑） |
+| 磁盘扫描阻塞 | rglob 全量扫描是同步 IO——统计类端点用 `def`（线程池）而非 `async def`，避免大目录卡事件循环 |
 
 ## 更新文档的责任
 

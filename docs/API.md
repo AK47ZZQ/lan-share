@@ -20,7 +20,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/logout` | 🔓 | 吊销当前会话 |
 | GET | `/api/auth/me` | 🔑 | 当前用户名 |
 | POST | `/api/auth/password` | 🔑 | `{old_password, new_password}`；改密吊销全部会话并重签当前 |
-| POST | `/api/auth/username` | 🔑 | `{new_username, password}` 改用户名，需当前密码确认；登录态不变；空白/控制字符/超 64 字符 400，同名 400，密码错误 403 |
+| POST | `/api/auth/username` | 🔑 | `{new_username, password}` 改用户名，需当前密码确认（失败计入防爆破锁定，锁定期 429）；登录态不变；空白/控制字符/超 64 字符 400，同名（不分大小写）400，密码错误 403 |
 | GET | `/authcheck` | 🔓 | Caddy forward_auth 子请求入口；200=会话有效 / 401 |
 
 ## 文件
@@ -34,14 +34,14 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速） |
 | POST | `/api/upload/finish/{sid}` | 🔑 | 合并 + SHA256/大小校验 → 入库去重；`{path, size, sha256, deduped}` |
 | POST | `/api/mkdir/{path}` | 🔑 | 逐段清洗后创建目录 |
-| POST | `/api/move` | 🔑 | `{sources:[路径], dest_dir}` 批量移动；同盘 rename（硬链接/指纹不受影响）。逐项返回 `{results:[{src, ok, dest\|error}]}`；重名自动 `(2)` 改名，移入自身子目录 400，已在目标目录 400 |
+| POST | `/api/move` | 🔑 | `{sources:[路径], dest_dir}` 批量移动（≤500 项）；同盘 rename（硬链接/指纹不受影响）。逐项返回 `{results:[{src, ok, dest\|error}]}`；重名原子改名 `(2)`/`(3)`（`os.rename` 目标存在必抛错，无覆盖窗口），移入自身子目录 400，已在目标目录 400 |
 | POST | `/api/rename` | 🔑 | `{path, new_name}` |
 | DELETE | `/api/files/{path}` | 🔑 | 移入回收站（非物理删除） |
 | GET | `/preview/{path}` | 🔑 | 内联预览，支持 Range（音视频拖动） |
 | GET | `/thumb/{path}` | 🔑 | 图片/视频缩略图 JPEG（缓存于 `.thumbs/`） |
 | GET | `/api/search?q=` | 🔑 | 文件名搜索，最多 50 条 |
 | GET | `/api/recent?limit=` | 🔑 | 最近修改（≤100） |
-| GET | `/api/disk` · `/api/disk/detail` | 🔑 | 磁盘用量 / 分类占用 |
+| GET | `/api/disk` · `/api/disk/detail` | 🔑 | C 盘用量 + 网盘统计（`share_size` 按文件索引去重，硬链接只计一次；detail 附各一级目录逻辑大小 `categories`） |
 | GET | `/api/photos?limit=&offset=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,thumb}]}`（EXIF 日期倒序） |
 
 ## 回收站
