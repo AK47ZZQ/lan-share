@@ -19,6 +19,7 @@ const SVG={
   image:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>',
   clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>',
   move:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2Z"/><path d="M12 11v6"/><path d="m9 14 3 3 3-3"/></svg>',
+  dots:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
 };
 
 // ─── API ───
@@ -234,6 +235,10 @@ function renderFiles(stagger){
     const cut=cutPaths.has(f.path)?' cut-item':'';
     const dragAttr=canDrag&&!selectMode?' draggable="true"':'';
     const delay=stagger?` style="animation-delay:${Math.min(idx*22,240)}ms"`:'';
+    // 文件页右侧：操作菜单按钮（点击/桌面右键等效触屏长按）；其他页保持箭头
+    const arrow=activeTab==='files'&&!selectMode
+      ?`<div class="file-arrow file-menu-btn" data-p="${esc(f.path)}" data-d="${f.is_dir?1:0}" title="操作菜单">${SVG.dots}</div>`
+      :`<div class="file-arrow">›</div>`;
     return `<div class="file-card${f.is_dir?' folder':''}${selected}${cut}" ${dataAttrs}${longPress}${dragAttr}${delay}>
       <div class="file-check">✓</div>
       ${icon}
@@ -245,7 +250,7 @@ function renderFiles(stagger){
           ${canPreview&&!selectMode?'<span class="tag" style="color:var(--accent)">预览</span>':''}
         </div>
       </div>
-      <div class="file-arrow">${f.is_dir?'›':'›'}</div>
+      ${arrow}
     </div>`;
   }).join('');
   if(stagger){el.classList.add('fresh');setTimeout(()=>el.classList.remove('fresh'),650)}
@@ -503,6 +508,20 @@ document.getElementById('file-list').addEventListener('drop',e=>{
   execMove(srcs,dest);
 });
 function clearDropHint(){document.querySelectorAll('.file-card.drop-hint').forEach(el=>el.classList.remove('drop-hint'))}
+
+// ─── 文件右侧 ⋯ 菜单按钮 + 桌面右键 ───
+// 点击等效触屏长按：菜单贴按钮下缘、右对齐；stopPropagation 防止同时触发卡片默认动作
+document.getElementById('file-list').addEventListener('click',e=>{
+  const btn=e.target.closest('.file-menu-btn');if(!btn)return;
+  e.stopPropagation();e.preventDefault();
+  const r=btn.getBoundingClientRect();
+  showCtx(r.right-180,r.bottom+6,btn.dataset.p,btn.dataset.d==='1');
+});
+document.getElementById('file-list').addEventListener('contextmenu',e=>{
+  const card=e.target.closest('.file-card');if(!card||selectMode||!card.dataset.p)return;
+  e.preventDefault();
+  showCtx(e.clientX,e.clientY,card.dataset.p,card.dataset.d==='1');
+});
 
 // ─── Shares ───
 async function showShares(){

@@ -115,6 +115,11 @@ a{color:var(--accent);text-decoration:none}
 .file-card.folder .file-meta .tag{background:var(--folder-bg);color:var(--accent)}
 .file-arrow{color:var(--text2);font-size:15px;flex-shrink:0;opacity:.4;transition:all .18s}
 .file-card:hover .file-arrow{opacity:.8;transform:translateX(2px);color:var(--accent)}
+.file-menu-btn{width:38px;height:38px;margin-right:-8px;display:flex;align-items:center;justify-content:center;border-radius:10px;cursor:pointer;opacity:.5;color:var(--text)}
+.file-card:hover .file-menu-btn{opacity:1;transform:none;background:var(--surface2);color:var(--accent)}
+.file-card.folder .file-menu-btn{opacity:.7;color:var(--accent)}
+.file-menu-btn svg{width:20px;height:20px}
+@media(hover:none){.file-menu-btn{width:44px;height:44px;margin-right:-10px}}
 .file-card.folder .file-arrow{opacity:.7;color:var(--accent)}
 .file-check{width:22px;height:22px;border-radius:7px;border:2px solid var(--border-strong);display:none;align-items:center;justify-content:center;flex-shrink:0;font-size:12px;color:#fff;transition:all .15s}
 .selecting .file-check{display:flex}
