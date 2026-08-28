@@ -10,6 +10,7 @@
 ├── 安全模型 .......... docs/SECURITY.md
 ├── 开发指南 .......... docs/DEVELOPMENT.md
 ├── 版本历史 .......... CHANGELOG.md
+├── Git 工作流 ........ docs/GIT.md
 └── 演进规划 .......... PLAN.md
 ```
 
