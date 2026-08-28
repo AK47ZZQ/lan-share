@@ -1,5 +1,8 @@
-# LAN Share → 个人网盘 演进规划
+# LAN Share → 个人网盘 演进规划（v2，已交付）
 
+> **本文为 v2 规划的存档。** 当前进行中的规划是 v3 家庭团队版（PostgreSQL +
+> Vue 3 + 多用户），见 `PLAN-v3.md` 与 `docs/DESIGN-v3/`。
+>
 > **状态：已全部交付（2026-08-29）。** P0-P3 全部完成；"每日自动备份"按用户决策不做，
 > 托盘小工具暂缓。本文保留作为设计决策记录；日常使用看 README，开发看 docs/DEVELOPMENT.md，
 > 接口看 docs/API.md，安全模型看 docs/SECURITY.md，历史看 CHANGELOG.md。
