@@ -203,3 +203,30 @@ async def generic_qr(text: str = Query(..., min_length=1, max_length=512),
     buf = io.BytesIO()
     img.save(buf)
     return Response(content=buf.getvalue(), media_type="image/svg+xml")
+
+
+@app.get("/healthz")
+def healthz():
+    """免认证健康探针（M5）：进程存活 + DB 连通 + 数据目录可写 + 磁盘水位。"""
+    import shutil as _shutil
+    checks = {"db": False, "data_dir": False}
+    try:
+        _db().execute("SELECT 1").fetchone()
+        checks["db"] = True
+    except Exception:
+        pass
+    try:
+        probe = SHARE_ROOT / ".healthz-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        checks["data_dir"] = True
+    except Exception:
+        pass
+    du = _shutil.disk_usage(str(SHARE_ROOT))
+    return {
+        "status": "ok" if all(checks.values()) else "degraded",
+        **checks,
+        "disk_free_gb": round(du.free / 2**30, 1),
+        "disk_total_gb": round(du.total / 2**30, 1),
+        "disk_used_pct": round(du.used / du.total * 100, 1),
+    }
