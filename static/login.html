@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>LAN Share — 登录</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<meta name="theme-color" content="#070b14">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#070b14;--surface:#141a28;--surface2:#1b2234;--border:rgba(255,255,255,.08);--text:#e9ecf4;--text2:#8189a0;--accent:#6d9cff;--accent2:#8a6cff;--accent-grad:linear-gradient(135deg,#6d9cff,#8a6cff);--red:#fb7185}
+body{
+  font-family:-apple-system,'SF Pro Text','Segoe UI',system-ui,sans-serif;color:var(--text);min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:radial-gradient(900px 600px at 75% -10%, rgba(109,156,255,.12), transparent 60%),radial-gradient(700px 500px at 0% 110%, rgba(138,108,255,.1), transparent 55%),var(--bg);
+}
+.card{background:linear-gradient(180deg,rgba(255,255,255,.03),transparent),var(--surface);border-radius:24px;padding:38px 30px;width:100%;max-width:370px;border:1px solid var(--border);box-shadow:0 24px 70px rgba(0,0,0,.5);animation:cardIn .45s cubic-bezier(.2,.7,.3,1) both}
+@keyframes cardIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.logo{width:64px;height:64px;margin:0 auto 14px;display:block;filter:drop-shadow(0 6px 20px rgba(109,156,255,.45));animation:float 4s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+h2{text-align:center;font-size:18px;font-weight:700;margin-bottom:4px;letter-spacing:-.3px}
+.sub{text-align:center;font-size:12px;color:var(--text2);margin-bottom:24px}
+.field{margin-bottom:15px}
+.field label{display:block;font-size:12px;color:var(--text2);margin-bottom:6px}
+.field input{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:16px;outline:none;transition:border .18s,box-shadow .18s}
+.field input:focus{border-color:rgba(109,156,255,.5);box-shadow:0 0 0 3px rgba(109,156,255,.16)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:13px;border:none;font-size:15px;font-weight:700;cursor:pointer;background:var(--accent-grad);color:#fff;width:100%;transition:all .18s;margin-top:6px;box-shadow:0 4px 16px rgba(109,156,255,.32)}
+.btn:hover{filter:brightness(1.1)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none;filter:none}
+.error{color:var(--red);font-size:13px;margin-top:13px;text-align:center;min-height:18px}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+</style>
+</head>
+<body>
+<div class="card">
+  <svg class="logo" viewBox="0 0 64 64"><defs><linearGradient id="lg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#6d9cff"/><stop offset="1" stop-color="#8a6cff"/></linearGradient></defs><rect x="2" y="2" width="60" height="60" rx="16" fill="url(#lg)"/><path d="M14 22a4 4 0 0 1 4-4h8l4 5h16a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H18a4 4 0 0 1-4-4V22z" fill="rgba(255,255,255,.92)"/><path d="M14 28h36v2H14z" fill="rgba(109,156,255,.35)"/></svg>
+  <h2 id="title">LAN Share</h2>
+  <div class="sub" id="sub">请登录以继续</div>
+  <div class="field" id="user-field">
+    <label>用户名</label>
+    <input type="text" id="username" autocomplete="username">
+  </div>
+  <div class="field">
+    <label id="pwd-label">密码</label>
+    <input type="password" id="password" autocomplete="current-password">
+  </div>
+  <button class="btn" id="btn">登 录</button>
+  <div class="error" id="error"></div>
+</div>
+
+<script src="/static/login.js"></script>
+</body>
+</html>

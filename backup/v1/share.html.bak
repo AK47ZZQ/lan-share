@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>分享链接</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--surface:#141821;--surface2:#1c2130;--border:#2a2f42;--text:#e8eaf0;--text2:#7a7f96;--accent:#5b8def;--green:#4ade80;--red:#f87171}
+body{font-family:-apple-system,'SF Pro Text','Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:var(--surface);border-radius:20px;padding:32px 24px;width:100%;max-width:380px;text-align:center;border:1px solid var(--border)}
+.card .icon{font-size:56px;margin-bottom:14px}
+.card h2{font-size:17px;margin-bottom:6px;word-break:break-all;font-weight:600}
+.card .meta{font-size:12px;color:var(--text2);margin-bottom:18px}
+.card .pwd-input{width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:15px;margin-bottom:14px;text-align:center;outline:none}
+.card .pwd-input:focus{border-color:var(--accent)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:12px;border:none;font-size:15px;font-weight:600;cursor:pointer;background:var(--accent);color:#fff;width:100%;transition:all .15s}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.error{color:var(--red);font-size:13px;margin-top:10px}
+.progress{margin-top:14px;display:none}
+.progress-text{font-size:12px;color:var(--text2);margin-bottom:6px}
+.progress-bar{height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
+.progress-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .3s;width:0}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon" id="icon">📦</div>
+  <h2 id="filename">加载中...</h2>
+  <div class="meta" id="meta"></div>
+  <div id="pwd-section" style="display:none">
+    <input class="pwd-input" type="password" id="pwd" placeholder="请输入提取码" onkeydown="if(event.key==='Enter')download()">
+  </div>
+  <button class="btn" id="dl-btn" onclick="download()" disabled>⬇️ 下载</button>
+  <div class="progress" id="progress">
+    <div class="progress-text" id="progress-text">准备下载...</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+  <div class="error" id="error" style="display:none"></div>
+</div>
+
+<script>
+const token = window.location.pathname.split('/s/')[1];
+let fileName = '文件';
+let needsPassword = false;
+
+function getExt(name) {
+  const map = {'.apk':'📱','.pdf':'📄','.mp4':'🎬','.mkv':'🎬','.zip':'📦','.rar':'📦','.7z':'📦','.jpg':'🖼️','.jpeg':'🖼️','.png':'🖼️','.gif':'🖼️','.webp':'🖼️','.mp3':'🎵','.wav':'🎵','.txt':'📝','.md':'📝'};
+  return map[(name.split('.').pop()||'').toLowerCase()] || '📦';
+}
+
+function extractFilename(headers) {
+  const cd = headers.get('content-disposition');
+  if (!cd) return '文件';
+  let m = cd.match(/filename\*=(?:UTF-8'')?([^;]+)/i);
+  if (m) return decodeURIComponent(m[1].replace(/["']/g, ''));
+  m = cd.match(/filename="?([^";]+)"?/i);
+  if (m) return decodeURIComponent(m[1].trim());
+  return '文件';
+}
+
+async function load() {
+  try {
+    // Use HEAD to check share without downloading the file
+    const res = await fetch(`/api/share/${token}`, { method: 'HEAD' });
+    if (res.status === 401) {
+      needsPassword = true;
+      document.getElementById('pwd-section').style.display = 'block';
+      document.getElementById('meta').textContent = '此文件需要提取码';
+      document.getElementById('dl-btn').disabled = false;
+      document.getElementById('pwd').focus();
+    } else if (res.ok) {
+      fileName = extractFilename(res.headers);
+      document.getElementById('filename').textContent = fileName;
+      document.getElementById('icon').textContent = getExt(fileName);
+      const size = res.headers.get('content-length');
+      if (size) {
+        const mb = (parseInt(size) / 1048576).toFixed(1);
+        document.getElementById('meta').textContent = `${mb} MB`;
+      }
+      document.getElementById('dl-btn').disabled = false;
+    } else if (res.status === 410) {
+      showError('链接已过期');
+    } else {
+      showError('链接无效或已过期');
+    }
+  } catch {
+    showError('网络错误，请检查连接');
+  }
+}
+
+function showError(msg) {
+  document.getElementById('error').textContent = msg;
+  document.getElementById('error').style.display = 'block';
+  document.getElementById('dl-btn').disabled = true;
+}
+
+async function download() {
+  const pwd = document.getElementById('pwd')?.value || '';
+  if (needsPassword && !pwd) {
+    showError('请输入提取码');
+    return;
+  }
+
+  const url = `/api/share/${token}${pwd ? '?password=' + encodeURIComponent(pwd) : ''}`;
+
+  // 方案：直接用 <a> 标签下载，不读进内存
+  // 对于有密码的：先验证密码，再用隐藏 iframe 触发下载
+  if (pwd) {
+    try {
+      const checkRes = await fetch(url, { method: 'HEAD' });
+      if (checkRes.status === 401) {
+        showError('提取码错误');
+        return;
+      }
+      if (!checkRes.ok) {
+        showError('下载失败');
+        return;
+      }
+    } catch {
+      showError('网络错误');
+      return;
+    }
+  }
+
+  // 直接触发下载 — 不经过 blob，大文件也不会崩
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 200);
+}
+
+load();
+</script>
+</body>
+</html>

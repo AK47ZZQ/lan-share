@@ -1,0 +1,74 @@
+# 开发指南
+
+## 环境与运行
+
+- Python 3.11 + FastAPI/uvicorn/aiofiles/Pillow/qrcode（既有 venv，见 `install-service.bat` 中的 PYTHON 路径）
+- Caddy v2.11 原生二进制（`caddy.exe`，**不要**换成需要插件的构建）
+- ffmpeg（可选）：仅视频缩略图用，缺失时视频缩略图返回 404，不影响其它功能
+
+```bash
+# 开发实例（不碰线上服务）
+SHARE_ROOT=C:/somewhere/sandbox python -m uvicorn server:app --host 127.0.0.1 --port 8768
+
+# 线上（注意 C:\lan-share 是本项目目录的 junction，改这里就是改线上）
+net stop lan-share-api && net start lan-share-api     # server.py 变更
+net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
+# static/* 变更无需重启，刷新即生效
+```
+
+## 部署/测试约定
+
+1. **沙箱先行**：所有改动先在 `SHARE_ROOT=测试目录` 的 8768 实例上验证，
+   再 `net stop/start` 上线；`test-sandbox/` 目录用完即删，不要提交。
+2. **回归清单**（改后端必跑）：setup→login→上传（直传+分块+秒传）→列表/搜索→分享
+   （密码对/错/锁定）→票据下载→删除→回收站恢复→WebDAV PROPFIND/PUT→401 未认证探测。
+3. **前端改动**用真实浏览器点一遍主要链路（登录、浏览、上传、预览、弹窗），
+   注意移动端视口（390×844）。
+
+## 代码结构
+
+```
+server.py        全部后端。区块顺序：配置 → DB → 密码/会话 → 限速/CSRF中间件 →
+                 文件工具 → 认证API → 文件API → 分块上传 → 回收站 → zip/重命名 →
+                 缩略图 → 搜索/最近/磁盘 → 分享 → 定时清理 → WebDAV → 照片 → 页面路由
+static/index.js  主界面逻辑（状态 + 渲染 + API + ACTIONS 事件分发表）
+static/*.html    纯结构 + 样式，零内联脚本
+docs/            API.md / SECURITY.md / 本文档
+```
+
+## 前端约定（CSP 硬约束）
+
+- **禁止**任何内联事件处理器（`onclick=` 等）与内联 `<script>`——CSP `script-src 'self'` 会拦截。
+- 交互统一走 **`data-act` 事件委托**：元素加 `data-act="动作名"` + `data-*` 参数，
+  在 `index.js` 的 `ACTIONS` 表注册处理函数。动态生成的 HTML 同样如此。
+- 动态值入属性用 `esc()`；**不再需要** escJs（旧的 JS 字符串拼接模式已移除）。
+- 图片加载失败用 document 捕获阶段的 `error` 委托处理（error 事件不冒泡）。
+- 新增浮层注意 z-index 层级：列表 < 预览(110) < 弹窗(120) < Toast(200)。
+- 按钮/容器内的 `<svg>` 必须显式定宽高（有 `.btn svg` 兜底，但自定义容器要自己加）。
+
+## 后端约定
+
+- 新路由默认挂 `Depends(require_user)`；设计为公开的必须加限速与输入校验（见 docs/SECURITY.md 检查清单）。
+- 一切用户提供的路径走 `safe_path()`，文件名走 `clean_filename()`。
+- DB 写操作放 `with _db_lock:`；读用线程本地的 `_db()` 连接直接查。
+- 可-dispatch 的耗时 IO 用 `async def` + aiofiles；CPU/阻塞型（缩略图、zip）用 `def` 同步端点跑线程池；
+  scrypt 这类密码学操作用 `run_in_threadpool`。
+- 关键操作 `audit(...)`，action 命名见 `audit_log` 现有值。
+- 新增表/列：改 `init_db()` 的 executescript（CREATE TABLE IF NOT EXISTS，服务重启自动迁移）。
+
+## 已知陷阱（踩过的坑）
+
+| 坑 | 说明 |
+|----|------|
+| FastAPI 路由顺序 | `POST /api/upload/{path:path}` 通配会吞掉 `/api/upload/init` 等精确路由——精确路由必须注册在通配**之前** |
+| ffmpeg 输出扩展名 | 输出到 `.tmp` 必须显式 `-f image2`，否则无法推断格式报错 |
+| ffmpeg 短视频抽帧 | `-ss` 越界抽不到帧，先试 `-ss 1` 再退回首帧 |
+| scrypt 内存 | Windows OpenSSL 默认 maxmem 不够，必须显式 `maxmem=` |
+| Caddy 原生无插件 | rate_limit / HMAC 签头都是第三方模块，别在 Caddyfile 里用 |
+| NTFSADS | 文件名带冒号会写进备用数据流，`clean_filename` 已拦截，别绕过它 |
+| junction | `Path.resolve()` 会穿透 junction，路径校验用 `absolute()` + 词法边界（safe_path 已处理） |
+
+## 更新文档的责任
+
+改了 API、安全行为、前端交互约定或部署方式，**同一次提交里**更新
+`docs/API.md`、`docs/SECURITY.md`、`README.md` 与 `CHANGELOG.md`。文档过期比没有文档更糟。
