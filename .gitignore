@@ -10,6 +10,9 @@ caddy.exe
 # 自签证书可重新生成（方法见 certs/san.cnf 与 docs/DEVELOPMENT.md），私钥严禁入库
 certs/*.pem
 
+# ---- 调试凭据（含明文密码，只留本机） ----
+docs/DEBUG-ACCOUNT.md
+
 # ---- 系统杂项 ----
 Thumbs.db
 desktop.ini

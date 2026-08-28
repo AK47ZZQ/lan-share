@@ -1,5 +1,10 @@
 # 更新日志
 
+## 2026-08-29（晚）— 调试账号
+
+- 新建 `debug` 调试账号（权限与管理员一致，供 AI Agent 调试接口用），审计记 `debug_account_created`
+- 凭据放 `docs/DEBUG-ACCOUNT.md`，该文件已加入 .gitignore 不入库；admin 账号密码未变更
+
 ## 2026-08-29（晚）— 移除公网 basic_auth + 账号设置
 
 - 新增修改用户名：`POST /api/auth/username`（需当前密码确认）；头部 🔑 图标改为"账号设置"弹窗，
