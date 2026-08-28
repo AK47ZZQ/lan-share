@@ -55,6 +55,10 @@ async def _dav_auth(request: Request):
         raise HTTPException(status_code=401, detail="Locked",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
     row = _db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    if row and not row["is_active"]:
+        audit("login_disabled", username, ip=client_ip(request))
+        raise HTTPException(status_code=401, detail="Unauthorized",
+                            headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
     ok = bool(row) and await run_in_threadpool(verify_password, password, row["password_hash"])
     if not ok:
         record_login_fail(username)

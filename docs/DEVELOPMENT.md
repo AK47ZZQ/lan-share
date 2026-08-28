@@ -13,6 +13,8 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
   认证/防爆破、文件增删改移、分块上传与秒传、回收站、分享全链路、
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
+- v3 新增 `tests/test_multiuser.py`（角色/空间/授权边界，对应 DESIGN-v3/PERMISSIONS.md）。
+- 新前端：`cd web && npm run build`（产物 web/dist 自动挂 /app，无需重启服务）。
 
 ## 环境与运行
 

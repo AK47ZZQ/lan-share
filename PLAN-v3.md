@@ -81,6 +81,9 @@ XFF 剥离、审计日志、分享密码 POST body、文件名 NTFS 清洗、回
 
 ## 4. 里程碑与验收
 
+> **实施状态（2026-08-29 夜）**：M0 ✅、M2 首版 ✅、M3 核心 ✅、M1/M4/M5 部分 ⚠️。
+> 逐项细节与偏差（PG 未装、备份盘缺位、管理面板未做）见 `docs/STATUS-v3.md`。
+
 | 阶段 | 内容 | 出口标准 |
 |------|------|----------|
 | **M0 工程地基**（3–4 周） | `server.py` 拆包（api/services/models/storage/db）；pytest 基线（现有全 API happy path + 权限/路径边界）；本地质量门禁（ruff + mypy + pytest + pip-audit：pre-commit 钩子 + `check.bat` 全量脚本，无 git 远端故不用 GitHub Actions，若日后建远端可平移）；配置外置化（env/.env） | **行为零变化**；门禁全绿；可在沙箱实例回归通过 |

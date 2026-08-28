@@ -272,7 +272,8 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
     results = []
     for src in body.sources:
         try:
-            target = resolve(_user, src, "read")
+            # 移动=从源删除：源也需要写权（不能移走只有读权的共享文件）
+            target = resolve(_user, src, "write")
             _cross_space_guard(_user, target, dest_dir)
             if not target.exists():
                 raise HTTPException(status_code=404, detail="源文件不存在")
@@ -296,6 +297,9 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             if placed is None:
                 raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
             final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
+            if target.is_dir():
+                sync_grants_on_move(
+                    str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), final_rel)
             results.append({"src": src, "ok": True, "dest": final_rel})
             audit("move", src, f"→ {final_rel}", client_ip(request))
         except HTTPException as e:

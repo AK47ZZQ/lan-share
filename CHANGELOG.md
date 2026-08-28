@@ -1,5 +1,21 @@
 # 更新日志
 
+## 2026-08-29（深夜）— v3 家庭团队版首批交付（M0/M1/M2/M3/M5）
+
+单管理员网盘 → 家庭团队网盘的第一夜。状态详情见 docs/STATUS-v3.md。
+
+- **M0**：server.py（1799 行）拆包为 app/ 包（config/db/security/filetools/api/*），
+  server.py 变兼容 shim，NSSM 入口不变；pytest 基线 + 本地门禁 check.bat
+- **M3**：多用户核心——admin/member/guest 三角色、private:/shared: 空间模型、
+  目录授权 grants、邀请制建号、私人空间配额、直传按用户分桶、
+  search/recent/trash/photos 按身份过滤、停用账号即时踢出、跨空间移动拦截
+- **M2**：Vue3 + Vite + TS 新前端首版挂 /app（登录/浏览/上传），旧页灰度并存
+- **M1/M5**：/healthz、backup.bat（SQLite 在线备份 + robocopy 增量）；
+  PG 未装，双引擎准备（迁移集中 _migrate_v3，幂等）
+- **审查**：第一轮修复 3 项——move 源需写权、目录移动同步 grants、
+  WebDAV Basic 查 is_active；残余风险记录于 STATUS-v3.md
+- 测试 43 项全绿（基线 25 + 多用户权限 18）
+
 ## 2026-08-29（晚）— 全面对抗式审查（第四轮）
 
 覆盖当日全部新增：/api/move、改名/改密、basic_auth 移除、调试账号、前端移动交互。修复：
