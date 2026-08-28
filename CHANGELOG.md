@@ -1,5 +1,12 @@
 # 更新日志
 
+## 2026-08-29（晚）— 返回按钮可拖动
+
+- 返回按钮默认位置从左下改为**右下**（right:16px / bottom:96px）
+- 支持拖动：Pointer Events 实现，移动 ≥6px 视为拖动并拦截 click（不误触返回），
+  边缘自动夹紧；位置存 localStorage（`backBtnPos`），刷新后恢复
+- 按钮加 `touch-action:none`（触屏拖动不滚动页面）
+
 ## 2026-08-29（晚）— 调试账号
 
 - 新建 `debug` 调试账号（权限与管理员一致，供 AI Agent 调试接口用），审计记 `debug_account_created`

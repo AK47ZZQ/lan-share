@@ -680,5 +680,43 @@ document.addEventListener('error',e=>{
 // 搜索输入
 document.getElementById('search-input').addEventListener('input',e=>doSearch(e.target.value));
 
+// ─── 返回按钮：可拖动 + 记忆位置 ───
+// 拖动超过 6px 视为移动（拦截 click 委托），否则按原样触发返回；位置存 localStorage
+(function(){
+  const b=document.getElementById('back-btn');
+  let sx,sy,ox,oy,moved=false;
+  try{
+    const p=JSON.parse(localStorage.getItem('backBtnPos')||'null');
+    if(p&&p.left!=null){b.style.left=p.left;b.style.top=p.top;b.style.right='auto';b.style.bottom='auto'}
+  }catch{}
+  b.addEventListener('pointerdown',e=>{
+    if(e.button!==0)return;
+    moved=false;sx=e.clientX;sy=e.clientY;
+    const r=b.getBoundingClientRect();ox=r.left;oy=r.top;
+    b.style.transition='none';
+    try{b.setPointerCapture(e.pointerId)}catch{}
+  });
+  b.addEventListener('pointermove',e=>{
+    if(sx===undefined)return;
+    const dx=e.clientX-sx,dy=e.clientY-sy;
+    if(!moved&&Math.hypot(dx,dy)<6)return;
+    moved=true;
+    const r=b.getBoundingClientRect();
+    const nl=Math.max(4,Math.min(innerWidth-r.width-4,ox+dx));
+    const nt=Math.max(4,Math.min(innerHeight-r.height-4,oy+dy));
+    b.style.left=nl+'px';b.style.top=nt+'px';b.style.right='auto';b.style.bottom='auto';
+  });
+  b.addEventListener('pointerup',()=>{
+    if(sx===undefined)return;
+    if(moved){
+      // 拖动结束：吞掉紧随的 click，避免触发 goBack；并持久化位置
+      b.addEventListener('click',ev=>ev.stopPropagation(),{capture:true,once:true});
+      try{localStorage.setItem('backBtnPos',JSON.stringify({left:b.style.left,top:b.style.top}))}catch{}
+    }
+    sx=undefined;b.style.transition='';
+  });
+  b.addEventListener('pointercancel',()=>{sx=undefined;b.style.transition=''});
+})();
+
 // ─── Init ───
 loadDir('');loadDisk();
