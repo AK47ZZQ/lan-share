@@ -1,5 +1,19 @@
 # 开发指南
 
+## 测试（M0 新增）
+
+```bash
+check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑绿才算改完）
+# 或手动：venv python -m pytest tests/ -q
+```
+
+- `tests/conftest.py` 在导入 `server` 前把 `SHARE_ROOT` 指向临时目录，
+  全套测试不碰真实数据；`client` 夹具恒为匿名态，`auth` 夹具是独立实例的登录态。
+- `tests/test_baseline.py` 是**现有行为的回归网**（拆包/PG/Vue 升级期间不许掉）：
+  认证/防爆破、文件增删改移、分块上传与秒传、回收站、分享全链路、
+  safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
+- 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
+
 ## 环境与运行
 
 - Python 3.11 + FastAPI/uvicorn/aiofiles/Pillow/qrcode（既有 venv，见 `install-service.bat` 中的 PYTHON 路径）
