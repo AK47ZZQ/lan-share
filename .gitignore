@@ -17,3 +17,8 @@ docs/DEBUG-ACCOUNT.md
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# v3 前端工程
+web/node_modules/
+web/dist/
+static-vue/

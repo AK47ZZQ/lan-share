@@ -82,6 +82,12 @@ async def share_page(token: str):
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 
 
+# ─── Vue3 新版前端（M2）：构建产物挂 /app，未构建则跳过 ──
+_vue_dist = PROJECT_ROOT / "web" / "dist"
+if _vue_dist.exists():
+    app.mount("/app", StaticFiles(directory=str(_vue_dist), html=True), name="vue-app")
+
+
 # ─── 入口 ─────────────────────────────────────────────────
 
 init_db()
