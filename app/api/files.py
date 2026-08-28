@@ -23,14 +23,44 @@ from starlette.background import BackgroundTask
 from app.config import (CHUNK_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, UPLOAD_SESSION_TTL,
                         ZIP_TTL, SHARE_ROOT)
 from app.db import _db, _db_lock
-from app.security import audit, client_ip, require_user
-from app.filetools import clean_filename, dir_tree, human_size, safe_path, save_upload
+from app.security import audit, client_ip, require_user, require_admin
+from app.filetools import (_file_dict, clean_filename, dir_tree, human_size, safe_path,
+                           save_upload)
+from app.spaces import enforce_quota, resolve, sync_grants_on_move, visible
 from app.main import app
+
+
+def _session_owner_guard(row, user):
+    """分块上传会话只能由创建者（或 admin）续传/收尾。"""
+    if row["user_id"] and row["user_id"] != user["user_id"] and user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _under_private(path: Path, username: str) -> bool:
+    try:
+        rel = path.relative_to(SHARE_ROOT)
+    except ValueError:
+        return False
+    return (rel.parts and rel.parts[0] == "private"
+            and len(rel.parts) > 1
+            and rel.parts[1].lower() == username.lower())
+
+
+def _cross_space_guard(user, src: Path, dest: Path):
+    """E9：成员不得把文件移入/移出私人空间与共享空间之间（admin 不限）。
+    私人空间内部的移动不受限。"""
+    if user["role"] == "admin":
+        return
+    src_priv = _under_private(src, user["username"])
+    dest_priv = _under_private(dest, user["username"])
+    if src_priv != dest_priv:
+        raise HTTPException(status_code=400,
+                            detail="共享空间与私人空间之间不能移动（可复制后删除）")
 
 @app.get("/api/files/{path:path}")
 @app.get("/api/files")
 async def list_files(path: str = "", _user=Depends(require_user)):
-    target = safe_path(path) if path else SHARE_ROOT
+    target = resolve(_user, path, "read")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Directory not found")
     if target.is_file():
@@ -77,10 +107,11 @@ def _chunk_dir(sid: str) -> Path:
 
 @app.post("/api/upload/init")
 async def upload_init(request: Request, body: UploadInitBody, _user=Depends(require_user)):
-    dest_dir = safe_path(body.dest_dir) if body.dest_dir else SHARE_ROOT
+    dest_dir = resolve(_user, body.dest_dir, "write")
     dest = dest_dir / clean_filename(body.filename)
     if body.size <= 0:
         raise HTTPException(status_code=400, detail="Invalid size")
+    enforce_quota(_user, dest, body.size)
 
     # 秒传：库里有同 sha256 内容（服务端算的，可信），直接硬链接
     if body.sha256:
@@ -104,9 +135,10 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
     _chunk_dir(sid).mkdir(parents=True, exist_ok=True)
     with _db_lock:
         _db().execute(
-            "INSERT INTO upload_sessions(id, dest_dir, filename, total_size, sha256, created_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (sid, body.dest_dir, dest.name, body.size, body.sha256, time.time()))
+            "INSERT INTO upload_sessions(id, dest_dir, filename, total_size, sha256, "
+            "created_at, user_id) VALUES(?,?,?,?,?,?,?)",
+            (sid, body.dest_dir, dest.name, body.size, body.sha256, time.time(),
+             _user["user_id"]))
         _db().commit()
     return {"instant": False, "session": sid, "chunk_size": CHUNK_SIZE, "received": []}
 
@@ -117,6 +149,7 @@ async def upload_state(sid: str, _user=Depends(require_user)):
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
+    _session_owner_guard(row, _user)
     d = _chunk_dir(sid)
     received = sorted(int(p.stem.split("-")[1]) for p in d.glob("part-*")) if d.exists() else []
     return {"session": sid, "chunk_size": CHUNK_SIZE, "received": received}
@@ -128,6 +161,7 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
+    _session_owner_guard(row, _user)
     total = (row["total_size"] + CHUNK_SIZE - 1) // CHUNK_SIZE
     if index < 0 or index >= total:
         raise HTTPException(status_code=400, detail="Chunk index out of range")
@@ -143,6 +177,7 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
+    _session_owner_guard(row, _user)
     d = _chunk_dir(sid)
     total = (row["total_size"] + CHUNK_SIZE - 1) // CHUNK_SIZE
     parts = sorted(d.glob("part-*"))
@@ -150,7 +185,13 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise HTTPException(status_code=400,
                             detail=f"Missing chunks: {len(parts)}/{total}")
 
-    dest_dir = safe_path(row["dest_dir"]) if row["dest_dir"] else SHARE_ROOT
+    owner = _user
+    if row["user_id"] and row["user_id"] != _user["user_id"]:
+        owner = _db().execute("SELECT * FROM users WHERE id=?",
+                              (row["user_id"],)).fetchone()
+        if not owner:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    dest_dir = resolve(owner, row["dest_dir"] or "", "write")
     dest = dest_dir / row["filename"]
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".uploading")
@@ -173,6 +214,7 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
+    enforce_quota(owner, dest, size)
     os.replace(tmp, dest)
     deduped = register_blob(dest, real_sha, size)
     shutil.rmtree(d, ignore_errors=True)
@@ -190,7 +232,8 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
 async def upload_file(request: Request, path: str = "", file: UploadFile = File(...),
                       _user=Depends(require_user)):
     clean_name = clean_filename(file.filename)
-    dest = safe_path(path) / clean_name if path else SHARE_ROOT / clean_name
+    dest = resolve(_user, path, "write") / clean_name
+    enforce_quota(_user, dest, file.size or 0)
     result = await save_upload(file, dest)
     deduped = register_blob(dest, result["sha256"], result["size"])
     audit("upload", result["path"], result["size_human"], client_ip(request))
@@ -201,10 +244,10 @@ async def upload_file(request: Request, path: str = "", file: UploadFile = File(
 async def create_directory(request: Request, path: str, _user=Depends(require_user)):
     if not path.strip():
         raise HTTPException(status_code=400, detail="Invalid directory name")
-    # 逐段清洗（保留名/冒号/结尾点等），再过 safe_path
+    # 逐段清洗（保留名/冒号/结尾点等），再过空间解析（含写权限判定）
     parts = [p for p in path.replace("\\", "/").split("/") if p not in ("", ".")]
     cleaned = [clean_filename(p) for p in parts]
-    target = safe_path("/".join(cleaned))
+    target = resolve(_user, "/".join(cleaned), "write")
     target.mkdir(parents=True, exist_ok=True)
     rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
     audit("mkdir", rel, ip=client_ip(request))
@@ -223,13 +266,14 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
         raise HTTPException(status_code=400, detail="未选择要移动的文件")
     if len(body.sources) > 500:
         raise HTTPException(status_code=400, detail="单次最多移动 500 项")
-    dest_dir = safe_path(body.dest_dir)
+    dest_dir = resolve(_user, body.dest_dir, "write")
     if not dest_dir.is_dir():
         raise HTTPException(status_code=404, detail="目标目录不存在")
     results = []
     for src in body.sources:
         try:
-            target = safe_path(src)
+            target = resolve(_user, src, "read")
+            _cross_space_guard(_user, target, dest_dir)
             if not target.exists():
                 raise HTTPException(status_code=404, detail="源文件不存在")
             if target.parent == dest_dir:
@@ -282,7 +326,7 @@ def _move_to_trash(target: Path, orig_path: str):
 
 @app.delete("/api/files/{path:path}")
 async def delete_file(request: Request, path: str, _user=Depends(require_user)):
-    target = safe_path(path)
+    target = resolve(_user, path, "write")
     if target == SHARE_ROOT:
         raise HTTPException(status_code=400, detail="不能删除根目录")
     if not target.exists():
@@ -303,7 +347,7 @@ async def list_trash(_user=Depends(require_user)):
         "size_human": human_size(r["size"]) if r["size"] else "-",
         "deleted_at": datetime.fromtimestamp(r["deleted_at"]).isoformat(),
         "days_left": max(0, TRASH_DAYS - int((time.time() - r["deleted_at"]) / 86400)),
-    } for r in rows]
+    } for r in rows if visible(_user, r["orig_path"].split("/"))]
 
 
 @app.post("/api/trash/{trash_id}/restore")
@@ -317,7 +361,7 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
             _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
             _db().commit()
         raise HTTPException(status_code=404, detail="Trash file missing")
-    dest = safe_path(row["orig_path"])
+    dest = resolve(_user, row["orig_path"], "write")
     if dest.exists():
         stem, suffix = dest.stem, dest.suffix
         dest = dest.with_name(f"{stem} (恢复){suffix}")
@@ -335,6 +379,8 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
+    if not visible(_user, row["orig_path"].split("/")):
+        raise HTTPException(status_code=403, detail="Forbidden")
     trash_path = SHARE_ROOT / row["trash_path"]
     if trash_path.is_dir():
         shutil.rmtree(trash_path, ignore_errors=True)
@@ -348,7 +394,7 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
 
 
 @app.delete("/api/trash")
-async def empty_trash(request: Request, _user=Depends(require_user)):
+async def empty_trash(request: Request, _admin=Depends(require_admin)):
     trash_root = SHARE_ROOT / ".trash"
     if trash_root.exists():
         shutil.rmtree(trash_root, ignore_errors=True)
@@ -361,7 +407,7 @@ async def empty_trash(request: Request, _user=Depends(require_user)):
 
 @app.get("/preview/{path:path}")
 async def preview_file(path: str, _user=Depends(require_user)):
-    target = safe_path(path)
+    target = resolve(_user, path, "read")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     mime, _ = mimetypes.guess_type(str(target))
@@ -384,7 +430,7 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
     """打包选中文件/目录为 zip，返回短时效下载 URL。"""
     if not body.paths or len(body.paths) > 500:
         raise HTTPException(status_code=400, detail="Invalid paths")
-    targets = [safe_path(p) for p in body.paths]
+    targets = [resolve(_user, p, "read") for p in body.paths]
     for t in targets:
         if not t.exists():
             raise HTTPException(status_code=404, detail=f"Not found: {t.name}")
@@ -437,7 +483,7 @@ class RenameBody(BaseModel):
 
 @app.post("/api/rename")
 async def rename_path(request: Request, body: RenameBody, _user=Depends(require_user)):
-    target = safe_path(body.path)
+    target = resolve(_user, body.path, "write")
     if target == SHARE_ROOT:
         raise HTTPException(status_code=400, detail="不能重命名根目录")
     if not target.exists():
@@ -447,7 +493,13 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
         return {"ok": True}
     if dest.exists():
         raise HTTPException(status_code=400, detail="目标名称已存在")
+    try:
+        old_rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
+    except ValueError:
+        old_rel = ""
     target.rename(dest)
+    if old_rel:
+        sync_grants_on_move(old_rel, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     audit("rename", body.path, body.new_name, client_ip(request))
     return {"ok": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")}
 
@@ -462,7 +514,7 @@ VID_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 def thumb_file(path: str, _user=Depends(require_user)):
     """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。"""
     from PIL import Image
-    target = safe_path(path)
+    target = resolve(_user, path, "read")
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Not found")
     ext = target.suffix.lower()
@@ -509,7 +561,7 @@ async def search_files(q: str = Query(..., min_length=1), _user=Depends(require_
     results = []
     for f in SHARE_ROOT.rglob("*"):
         rel_parts = f.relative_to(SHARE_ROOT).parts
-        if any(p.startswith(".") for p in rel_parts):
+        if not visible(_user, rel_parts):
             continue
         if f.is_file() and q.lower() in f.name.lower():
             results.append(_file_dict(f))
@@ -523,7 +575,7 @@ async def recent_files(limit: int = Query(default=20, le=100), _user=Depends(req
     files = []
     for f in SHARE_ROOT.rglob("*"):
         rel_parts = f.relative_to(SHARE_ROOT).parts
-        if any(p.startswith(".") for p in rel_parts):
+        if not visible(_user, rel_parts):
             continue
         if f.is_file():
             files.append(_file_dict(f))
@@ -572,7 +624,8 @@ def disk_info(_user=Depends(require_user)):
 
 
 @app.get("/api/disk/detail")
-def disk_detail(_user=Depends(require_user)):
+def disk_detail(_admin=Depends(require_admin)):
+    """分目录明细仅 admin（成员可见磁盘总况 /api/disk，见不到各文件夹构成）。"""
     usage = shutil.disk_usage(str(SHARE_ROOT))
     share_physical, cat_sizes = _scan_share_sizes()
     categories = {name: {"size": size, "size_human": human_size(size)}

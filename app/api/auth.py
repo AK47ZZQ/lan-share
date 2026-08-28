@@ -1,4 +1,5 @@
 """认证 API：初始化/登录/登出/改密/改用户名/账号状态。"""
+import os
 import re
 import time
 from typing import Optional
@@ -8,12 +9,13 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from app.config import COOKIE_NAME, SESSION_TTL
+from app.config import COOKIE_NAME, SESSION_TTL, SHARE_ROOT
 from app.db import _db, _db_lock
 from app.security import (audit, client_ip, create_session, get_session_user,
                           hash_password, is_https, login_locked_remaining,
                           record_login_fail, require_user, verify_password,
                           _login_fails, _rate_lock, _sha)
+from app.spaces import RESERVED_USERNAMES, _normcase_eq
 from app.main import app
 
 class AuthBody(BaseModel):
@@ -53,7 +55,7 @@ async def setup(body: AuthBody, request: Request, response: Response):
     if not body.username.strip():
         raise HTTPException(status_code=400, detail="用户名不能为空")
     with _db_lock:
-        _db().execute("INSERT INTO users(username, password_hash, created_at) VALUES(?,?,?)",
+        _db().execute("INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,'admin')",
                       (body.username.strip(), hash_password(body.password), time.time()))
         _db().commit()
     uid = _db().execute("SELECT id FROM users WHERE username=?",
@@ -72,6 +74,9 @@ async def login(body: AuthBody, request: Request, response: Response):
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     row = _db().execute("SELECT * FROM users WHERE username=?",
                         (body.username,)).fetchone()
+    if row and not row["is_active"]:
+        audit("login_disabled", body.username, ip=client_ip(request))
+        raise HTTPException(status_code=403, detail="账号已停用")
     ok = bool(row) and await run_in_threadpool(verify_password, body.password, row["password_hash"])
     if not ok:
         record_login_fail(body.username)
@@ -109,7 +114,8 @@ async def me(request: Request):
     user = get_session_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"username": user["username"]}
+    return {"username": user["username"], "role": user["role"],
+            "quota_bytes": user["quota_bytes"]}
 
 
 class PasswordBody(BaseModel):
@@ -172,11 +178,23 @@ async def change_username(request: Request, body: UsernameBody,
                             detail="用户名不能含空白/控制字符，且不超过 64 字符")
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
+    if new_name.lower() in RESERVED_USERNAMES:
+        raise HTTPException(status_code=400, detail="该用户名是保留名")
     if _db().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE", (new_name,)).fetchone():
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     with _db_lock:
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, row["id"]))
         _db().commit()
+    # 私人空间目录跟随用户名迁移（Windows 大小写不敏感：仅大小写变化时 rename 会变 no-op）
+    old_dir = SHARE_ROOT / "private" / row["username"]
+    new_dir = SHARE_ROOT / "private" / new_name
+    if old_dir.exists() and not _normcase_eq(old_dir, new_dir):
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            old_dir.rename(new_dir)
+        except OSError:
+            audit("username_dir_rename_fail", f"{row['username']} → {new_name}",
+                  ip=client_ip(request))
     # 会话按 user_id 关联，改名不影响登录态；旧用户名的防爆破计数自然失效
     audit("username_change", row["username"], f"→ {new_name}", client_ip(request))
     return {"ok": True, "username": new_name}

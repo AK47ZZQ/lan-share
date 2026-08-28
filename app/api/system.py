@@ -14,6 +14,7 @@ from app.config import (CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DA
                         UPLOAD_SESSION_TTL, ZIP_TTL)
 from app.db import _db, _db_lock
 from app.security import audit, require_user
+from app.spaces import visible
 from app.api.files import _chunk_dir, _zips, _zips_lock
 from app.api.share import _tickets, _tickets_lock
 from app.main import app
@@ -179,12 +180,13 @@ def _scan_photos():
 @app.get("/api/photos")
 def list_photos(limit: int = Query(default=120, le=500), offset: int = Query(default=0, ge=0),
                 _user=Depends(require_user)):
-    """照片时间线：按拍摄日期倒序（EXIF 优先）。"""
+    """照片时间线：按拍摄日期倒序（EXIF 优先）。仅显示对当前用户可见的照片。"""
     _scan_photos()
-    rows = _db().execute(
-        "SELECT path, taken_at FROM photos ORDER BY taken_at DESC, path LIMIT ? OFFSET ?",
-        (limit, offset)).fetchall()
-    total = _db().execute("SELECT COUNT(*) AS c FROM photos").fetchone()["c"]
+    all_rows = _db().execute(
+        "SELECT path, taken_at FROM photos ORDER BY taken_at DESC, path").fetchall()
+    rows = [r for r in all_rows if visible(_user, r["path"].split("/"))]
+    total = len(rows)
+    rows = rows[offset:offset + limit]
     return {
         "total": total,
         "items": [{

@@ -87,5 +87,47 @@ def init_db():
         );
     """)
     _db().commit()
+    _migrate_v3()
+
+
+def _migrate_v3():
+    """v3 多用户 schema 增量迁移（幂等）：角色/激活/配额 + 授权表 + 邀请表。
+    首个（最小 id）用户自动晋升 admin，兼容 v2 单管理员存量。"""
+    with _db_lock:
+        conn = _db()
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "role" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'member'")
+        if "is_active" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        if "quota_bytes" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN quota_bytes INTEGER")
+        ucols = {r["name"] for r in conn.execute("PRAGMA table_info(upload_sessions)").fetchall()}
+        if "user_id" not in ucols:
+            conn.execute("ALTER TABLE upload_sessions ADD COLUMN user_id INTEGER")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS grants(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                path TEXT NOT NULL,
+                can_read INTEGER NOT NULL DEFAULT 1,
+                can_write INTEGER NOT NULL DEFAULT 0,
+                created_by INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL,
+                UNIQUE(user_id, path)
+            );
+            CREATE TABLE IF NOT EXISTS invites(
+                code TEXT PRIMARY KEY,
+                role TEXT NOT NULL DEFAULT 'member',
+                created_by INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                used_by INTEGER,
+                used_at REAL
+            );
+        """)
+        conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users)")
+        conn.commit()
 
 

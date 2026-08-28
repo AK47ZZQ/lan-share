@@ -17,7 +17,8 @@ from starlette.background import BackgroundTask
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_TTL
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, require_user
-from app.filetools import human_size, safe_path
+from app.filetools import human_size
+from app.spaces import resolve
 from app.api.auth import SharePrepareBody
 from app.main import app
 
@@ -30,7 +31,8 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         raise HTTPException(status_code=400, detail="expires_hours must be >= 1")
     if max_downloads is not None and max_downloads < 1:
         raise HTTPException(status_code=400, detail="max_downloads must be >= 1")
-    target = safe_path(path)
+    # 只能分享自己可读的路径（v3：分享权限跟随创建者）
+    target = resolve(_user, path, "read")
     if not target.exists():
         raise HTTPException(status_code=404, detail="File not found")
     if target.is_dir():

@@ -56,6 +56,7 @@ def auth(client):
     c = TestClient(server.app, base_url="https://testserver")
     r = c.post("/api/login", json={"username": ADMIN_USER, "password": ADMIN_PASS})
     assert r.status_code == 200, r.text
+    c.username = ADMIN_USER
     return c
 
 

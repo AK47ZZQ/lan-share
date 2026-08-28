@@ -18,7 +18,8 @@ from app.config import MAX_UPLOAD_SIZE, SHARE_ROOT
 from app.db import _db
 from app.security import (audit, client_ip, get_session_user, login_locked_remaining,
                           record_login_fail, verify_password)
-from app.filetools import _RESERVED_NAME, human_size, safe_path
+from app.filetools import _RESERVED_NAME, human_size
+from app.spaces import enforce_quota, resolve
 from app.api.files import _move_to_trash
 from app.main import app
 
@@ -84,22 +85,27 @@ def _dav_prop_entry(href_path: str, target: Path) -> str:
             f"{resource_type}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>")
 
 
-def _dav_destination(request: Request) -> Path:
+def _dav_destination(request: Request, user) -> Path:
     raw = request.headers.get("destination", "")
     p = unquote(urlsplit(raw).path)
     if p == "/dav":
-        return SHARE_ROOT
+        return resolve(user, "", "write")
     if not p.startswith("/dav/"):
         raise HTTPException(status_code=400, detail="Invalid Destination")
-    return safe_path(p[len("/dav/"):])
+    return resolve(user, p[len("/dav/"):], "write")
+
+
+_READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNLOCK"}
 
 
 @app.api_route("/dav", methods=DAV_METHODS)
 @app.api_route("/dav/{path:path}", methods=DAV_METHODS)
 async def dav_handler(request: Request, path: str = ""):
-    await _dav_auth(request)
+    user = await _dav_auth(request)
     method = request.method
-    target = safe_path(path) if path else SHARE_ROOT
+    need = "read" if method in _READ_METHODS or method == "COPY" else "write"
+    target = resolve(user, path, need) if path else (
+        SHARE_ROOT if need == "read" else resolve(user, "", "write"))
     exists = target.exists()
 
     if method == "OPTIONS":
@@ -159,6 +165,7 @@ async def dav_handler(request: Request, path: str = ""):
         if exists:
             # 覆盖的旧版本进回收站，而不是直接丢失
             _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
+        enforce_quota(user, target, size)
         os.replace(tmp, target)
         audit("dav_put", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
               human_size(size), client_ip(request))
@@ -188,7 +195,7 @@ async def dav_handler(request: Request, path: str = ""):
     if method in ("MOVE", "COPY"):
         if not exists:
             raise HTTPException(status_code=404)
-        dest = _dav_destination(request)
+        dest = _dav_destination(request, user)
         if dest == target:
             raise HTTPException(status_code=403, detail="Same resource")
         overwrite = request.headers.get("overwrite", "T").upper() != "F"

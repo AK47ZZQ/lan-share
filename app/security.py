@@ -57,18 +57,19 @@ def is_https(request: Request) -> bool:
 
 
 def get_session_user(request: Request) -> Optional[sqlite3.Row]:
-    """校验 Cookie 会话；有效则滑动续期。返回 users 行或 None。"""
+    """校验 Cookie 会话；有效则滑动续期。返回 users 行（含 role/is_active/quota_bytes）或 None。"""
     tok = request.cookies.get(COOKIE_NAME)
     if not tok:
         return None
     th = _sha(tok)
     row = _db().execute(
-        "SELECT s.expires_at, s.user_id, u.username FROM sessions s "
-        "JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?", (th,)).fetchone()
+        "SELECT s.expires_at, s.user_id, u.username, u.role, u.is_active, u.quota_bytes "
+        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
+        (th,)).fetchone()
     if not row:
         return None
     now = time.time()
-    if now > row["expires_at"]:
+    if now > row["expires_at"] or not row["is_active"]:
         with _db_lock:
             _db().execute("DELETE FROM sessions WHERE token_hash = ?", (th,))
             _db().commit()
@@ -98,6 +99,14 @@ def require_user(request: Request) -> sqlite3.Row:
     user = get_session_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def require_admin(request: Request) -> sqlite3.Row:
+    """v3：管理端点依赖（成员/邀请/授权管理、审计、删号）。"""
+    user = require_user(request)
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
     return user
 
 
