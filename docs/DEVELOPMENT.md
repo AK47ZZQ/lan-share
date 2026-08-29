@@ -14,7 +14,11 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
 - v3 新增 `tests/test_multiuser.py`（角色/空间/授权边界，对应 DESIGN-v3/PERMISSIONS.md）。
-- 新前端：`cd web && npm run build`（产物 web/dist 自动挂 /app，无需重启服务）。
+- 新前端：`cd web && npm run build`（产物 web/dist 即时生效，无需重启服务）。
+- 前端约定：**禁止使用浏览器原生 alert/confirm/prompt**——统一用
+  `ui.ts` 的 toast / confirmDlg / promptDlg（Promise 化，App 根级渲染）；
+  登录态统一走 `auth.ts`（禁止各页面自存 me 状态）；**构建必须单独跑
+  `npm run build` 并确认退出码**（管道会吞 vue-tsc 的失败）。
 
 ## 环境与运行
 
