@@ -32,6 +32,10 @@ const allSelected = computed(() => items.value.length > 0 && items.value.every(i
 
 // 操作菜单（⋯ 按钮与右键共用）
 const menu = ref<{ x: number; y: number; e: Entry } | null>(null)
+function copyText(text: string) {
+  try { navigator.clipboard.writeText(text).then(() => toast('已复制', 'ok')).catch(() => prompt('请手动复制：', text)) }
+  catch { prompt('请手动复制：', text) }
+}
 function openMenu(ev: MouseEvent, e: Entry) {
   menu.value = { x: ev.clientX, y: ev.clientY, e }
 }
@@ -49,6 +53,8 @@ function menuAct(action: string) {
 
 // 弹窗
 const showMove = ref(false)
+const showQr = ref(false)
+const upUrl = location.origin + '/up' 
 const sharePaths = ref<string[] | null>(null)
 const renameTarget = ref<Entry | null>(null)
 const renameName = ref('')
@@ -246,6 +252,7 @@ onMounted(() => load(''))
       <button class="btn ghost sm" @click="runSearch" title="搜索">🔍</button>
       <button class="btn ghost sm" @click="showRecent">{{ view === 'recent' ? '返回浏览' : '🕐 最近' }}</button>
       <button class="btn sm" @click="newFolder">＋ 文件夹</button>
+      <button class="btn ghost sm" @click="showQr = true">📲 手机上传</button>
       <label class="btn sm" style="position:relative">
         {{ uploading ? '上传中…' : '⬆ 上传' }}
         <input type="file" multiple hidden @change="onPick" />
@@ -353,6 +360,18 @@ onMounted(() => load(''))
     </Modal>
     <Modal v-if="sharePaths" title="创建分享" @close="sharePaths = null">
       <ShareModal :paths="sharePaths" @close="sharePaths = null" />
+    </Modal>
+
+    <!-- 手机上传二维码 -->
+    <Modal v-if="showQr" title="📲 手机扫码上传" @close="showQr = false">
+      <div style="text-align:center;display:grid;gap:10px;justify-items:center">
+        <img :src="`/api/qr?text=${encodeURIComponent(upUrl)}`"
+             style="width:200px;height:200px;background:#fff;padding:8px;border-radius:12px" />
+        <p style="font-size:13px;color:var(--text-2);margin:0">
+          手机扫码打开直传页，照片/文件将备份到你的 <b>incoming</b> 目录
+        </p>
+        <button class="btn ghost sm" @click="copyText(upUrl)">📋 复制直传地址</button>
+      </div>
     </Modal>
 
     <!-- 操作菜单（⋯ / 右键） -->

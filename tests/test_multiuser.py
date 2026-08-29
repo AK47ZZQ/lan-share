@@ -339,3 +339,21 @@ def test_admin_can_rename_and_reset_member(auth, make_user):
     c = TestClient(_s.app, base_url="https://x")
     assert c.post("/api/login", json={"username": "renamed-member-x",
                                       "password": "brand-new-pass-1"}).status_code == 200
+
+
+def test_incoming_delete_own_and_by_admin(make_user, auth):
+    """回归：成员/管理员都能删除 incoming 里的文件（此前用户名重复拼接致 404）。"""
+    member = make_user("member")
+    r = member.post("/api/upload/incoming",
+                    files={"file": ("phone.txt", b"p", "text/plain")})
+    assert r.status_code == 200
+    path = r.json()["path"]  # incoming/<member>/phone.txt
+
+    # 成员删除自己的直传文件
+    assert member.delete(f"/api/files/{path}").status_code == 200
+
+    # admin 删除成员的直传文件
+    r = auth.post("/api/upload/incoming",
+                  files={"file": ("adm.txt", b"a", "text/plain")})
+    apath = r.json()["path"]
+    assert auth.delete(f"/api/files/{apath}").status_code == 200

@@ -101,6 +101,12 @@ def resolve(user, path: str, need: str = "read"):
         sub = parts[1:]
         if need == "write":
             # 直传落各自子目录（权限内建，不查 grant）
+            if role == "admin" and sub:
+                # admin 对既有路径的精确写操作（删除/移动/覆盖他人文件）
+                return safe_path("/".join(parts))
+            if sub and _normcase_eq(sub[0], username):
+                # 路径已带本人子目录（列表展示形态），原样返回
+                return safe_path("/".join(parts))
             return safe_path("/".join(["incoming", username] + sub))
         # 读：admin 全见；member 仅本人子树；guest 凭 grant
         if role == "admin":
