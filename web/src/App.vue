@@ -5,6 +5,7 @@ import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth } from './auth'
 import { toasts } from './ui'
 import DiskModal from './components/DiskModal.vue'
+import AccountModal from './components/AccountModal.vue'
 import { applyTheme, currentTheme, type Theme } from './theme'
 
 const disk = ref<{ free: string; warning: boolean; used_bytes: number; total_bytes: number } | null>(null)
@@ -22,6 +23,7 @@ async function boot() {
 
 const menuOpen = ref(false)
 const showDisk = ref(false)
+const showAccount = ref(false)
 const theme = ref<Theme>(currentTheme())
 function setTheme(th: Theme) { theme.value = th; applyTheme(th) }
 function closeMenu() { menuOpen.value = false }
@@ -67,6 +69,7 @@ watchEffect(() => {
           <span class="caret">▾</span>
         </button>
         <DiskModal v-if="showDisk" :me="me" @close="showDisk = false" />
+        <AccountModal v-if="showAccount" :me="me" @close="showAccount = false" @updated="boot" />
         <teleport to="body">
           <div v-if="menuOpen" class="usermenu" @click.stop>
             <div class="um-head">
@@ -90,6 +93,7 @@ watchEffect(() => {
               </div>
             </div>
             <div class="um-divider" />
+            <button class="um-item" @click="closeMenu(); showAccount = true"><span>🔑</span> 账号设置</button>
             <button class="um-item danger" @click="doLogout"><span>⏻</span> 退出登录</button>
           </div>
         </teleport>

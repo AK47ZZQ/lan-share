@@ -43,6 +43,10 @@ export const api = {
   me: () => fetch('/api/auth/me').then(r => handle<Me>(r)),
   login: (username: string, password: string) => jpost('/api/login', { username, password }).then(r => handle<{ ok: boolean }>(r)),
   logout: () => fetch('/api/logout', { method: 'POST' }).then(() => undefined),
+  changeUsername: (new_username: string, password: string) =>
+    jpost('/api/auth/username', { new_username, password }).then(r => handle<{ ok: boolean; username: string }>(r)),
+  changePassword: (old_password: string, new_password: string) =>
+    jpost('/api/auth/password', { old_password, new_password }).then(r => handle<{ ok: boolean }>(r)),
 
   list: (path: string) => fetch(`/api/files/${enc(path)}`).then(r => handle<{ path: string; items: Entry[] }>(r)),
   mkdir: (path: string) => fetch(`/api/mkdir/${enc(path)}`, { method: 'POST' }).then(r => handle<{ ok: boolean }>(r)),
