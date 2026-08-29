@@ -15,7 +15,7 @@ const err = ref('')
 
 // 授权表单（批量）
 const gUsers = ref<number[]>([])
-const gPath = ref('')
+const gPaths = ref<string[]>([])
 const gWrite = ref(false)
 const gExpiry = ref(0)            // 0=永久
 const dirOptions = ref<{ path: string; label: string }[]>([])
@@ -29,7 +29,7 @@ async function loadDirs() {
   async function walk(p: string, depth: number) {
     try {
       const r = await api.list(p)
-      for (const e of r.items.filter(x => x.is_dir)) {
+      for (const e of r.items.filter(x => x.is_dir && !x.is_private_root && x.path !== 'private' && x.path !== 'incoming')) {
         if (e.name === 'private' || e.name === 'incoming') continue
         out.push({ path: e.path, label: e.path })
         if (depth < 2) await walk(e.path, depth + 1)
@@ -41,13 +41,15 @@ async function loadDirs() {
 }
 
 async function addGrantBatch() {
-  if (!gUsers.value.length || !gPath.value) { toast('先选成员和目录', 'err'); return }
-  let ok = 0
+  if (!gUsers.value.length || !gPaths.value.length) { toast('先选成员和目录', 'err'); return }
+  let ok = 0, fail = 0
   for (const uid of gUsers.value) {
-    try { await api.adminCreateGrant(uid, gPath.value, true, gWrite.value, gExpiry.value || undefined); ok++ }
-    catch (e) { toast(`${memberName(uid)}: ${(e as Error).message}`, 'err') }
+    for (const p of gPaths.value) {
+      try { await api.adminCreateGrant(uid, p, true, gWrite.value, gExpiry.value || undefined); ok++ }
+      catch (e) { fail++; toast(`${memberName(uid)} × ${p}: ${(e as Error).message}`, 'err') }
+    }
   }
-  if (ok) toast(`已授权 ${ok} 位成员 → ${gPath.value}`, 'ok')
+  if (ok) toast(`已创建 ${ok} 条授权（${gUsers.value.length} 位成员 × ${gPaths.value.length} 个目录）`, 'ok')
   await loadAll()
 }
 
@@ -218,11 +220,15 @@ onMounted(async () => {
               <span v-if="!memberOptions.length" style="color:var(--text-3);font-size:12.5px">暂无成员</span>
             </div>
           </label>
-          <label class="field">共享目录
-            <select v-model="gPath">
-              <option value="" disabled>选择目录…</option>
-              <option v-for="d in dirOptions" :key="d.path" :value="d.path">{{ d.label }}</option>
-            </select>
+          <label class="field">共享目录（可多选）
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;max-height:132px;overflow:auto">
+              <label v-for="d in dirOptions" :key="d.path"
+                     style="display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 9px;border:1px solid var(--line);border-radius:999px;cursor:pointer"
+                     :style="gPaths.includes(d.path) ? 'border-color:var(--accent);background:var(--hover)' : ''">
+                <input type="checkbox" style="width:auto;display:none" :value="d.path" v-model="gPaths" />📁 {{ d.label }}
+              </label>
+              <span v-if="!dirOptions.length" style="color:var(--text-3);font-size:12.5px">共享空间还没有目录</span>
+            </div>
           </label>
         </div>
         <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
@@ -237,7 +243,7 @@ onMounted(async () => {
               <option :value="720">30 天</option>
             </select>
           </label>
-          <button class="btn sm" style="margin-left:auto" @click="addGrantBatch">保存授权（{{ gUsers.length || 0 }} 人）</button>
+          <button class="btn sm" style="margin-left:auto" @click="addGrantBatch">保存授权（{{ gUsers.length || 0 }} 人 × {{ gPaths.length || 0 }} 目录）</button>
         </div>
       </div>
 
