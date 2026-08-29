@@ -18,7 +18,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/setup` | 🔓* | `{username, password}` 创建管理员；*仅用户表为空时可用，创建后永久关闭 |
 | POST | `/api/login` | 🔓 | `{username, password}`；失败 5 次锁账号 15 分钟；10 次/分/IP |
 | POST | `/api/logout` | 🔓 | 吊销当前会话 |
-| GET | `/api/auth/me` | 🔑 | 当前用户名 |
+| GET | `/api/auth/me` | 🔑 | `{username, role, quota_bytes}`；401=未登录（前端以此为登录态探测） |
 | POST | `/api/auth/password` | 🔑 | `{old_password, new_password}`；改密吊销全部会话并重签当前 |
 | POST | `/api/auth/username` | 🔑 | `{new_username, password}` 改用户名，需当前密码确认（失败计入防爆破锁定，锁定期 429）；登录态不变；空白/控制字符/超 64 字符 400，同名（不分大小写）400，密码错误 403 |
 | GET | `/authcheck` | 🔓 | Caddy forward_auth 子请求入口；200=会话有效 / 401 |
@@ -104,3 +104,49 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | `/api/share*` | 30 次/分/IP |
 | 其它 `/api/*` | 120 次/分/IP |
 | `/api/upload/chunk/*`、`/authcheck`、`/thumb`、`/preview`、`/dav` | 不限（仍有认证保护） |
+
+## v3 多用户（家庭团队版）
+
+**空间语义（适用于所有文件端点）**：路径可为 `private:<path>`（本人私人空间）、
+`shared:<path>` 或裸路径（共享空间，兼容 v2）。`shared:private/...` 永远映射到
+请求者本人的私人目录；`shared:incoming/...` 写入落到 `incoming/<用户名>/`。
+权限：admin 全权；member 共享空间默认只读（需授权写入）；guest 全凭授权；
+私人空间仅本人（admin 亦不可读他人私人目录）。
+
+### 认证扩展
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/invites/redeem` | 🔓 | `{code, username, password}` 邀请码建号；原子认领；保留词/分隔符/重名 400 |
+
+### 管理（require_admin，非 admin 403）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/admin/users` | 成员列表 `{id, username, role, is_active, quota_bytes, ...}` |
+| PATCH | `/api/admin/users/{uid}` | `{is_active?, quota_bytes?, role?}`；停用即吊销全部会话；最后一个 admin 不可降级/停用 |
+| DELETE | `/api/admin/users/{uid}` | 删号（grants/会话级联；私人目录改名 `.orphaned/<uid>-<名>/`） |
+| GET/POST | `/api/admin/invites` | 邀请码列表 / 创建 `{role: member\|guest, hours}` |
+| DELETE | `/api/admin/invites/{code}` | 删除邀请记录（任意状态） |
+| GET/POST | `/api/admin/grants` | 目录授权查询 / 创建 `{user_id, path, can_read, can_write, expires_hours?}`（仅 shared 空间目录） |
+| DELETE | `/api/admin/grants/{gid}` | 撤销授权 |
+| GET | `/api/activity?limit=` | 家庭动态流（audit 过滤 private 目标） |
+| POST | `/api/activity/clear` | 清空动态（settings 水位软清空，审计保留） |
+| GET/POST | `/api/admin/public-url` | 公网访问地址（分享双地址复制用） |
+
+### 分享扩展
+
+- `POST /api/share` 记录 `owner_id`；`GET /api/shares` 按创建者隔离
+  （admin 全见 + `owner` 字段），响应为 **以 token 为键的字典**；带密码分享
+  含 `password` 明文（创建时保存，旧存量分享无此字段）
+- `DELETE /api/shares/{token}` 与 `GET /api/shares/{token}/history` 仅创建者/admin
+- 下载计数**按票据去重**：下载管理器的并发 Range 分段同一 `tkt` 只计 1 次
+- `GET /api/share/{token}/qr` 🔑 需登录（按请求 Host 生成对应域的二维码）
+
+### 其他
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/healthz` | 🔓 | `{status, db, data_dir, disk_free_gb, disk_used_pct}` |
+| GET | `/api/disk/detail` | 🔑 | 全员可查；`categories` 仅 admin；成员返回 `private_used/quota_bytes` |
+| GET | `/api/qr?text=` | 🔑 | 任意文本二维码 SVG |

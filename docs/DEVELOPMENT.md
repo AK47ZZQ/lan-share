@@ -1,6 +1,6 @@
 # 开发指南
 
-## 测试（M0 新增）
+## 测试
 
 ```bash
 check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑绿才算改完）
@@ -9,7 +9,7 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
 
 - `tests/conftest.py` 在导入 `server` 前把 `SHARE_ROOT` 指向临时目录，
   全套测试不碰真实数据；`client` 夹具恒为匿名态，`auth` 夹具是独立实例的登录态。
-- `tests/test_baseline.py` 是**现有行为的回归网**（拆包/PG/Vue 升级期间不许掉）：
+- `tests/test_baseline.py`（25 项）是**行为回归网**；`tests/test_multiuser.py`（18 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
   认证/防爆破、文件增删改移、分块上传与秒传、回收站、分享全链路、
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
@@ -44,16 +44,26 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 4. **调试账号**：接口调试用 `debug` 账号登录（凭据见 `docs/DEBUG-ACCOUNT.md`，不入库），
    审计日志可与管理员操作区分。
 
-## 代码结构
+## 代码结构（v3 拆包后）
 
 ```
-server.py        全部后端。区块顺序：配置 → DB → 密码/会话 → 限速/CSRF中间件 →
-                 文件工具 → 认证API（登录/登出/改密/改用户名）→ 文件API → 移动(/api/move) →
-                 分块上传 → 回收站 → zip/重命名 → 缩略图 → 搜索/最近/磁盘 → 分享 →
-                 定时清理 → WebDAV → 照片 → 页面路由
-static/index.js  主界面逻辑（状态 + 渲染 + API + ACTIONS 事件分发表；
-                 文件移动三入口 = 目录选择器 / 剪切粘贴 / 拖拽，均在"移动文件"区块）
-static/*.html    纯结构 + 样式，零内联脚本
+app/
+├── main.py            应用组装：app+中间件 → 路由模块 → SPA 页面路由/深链回退 → 静态挂载
+├── config.py          全部常量与 env（SHARE_ROOT/DB_PATH 等）
+├── db.py              SQLite 每线程连接 + 写锁 + init_db + _migrate_v3（幂等迁移）
+├── security.py        审计/scrypt/会话/防爆破/限速/require_user/require_admin
+├── filetools.py       safe_path/clean_filename/dir_tree/save_upload
+├── spaces.py          v3 空间解析 resolve()/授权判定/配额/可见性过滤（安全核心）
+├── api/auth.py        认证 API（setup/login/logout/改密/改用户名/authcheck）
+├── api/files.py       文件 API（列表/上传/移动/回收站/预览/zip/缩略图/搜索/磁盘）
+├── api/share.py       分享 API（外链/票据/QR/取件记录；按 owner 隔离）
+├── api/webdav.py      WebDAV（与网页同一 resolve 权限源）
+├── api/system.py      定时清理/照片时间线/通用 QR/healthz
+├── api/admin.py       成员/邀请/授权/动态流/公网地址
+server.py             兼容 shim（NSSM 入口 server:app 不变；测试 import server）
+web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/auth.ts
+                      共享登录态、src/views/ 七个页面；构建产物 dist/ 即时生效
+static/               仅 favicon（旧页面已删，git 历史可回滚）
 docs/            API.md / SECURITY.md / DEVELOPMENT.md / GIT.md / DEBUG-ACCOUNT.md(不入库)
 ```
 

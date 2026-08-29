@@ -1,7 +1,8 @@
-# LAN Share — 个人网盘
+# LAN Share — 家庭团队网盘（v3）
 
-单管理员自用网盘。局域网与公网（樱花FRP）功能完全对等，统一应用层认证；
-支持断点续传、秒传去重、回收站、在线预览、照片时间线、分享外链、手机直传和 WebDAV 挂载。
+家用小团队（2–20 人）的多用户网盘。局域网与公网（樱花FRP）功能完全对等，
+支持多角色成员、私人/共享双空间、目录授权、断点续传、秒传去重、回收站、
+在线预览、照片时间线、带提取码的外链分享、手机直传和 WebDAV 挂载。
 
 ```
 快速入口
@@ -9,11 +10,10 @@
 ├── 完整 API .......... docs/API.md
 ├── 安全模型 .......... docs/SECURITY.md
 ├── 开发指南 .......... docs/DEVELOPMENT.md
+├── v3 实施状态 ....... docs/STATUS-v3.md
 ├── 版本历史 .......... CHANGELOG.md
 ├── Git 工作流 ........ docs/GIT.md
-├── v3 演进规划 ....... PLAN-v3.md（家庭团队版，进行中）
-├── v3 设计文档 ....... docs/DESIGN-v3/（架构/权限/数据库/前端）
-└── v2 演进规划 ....... PLAN.md（已交付，决策记录）
+└── 演进规划 .......... PLAN-v3.md（v2 存档：PLAN.md）
 ```
 
 ## 快速开始
@@ -23,93 +23,104 @@
 net start lan-share-api && net start lan-share-caddy
 net stop  lan-share-caddy && net stop  lan-share-api   # 停止（先 caddy 后 api）
 
-# 开发调试（仅 FastAPI，端口 8766，无 TLS）
-python server.py
-# 或指定数据目录
-SHARE_ROOT=D:/test-data python -m uvicorn server:app --port 8768
+# 前端更新（web/ 工程改动后）
+cd web && npm install && npm run build   # 产物 web/dist 即时生效，无需重启
+
+# 开发调试（后端）
+SHARE_ROOT=D:/test-data python server.py
 ```
 
 | 入口 | 地址 | 认证 |
 |------|------|------|
-| Web UI（v3 Vue 全站） | `https://192.168.1.100:8765`（公网 `https://your-frp-domain.com:xxxxx`） | 应用层登录 |
+| Web UI（Vue 全站） | `https://192.168.1.100:8765` | 应用层登录 |
+| 公网（樱花FRP） | `https://your-frp-domain.com:xxxxx` | 应用层登录（与局域网一致） |
 | 健康探针 | `/healthz` | 免认证 |
 | WebDAV | `https://192.168.1.100:8765/dav/` | Basic（成员账号，挂载各自可见空间） |
 
-> 自签证书：浏览器首次访问点"继续访问"即可；首次进入会引导创建管理员账号。
+> 自签证书：浏览器首次访问点"继续访问"；裸地址输入会由 :80 端口自动跳转 HTTPS。
+> 首次进入引导创建管理员账号；其他成员由管理员发邀请码自助注册。
 
 ## 功能总览
 
-**文件管理**：目录浏览、排序/筛选、搜索、最近文件、卡片右侧 ⋯ 操作菜单（桌面右键等效触屏
-长按）、新建/重命名/删除；**移动文件**三种方式——"移动到…"目录选择器（含新建文件夹）、
-剪切→导航→粘贴、桌面拖拽到文件夹卡片；重名自动 `(2)` 改名不覆盖；多选打包 zip 下载（一次性 URL）。
+**多用户**：admin/member/guest 三角色；每人**私人空间**（仅本人）+ **共享空间**
+（默认全员只读，子目录可由管理员授权读写）；目录授权、邀请制建号、
+私人空间配额、停用账号即时全端踢出。
 
-**上传**：小文件直传；大文件自动 5MB 分块 + **断点续传**（每块自动重试 3 次）+
-≤100MB 客户端预计算 SHA256 的**秒传**；服务端合并时强制校验哈希。
-相同内容的文件以 **NTFS 硬链接去重**，多份引用只占一份磁盘。
+**文件管理**：网格/列表双视图（缩略图砖、四色文件夹）、搜索、最近文件、
+多选批量（删除/移动/打包 zip/分享）、⋯ 与右键操作菜单、页内灯箱预览
+（图片/视频/音频/PDF/文本）、面包屑 + 返回按钮；移动端两行化布局。
 
-**回收站**：删除（界面与 WebDAV 一致）移入 `.trash/` 保留 30 天，可恢复/单项删/清空，到期自动清理；
-覆盖写、移动覆盖的旧版本同样进回收站。
+**上传**：小文件直传；大文件 5MB 分块 + **断点续传**（每块重试 3 次）+
+≤100MB 客户端 SHA256 **秒传**；相同内容 NTFS 硬链接去重。
 
-**分享**：链接 + QR 码，可设有效期 / 提取码 / **下载次数上限**；可撤销、可查取件记录（含来源 IP）；
-提取码错误 5 次锁 15 分钟；密码走 POST body 不进访问日志。
+**分享**：外链 + 二维码，有效期/提取码/**下载次数上限**（按票据去重计数，
+下载管理器多分段不重复计）；提取码明文保存可在管理页查看；**双地址复制**
+（局域网/公网，公网地址在管理面板配置）；**分享管理页**（/shares：状态
+筛选/取件记录含来源 IP/撤销）；成员只能管理自己的分享，管理员可见全部。
 
-**预览**：图片/视频/音频/PDF/文本内嵌预览，音视频支持 Range 拖动；图片与视频自动生成缩略图并缓存。
+**回收站**：删除（界面与 WebDAV 一致）进 `.trash/` 保留 30 天，可恢复/彻底
+删除/清空（清空仅 admin）；覆盖写与移动覆盖的旧版本同样进回收站。
 
-**照片时间线**：按 EXIF 拍摄日期（缺失回退文件时间）倒序的网格视图，增量扫描 + SQLite 缓存。
+**照片时间线**：按 EXIF 拍摄日期倒序的瀑布流，按用户过滤可见性。
 
-**手机直传**：主界面 📲 出二维码，手机扫码打开 `/up` 直传 `incoming/`（复用分块续传/秒传）。
+**手机直传**：`/up` 页上传到 `incoming/<用户名>/`；文件页 `incoming/` 卡片
+即本人目录。
 
-**WebDAV**：`/dav/` 支持 PROPFIND/GET/PUT/MKCOL/MOVE/COPY/DELETE/LOCK，可挂载为网络磁盘
-（推荐 RaiDrive / WinSCP）；DELETE 与覆盖行为同界面一样进回收站。
+**WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
+
+**主题**：浅色/深色/跟随系统（头像菜单切换，本地记忆）；深浅模式完整适配。
 
 ## 架构
 
 ```
 外网设备 ──樱花FRP──▶ Caddy :8767 (HTTPS, 剥离入站XFF)
-内网设备 ──局域网──▶ Caddy :8765 (HTTPS)   ← 两端口配置完全一致，认证统一在应用层
+内网设备 ──局域网──▶ Caddy :8765/:443 (HTTPS; :80 跳转 HTTPS)
                         │
-                        ├─ /files/*  → forward_auth(/authcheck) 后 file_server 静态直连
+                        ├─ /files/*  → forward_auth 后 file_server 静态直连
                         │               （大文件下载不经过 Python）
-                        ├─ /dav/* /api/* /s/* /up
+                        ├─ /api/* /dav/* /s/* /up
                         │             → FastAPI :8766 (127.0.0.1)
-                        │                ├─ SQLite data/.meta.db（用户/会话/分享/审计/blob指纹/照片）
-                        │                ├─ 数据目录 data/（.trash .thumbs .chunks .zips 自动管理）
+                        │                ├─ SQLite data/.meta.db（用户/会话/授权/
+                        │                │  分享/审计/blob指纹/照片/设置）
+                        │                ├─ 数据目录 data/（private/<用户>/、
+                        │                │  共享目录、.trash .thumbs .chunks .zips）
                         │                └─ 应用层限速 / CSRF / 防爆破 / 审计
-                        └─ /static/*  → 前端（原生 HTML/CSS/JS，CSP: script-src 'self'）
+                        └─ /assets/*  → Vue3 SPA 构建产物（web/dist）
 ```
 
-**技术栈**：Caddy v2.11（原生无插件）、FastAPI + uvicorn、SQLite（标准库）、
-原生 HTML/CSS/JS（事件委托，零构建）、Pillow、qrcode、ffmpeg（可选，视频缩略图）。
-密码哈希用标准库 scrypt——**除既有依赖外不引入任何新 pip 包**。
+**技术栈**：FastAPI + uvicorn、Caddy v2.11（原生无插件）、SQLite（标准库）、
+Vue 3 + Vite + TypeScript（web/ 工程）、Pillow、qrcode、ffmpeg（可选）。
 
 ## 目录结构
 
 ```
-lan-share/                  ← 本目录（C:\lan-share 是指向这里的 junction）
-├── server.py               FastAPI 后端（全部后端逻辑）
-├── Caddyfile               反代/TLS/forward_auth（8765 局域网与 8767 公网配置一致）
-├── static/                 前端（index/login/up/share 四页 + 同名 .js + favicon.svg）
-├── docs/                   API / SECURITY / DEVELOPMENT 文档
-├── backup/v1/              v1 备份与回滚说明
-├── PLAN.md                 演进规划（P0-P3 全部完成）
+lan-share/
+├── server.py               兼容 shim（NSSM 入口 server:app 不变）
+├── app/                    后端包：config/db/security/filetools/spaces/
+│                           api/{auth,files,share,webdav,system,admin}/main
+├── web/                    Vue3 前端工程（构建产物 web/dist 由 FastAPI 挂载）
+├── Caddyfile               反代/TLS/forward_auth/:80跳转
+├── static/                 favicon（旧页面已移除，git 历史可回滚）
+├── docs/                   API / SECURITY / DEVELOPMENT / STATUS-v3 / DESIGN-v3
+├── PLAN-v3.md              v3 规划（家庭团队版）；PLAN.md 为 v2 存档
 ├── CHANGELOG.md            版本历史
-├── install-service.bat     NSSM 注册服务
-├── start.bat / stop.bat / start-silent.vbs
+├── backup.bat              备份脚本（SQLite 在线备份 + 数据目录增量）
+├── check.bat               本地质量门禁（pytest 基线）
+├── tests/                  测试（基线回归 + 多用户权限边界）
 └── logs/                   服务日志（NSSM 轮转）
-
-C:/lan-share/data/          ← 文件数据根（环境变量 SHARE_ROOT 可改）
-├── apk/ documents/ media/ tmp/ incoming/ 照片/   ← 用户文件
-├── .meta.db                SQLite 元数据（隐藏，勿手删）
-└── .trash/ .thumbs/ .chunks/ .zips/              ← 回收站/缩略图缓存/分块临时/打包临时
 ```
 
 ## 常用运维
 
 ```bash
-# 改了 server.py 后
+# 改了后端（app/ 或 server.py）
 net stop lan-share-api && net start lan-share-api
-# 改了 Caddyfile 后（静态文件 static/* 不需要重启）
+# 改了 Caddyfile
 net stop lan-share-caddy && net start lan-share-caddy
+# 前端改动无需重启：cd web && npm run build
+
+# 质量门禁（改后端必跑）
+check.bat
 
 # 查日志
 tail -f logs/api-stderr.log logs/caddy-stderr.log
@@ -119,13 +130,17 @@ tail -f logs/api-stderr.log logs/caddy-stderr.log
 
 | 问题 | 处理 |
 |------|------|
-| 浏览器提示证书不受信任 | 自签证书所致，点"继续访问"；或把 `certs/cert.pem` 导入系统"受信任的根证书颁发机构" |
-| 忘记管理员密码 | 删除 `data/.meta.db` 后重启服务，重新走初始化（注意：会同时清掉分享与审计记录） |
-| 公网上传慢 | FRP 隧道带宽有限，大文件走局域网；中断后重新选同一文件会自动续传 |
-| Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive/WinSCP 或先导入证书 |
-| 改了前端没生效 | Ctrl+F5 强刷；前端静态文件无需重启服务 |
+| 证书不受信任 | 自签证书所致，点"继续访问"；或把 `certs/cert.pem` 导入系统根证书 |
+| 忘记管理员密码 | 删除 `data/.meta.db` 重启（会清掉分享与审计）；成员账号由管理员邀请重建 |
+| 成员如何加入 | 管理 → 邀请 → 生成邀请码 → 对方在登录页"使用邀请码加入" |
+| 公网分享打不开 | 确认复制的是 🌐 公网链接（管理面板先配置公网访问地址）；FRP 隧道需在线 |
+| 5G 下载 apk 被提示次数上限 | v3 已修（按票据去重计数）；旧分享撤销重建即可 |
+| Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive/WinSCP |
+| 改了前端没生效 | Ctrl+F5 强刷一次；之后资产文件名哈希自动更新 |
 
 ## 路线图状态
 
-P0 安全地基 ✅ · P1 传输可靠性 ✅ · P2 分享与移动端 ✅ · P3 WebDAV/照片时间线 ✅。
-未做：每日自动备份（明确不做）、系统托盘小工具（暂缓）。
+v2 个人网盘（P0–P3）✅ → v3 家庭团队版：M0 拆包 ✅ · M1 数据层（PG 待装，
+SQLite 运行中）⚠️ · M2 Vue 全站 ✅ · M3 多用户核心 ✅ · M4 部分（动态流 API，
+管理面板已上）⚠️ · M5 部分（healthz/备份脚本）⚠️。
+详见 `docs/STATUS-v3.md`；规划见 `PLAN-v3.md`。
