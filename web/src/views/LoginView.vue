@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api } from '../api'
+import { login as authLogin } from '../auth'
 import { toast } from '../ui'
 
 const username = ref('')
@@ -21,7 +21,7 @@ async function submit() {
   err.value = ''
   busy.value = true
   try {
-    await api.login(username.value, password.value)
+    await authLogin(username.value, password.value)
     toast('欢迎回来', 'ok')
     const next = String(route.query.next || '/')
     router.replace(next.startsWith('/') ? next : '/')

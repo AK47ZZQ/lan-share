@@ -190,6 +190,8 @@ async function showRecent() {
   } catch (e) { toast((e as Error).message, 'err') }
 }
 
+const searchMode = computed(() => view.value === 'recent' || !!searchResults.value)
+
 const shownItems = computed(() => {
   if (view.value === 'recent') return recentItems.value
   if (searchResults.value) return searchResults.value
@@ -217,7 +219,7 @@ onMounted(() => load(''))
       </span>
     </div>
 
-    <div class="crumbs" v-if="view === 'browse' && !searchResults && crumbs.length > 1">
+    <div class="crumbs" v-if="searchMode">
       <template v-for="(c, i) in crumbs" :key="c.path">
         <span v-if="i" class="sep">/</span>
         <a href="#" :class="{ cur: i === crumbs.length - 1 }" @click.prevent="load(c.path)">{{ c.name }}</a>
@@ -225,6 +227,7 @@ onMounted(() => load(''))
     </div>
     <div class="crumbs" v-else>
       <span class="cur">{{ view === 'recent' ? '最近文件' : `搜索“${searchQ}”` }}</span>
+      <a href="#" style="margin-left:10px" @click.prevent="searchQ = ''; searchResults = null; view = 'browse'">返回浏览</a>
     </div>
 
     <p v-if="err" class="err">{{ err }}</p>

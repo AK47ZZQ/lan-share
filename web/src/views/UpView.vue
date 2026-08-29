@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api, uploadResumable, type Me } from '../api'
+import { uploadResumable } from '../api'
+import { me, refreshAuth } from '../auth'
 import { toast } from '../ui'
 
-const props = defineProps<{ me?: Me }>()
-const me = ref<Me | null>(props.me ?? null)
+const props = defineProps<{ me?: { username: string; role: string } }>()
 const checking = ref(true)
 const uploads = ref<{ name: string; sent: number; total: number; stage: string }[]>([])
 const busy = ref(false)
 
 onMounted(async () => {
-  try { me.value = await api.me() } catch { me.value = null }
+  if (!props.me) await refreshAuth()
   checking.value = false
 })
 

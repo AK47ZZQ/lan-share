@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, type Me } from './api'
+import { api } from './api'
+import { authReady, logout as authLogout, me, refreshAuth } from './auth'
 import { toasts } from './ui'
 
-const me = ref<Me | null>(null)
-const ready = ref(false)
 const disk = ref<{ free: string; warning: boolean; disk_used_pct?: number } | null>(null)
 const route = useRoute()
 const router = useRouter()
@@ -14,28 +13,23 @@ const router = useRouter()
 const publicRoute = computed(() => ['share', 'login'].includes(String(route.name)))
 
 async function boot() {
-  try {
-    me.value = await api.me()
-  } catch { /* 未登录 */ }
-  ready.value = true
-  if (me.value) {
-    api.disk().then(d => { disk.value = d }).catch(() => {})
-  }
+  await refreshAuth()
+  if (me.value) api.disk().then(d => { disk.value = d }).catch(() => {})
 }
 
-watchEffect(() => {
-  if (!ready.value) return
-  if (!me.value && !publicRoute.value) void router.replace('/login')
-  if (me.value && route.name === 'login') void router.replace('/')
-})
-
 function logout() {
-  api.logout().then(() => { me.value = null; router.push('/login') })
+  authLogout().then(() => router.replace('/login'))
 }
 
 function initial(name: string) { return (name || '?').slice(0, 1).toUpperCase() }
 
 onMounted(boot)
+
+watchEffect(() => {
+  if (!authReady.value) return
+  if (!me.value && !publicRoute.value) void router.replace('/login')
+  if (me.value && route.name === 'login') void router.replace('/')
+})
 </script>
 
 <template>
@@ -43,7 +37,7 @@ onMounted(boot)
     <div v-for="t in toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
   </div>
 
-  <div v-if="!ready" class="page"><div class="card empty">加载中…</div></div>
+  <div v-if="!authReady" class="page"><div class="card empty">加载中…</div></div>
 
   <template v-else>
     <!-- 公开页（分享/登录）不显示顶栏 -->
@@ -72,7 +66,7 @@ onMounted(boot)
           </button>
         </div>
       </header>
-      <router-view :me="me" @refresh-me="boot" :key="route.fullPath" />
+      <router-view :me="me" :key="route.fullPath" />
     </template>
 
     <div v-else class="page"><div class="card empty">跳转登录…</div></div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, type AdminUser, type ActivityItem } from '../api'
+import { me } from '../auth'
 import { fmtTs, toast } from '../ui'
 
 const tab = ref<'users' | 'invites' | 'grants' | 'feed'>('users')
@@ -68,7 +69,13 @@ async function delGrant(g: { id: number }) {
   try { await api.adminDeleteGrant(g.id); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  if (me.value && me.value.role !== 'admin') {
+    err.value = '需要管理员权限'
+    return
+  }
+  void loadAll()
+})
 </script>
 
 <template>

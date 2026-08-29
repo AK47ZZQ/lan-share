@@ -14,7 +14,13 @@ export interface ActivityItem { ts: number; username: string; action: string; ta
 export interface DiskInfo { total: string; used: string; free: string; free_bytes: number; share_size: string; warning: boolean }
 
 async function handle<T>(r: Response): Promise<T> {
-  if (r.status === 401) throw Object.assign(new Error('未登录'), { unauthorized: true })
+  if (r.status === 401) {
+    // 会话过期：整页跳登录（带 next 回跳），避免停留在失效页面
+    if (!location.pathname.startsWith('/login')) {
+      location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
+    }
+    throw Object.assign(new Error('未登录'), { unauthorized: true })
+  }
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     try { const b = await r.json(); detail = typeof b.detail === 'string' ? b.detail : detail } catch { /* */ }
