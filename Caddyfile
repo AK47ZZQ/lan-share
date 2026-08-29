@@ -1,7 +1,12 @@
 # 局域网与公网入口完全对等，认证统一在应用层（Cookie 会话 / WebDAV Basic）。
 # 公网不再设 basic_auth 第一道门（浏览器弹窗体验差）；扫描器与爆破由应用层
 # 登录防爆破（按账号 5 次锁 15 分钟）+ 限速（登录 10/分）抵御，见 docs/SECURITY.md。
-:8765, :8767 {
+:80, :8080 {
+	# 用户在浏览器输入裸地址（无 https:// 前缀）时兜底跳转
+	redir https://{host}:8765{uri} 308
+}
+
+:8765, :8767, :443 {
 	tls C:/lan-share/certs/cert.pem C:/lan-share/certs/key.pem
 
 	# 剥离外部传入的 X-Forwarded-For，防止伪造（后端取 XFF 最后一个值）

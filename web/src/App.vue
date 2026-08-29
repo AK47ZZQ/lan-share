@@ -6,7 +6,7 @@ import { toasts } from './ui'
 
 const me = ref<Me | null>(null)
 const ready = ref(false)
-const disk = ref<{ free: string; warning: boolean } | null>(null)
+const disk = ref<{ free: string; warning: boolean; disk_used_pct?: number } | null>(null)
 const route = useRoute()
 const router = useRouter()
 
@@ -51,20 +51,25 @@ onMounted(boot)
 
     <template v-else-if="me">
       <header class="topbar">
-        <div class="brand"><span class="logo">◈</span> LAN Share</div>
+        <div class="brand"><span class="logo">◈</span><span class="brand-name">LAN Share</span></div>
         <nav class="tabs">
           <router-link to="/">文件</router-link>
           <router-link to="/photos">照片</router-link>
           <router-link to="/trash">回收站</router-link>
           <router-link v-if="me.role === 'admin'" to="/admin">管理</router-link>
         </nav>
-        <span class="disk-badge" :class="{ low: disk?.warning }" v-if="disk">
+        <span class="disk-badge" :class="{ low: disk?.warning }" v-if="disk" title="磁盘已用比例">
+          <span class="bar"><i :style="{ width: Math.round(disk.disk_used_pct ?? 0) + '%' }" /></span>
           {{ disk.free }} 可用
         </span>
         <div class="userchip">
           <span class="avatar">{{ initial(me.username) }}</span>
           <span class="uname">{{ me.username }}</span>
-          <button class="iconbtn" title="退出" @click="logout">⏻</button>
+          <button class="iconbtn" title="退出" @click="logout">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <path d="M12 3v8" /><path d="M6.3 6.5a8 8 0 1 0 11.4 0" />
+            </svg>
+          </button>
         </div>
       </header>
       <router-view :me="me" @refresh-me="boot" :key="route.fullPath" />
@@ -77,7 +82,9 @@ onMounted(boot)
 <style>
 .uname { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) {
-  .disk-badge, .uname { display: none; }
-  nav.tabs a { padding: 7px 10px; font-size: 13px; }
+  .disk-badge, .uname, .brand-name { display: none; }
+  .topbar { gap: 8px; padding: 9px 12px; }
+  nav.tabs a { padding: 7px 9px; font-size: 13px; }
+  .userchip { margin-left: auto; }
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, uploadResumable, type Entry } from '../api'
 import { toast } from '../ui'
 import Modal from '../components/Modal.vue'
@@ -7,6 +7,14 @@ import DirPicker from '../components/DirPicker.vue'
 import ShareModal from '../components/ShareModal.vue'
 
 defineProps<{ me: { username: string; role: string } }>()
+
+const grid = ref(localStorage.getItem('lsView') !== 'list')
+watch(grid, g => localStorage.setItem('lsView', g ? 'grid' : 'list'))
+function hashName(s: string): number {
+  let h = 0
+  for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return h
+}
 
 const path = ref('')
 const items = ref<Entry[]>([])
@@ -33,7 +41,7 @@ const uploading = ref(false)
 
 const crumbs = computed(() => {
   const parts = path.value.split('/').filter(Boolean)
-  const out = [{ name: '根目录', path: '' }]
+  const out = [{ name: '🏠', path: '' }]
   parts.forEach((p, i) => out.push({ name: p, path: parts.slice(0, i + 1).join('/') }))
   return out
 })
@@ -195,17 +203,21 @@ onMounted(() => load(''))
   <main class="page">
     <div class="page-head">
       <h1>文件</h1>
-      <input v-model="searchQ" placeholder="🔍 搜索文件…" style="width:210px;font-size:14px"
+      <input v-model="searchQ" placeholder="🔍 搜索文件…" class="searchbox"
              @keydown.enter="runSearch" @input="!searchQ && (searchResults = null)" />
-      <button class="btn ghost sm" @click="showRecent">{{ view === 'recent' ? '返回浏览' : '最近文件' }}</button>
-      <button class="btn sm" @click="newFolder">＋ 新建文件夹</button>
+      <button class="btn ghost sm" @click="showRecent">{{ view === 'recent' ? '返回浏览' : '🕐 最近' }}</button>
+      <button class="btn sm" @click="newFolder">＋ 文件夹</button>
       <label class="btn sm" style="position:relative">
         {{ uploading ? '上传中…' : '⬆ 上传' }}
         <input type="file" multiple hidden @change="onPick" />
       </label>
+      <span class="view-toggle">
+        <button :class="{ on: grid }" title="网格视图" @click="grid = true">▦</button>
+        <button :class="{ on: !grid }" title="列表视图" @click="grid = false">☰</button>
+      </span>
     </div>
 
-    <div class="crumbs" v-if="view === 'browse' && !searchResults">
+    <div class="crumbs" v-if="view === 'browse' && !searchResults && crumbs.length > 1">
       <template v-for="(c, i) in crumbs" :key="c.path">
         <span v-if="i" class="sep">/</span>
         <a href="#" :class="{ cur: i === crumbs.length - 1 }" @click.prevent="load(c.path)">{{ c.name }}</a>
@@ -217,8 +229,29 @@ onMounted(() => load(''))
 
     <p v-if="err" class="err">{{ err }}</p>
 
-    <div class="card flist" style="padding:8px">
-      <div v-if="!shownItems.length" class="empty">{{ view === 'browse' ? '此目录为空' : '没有匹配结果' }}</div>
+    <div v-if="!shownItems.length" class="card empty-state">
+      <div class="art">{{ view === 'browse' ? '🗂️' : '🔎' }}</div>
+      <div>{{ view === 'browse' ? '此目录为空' : '没有匹配结果' }}</div>
+      <div class="hint" v-if="view === 'browse'">点右上「⬆ 上传」添加文件，或拖拽文件夹卡片进入</div>
+    </div>
+    <div v-if="shownItems.length && grid && view === 'browse'" class="fgrid">
+      <div v-for="(e, gi) in shownItems" :key="e.path"
+           class="gcard" :class="{ selected: selected.has(e.path) }"
+           @click="open(e)" @contextmenu.prevent="startSelect(e)">
+        <span v-if="selectMode" class="checkbox gcheck" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
+        <span class="ops" @click.stop>
+          <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
+          <button class="iconbtn" title="更多" @click="startSelect(e)">⋯</button>
+        </span>
+        <span class="gicon" :class="e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
+          <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
+          <template v-else>{{ fileIcon(e) }}</template>
+        </span>
+        <span class="gname" :title="e.name">{{ e.name }}</span>
+        <span class="gsub">{{ e.is_dir ? e.modified.slice(5, 10) : e.size_human }}</span>
+      </div>
+    </div>
+    <div v-else-if="shownItems.length" class="card flist" style="padding:8px">
       <div v-for="e in shownItems" :key="e.path"
            class="frow" :class="{ selected: selected.has(e.path) }"
            @click="open(e)" @contextmenu.prevent="startSelect(e)">

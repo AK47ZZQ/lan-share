@@ -43,6 +43,14 @@ body {
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  position: relative;
+}
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(560px 420px at 12% -8%, rgba(101, 118, 255, 0.20), transparent 66%),
+    radial-gradient(640px 480px at 96% 14%, rgba(150, 96, 255, 0.14), transparent 66%),
+    radial-gradient(720px 560px at 50% 118%, rgba(77, 160, 255, 0.10), transparent 66%);
 }
 @media (prefers-reduced-motion: no-preference) {
   .card, .modal-card { animation: pop .28s cubic-bezier(.2,.9,.3,1.2); }
@@ -97,13 +105,15 @@ label.field { display: grid; gap: 5px; font-size: 13px; color: var(--text-2); }
   background: var(--glass); border-bottom: 1px solid var(--glass-border);
   backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
 }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; letter-spacing: .2px; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; letter-spacing: .2px; white-space: nowrap; }
 .logo {
   width: 30px; height: 30px; border-radius: 9px; background: var(--grad);
   display: grid; place-items: center; color: #fff; font-size: 15px;
   box-shadow: 0 4px 12px rgba(91, 108, 255, .4);
 }
-nav.tabs { display: flex; gap: 4px; flex: 1; }
+nav.tabs { display: flex; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+nav.tabs::-webkit-scrollbar { display: none; }
+nav.tabs a { white-space: nowrap; }
 nav.tabs a {
   padding: 7px 14px; border-radius: var(--radius-sm); color: var(--text-2);
   font-size: 14px; font-weight: 500; transition: background .12s, color .12s;
@@ -111,11 +121,14 @@ nav.tabs a {
 nav.tabs a:hover { background: var(--hover); color: var(--text); }
 nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); font-weight: 600; }
 .disk-badge {
+  display: inline-flex; align-items: center; gap: 8px;
   font-size: 12.5px; color: var(--text-2); padding: 5px 11px;
   border-radius: 999px; background: var(--glass-strong); border: 1px solid var(--line);
   white-space: nowrap;
 }
+.disk-badge .bar { width: 56px; margin: 0; }
 .disk-badge.low { color: var(--danger); border-color: rgba(229, 83, 75, .4); }
+.disk-badge.low .bar i { background: linear-gradient(135deg, #e5534b, #d64562); }
 .userchip { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text-2); }
 .avatar {
   width: 28px; height: 28px; border-radius: 50%; background: var(--grad);
@@ -238,3 +251,47 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 }
 .toast.err { color: var(--danger); }
 .toast.ok { color: var(--ok); }
+
+/* ── 网格视图 ── */
+.view-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.view-toggle button {
+  border: 0; background: transparent; color: var(--text-3); cursor: pointer;
+  padding: 6px 10px; font-size: 14px; line-height: 1;
+}
+.view-toggle button.on { background: var(--hover); color: var(--accent); }
+.fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; }
+.gcard {
+  display: grid; justify-items: center; gap: 7px; padding: 16px 8px 13px;
+  border-radius: 14px; cursor: pointer; text-align: center;
+  background: var(--glass); border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-sm); position: relative;
+  transition: transform .14s, box-shadow .14s, border-color .14s;
+}
+.gcard:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+.gcard.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91,108,255,.35); }
+.gcard .gicon {
+  width: 58px; height: 58px; border-radius: 15px; display: grid; place-items: center;
+  font-size: 28px; overflow: hidden; color: #fff;
+  background: linear-gradient(135deg, rgba(101,118,255,.16), rgba(150,96,255,.16));
+  border: 1px solid var(--line);
+}
+.gcard .gicon img { width: 100%; height: 100%; object-fit: cover; }
+.gcard .gicon.dir0 { background: linear-gradient(135deg, rgba(91,108,255,.28), rgba(138,91,255,.28)); }
+.gcard .gicon.dir1 { background: linear-gradient(135deg, rgba(45,164,78,.24), rgba(16,140,90,.24)); }
+.gcard .gicon.dir2 { background: linear-gradient(135deg, rgba(240,146,60,.26), rgba(224,96,120,.26)); }
+.gcard .gicon.dir3 { background: linear-gradient(135deg, rgba(60,160,255,.26), rgba(101,118,255,.26)); }
+.gcard .gname {
+  font-size: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; padding: 0 4px;
+}
+.gcard .gsub { font-size: 11px; color: var(--text-3); }
+.gcard .gcheck {
+  position: absolute; top: 8px; left: 8px;
+}
+.gcard .ops { position: absolute; top: 7px; right: 7px; opacity: 0; transition: opacity .12s; }
+.gcard:hover .ops, .gcard.selected .ops { opacity: 1; }
+
+/* ── 空状态 ── */
+.empty-state { text-align: center; padding: 64px 16px; color: var(--text-3); }
+.empty-state .art { font-size: 52px; margin-bottom: 10px; filter: grayscale(.2); }
+.empty-state .hint { font-size: 13px; margin-top: 6px; }
