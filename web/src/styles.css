@@ -317,17 +317,23 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .empty-state .art { font-size: 52px; margin-bottom: 10px; filter: grayscale(.2); }
 .empty-state .hint { font-size: 13px; margin-top: 6px; }
 
-/* ── 窄屏：行布局两行化（信息行 + 操作行），杜绝横向溢出 ── */
+/* ── 窄屏：文件页行不换行只留 ⋯；其他页（分享/管理）行两行化 ── */
 @media (max-width: 640px) {
   .page { overflow-x: hidden; }
-  .frow { flex-wrap: wrap; }
-  .frow .name { flex: 1 1 calc(100% - 54px); min-width: 0; }
-  .frow .meta { display: none; }
-  .frow .ops, .frow .ops[style] {
+  /* 文件页：图标+名称+⋯，全部操作在菜单里 */
+  .file-row { flex-wrap: nowrap; }
+  .file-row .name { flex: 1 1 auto; min-width: 0; }
+  .file-row .meta { display: none; }
+  .file-row .ops, .file-row .ops[style] { opacity: 1; width: auto; border: 0; padding: 0; margin: 0; }
+  .file-row .ops .btn.sm { display: none; }
+  /* 其他列表页（分享/管理/回收站）：信息行 + 操作行 */
+  .frow:not(.file-row) { flex-wrap: wrap; }
+  .frow:not(.file-row) .name { flex: 1 1 calc(100% - 54px); min-width: 0; }
+  .frow:not(.file-row) .meta { display: none; }
+  .frow:not(.file-row) .ops, .frow:not(.file-row) .ops[style] {
     opacity: 1; width: 100%; justify-content: flex-end;
     border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px;
   }
-  .frow .ops .btn.sm, .frow .ops select, .frow .ops input { flex: 0 0 auto; }
   .modal-card { max-height: 88vh; }
 }
 
@@ -376,3 +382,7 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 }
 .status-pill.done { background: rgba(191, 135, 0, .14); color: var(--warn); }
 .status-pill.expired { background: rgba(229, 83, 75, .12); color: var(--danger); }
+
+/* ── 私人空间专属样式 ── */
+.gicon.private { background: linear-gradient(135deg, rgba(138, 91, 255, 0.35), rgba(91, 108, 255, 0.35)); }
+.icon-private { background: linear-gradient(135deg, rgba(138, 91, 255, 0.3), rgba(91, 108, 255, 0.3)) !important; }

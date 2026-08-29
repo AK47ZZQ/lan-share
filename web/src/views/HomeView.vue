@@ -273,7 +273,7 @@ onMounted(() => { load(''); loadPublic() })
       <a href="#" style="margin-left:10px" @click.prevent="searchQ = ''; searchResults = null; view = 'browse'">返回浏览</a>
     </div>
 
-    <div class="crumbs" v-if="!searchMode">
+    <div class="crumbs" v-if="!searchMode && crumbs.length > 1">
       <template v-for="(c, i) in crumbs" :key="c.path">
         <span v-if="i" class="sep">/</span>
         <a href="#" :class="{ cur: i === crumbs.length - 1 }" @click.prevent="load(c.path)">{{ c.name }}</a>
@@ -292,9 +292,9 @@ onMounted(() => { load(''); loadPublic() })
            class="gcard" :class="{ selected: selected.has(e.path) }"
            @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox gcheck" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
-        <span class="gicon" :class="e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
+        <span class="gicon" :class="e.is_private_root ? 'private' : e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
-          <template v-else>{{ fileIcon(e) }}</template>
+          <template v-else>{{ e.is_private_root ? '🔒' : fileIcon(e) }}</template>
         </span>
         <span class="gname" :title="e.name">{{ e.name }}</span>
         <span class="gsub">{{ e.is_dir ? e.modified.slice(5, 10) : e.size_human }}</span>
@@ -306,18 +306,18 @@ onMounted(() => { load(''); loadPublic() })
     </div>
     <div v-else-if="shownItems.length" class="card flist" style="padding:8px">
       <div v-for="e in shownItems" :key="e.path"
-           class="frow" :class="{ selected: selected.has(e.path) }"
+           class="frow file-row" :class="{ selected: selected.has(e.path) }"
            @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
-        <span class="icon">
+        <span class="icon" :class="{ 'icon-private': e.is_private_root }">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
-          <template v-else>{{ fileIcon(e) }}</template>
+          <template v-else>{{ e.is_private_root ? '🔒' : fileIcon(e) }}</template>
         </span>
         <span class="name">
           <div>{{ e.name }}</div>
-          <small>{{ e.modified.slice(0, 16).replace('T', ' ') }}</small>
+          <small>{{ e.modified.slice(5, 16).replace('T', ' ') }}</small>
         </span>
-        <span class="meta">{{ e.is_dir ? '' : e.size_human }}</span>
+        <span class="meta">{{ e.is_dir ? '目录' : e.size_human }}</span>
         <span class="ops" @click.stop>
           <button class="iconbtn" title="下载" @click="download(e)" v-if="!e.is_dir">⬇</button>
           <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
