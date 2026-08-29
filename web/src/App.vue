@@ -101,6 +101,7 @@ watchEffect(() => {
             <router-link class="um-item" to="/photos" @click="menuOpen = false"><span>🖼️</span> 照片</router-link>
             <router-link class="um-item" to="/trash" @click="menuOpen = false"><span>🗑️</span> 回收站</router-link>
             <router-link class="um-item" to="/shares" @click="menuOpen = false"><span>🔗</span> 分享管理</router-link>
+            <router-link class="um-item" to="/activity" @click="menuOpen = false"><span>🔔</span> 家庭动态</router-link>
             <router-link v-if="me.role === 'admin'" class="um-item" to="/admin" @click="menuOpen = false"><span>⚙️</span> 管理</router-link>
             <button class="um-item" @click="closeMenu(); showDisk = true"><span>💾</span> 存储空间</button>
             <div class="um-divider" />

@@ -221,10 +221,31 @@ def _db():
     return conn
 
 
+def _backfill_audit_usernames():
+    """存量审计回填：username 为空且 target 以 incoming/<u>/、private/<u>/ 开头的行，
+    从路径反推操作者。幂等（只补空行）；无法反推的保持空串（前端显示"链接访客/
+    早期记录"）。"""
+    with _db_lock:
+        conn = _db()
+        rows = conn.execute(
+            "SELECT id, target FROM audit_log WHERE username=''").fetchall()
+        updates = []
+        for r in rows:
+            parts = str(r["target"] or "").split("/")
+            if len(parts) >= 2 and parts[0] in ("incoming", "private") and parts[1]:
+                updates.append((parts[1], r["id"]))
+        if updates:
+            for u, rid in updates:
+                conn.execute("UPDATE audit_log SET username=? WHERE id=? AND username=''", (u, rid))
+            if not USE_PG:
+                conn.commit()
+
+
 def init_db():
     SHARE_ROOT.mkdir(parents=True, exist_ok=True)
     if USE_PG:
         _db().executescript(_PG_SCHEMA)
+        _backfill_audit_usernames()
         return
     conn = _db()
     conn.execute("PRAGMA journal_mode=WAL")

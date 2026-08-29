@@ -5,6 +5,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from contextvars import ContextVar
 from typing import Optional
 
 from fastapi import HTTPException, Request
@@ -13,11 +14,19 @@ from app.config import (AUDIT_KEEP, COOKIE_NAME, LOGIN_LOCK_SECONDS, LOGIN_MAX_F
                         SESSION_RENEW_AFTER, SESSION_TTL)
 from app.db import _db, _db_lock
 
+# 当前请求的登录用户名：中间件注入，audit() 自动带上（公开入口为空串）
+_audit_user: ContextVar[str] = ContextVar("audit_user", default="")
+
+
+def set_audit_user(username: str):
+    _audit_user.set(username or "")
+
+
 def audit(action: str, target: str = "", detail: str = "", ip: str = ""):
     with _db_lock:
         _db().execute(
-            "INSERT INTO audit_log(ts, ip, action, target, detail) VALUES(?,?,?,?,?)",
-            (time.time(), ip, action, target, detail))
+            "INSERT INTO audit_log(ts, ip, action, target, detail, username) VALUES(?,?,?,?,?,?)",
+            (time.time(), ip, action, target, detail, _audit_user.get()))
         _db().execute(
             "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", (AUDIT_KEEP,))
         _db().commit()

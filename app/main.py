@@ -12,12 +12,18 @@ from urllib.parse import urlsplit
 from app.config import (API_RATE_LIMIT, LOGIN_RATE_LIMIT, PROJECT_ROOT, SHARE_RATE_LIMIT,
                         SHARE_ROOT)
 from app.db import init_db
-from app.security import allow_rate, client_ip, get_session_user
+from app.security import allow_rate, client_ip, get_session_user, set_audit_user
 
 app = FastAPI(title="LAN Share", version="2.0.0")
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
+    # 审计上下文：本请求的登录用户名（audit() 自动带上；未登录为空）
+    try:
+        u = get_session_user(request)
+        set_audit_user(u["username"] if u else "")
+    except Exception:
+        set_audit_user("")
     # CSRF：带 Origin 的请求必须与 Host 同源（SameSite=Lax 之外的第二道防线）
     origin = request.headers.get("origin")
     if origin and urlsplit(origin).netloc != request.headers.get("host", ""):

@@ -7,6 +7,7 @@ import AdminView from './views/AdminView.vue'
 import SharesView from './views/SharesView.vue'
 import ShareView from './views/ShareView.vue'
 import UpView from './views/UpView.vue'
+import ActivityView from './views/ActivityView.vue'
 
 export const router = createRouter({
   history: createWebHistory('/'),
@@ -16,6 +17,7 @@ export const router = createRouter({
     { path: '/photos', name: 'photos', component: PhotosView },
     { path: '/trash', name: 'trash', component: TrashView },
     { path: '/shares', name: 'shares', component: SharesView },
+    { path: '/activity', name: 'activity', component: ActivityView },
     { path: '/admin', name: 'admin', component: AdminView, meta: { admin: true } },
     { path: '/s/:token', name: 'share', component: ShareView },
     { path: '/up', name: 'up', component: UpView },

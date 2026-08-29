@@ -271,17 +271,14 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 动态 -->
-    <div v-if="tab === 'feed'" class="card flist" style="padding:8px">
-      <div v-if="!feed.length" class="empty">暂无动态</div>
-      <div v-for="(a, i) in feed" :key="i" class="frow" style="cursor:default">
-        <span class="icon">{{ a.action.startsWith('share') ? '🔗' : a.action === 'upload' || a.action === 'upload_instant' ? '⬆️' : a.action === 'invite_redeemed' ? '👋' : '✨' }}</span>
-        <span class="name">
-          <div>{{ a.username || '（成员）' }} {{ { upload: '上传了', upload_instant: '秒传了', mkdir: '新建了目录', share: '创建了分享', share_download: '分享被下载', invite_redeemed: '加入了家庭空间', trash: '删除了', restore: '恢复了', move: '移动了', rename: '重命名了' }[a.action] || a.action }}
-            <b>{{ a.target.split('/').pop() }}</b></div>
-          <small>{{ a.target }}</small>
-        </span>
-        <span class="meta">{{ fmtTs(a.ts) }}</span>
+    <!-- 动态（入口：完整动态流已独立为全员页面 /activity） -->
+    <div v-if="tab === 'feed'" class="card empty-state">
+      <div class="art">🔔</div>
+      <div>家庭动态已独立成页（全员可见）</div>
+      <div class="hint">动态的聚合、跳转、清空都在动态页完成</div>
+      <div style="margin-top:10px;display:flex;gap:8px;justify-content:center">
+        <router-link class="btn sm" to="/activity">打开家庭动态 →</router-link>
+        <button v-if="feed.length" class="btn danger sm" @click="clearFeed">清空动态</button>
       </div>
     </div>
 
