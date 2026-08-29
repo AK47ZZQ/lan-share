@@ -163,7 +163,7 @@ async def share_download(request: Request, token: str, tkt: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File deleted")
     return FileResponse(file_path, media_type="application/octet-stream",
-                        headers={"Content-Disposition": f'attachment; filename="{s["name"]}"'},
+                        filename=s["name"],
                         background=BackgroundTask(
                             _share_download_done, token, s["path"], client_ip(request)))
 

@@ -124,7 +124,7 @@ async def dav_handler(request: Request, path: str = ""):
             raise HTTPException(status_code=400, detail="Collection")
         mime, _ = mimetypes.guess_type(str(target))
         return FileResponse(target, media_type=mime or "application/octet-stream",
-                            headers={"Content-Disposition": f'inline; filename="{_xml_escape(target.name)}"'})
+                            filename=target.name)
 
     if method == "PROPFIND":
         if not exists:

@@ -415,8 +415,9 @@ async def preview_file(path: str, _user=Depends(require_user)):
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     mime, _ = mimetypes.guess_type(str(target))
+    # filename 走 starlette 的 RFC5987 编码（中文文件名直接拼头会炸 latin-1）
     return FileResponse(target, media_type=mime or "application/octet-stream",
-                        headers={"Content-Disposition": f"inline; filename=\"{target.name}\""})
+                        filename=target.name)
 
 
 # ─── 批量打包下载 / 重命名 ─────────────────────────────────

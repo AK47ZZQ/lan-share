@@ -265,3 +265,14 @@ def test_share_download_limit(auth, workdir):
     # 次数在响应发送完成后才计（BackgroundTask），TestClient 会跑完 background
     prep2 = auth.post(f"/api/share/{token}/prepare", json={})
     assert prep2.status_code == 410  # 下载次数已达上限
+
+
+def test_preview_chinese_filename(auth, workdir):
+    """回归：中文文件名预览曾因 Content-Disposition 头 latin-1 编码 500。"""
+    name = "截图 测试 中文.txt"
+    r = auth.post(f"/api/upload/{workdir}",
+                  files={"file": (name, b"content", "text/plain")})
+    assert r.status_code == 200, r.text
+    r = auth.get(f"/preview/{workdir}/{name}")
+    assert r.status_code == 200, f"{r.status_code}: {r.text[:120]}"
+    assert r.content == b"content"

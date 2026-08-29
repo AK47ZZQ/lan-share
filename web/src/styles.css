@@ -295,3 +295,10 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .empty-state { text-align: center; padding: 64px 16px; color: var(--text-3); }
 .empty-state .art { font-size: 52px; margin-bottom: 10px; filter: grayscale(.2); }
 .empty-state .hint { font-size: 13px; margin-top: 6px; }
+
+/* ── 触屏适配：没有 hover，操作按钮常显、点击区加大 ── */
+@media (hover: none) {
+  .frow .ops, .gcard .ops { opacity: 1; }
+  .iconbtn { width: 38px; height: 38px; font-size: 17px; }
+  .frow { padding: 13px 12px; }
+}

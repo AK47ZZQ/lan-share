@@ -82,7 +82,7 @@ async function load(p: string) {
 function open(e: Entry) {
   if (selectMode.value) { toggle(e.path); return }
   if (e.is_dir) void load(e.path)
-  else window.open(`/preview/${encodeURI(e.path)}`, '_blank')
+  else previewFile.value = e
 }
 
 // ── 选择 ──
@@ -192,6 +192,23 @@ async function showRecent() {
 
 const searchMode = computed(() => view.value === 'recent' || !!searchResults.value)
 
+// 页内预览（不再 window.open——弹窗拦截器会吞掉新页）
+const previewFile = ref<Entry | null>(null)
+const IMG = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+const VID = ['.mp4', '.mkv', '.mov', '.webm', '.avi']
+const AUD = ['.mp3', '.flac', '.wav', '.m4a', '.ogg']
+const previewKind = computed(() => {
+  const e = previewFile.value
+  if (!e) return null
+  const ext = (e.ext || '').toLowerCase()
+  if (IMG.includes(ext)) return 'image'
+  if (VID.includes(ext)) return 'video'
+  if (AUD.includes(ext)) return 'audio'
+  if (ext === '.pdf' || ['.txt', '.md', '.log', '.json'].includes(ext)) return 'frame'
+  return 'download'
+})
+const previewUrl = computed(() => previewFile.value ? `/preview/${encodeURI(previewFile.value.path)}` : '')
+
 const shownItems = computed(() => {
   if (view.value === 'recent') return recentItems.value
   if (searchResults.value) return searchResults.value
@@ -205,6 +222,7 @@ onMounted(() => load(''))
   <main class="page">
     <div class="page-head">
       <h1>文件</h1>
+      <button v-if="path && view === 'browse'" class="btn ghost sm" @click="load(path.split('/').slice(0, -1).join('/'))">← 返回</button>
       <input v-model="searchQ" placeholder="🔍 搜索文件…" class="searchbox"
              @keydown.enter="runSearch" @input="!searchQ && (searchResults = null)" />
       <button class="btn ghost sm" @click="showRecent">{{ view === 'recent' ? '返回浏览' : '🕐 最近' }}</button>
@@ -213,6 +231,9 @@ onMounted(() => load(''))
         {{ uploading ? '上传中…' : '⬆ 上传' }}
         <input type="file" multiple hidden @change="onPick" />
       </label>
+      <button class="btn ghost sm" @click="selectMode = !selectMode; if (!selectMode) selected.clear()">
+        {{ selectMode ? '取消选择' : '☑ 选择' }}
+      </button>
       <span class="view-toggle">
         <button :class="{ on: grid }" title="网格视图" @click="grid = true">▦</button>
         <button :class="{ on: !grid }" title="列表视图" @click="grid = false">☰</button>
@@ -220,14 +241,15 @@ onMounted(() => load(''))
     </div>
 
     <div class="crumbs" v-if="searchMode">
+      <span class="cur">{{ view === 'recent' ? '最近文件' : `搜索“${searchQ}”` }}</span>
+      <a href="#" style="margin-left:10px" @click.prevent="searchQ = ''; searchResults = null; view = 'browse'">返回浏览</a>
+    </div>
+
+    <div class="crumbs" v-if="!searchMode">
       <template v-for="(c, i) in crumbs" :key="c.path">
         <span v-if="i" class="sep">/</span>
         <a href="#" :class="{ cur: i === crumbs.length - 1 }" @click.prevent="load(c.path)">{{ c.name }}</a>
       </template>
-    </div>
-    <div class="crumbs" v-else>
-      <span class="cur">{{ view === 'recent' ? '最近文件' : `搜索“${searchQ}”` }}</span>
-      <a href="#" style="margin-left:10px" @click.prevent="searchQ = ''; searchResults = null; view = 'browse'">返回浏览</a>
     </div>
 
     <p v-if="err" class="err">{{ err }}</p>
@@ -313,5 +335,28 @@ onMounted(() => load(''))
     <Modal v-if="sharePaths" title="创建分享" @close="sharePaths = null">
       <ShareModal :paths="sharePaths" @close="sharePaths = null" />
     </Modal>
+
+    <!-- 页内预览灯箱 -->
+    <teleport to="body">
+      <div v-if="previewFile" class="overlay" @click.self="previewFile = null">
+        <div class="preview-box">
+          <div class="preview-head">
+            <span class="preview-name" :title="previewFile.name">{{ previewFile.name }}</span>
+            <span style="display:flex;gap:6px;align-items:center">
+              <a class="btn ghost sm" :href="`/files/${encodeURI(previewFile.path)}`" target="_blank">⬇ 下载</a>
+              <button class="iconbtn" style="color:#fff" @click="previewFile = null">✕</button>
+            </span>
+          </div>
+          <img v-if="previewKind === 'image'" :src="previewUrl" class="preview-media" />
+          <video v-else-if="previewKind === 'video'" :src="previewUrl" class="preview-media" controls autoplay />
+          <audio v-else-if="previewKind === 'audio'" :src="previewUrl" controls autoplay style="width:min(560px,90vw)" />
+          <iframe v-else-if="previewKind === 'frame'" :src="previewUrl" class="preview-frame" />
+          <div v-else class="card" style="padding:26px;text-align:center">
+            <p>该类型暂不支持在线预览</p>
+            <a class="btn sm" :href="`/files/${encodeURI(previewFile.path)}`" target="_blank">⬇ 下载文件</a>
+          </div>
+        </div>
+      </div>
+    </teleport>
   </main>
 </template>
