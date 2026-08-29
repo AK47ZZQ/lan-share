@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth } from './auth'
 import { toasts } from './ui'
+import { applyTheme, currentTheme, type Theme } from './theme'
 
 const disk = ref<{ free: string; warning: boolean; disk_used_pct?: number } | null>(null)
 const route = useRoute()
@@ -18,6 +19,8 @@ async function boot() {
 }
 
 const menuOpen = ref(false)
+const theme = ref<Theme>(currentTheme())
+function setTheme(th: Theme) { theme.value = th; applyTheme(th) }
 function closeMenu() { menuOpen.value = false }
 function doLogout() { closeMenu(); authLogout().then(() => router.replace('/login')) }
 
@@ -67,6 +70,15 @@ watchEffect(() => {
             <router-link class="um-item" to="/trash" @click="menuOpen = false"><span>🗑️</span> 回收站</router-link>
             <router-link v-if="me.role === 'admin'" class="um-item" to="/admin" @click="menuOpen = false"><span>⚙️</span> 管理</router-link>
             <div class="um-divider" />
+            <div class="um-theme">
+              <span style="font-size:13px;color:var(--text-3)">主题</span>
+              <div class="theme-seg">
+                <button :class="{ on: theme === 'light' }" @click="setTheme('light')">浅色</button>
+                <button :class="{ on: theme === 'dark' }" @click="setTheme('dark')">深色</button>
+                <button :class="{ on: theme === 'auto' }" @click="setTheme('auto')">跟随系统</button>
+              </div>
+            </div>
+            <div class="um-divider" />
             <button class="um-item danger" @click="doLogout"><span>⏻</span> 退出登录</button>
           </div>
         </teleport>
@@ -79,6 +91,13 @@ watchEffect(() => {
 </template>
 
 <style>
+.um-theme { padding: 6px 10px 4px; display: grid; gap: 6px; }
+.theme-seg { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.theme-seg button {
+  flex: 1; border: 0; background: transparent; color: var(--text-3);
+  padding: 6px 4px; font-size: 12.5px; cursor: pointer;
+}
+.theme-seg button.on { background: var(--hover); color: var(--accent); font-weight: 600; }
 .uname { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avatar-btn {
   margin-left: auto; display: flex; align-items: center; gap: 8px;

@@ -20,8 +20,22 @@
   --hover: rgba(91, 108, 255, 0.09);
   --line: rgba(35, 38, 61, 0.08);
 }
+/* 深色令牌：跟随系统（auto）或手动 data-theme='dark'；data-theme='light' 强制浅色 */
+:root[data-theme='dark'] {
+  --bg: linear-gradient(135deg, #171a2e 0%, #1d1832 55%, #141b2b 100%);
+  --glass: rgba(30, 33, 54, 0.62);
+  --glass-strong: rgba(34, 37, 60, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 3px 14px rgba(0, 0, 0, 0.35);
+  --text: #e6e8f7;
+  --text-2: #a4a9c8;
+  --text-3: #6f7494;
+  --hover: rgba(122, 134, 255, 0.16);
+  --line: rgba(230, 232, 247, 0.09);
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: linear-gradient(135deg, #171a2e 0%, #1d1832 55%, #141b2b 100%);
     --glass: rgba(30, 33, 54, 0.62);
     --glass-strong: rgba(34, 37, 60, 0.85);
