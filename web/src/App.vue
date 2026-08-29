@@ -13,8 +13,8 @@ const diskPct = computed(() => disk.value && disk.value.total_bytes ? Math.round
 const route = useRoute()
 const router = useRouter()
 
-// 无需登录的公开页
-const publicRoute = computed(() => ['share', 'login'].includes(String(route.name)))
+// 公开渲染的页面：分享落地页、登录页、直传页（未登录时页内引导登录）
+const publicRoute = computed(() => ['share', 'login', 'up'].includes(String(route.name)))
 
 async function boot() {
   await refreshAuth()

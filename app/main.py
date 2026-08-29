@@ -67,10 +67,8 @@ def spa_index() -> HTMLResponse:
 
 
 @app.get("/up", response_class=HTMLResponse)
-async def up_page(request: Request):
-    """手机直传页（需登录）。"""
-    if not get_session_user(request):
-        return RedirectResponse("/login?next=/up", status_code=307)
+async def up_page():
+    """手机直传页：SPA 自带未登录引导（页内"去登录"带 next 回跳）。"""
     return spa_index() if _SPA_READY else html_page("up.html")
 
 
