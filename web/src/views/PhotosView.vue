@@ -2,6 +2,9 @@
 import { onMounted, ref, computed } from 'vue'
 import { api, type PhotoItem, type PhotoFacets, type Album, type Me } from '../api'
 import { promptDlg, toast } from '../ui'
+import Modal from '../components/Modal.vue'
+import ShareModal from '../components/ShareModal.vue'
+import FileViewer, { type ViewerItem } from '../components/FileViewer.vue'
 
 const props = defineProps<{ me: Me }>()
 
@@ -11,8 +14,20 @@ const total = ref(0)
 const offset = ref(0)
 const loading = ref(false)
 const err = ref('')
-const preview = ref<Ph | null>(null)
+const viewerIndex = ref(-1)
 const LIMIT = 120
+
+// 预览器数据：已加载照片扁平化 + 预览内分享
+const navItems = computed<ViewerItem[]>(() =>
+  groups.value.flatMap(g => g.photos.map(p => ({
+    path: p.path, name: p.name, ext: p.path.match(/(\.[^.]+)$/)?.[1] ?? null,
+    taken: p.taken, uploader: p.uploader, modified: p.taken,
+  }))))
+const sharePaths = ref<string[] | null>(null)
+function onViewerShare(item: ViewerItem) {
+  viewerIndex.value = -1
+  sharePaths.value = [item.path]
+}
 
 // 双维度筛选 + 精选专辑
 const facets = ref<PhotoFacets | null>(null)
@@ -140,21 +155,21 @@ onMounted(() => { void loadMore(); void loadFacets(); window.addEventListener('s
     <div v-for="g in groups" :key="g.date">
       <div class="phdate">{{ g.date }}</div>
       <div class="photogrid">
-        <div v-for="p in g.photos" :key="p.path" class="ph" @click="preview = p">
+        <div v-for="p in g.photos" :key="p.path" class="ph"
+             @click="viewerIndex = navItems.findIndex(x => x.path === p.path)">
           <img :src="p.thumb" loading="lazy" alt="" />
         </div>
       </div>
     </div>
     <div class="empty" v-if="loading">加载中…</div>
 
-    <div v-if="preview" class="overlay" @click.self="preview = null">
-      <div style="max-width:94vw;max-height:90vh;text-align:center">
-        <img :src="`/preview/${encodeURI(preview.path)}`" style="max-width:94vw;max-height:82vh;border-radius:12px" />
-        <div style="color:#fff;margin-top:8px;font-size:13px;text-shadow:0 1px 4px rgba(0,0,0,.6)">
-          {{ preview.name }} · {{ preview.taken }} · 👤{{ preview.uploader }}
-        </div>
-      </div>
-    </div>
+    <!-- 统一预览器 -->
+    <FileViewer v-if="viewerIndex >= 0 && navItems.length" :items="navItems"
+                v-model="viewerIndex" :me="me" @close="viewerIndex = -1"
+                @share="onViewerShare" @refresh="applyFilter()" />
+    <Modal v-if="sharePaths" title="创建分享" @close="sharePaths = null">
+      <ShareModal :paths="sharePaths" @close="sharePaths = null" />
+    </Modal>
   </main>
 </template>
 

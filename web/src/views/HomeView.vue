@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { api, uploadResumable, type Entry } from '../api'
+import { api, uploadResumable, type Entry, type Me } from '../api'
 import { confirmDlg, promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
 import DirPicker from '../components/DirPicker.vue'
 import ShareModal from '../components/ShareModal.vue'
 import ContextMenu from '../components/ContextMenu.vue'
+import FileViewer from '../components/FileViewer.vue'
 
-defineProps<{ me: { username: string; role: string } }>()
+defineProps<{ me: Me }>()
 
 const grid = ref(localStorage.getItem('lsView') !== 'list')
 watch(grid, g => localStorage.setItem('lsView', g ? 'grid' : 'list'))
@@ -113,7 +114,7 @@ async function load(p: string) {
 function open(e: Entry) {
   if (selectMode.value) { toggle(e.path); return }
   if (e.is_dir) void load(e.path)
-  else previewFile.value = e
+  else openViewer(e)
 }
 
 // ── 选择 ──
@@ -223,22 +224,17 @@ async function showRecent() {
 
 const searchMode = computed(() => view.value === 'recent' || !!searchResults.value)
 
-// 页内预览（不再 window.open——弹窗拦截器会吞掉新页）
-const previewFile = ref<Entry | null>(null)
-const IMG = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-const VID = ['.mp4', '.mkv', '.mov', '.webm', '.avi']
-const AUD = ['.mp3', '.flac', '.wav', '.m4a', '.ogg']
-const previewKind = computed(() => {
-  const e = previewFile.value
-  if (!e) return null
-  const ext = (e.ext || '').toLowerCase()
-  if (IMG.includes(ext)) return 'image'
-  if (VID.includes(ext)) return 'video'
-  if (AUD.includes(ext)) return 'audio'
-  if (ext === '.pdf' || ['.txt', '.md', '.log', '.json'].includes(ext)) return 'frame'
-  return 'download'
-})
-const previewUrl = computed(() => previewFile.value ? `/preview/${encodeURI(previewFile.value.path)}` : '')
+// 页内预览（统一 FileViewer：相邻导航/缩放/信息面板/文本渲染）
+const previewIndex = ref(-1)
+const navItems = computed(() => shownItems.value.filter(i => !i.is_dir))
+function openViewer(e: Entry) {
+  const idx = navItems.value.findIndex(x => x.path === e.path)
+  if (idx >= 0) previewIndex.value = idx
+}
+function onViewerShare(item: { path: string }) {
+  previewIndex.value = -1
+  sharePaths.value = [item.path]
+}
 
 const shownItems = computed(() => {
   if (view.value === 'recent') return recentItems.value
@@ -407,27 +403,9 @@ onMounted(() => { load(''); loadPublic() })
       <button class="mi" @click="menuAct('multi')">☑ 多选模式</button>
     </ContextMenu>
 
-    <!-- 页内预览灯箱 -->
-    <teleport to="body">
-      <div v-if="previewFile" class="overlay" @click.self="previewFile = null">
-        <div class="preview-box">
-          <div class="preview-head">
-            <span class="preview-name" :title="previewFile.name">{{ previewFile.name }}</span>
-            <span style="display:flex;gap:6px;align-items:center">
-              <a class="btn ghost sm" :href="`/files/${encodeURI(previewFile.path)}`" target="_blank">⬇ 下载</a>
-              <button class="iconbtn" style="color:#fff" @click="previewFile = null">✕</button>
-            </span>
-          </div>
-          <img v-if="previewKind === 'image'" :src="previewUrl" class="preview-media" />
-          <video v-else-if="previewKind === 'video'" :src="previewUrl" class="preview-media" controls autoplay />
-          <audio v-else-if="previewKind === 'audio'" :src="previewUrl" controls autoplay style="width:min(560px,90vw)" />
-          <iframe v-else-if="previewKind === 'frame'" :src="previewUrl" class="preview-frame" />
-          <div v-else class="card" style="padding:26px;text-align:center">
-            <p>该类型暂不支持在线预览</p>
-            <a class="btn sm" :href="`/files/${encodeURI(previewFile.path)}`" target="_blank">⬇ 下载文件</a>
-          </div>
-        </div>
-      </div>
-    </teleport>
+    <!-- 页内预览（统一 FileViewer） -->
+    <FileViewer v-if="previewIndex >= 0 && navItems.length" :items="navItems"
+                v-model="previewIndex" :me="me" @close="previewIndex = -1"
+                @share="onViewerShare" @refresh="load(path)" />
   </main>
 </template>

@@ -431,12 +431,35 @@ async def empty_trash(request: Request, _admin=Depends(require_admin)):
 
 
 @app.get("/preview/{path:path}")
-async def preview_file(path: str, _user=Depends(require_user)):
+async def preview_file(path: str, w: int | None = Query(default=None),
+                       _user=Depends(require_user)):
+    """文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/），
+    公网/移动端省流量；缩放超过中档位后前端自行改拉原图。"""
     target = resolve(_user, path, "read")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     mime, _ = mimetypes.guess_type(str(target))
     # filename 走 starlette 的 RFC5987 编码（中文文件名直接拼头会炸 latin-1）
+    if w and target.suffix.lower() in IMG_EXTS:
+        w = max(320, min(int(w), 3840))
+        stat = target.stat()
+        key = hashlib.md5(
+            f"{path}:{stat.st_mtime_ns}:{stat.st_size}:w{w}".encode()).hexdigest()
+        cache_dir = SHARE_ROOT / ".thumbs"
+        cache_dir.mkdir(exist_ok=True)
+        cached = cache_dir / f"{key}.jpg"
+        if not cached.exists():
+            from PIL import Image
+            tmp = cached.with_suffix(".tmp")
+            try:
+                img = Image.open(target)
+                img.thumbnail((w, w))
+                img.convert("RGB").save(tmp, "JPEG", quality=82)
+                os.replace(tmp, cached)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail="Preview error")
+        return FileResponse(cached, media_type="image/jpeg")
     return FileResponse(target, media_type=mime or "application/octet-stream",
                         filename=target.name)
 
