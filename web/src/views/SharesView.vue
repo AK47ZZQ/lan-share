@@ -110,6 +110,7 @@ onMounted(async () => {
             <button v-if="s.password" class="btn ghost sm" @click="copyPwd(s)">🔑 复制提取码</button>
             <button class="btn ghost sm" @click="qrFor = s; qrFailed = false">🔳 二维码</button>
             <button class="btn ghost sm" @click="showHistory(s)">取件记录</button>
+            <button class="btn danger sm btn-revoke" @click="revoke(s)">✕ 撤销</button>
             <button class="iconbtn danger" title="撤销分享" @click="revoke(s)">✕</button>
           </span>
         </div>

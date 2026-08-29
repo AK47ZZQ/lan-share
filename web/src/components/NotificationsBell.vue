@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type NotificationItem, type ActivityItem, type Me } from '../api'
-import { fmtTs, toast } from '../ui'
+import { fmtTs } from '../ui'
 
 const props = defineProps<{ me: Me }>()
 
@@ -56,6 +56,10 @@ async function switchTab(t: 'notify' | 'activity') {
     loading.value = true
     await load()
     loading.value = false
+    // 重开通知 Tab 同样清除未读（与首次打开一致）
+    if (unread.value) {
+      api.notificationsRead().then(() => { unread.value = 0 }).catch(() => {})
+    }
   } else {
     await openActivity()
   }
@@ -99,19 +103,22 @@ function baseName(target: string): string {
 function activityTitle(n: ActivityItem): string {
   const who = n.username || '有人'
   const verb = ACTION_TEXT[n.action] || n.action
-  return n.count > 1 ? `${who} ${verb} ${n.count} 项` : `${who} ${verb} ${baseName(n.target)}`
+  if (n.count > 1) return `${who} ${verb} ${n.count} 项`
+  if (n.action === 'share_target' && n.detail) return `${who} 定向分享了 ${baseName(n.target)} ${n.detail}`
+  return `${who} ${verb} ${baseName(n.target)}`
 }
 // 点击动态跳转：返回目标路由，null = 不可跳
 function activityRoute(n: ActivityItem): { path: string; query?: Record<string, string> } | null {
   const target = n.target || ''
   const dirOf = (p: string) => p.split('/').filter(Boolean).slice(0, -1).join('/')
+  const toDir = (d: string) => d ? { path: '/', query: { dir: d } } : { path: '/' }
   switch (n.action) {
     case 'upload': case 'upload_instant':
-      return { path: '/', query: { dir: dirOf(target) } }
+      return toDir(dirOf(target))
     case 'mkdir':
-      return { path: '/', query: { dir: target } }
+      return toDir(target)
     case 'move': case 'rename':
-      return { path: '/', query: { dir: dirOf(target) } }
+      return toDir(dirOf(target))
     case 'trash': case 'restore':
       return { path: '/trash' }
     case 'share': case 'share_target': case 'share_download':

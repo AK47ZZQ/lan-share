@@ -789,7 +789,7 @@ function iconOf(it: ViewerItem): string {
 .fv-audio-bar { display: flex; align-items: center; gap: 10px; width: min(560px, 86vw); }
 .fv-audio-bar input[type=range] { flex: 1; accent-color: #7c8cf8; }
 .fv-time { font-size: 12px; color: rgba(255, 255, 255, .6); font-variant-numeric: tabular-nums; }
-.fv-hint { font-size: 12px; color: rgba(255, 255, 255, .4); margin: 0; }
+.fv-hint { font-size: 12px; color: rgba(255, 255, 255, .55); margin: 0; }
 
 /* 胶片条 */
 .fv-strip {

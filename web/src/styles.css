@@ -386,3 +386,10 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 /* ── 私人空间专属样式 ── */
 .gicon.private { background: linear-gradient(135deg, rgba(138, 91, 255, 0.35), rgba(91, 108, 255, 0.35)); }
 .icon-private { background: linear-gradient(135deg, rgba(138, 91, 255, 0.3), rgba(91, 108, 255, 0.3)) !important; }
+
+/* 撤销按钮：桌面用 ✕ 图标，手机端用文字按钮（避免 flex 换行后 ✕ 孤行） */
+.btn-revoke { display: none; }
+@media (max-width: 640px) {
+  .share-card .iconbtn.danger { display: none; }
+  .btn-revoke { display: inline-flex; align-items: center; }
+}

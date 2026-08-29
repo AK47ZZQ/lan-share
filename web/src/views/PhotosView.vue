@@ -193,6 +193,7 @@ onMounted(() => { void loadMore(); void loadFacets(); window.addEventListener('s
 .facet-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .facet-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
 .chip {
+  display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   border: 1px solid var(--line); background: var(--glass); border-radius: 999px;
   padding: 4px 12px; font-size: 12.5px; cursor: pointer; color: var(--text-2);
   transition: border-color .12s, background .12s;
