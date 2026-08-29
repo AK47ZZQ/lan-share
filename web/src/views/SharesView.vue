@@ -10,6 +10,10 @@ const filter = ref<'all' | 'active' | 'done'>('all')
 const qrFor = ref<ShareItem | null>(null)
 const qrFailed = ref(false)
 const historyFor = ref<{ s: ShareItem; rows: ShareHistoryRow[] } | null>(null)
+const publicBase = ref('')
+function linkOf(s: ShareItem, usePublic = false) {
+  return usePublic && publicBase.value ? publicBase.value + '/s/' + s.token : `${location.origin}/s/${s.token}`
+}
 
 type Status = 'active' | 'done' | 'expired'
 function statusOf(s: ShareItem): Status {
@@ -31,11 +35,14 @@ const counts = computed(() => {
 async function load() {
   try { items.value = await api.shares() } catch (e) { err.value = (e as Error).message }
 }
-function linkOf(s: ShareItem) { return `${location.origin}/s/${s.token}` }
 async function copy(s: ShareItem) {
   const text = s.password ? `${linkOf(s)}
 提取码：${s.password}` : linkOf(s)
   try { await navigator.clipboard.writeText(text); toast(s.password ? '已复制链接和提取码' : '链接已复制', 'ok') }
+  catch { prompt('请手动复制：', text) }
+}
+async function copyText(text: string) {
+  try { await navigator.clipboard.writeText(text); toast('已复制', 'ok') }
   catch { prompt('请手动复制：', text) }
 }
 async function copyPwd(s: ShareItem) {
@@ -53,7 +60,10 @@ async function showHistory(s: ShareItem) {
 }
 const STATUS_LABEL: Record<Status, string> = { active: '有效', done: '已用完', expired: '已过期' }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  try { publicBase.value = (await api.getPublicUrl()).public_base_url } catch { /* 成员不可见 */ }
+})
 </script>
 
 <template>
@@ -94,8 +104,9 @@ onMounted(load)
             <div class="bar"><i :style="{ width: Math.min(100, Math.round(s.downloads / s.max_downloads * 100)) + '%' }" /></div>
           </span>
           <span v-else style="font-size:12px;color:var(--text-3)">已下载 {{ s.downloads }} 次 · 不限次数</span>
-          <span style="display:flex;gap:6px;margin-left:auto">
-            <button class="btn ghost sm" @click="copy(s)">{{ s.password ? '📋 复制链接+提取码' : '📋 复制链接' }}</button>
+          <span style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">
+            <button class="btn ghost sm" @click="copy(s)">{{ s.password ? '📋 链接+提取码' : '📋 局域网链接' }}</button>
+            <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + s.token + (s.password ? ' | 提取码：' + s.password : ''))">🌐 公网</button>
             <button class="btn ghost sm" @click="qrFor = s; qrFailed = false">🔳 二维码</button>
             <button class="btn ghost sm" @click="showHistory(s)">取件记录</button>
             <button class="iconbtn danger" title="撤销分享" @click="revoke(s)">✕</button>

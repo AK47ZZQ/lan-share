@@ -86,13 +86,18 @@ async function revokeInvite(code: string) {
 async function delGrant(g: { id: number }) {
   try { await api.adminDeleteGrant(g.id); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
+const pubUrl = ref('')
+async function savePubUrl() {
+  try { await api.setPublicUrl(pubUrl.value.trim()); toast('公网地址已保存', 'ok') } catch (e) { toast((e as Error).message, 'err') }
+}
 
-onMounted(() => {
+onMounted(async () => {
   if (me.value && me.value.role !== 'admin') {
     err.value = '需要管理员权限'
     return
   }
   void loadAll()
+  try { pubUrl.value = (await api.getPublicUrl()).public_base_url } catch { /* */ }
 })
 </script>
 
@@ -128,6 +133,16 @@ onMounted(() => {
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
         </span>
       </div>
+    </div>
+
+    <!-- 公网地址设置（成员页底部） -->
+    <div v-if="tab === 'users'" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
+      <div style="font-size:13.5px;font-weight:600">🌐 公网访问地址（分享链接双地址用）</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input v-model="pubUrl" placeholder="如 https://your-frp-domain.com:xxxxx" style="flex:1;min-width:220px;font-size:14px" />
+        <button class="btn sm" @click="savePubUrl">保存</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-3);margin:0">设置后，分享卡片会同时提供局域网/公网两个复制按钮。</p>
     </div>
 
     <!-- 邀请 -->

@@ -11,7 +11,11 @@ const password = ref('')
 const maxDl = ref<number | null>(null)
 const link = ref('')
 const busy = ref(false)
+const publicBase = ref('')
 const qrFailed = ref(false)
+async function copyText(text: string) {
+  try { await navigator.clipboard.writeText(text); } catch { prompt('请手动复制：', text) }
+}
 async function copyLink() {
   try {
     await navigator.clipboard.writeText(link.value)
@@ -23,11 +27,12 @@ async function copyLink() {
 
 async function create() {
   busy.value = true
+  try { publicBase.value = (await api.getPublicUrl()).public_base_url } catch { /* 非管理员的旧分享不受影响 */ }
   try {
     const r = await api.createShare(props.paths[0], hours.value, password.value || null, maxDl.value)
     link.value = api.shareLink(r.token)
-    await navigator.clipboard?.writeText(link.value).catch(() => {})
-    toast('分享链接已复制到剪贴板', 'ok')
+    copyText(link.value)
+    toast('局域网链接已复制' + (publicBase.value ? '（公网链接可用下方按钮）' : ''), 'ok')
   } catch (e) {
     toast((e as Error).message, 'err')
   } finally { busy.value = false }
@@ -42,7 +47,10 @@ async function create() {
     <div v-if="link" class="share-done">
       <p style="font-size:13.5px;color:var(--text-2)">链接已生成：</p>
       <input :value="link" readonly style="width:100%" @focus="($event.target as HTMLInputElement).select()" />
-      <button class="btn sm" style="margin-top:10px" @click="copyLink">📋 复制链接</button>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:10px;flex-wrap:wrap">
+        <button class="btn ghost sm" @click="copyText(link)">📋 局域网链接</button>
+        <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + link.split('/').pop())">🌐 公网链接</button>
+      </div>
       <div style="display:flex;gap:10px;justify-content:center;margin-top:14px">
         <img v-if="!qrFailed" :src="`/api/share/${link.split('/').pop()}/qr`" alt="二维码"
              style="width:150px;height:150px;border-radius:10px;background:#fff;padding:6px" @error="qrFailed = true" />

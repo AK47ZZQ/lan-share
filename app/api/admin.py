@@ -200,6 +200,32 @@ def invite_redeem(body: RedeemBody, request: Request):
     return {"ok": True, "username": username, "role": row["role"]}
 
 
+# ─── 公网访问地址（分享链接双地址用）───────────────────────
+
+
+def _get_setting(key: str) -> str:
+    row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else ""
+
+
+@app.get("/api/admin/public-url")
+def get_public_url(_admin=Depends(require_admin)):
+    return {"public_base_url": _get_setting("public_base_url")}
+
+
+@app.post("/api/admin/public-url")
+def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
+    url = (body.get("url") or "").strip().rstrip("/")
+    if url and not url.startswith(("https://", "http://")):
+        raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
+    with _db_lock:
+        _db().execute("INSERT INTO settings(key, value) VALUES('public_base_url', ?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (url,))
+        _db().commit()
+    audit("public_url_set", url, ip=client_ip(request))
+    return {"ok": True, "public_base_url": url}
+
+
 # ─── 目录授权 ─────────────────────────────────────────────
 
 
