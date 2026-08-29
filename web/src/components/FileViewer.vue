@@ -103,7 +103,21 @@ function onDblClick() {
   if (kind.value !== 'image') return
   zoomTo(scale.value > 1 ? 1 / scale.value : 2.5)
 }
-function rotate() { rot.value = (rot.value + 90) % 360 }
+function rotate() {
+  rot.value = (rot.value + 90) % 360
+  // 旋转后按舞台重新适配（竖图转横/横转竖的可视尺寸互换，允许 <1 的适配缩放）
+  const img = document.querySelector('.fv-img') as HTMLImageElement | null
+  const stage = wheelRef.value
+  if (img && stage && scale.value === 1) {
+    const sw = stage.clientWidth - 48, sh = stage.clientHeight - 48
+    const iw = img.clientWidth, ih = img.clientHeight
+    const fit = rot.value % 180 === 90
+      ? Math.min(1, sw / ih, sh / iw)
+      : Math.min(1, sw / iw, sh / ih)
+    scale.value = Math.max(0.2, Math.min(8, fit))
+    if (scale.value <= 1) { tx.value = 0; ty.value = 0 }
+  }
+}
 // 拖拽平移 + 触屏手势（单指滑动切换/下滑关闭，双指捏合缩放）
 let dragging = false
 let dragX = 0, dragY = 0
@@ -557,9 +571,13 @@ function iconOf(it: ViewerItem): string {
 .fv-speed { width: auto; padding: 0 6px; font-size: 12.5px; }
 
 .fv-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
-.fv-center { position: absolute; inset: 0; display: grid; place-items: center; padding: 28px; }
+/* flex 而非 grid：grid 的 auto 轨道会让 max-height:100% 失效（竖屏图溢出） */
+.fv-center {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: 28px; min-width: 0; min-height: 0;
+}
 .fv-wide { padding: 16px; }
-.fv-scroll { overflow: auto; justify-items: center; }
+.fv-scroll { display: block; overflow: auto; padding: 16px; }
 .fv-loading { display: grid; place-items: center; }
 .fv-spin {
   width: 34px; height: 34px; border-radius: 50%;
@@ -599,13 +617,13 @@ function iconOf(it: ViewerItem): string {
   box-shadow: 0 8px 40px rgba(0, 0, 0, .5);
 }
 .fv-trunc { color: #ffb224; font-size: 12.5px; margin: 0 0 8px; }
-.fv-csv { border-collapse: collapse; background: rgba(255, 255, 255, .03); font-size: 13px; color: #e6edf3; }
+.fv-csv { border-collapse: collapse; background: rgba(255, 255, 255, .03); font-size: 13px; color: #e6edf3; margin: 0 auto; }
 .fv-csv td { border: 1px solid rgba(255, 255, 255, .12); padding: 6px 12px; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 .fv-csv tr:first-child td { background: rgba(255, 255, 255, .08); font-weight: 600; }
 
 .fv-prose {
   color: #e8e8f0; font-size: 14.5px; line-height: 1.75; max-width: 860px; width: 100%;
-  background: rgba(255, 255, 255, .04); border-radius: 12px; padding: 28px 34px;
+  background: rgba(255, 255, 255, .04); border-radius: 12px; padding: 28px 34px; margin: 0 auto;
 }
 .fv-prose h1, .fv-prose h2, .fv-prose h3 { color: #fff; margin: 1.1em 0 .5em; }
 .fv-prose h1 { font-size: 1.6em; } .fv-prose h2 { font-size: 1.35em; }

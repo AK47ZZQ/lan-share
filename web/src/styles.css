@@ -208,7 +208,7 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 
 /* ── 弹窗 ── */
 .overlay {
-  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+  position: fixed; inset: 0; z-index: 400; display: grid; place-items: center;
   background: rgba(20, 22, 40, 0.45); backdrop-filter: blur(4px); padding: 18px;
 }
 .modal-card {
@@ -258,7 +258,7 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .phdate { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 18px 0 10px; }
 
 /* toast */
-.toasts { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 200; display: grid; gap: 8px; }
+.toasts { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 500; display: grid; gap: 8px; }
 .toast {
   padding: 10px 18px; border-radius: 12px; font-size: 13.5px;
   background: var(--glass-strong); border: 1px solid var(--glass-border);

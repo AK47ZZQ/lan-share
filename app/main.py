@@ -45,7 +45,7 @@ from app.api import admin, auth, files, share, webdav, system, notify  # noqa: E
 # CSP：脚本全部外部化（script-src 'self'）；样式保留内联（style-src 'unsafe-inline'，
 # 仅 CSS 注入风险，收益/成本比合理）。前端已无任何内联事件处理器。
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data:; connect-src 'self'; media-src 'self'; frame-src 'self'; "
+       "img-src 'self' data: blob:; connect-src 'self'; media-src 'self'; frame-src 'self'; "
        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 
