@@ -239,7 +239,7 @@ def photo_facets(_user=Depends(require_user)):
         "months": [{"month": m, "count": c} for m, c in sorted(months.items(), reverse=True)],
         "uploaders": sorted(
             [{"name": u, "count": c} for u, c in uploaders.items()],
-            key=lambda x: -x[1]),
+            key=lambda x: -x["count"]),
     }
 
 
