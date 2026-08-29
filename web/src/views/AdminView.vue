@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { api, type AdminUser, type ActivityItem } from '../api'
+import { computed, onMounted, ref } from 'vue'
+import { api, type AdminUser, type ActivityItem, type Grant } from '../api'
 import { me } from '../auth'
 import Modal from '../components/Modal.vue'
 import AdminUserModal from '../components/AdminUserModal.vue'
@@ -9,14 +9,51 @@ import { fmtTs, toast } from '../ui'
 const tab = ref<'users' | 'invites' | 'grants' | 'feed'>('users')
 const users = ref<AdminUser[]>([])
 const invites = ref<{ code: string; role: string; expired: boolean; used: boolean }[]>([])
-const grants = ref<{ id: number; user_id: number; path: string; can_read: boolean; can_write: boolean }[]>([])
+const grants = ref<Grant[]>([])
 const feed = ref<ActivityItem[]>([])
 const err = ref('')
 
-// 授权表单
-const gUser = ref<number | null>(null)
+// 授权表单（批量）
+const gUsers = ref<number[]>([])
 const gPath = ref('')
 const gWrite = ref(false)
+const gExpiry = ref(0)            // 0=永久
+const dirOptions = ref<{ path: string; label: string }[]>([])
+const grantFilter = ref<number | 'all'>('all')
+
+const memberOptions = computed(() => users.value.filter(u => u.role !== 'admin'))
+function memberName(id: number) { return users.value.find(u => u.id === id)?.username ?? `#${id}` }
+
+async function loadDirs() {
+  const out: { path: string; label: string }[] = []
+  async function walk(p: string, depth: number) {
+    try {
+      const r = await api.list(p)
+      for (const e of r.items.filter(x => x.is_dir)) {
+        if (e.name === 'private' || e.name === 'incoming') continue
+        out.push({ path: e.path, label: e.path })
+        if (depth < 2) await walk(e.path, depth + 1)
+      }
+    } catch { /* 无权目录跳过 */ }
+  }
+  await walk('', 0)
+  dirOptions.value = out
+}
+
+async function addGrantBatch() {
+  if (!gUsers.value.length || !gPath.value) { toast('先选成员和目录', 'err'); return }
+  let ok = 0
+  for (const uid of gUsers.value) {
+    try { await api.adminCreateGrant(uid, gPath.value, true, gWrite.value, gExpiry.value || undefined); ok++ }
+    catch (e) { toast(`${memberName(uid)}: ${(e as Error).message}`, 'err') }
+  }
+  if (ok) toast(`已授权 ${ok} 位成员 → ${gPath.value}`, 'ok')
+  await loadAll()
+}
+
+const grantsFiltered = computed(() =>
+  grantFilter.value === 'all' ? grants.value : grants.value.filter(g => g.user_id === grantFilter.value))
+const memberGrantCount = (uid: number) => grants.value.filter(g => g.user_id === uid).length
 
 async function loadAll() {
   try {
@@ -24,6 +61,7 @@ async function loadAll() {
       api.adminUsers(), api.adminInvites(), api.activity(50),
     ])
     grants.value = await api.adminGrants()
+    void loadDirs()
   } catch (e) { err.value = (e as Error).message }
 }
 
@@ -73,11 +111,6 @@ async function delUser(u: AdminUser) {
   try { await api.adminDeleteUser(u.id); await loadAll(); toast('已删除', 'ok') } catch (e) { toast((e as Error).message, 'err') }
 }
 async function addGrant() {
-  if (!gUser.value || !gPath.value.trim()) return
-  try {
-    await api.adminCreateGrant(gUser.value, gPath.value.trim(), true, gWrite.value)
-    toast('授权已保存', 'ok'); gPath.value = ''; await loadAll()
-  } catch (e) { toast((e as Error).message, 'err') }
 }
 function copyInvite(code: string) {
   navigator.clipboard?.writeText(code).then(() => toast('已复制', 'ok')).catch(() => toast(code, 'info'))
@@ -171,35 +204,62 @@ onMounted(async () => {
 
     <!-- 授权 -->
     <div v-if="tab === 'grants'">
-      <div class="card" style="padding:16px;display:grid;gap:10px;margin-bottom:12px">
+      <div class="card" style="padding:14px 16px;display:grid;gap:10px;margin-bottom:12px">
+        <div style="font-size:13.5px;font-weight:600">➕ 新建授权（可批量）</div>
         <div class="grid2">
-          <label class="field">成员
-            <select v-model.number="gUser">
-              <option :value="null" disabled>选择成员…</option>
-              <option v-for="u in users.filter(x => x.role !== 'admin')" :key="u.id" :value="u.id">
-                {{ u.username }}（{{ u.role }}）
-              </option>
+          <label class="field">成员（可多选）
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+              <label v-for="u in memberOptions" :key="u.id"
+                     style="display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 9px;border:1px solid var(--line);border-radius:999px;cursor:pointer"
+                     :style="gUsers.includes(u.id) ? 'border-color:var(--accent);background:var(--hover)' : ''">
+                <input type="checkbox" style="width:auto;display:none" :value="u.id"
+                       v-model="gUsers" />{{ u.username }}
+              </label>
+              <span v-if="!memberOptions.length" style="color:var(--text-3);font-size:12.5px">暂无成员</span>
+            </div>
+          </label>
+          <label class="field">共享目录
+            <select v-model="gPath">
+              <option value="" disabled>选择目录…</option>
+              <option v-for="d in dirOptions" :key="d.path" :value="d.path">{{ d.label }}</option>
             </select>
           </label>
-          <label class="field">共享目录路径（如 docs 或 照片/2024）
-            <input v-model="gPath" placeholder="shared 空间下的目录" />
-          </label>
         </div>
-        <label style="display:flex;gap:8px;align-items:center;font-size:14px">
-          <input type="checkbox" v-model="gWrite" style="width:auto" /> 授予写入（默认只读）
-        </label>
-        <div><button class="btn sm" @click="addGrant">保存授权</button></div>
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+          <label style="display:flex;gap:6px;align-items:center;font-size:14px">
+            <input type="checkbox" v-model="gWrite" style="width:auto" /> 可写入（默认只读）
+          </label>
+          <label class="field" style="flex-direction:row;align-items:center;gap:6px">有效期
+            <select v-model.number="gExpiry" style="padding:6px 8px;font-size:13px;width:auto">
+              <option :value="0">永久</option>
+              <option :value="24">1 天</option>
+              <option :value="168">7 天</option>
+              <option :value="720">30 天</option>
+            </select>
+          </label>
+          <button class="btn sm" style="margin-left:auto" @click="addGrantBatch">保存授权（{{ gUsers.length || 0 }} 人）</button>
+        </div>
       </div>
+
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--text-2)">查看：</span>
+        <button class="btn ghost sm" :class="{ '': grantFilter === 'all' }" @click="grantFilter = 'all'"
+                :style="grantFilter === 'all' ? 'border-color:var(--accent);color:var(--accent)' : ''">全部成员</button>
+        <button v-for="u in memberOptions" :key="u.id" class="btn ghost sm"
+                :style="grantFilter === u.id ? 'border-color:var(--accent);color:var(--accent)' : ''"
+                @click="grantFilter = u.id">{{ u.username }}（{{ memberGrantCount(u.id) }}）</button>
+      </div>
+
       <div class="card flist" style="padding:8px">
-        <div v-if="!grants.length" class="empty">暂无授权</div>
-        <div v-for="g in grants" :key="g.id" class="frow" style="cursor:default">
+        <div v-if="!grantsFiltered.length" class="empty">暂无授权</div>
+        <div v-for="g in grantsFiltered" :key="g.id" class="frow" style="cursor:default">
           <span class="icon">🔑</span>
           <span class="name">
             <div>{{ g.path }} <span class="badge" :class="{ warn: !g.can_write }">{{ g.can_write ? '读写' : '只读' }}</span></div>
-            <small>成员 #{{ g.user_id }}：{{ users.find(u => u.id === g.user_id)?.username || '（已删除）' }}</small>
+            <small>{{ memberName(g.user_id) }}<template v-if="g.expires_at"> · {{ g.expires_at <= Date.now() / 1000 ? '已过期' : '至 ' + new Date(g.expires_at * 1000).toLocaleDateString() }}</template><template v-else> · 永久</template></small>
           </span>
           <span class="ops" style="opacity:1">
-            <button class="iconbtn danger" @click="delGrant(g)">✕</button>
+            <button class="iconbtn danger" title="撤销授权" @click="delGrant(g)">✕</button>
           </span>
         </div>
       </div>

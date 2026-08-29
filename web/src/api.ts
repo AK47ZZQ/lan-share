@@ -14,6 +14,7 @@ export interface ShareItem {
 export interface ShareHistoryRow { ts: number; ip: string; action: string }
 export interface ShareMeta { name: string; size_human: string; expires_in: string; needs_password: boolean; max_downloads: number | null; downloads: number }
 export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string }
+
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
 export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string }
 export interface DiskInfo { total: string; used: string; free: string; total_human: string; used_human: string; free_human: string; total_bytes: number; used_bytes: number; free_bytes: number; share_size: string; share_size_human: string; warning: boolean }
