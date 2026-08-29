@@ -36,10 +36,8 @@ async function load() {
   try { items.value = await api.shares() } catch (e) { err.value = (e as Error).message }
 }
 async function copy(s: ShareItem) {
-  const text = s.password ? `${linkOf(s)}
-提取码：${s.password}` : linkOf(s)
-  try { await navigator.clipboard.writeText(text); toast(s.password ? '已复制链接和提取码' : '链接已复制', 'ok') }
-  catch { await promptDlg('请手动复制：', text) }
+  try { await navigator.clipboard.writeText(linkOf(s)); toast('链接已复制', 'ok') }
+  catch { await promptDlg('请手动复制：', linkOf(s)) }
 }
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); toast('已复制', 'ok') }
@@ -105,8 +103,9 @@ onMounted(async () => {
           </span>
           <span v-else style="font-size:12px;color:var(--text-3)">已下载 {{ s.downloads }} 次 · 不限次数</span>
           <span style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">
-            <button class="btn ghost sm" @click="copy(s)">{{ s.password ? '📋 链接+提取码' : '📋 局域网链接' }}</button>
-            <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + s.token + (s.password ? ' | 提取码：' + s.password : ''))">🌐 公网</button>
+            <button class="btn ghost sm" @click="copy(s)">📋 复制链接</button>
+            <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + s.token)">🌐 公网链接</button>
+            <button v-if="s.password" class="btn ghost sm" @click="copyPwd(s)">🔑 复制提取码</button>
             <button class="btn ghost sm" @click="qrFor = s; qrFailed = false">🔳 二维码</button>
             <button class="btn ghost sm" @click="showHistory(s)">取件记录</button>
             <button class="iconbtn danger" title="撤销分享" @click="revoke(s)">✕</button>
