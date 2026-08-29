@@ -1,7 +1,7 @@
 // 全量 API 客户端（cookie 会话）
 
 export interface Entry {
-  name: string; path: string; is_dir: boolean
+  name: string; path: string; is_dir: boolean; is_private_root?: boolean
   size: number | null; size_human: string; modified: string; ext: string | null
 }
 export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null }
