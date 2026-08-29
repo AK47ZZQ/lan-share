@@ -30,3 +30,34 @@ export function human(size: number | null | undefined): string {
   }
   return `${s.toFixed(1)} PB`
 }
+
+// ── Vue 版确认/输入对话框（替代浏览器原生 confirm/prompt）──
+export const dlg = reactive({
+  open: false,
+  kind: 'confirm' as 'confirm' | 'prompt',
+  title: '', text: '', value: '', placeholder: '',
+  danger: false,
+  _resolve: null as null | ((v: unknown) => void),
+})
+export function confirmDlg(text: string, opts?: { title?: string; danger?: boolean; okText?: string }): Promise<boolean> {
+  return new Promise(resolve => {
+    Object.assign(dlg, { open: true, kind: 'confirm', title: opts?.title ?? '请确认', text,
+      value: '', danger: !!opts?.danger, _resolve: resolve as (v: unknown) => void })
+  })
+}
+export function promptDlg(text: string, value = '', opts?: { title?: string; placeholder?: string }): Promise<string | null> {
+  return new Promise(resolve => {
+    Object.assign(dlg, { open: true, kind: 'prompt', title: opts?.title ?? '请输入', text,
+      value, placeholder: opts?.placeholder ?? '', danger: false, _resolve: resolve as (v: unknown) => void })
+  })
+}
+export function dlgOk() {
+  dlg.open = false
+  dlg._resolve?.(dlg.kind === 'prompt' ? dlg.value : true)
+  dlg._resolve = null
+}
+export function dlgCancel() {
+  dlg.open = false
+  dlg._resolve?.(dlg.kind === 'prompt' ? null : false)
+  dlg._resolve = null
+}

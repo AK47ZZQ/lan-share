@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { api } from '../api'
-import { toast } from '../ui'
+import { promptDlg, toast } from '../ui'
 
 const props = defineProps<{ paths: string[] }>()
 const emit = defineEmits<{ close: [] }>()
@@ -14,14 +14,14 @@ const busy = ref(false)
 const publicBase = ref('')
 const qrFailed = ref(false)
 async function copyText(text: string) {
-  try { await navigator.clipboard.writeText(text); } catch { prompt('请手动复制：', text) }
+  try { await navigator.clipboard.writeText(text); } catch { await promptDlg('请手动复制：', text) }
 }
 async function copyLink() {
   try {
     await navigator.clipboard.writeText(link.value)
     toast('已复制到剪贴板', 'ok')
   } catch {
-    prompt('请手动复制：', link.value)
+    await promptDlg('请手动复制：', link.value)
   }
 }
 

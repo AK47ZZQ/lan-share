@@ -4,7 +4,7 @@ import { api, type AdminUser, type ActivityItem, type Grant } from '../api'
 import { me } from '../auth'
 import Modal from '../components/Modal.vue'
 import AdminUserModal from '../components/AdminUserModal.vue'
-import { fmtTs, toast } from '../ui'
+import { confirmDlg, fmtTs, toast } from '../ui'
 
 const tab = ref<'users' | 'invites' | 'grants' | 'feed'>('users')
 const users = ref<AdminUser[]>([])
@@ -101,7 +101,7 @@ async function changeRole(u: AdminUser, ev: Event) {
 }
 
 async function clearFeed() {
-  if (!confirm('清空当前动态？（不影响审计历史记录）')) return
+  if (!(await confirmDlg('清空当前动态？（不影响审计历史记录）', { danger: true, okText: '清空' }))) return
   try {
     const r = await fetch('/api/activity/clear', { method: 'POST' })
     if (!r.ok) throw new Error('HTTP ' + r.status)
@@ -109,7 +109,7 @@ async function clearFeed() {
   } catch (e) { toast((e as Error).message, 'err') }
 }
 async function delUser(u: AdminUser) {
-  if (!confirm(`删除成员「${u.username}」？其私人目录将移入 .orphaned/ 保留。`)) return
+  if (!(await confirmDlg(`删除成员「${u.username}」？其私人目录将移入 .orphaned/ 保留。`, { danger: true, okText: '删除' }))) return
   try { await api.adminDeleteUser(u.id); await loadAll(); toast('已删除', 'ok') } catch (e) { toast((e as Error).message, 'err') }
 }
 async function addGrant() {

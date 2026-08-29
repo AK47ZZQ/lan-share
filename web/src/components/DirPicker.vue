@@ -2,6 +2,7 @@
 // 目录选择器（移动到…）：导航 + 新建文件夹
 import { onMounted, ref } from 'vue'
 import { api, type Entry } from '../api'
+import { promptDlg } from '../ui'
 
 const emit = defineEmits<{ pick: [path: string]; close: [] }>()
 const cur = ref('')
@@ -17,7 +18,7 @@ async function load(p: string) {
 }
 
 async function newFolder() {
-  const name = prompt('新文件夹名称')
+  const name = await promptDlg('新文件夹名称', '', { title: '新建文件夹' })
   if (!name) return
   try {
     await api.mkdir([cur.value, name].filter(Boolean).join('/'))

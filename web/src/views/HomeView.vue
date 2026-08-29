@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, uploadResumable, type Entry } from '../api'
-import { toast } from '../ui'
+import { confirmDlg, promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
 import DirPicker from '../components/DirPicker.vue'
 import ShareModal from '../components/ShareModal.vue'
@@ -30,12 +30,17 @@ const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())
 const allSelected = computed(() => items.value.length > 0 && items.value.every(i => selected.value.has(i.path)))
 
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    toast('已复制', 'ok')
+  } catch {
+    await promptDlg('请手动复制：', text)
+  }
+}
+
 // 操作菜单（⋯ 按钮与右键共用）
 const menu = ref<{ x: number; y: number; e: Entry } | null>(null)
-function copyText(text: string) {
-  try { navigator.clipboard.writeText(text).then(() => toast('已复制', 'ok')).catch(() => prompt('请手动复制：', text)) }
-  catch { prompt('请手动复制：', text) }
-}
 function openMenu(ev: MouseEvent, e: Entry) {
   menu.value = { x: ev.clientX, y: ev.clientY, e }
 }
@@ -130,7 +135,7 @@ function startSelect(e: Entry) {
 // ── 操作 ──
 async function doDelete() {
   const paths = [...selected.value]
-  if (!confirm(`删除选中的 ${paths.length} 项？（可从回收站恢复）`)) return
+  if (!(await confirmDlg(`删除选中的 ${paths.length} 项？（可从回收站恢复）`, { danger: true, okText: '删除' }))) return
   try {
     for (const p of paths) await api.remove(p)
     toast(`已删除 ${paths.length} 项，可在回收站恢复`, 'ok')
@@ -192,7 +197,7 @@ async function onPick(ev: Event) {
 }
 
 async function newFolder() {
-  const name = prompt('文件夹名称')
+  const name = await promptDlg('文件夹名称', '', { title: '新建文件夹' })
   if (!name) return
   try {
     await api.mkdir([path.value, name].filter(Boolean).join('/'))

@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth } from './auth'
-import { toasts } from './ui'
+import { dlg, dlgCancel, dlgOk, toasts } from './ui'
 import DiskModal from './components/DiskModal.vue'
 import AccountModal from './components/AccountModal.vue'
 import { applyTheme, currentTheme, type Theme } from './theme'
@@ -46,6 +46,24 @@ watchEffect(() => {
   <div class="toasts">
     <div v-for="t in toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
   </div>
+
+  <!-- 全局确认/输入对话框（Promise 化） -->
+  <teleport to="body">
+    <div v-if="dlg.open" class="overlay" @click.self="dlgCancel">
+      <div class="modal-card" style="width:min(400px,92vw)">
+        <h3>{{ dlg.title }}</h3>
+        <p style="font-size:14px;margin:0 0 14px">{{ dlg.text }}</p>
+        <input v-if="dlg.kind === 'prompt'" v-model="dlg.value" :placeholder="dlg.placeholder"
+               style="width:100%" @keydown.enter="dlgOk" autofocus />
+        <div class="actions">
+          <button class="btn ghost sm" @click="dlgCancel">取消</button>
+          <button class="btn sm" :class="{ danger: dlg.danger }" @click="dlgOk">
+            {{ dlg.kind === 'prompt' ? '确定' : dlg.danger ? '确认删除' : '确认' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 
   <div v-if="!authReady" class="page"><div class="card empty">加载中…</div></div>
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api, type ShareItem, type ShareHistoryRow } from '../api'
-import { fmtTs, toast } from '../ui'
+import { confirmDlg, fmtTs, promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
 
 const items = ref<ShareItem[]>([])
@@ -39,19 +39,19 @@ async function copy(s: ShareItem) {
   const text = s.password ? `${linkOf(s)}
 提取码：${s.password}` : linkOf(s)
   try { await navigator.clipboard.writeText(text); toast(s.password ? '已复制链接和提取码' : '链接已复制', 'ok') }
-  catch { prompt('请手动复制：', text) }
+  catch { await promptDlg('请手动复制：', text) }
 }
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); toast('已复制', 'ok') }
-  catch { prompt('请手动复制：', text) }
+  catch { await promptDlg('请手动复制：', text) }
 }
 async function copyPwd(s: ShareItem) {
   if (!s.password) return
   try { await navigator.clipboard.writeText(s.password); toast('提取码已复制', 'ok') }
-  catch { prompt('提取码：', s.password) }
+  catch { await promptDlg('提取码：', s.password) }
 }
 async function revoke(s: ShareItem) {
-  if (!confirm(`撤销「${s.name}」的分享？链接立即失效。`)) return
+  if (!(await confirmDlg(`撤销「${s.name}」的分享？链接立即失效。`, { danger: true, okText: '撤销' }))) return
   try { await api.revokeShare(s.token); await load(); toast('已撤销', 'ok') } catch (e) { toast((e as Error).message, 'err') }
 }
 async function showHistory(s: ShareItem) {

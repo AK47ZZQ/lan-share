@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { api, type TrashItem } from '../api'
-import { toast } from '../ui'
+import { confirmDlg, toast } from '../ui'
 
 const items = ref<TrashItem[]>([])
 const err = ref('')
@@ -17,11 +17,11 @@ async function restore(t: TrashItem) {
   } catch (e) { toast((e as Error).message, 'err') }
 }
 async function remove(t: TrashItem) {
-  if (!confirm(`彻底删除「${t.name}」？不可恢复`)) return
+  if (!(await confirmDlg(`彻底删除「${t.name}」？不可恢复`, { danger: true, okText: '彻底删除' }))) return
   try { await api.trashDelete(t.id); await load() } catch (e) { toast((e as Error).message, 'err') }
 }
 async function empty() {
-  if (!confirm('清空回收站？其中所有项目将永久删除')) return
+  if (!(await confirmDlg('清空回收站？其中所有项目将永久删除', { danger: true, okText: '清空' }))) return
   try { await api.trashEmpty(); await load(); toast('回收站已清空', 'ok') } catch (e) { toast((e as Error).message, 'err') }
 }
 
