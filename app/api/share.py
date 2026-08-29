@@ -137,13 +137,23 @@ async def share_prepare(request: Request, token: str, body: SharePrepareBody):
         now = time.time()
         for k in [k for k, v in _tickets.items() if v["exp"] < now]:
             del _tickets[k]
-        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL}
+        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL, "counted": False}
     return {"ok": True, "url": f"/api/share/{token}/dl?tkt={tkt}",
             "name": s["name"], "expires": TICKET_TTL}
 
 
-def _share_download_done(token: str, path: str, ip: str):
-    """下载响应发送完成后计数与审计（客户端中途取消不计）。"""
+def _share_download_done(token: str, path: str, ip: str, tkt: str = ""):
+    """下载响应发送完成后计数与审计（客户端中途取消不计）。
+
+    按票据去重：手机下载管理器（小米等）会对大文件并发多个 Range 分段请求，
+    每段完成都会走到这里——同一 tkt 只计 1 次，否则一次下载被记 N 次、
+    误触 max_downloads 上限。"""
+    with _tickets_lock:
+        info = _tickets.get(tkt)
+        if info is not None:
+            if info.get("counted"):
+                return
+            info["counted"] = True
     with _db_lock:
         _db().execute("UPDATE shares SET downloads = downloads + 1 WHERE token=?", (token,))
         _db().commit()
@@ -166,7 +176,7 @@ async def share_download(request: Request, token: str, tkt: str):
     return FileResponse(file_path, media_type="application/octet-stream",
                         filename=s["name"],
                         background=BackgroundTask(
-                            _share_download_done, token, s["path"], client_ip(request)))
+                            _share_download_done, token, s["path"], client_ip(request), tkt))
 
 
 @app.get("/api/share/{token}/qr")

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { api, type AdminUser, type ActivityItem } from '../api'
 import { me } from '../auth'
+import Modal from '../components/Modal.vue'
 import { fmtTs, toast } from '../ui'
 
 const tab = ref<'users' | 'invites' | 'grants' | 'feed'>('users')
@@ -36,18 +37,27 @@ async function createInvite(role: string) {
 async function toggleActive(u: AdminUser) {
   try { await api.adminPatchUser(u.id, { is_active: !u.is_active }); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
-const quotas = ref<Record<number, string>>({})
+const quotaModal = ref<{ user: AdminUser; value: string } | null>(null)
+function openQuota(u: AdminUser) {
+  quotaModal.value = { user: u, value: u.quota_bytes ? String(Math.round(u.quota_bytes / 2**30)) : '' }
+}
+async function saveQuota() {
+  const m = quotaModal.value
+  if (!m) return
+  const gb = parseFloat(m.value)
+  const q = gb > 0 ? Math.round(gb * 2**30) : null
+  try {
+    await api.adminPatchUser(m.user.id, { quota_bytes: q })
+    toast(`「${m.user.username}」配额已更新`, 'ok')
+    quotaModal.value = null
+    await loadAll()
+  } catch (e) { toast((e as Error).message, 'err') }
+}
 async function changeRole(u: AdminUser, ev: Event) {
   const role = (ev.target as HTMLSelectElement).value
   try { await api.adminPatchUser(u.id, { role }); toast('角色已更新', 'ok'); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
-async function changeQuota(u: AdminUser) {
-  const v = quotas.value[u.id] ?? (u.quota_bytes ? String(Math.round(u.quota_bytes / 2**30)) : '')
-  const gb = parseFloat(v)
-  const q = gb > 0 ? Math.round(gb * 2**30) : null
-  if (q === u.quota_bytes) return
-  try { await api.adminPatchUser(u.id, { quota_bytes: q }); toast('配额已更新', 'ok'); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
-}
+
 async function clearFeed() {
   if (!confirm('清空当前动态？（不影响审计历史记录）')) return
   try {
@@ -113,9 +123,7 @@ onMounted(() => {
           <select :value="u.role" style="padding:6px 8px;font-size:13px" @change="changeRole(u, $event)">
             <option value="admin">admin</option><option value="member">member</option><option value="guest">guest</option>
           </select>
-          <input style="padding:6px 8px;font-size:13px;width:74px" placeholder="配额GB"
-                 :value="quotas[u.id] ?? (u.quota_bytes ? Math.round(u.quota_bytes / 2**30) : '')"
-                 @input="quotas[u.id] = ($event.target as HTMLInputElement).value" @change="changeQuota(u)" />
+          <button class="btn ghost sm" title="设置私人空间配额" @click="openQuota(u)">📏 配额</button>
           <button class="btn ghost sm" @click="toggleActive(u)">{{ u.is_active ? '停用' : '启用' }}</button>
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
         </span>
@@ -192,5 +200,18 @@ onMounted(() => {
         <span class="meta">{{ fmtTs(a.ts) }}</span>
       </div>
     </div>
+
+    <!-- 配额弹窗（全页签可用） -->
+    <Modal v-if="quotaModal" :title="`设置配额 — ${quotaModal.user.username}`" @close="quotaModal = null">
+      <label class="field">私人空间配额（GB，清空则不限制）
+        <input v-model="quotaModal.value" type="number" min="0" step="1" placeholder="不限"
+               @keydown.enter="saveQuota" />
+      </label>
+      <p style="font-size:12.5px;color:var(--text-3)">按逻辑字节计：秒传命中也计入；共享空间不受配额限制。</p>
+      <div class="actions">
+        <button class="btn ghost sm" @click="quotaModal = null">取消</button>
+        <button class="btn sm" @click="saveQuota">保存</button>
+      </div>
+    </Modal>
   </main>
 </template>
