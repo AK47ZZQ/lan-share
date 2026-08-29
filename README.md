@@ -31,9 +31,9 @@ SHARE_ROOT=D:/test-data python -m uvicorn server:app --port 8768
 
 | 入口 | 地址 | 认证 |
 |------|------|------|
-| 局域网 | `https://192.168.1.100:8765` | 应用层登录 |
-| 公网（樱花FRP） | `https://your-frp-domain.com:xxxxx`（→ Caddy :8767） | 应用层登录（与局域网一致） |
-| WebDAV | `https://192.168.1.100:8765/dav/` | Basic（管理员账号） |
+| Web UI（v3 Vue 全站） | `https://192.168.1.100:8765`（公网 `https://your-frp-domain.com:xxxxx`） | 应用层登录 |
+| 健康探针 | `/healthz` | 免认证 |
+| WebDAV | `https://192.168.1.100:8765/dav/` | Basic（成员账号，挂载各自可见空间） |
 
 > 自签证书：浏览器首次访问点"继续访问"即可；首次进入会引导创建管理员账号。
 
