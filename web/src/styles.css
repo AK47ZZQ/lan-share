@@ -151,8 +151,9 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 
 /* ── 布局 ── */
 .page { max-width: 1060px; margin: 0 auto; padding: 22px clamp(12px, 3vw, 28px) 90px; }
-.page-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.page-head h1 { font-size: 21px; margin: 0; flex: 1; }
+.page-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.page-head h1 { font-size: 21px; margin: 0; }
+.title-row { display: flex; align-items: center; gap: 10px; margin-right: auto; }
 .crumbs { font-size: 13.5px; color: var(--text-3); display: flex; flex-wrap: wrap; gap: 2px 0; }
 .crumbs a { color: var(--text-2); padding: 2px 5px; border-radius: 6px; }
 .crumbs a:hover { background: var(--hover); color: var(--accent); }
