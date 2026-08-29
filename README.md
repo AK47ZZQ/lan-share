@@ -23,6 +23,10 @@
 net start lan-share-api && net start lan-share-caddy
 net stop  lan-share-caddy && net stop  lan-share-api   # 停止（先 caddy 后 api）
 
+# 元数据库（v3.5 起）：PostgreSQL 16，原生服务 lan-share-postgresql（127.0.0.1:5433）
+net start lan-share-postgresql   # 数据目录 C:\pginstall\data；DATABASE_URL 配在 lan-share-api 服务环境变量
+# 不设 DATABASE_URL 时自动回退 SQLite（SHARE_ROOT/.meta.db，测试默认）
+
 # 前端更新（web/ 工程改动后）
 cd web && npm install && npm run build   # 产物 web/dist 即时生效，无需重启
 

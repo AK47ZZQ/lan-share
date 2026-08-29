@@ -118,6 +118,13 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | POST | `/api/invites/redeem` | 🔓 | `{code, username, password}` 邀请码建号；原子认领；保留词/分隔符/重名 400 |
+| POST | `/api/login/totp` | 🔓 | `{username, password, code}` 两步登录第二步（动态码错误计入防爆破） |
+| POST | `/api/auth/totp/setup` | 🔑 | 生成 TOTP 密钥，`{secret, otpauth}`（未验证前不生效） |
+| POST | `/api/auth/totp/enable` | 🔑 | `{code}` 验证动态码后开通两步验证 |
+| POST | `/api/auth/totp/disable` | 🔑 | `{old_password}` 关闭两步验证（需原密码） |
+
+`POST /api/login`：已启用 TOTP 的账号密码正确时返回 `{"totp_required": true}`
+且**不发会话**；`/api/auth/me` 增加 `totp_enabled` 字段。
 
 ### 管理（require_admin，非 admin 403）
 
@@ -139,12 +146,27 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 
 ### 分享扩展
 
-- `POST /api/share` 记录 `owner_id`；`GET /api/shares` 按创建者隔离
+- `POST /api/share` 记录 `owner_id`；新增可选表单字段 `target`（成员用户名）=
+  **定向分享**：仅该成员与 admin 登录后可取（免提取码），对无关者 404；
+  创建时自动给收件人发站内通知
+- `GET /api/members` 🔑 在用成员名单（定向分享收件人下拉用，不含自己）
+- `GET /api/notifications` 🔑 `{unread, items[50]}` 本人站内通知；
+  `POST /api/notifications/read` 🔑 全部标记已读；`GET /api/shares` 按创建者隔离
   （admin 全见 + `owner` 字段），响应为 **以 token 为键的字典**；带密码分享
   含 `password` 明文（创建时保存，旧存量分享无此字段）
 - `DELETE /api/shares/{token}` 与 `GET /api/shares/{token}/history` 仅创建者/admin
 - 下载计数**按票据去重**：下载管理器的并发 Range 分段同一 `tkt` 只计 1 次
 - `GET /api/share/{token}/qr` 🔑 需登录（按请求 Host 生成对应域的二维码）
+
+### 相册（v3.5）
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/photos?month=&uploader=` | 🔑 | 时间线条目带 `month`/`uploader`，可按月份/拍摄者过滤 |
+| GET | `/api/photos/facets` | 🔑 | `{months[], uploaders[]}` 维度分布（按本人可见范围统计） |
+| GET | `/api/albums` | 🔑 | 精选专辑列表（`{id, title, month}`） |
+| POST | `/api/admin/albums` | ⚙️ | `{title, month}` 新增精选专辑（同月唯一，month=YYYY-MM） |
+| DELETE | `/api/admin/albums/{id}` | ⚙️ | 移除精选专辑 |
 
 ### 其他
 

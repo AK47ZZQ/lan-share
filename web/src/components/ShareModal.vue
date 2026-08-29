@@ -51,9 +51,6 @@ async function create() {
 
 <template>
   <div>
-    <p v-if="!link" style="font-size:13.5px;color:var(--text-2);margin:0 0 12px">
-      分享 <b>{{ props.paths[0] }}</b>（多人分享请在管理面板授权成员）
-    </p>
     <div v-if="link" class="share-done">
       <p style="font-size:13.5px;color:var(--text-2)">链接已生成：</p>
       <input :value="link" readonly style="width:100%" @focus="($event.target as HTMLInputElement).select()" />

@@ -1,5 +1,38 @@
 # 更新日志
 
+## 2026-08-29（深夜）— v3.5：定向分享 / 共享相册 / TOTP / PostgreSQL
+
+- **定向分享 + 站内通知**：
+  - `POST /api/share` 新增 `target` 表单字段（成员用户名）——定向分享仅目标
+    成员（与 admin）登录后可取，免提取码；对无关者 404 不泄露存在性
+  - 新增 `notifications` 表与 `app/api/notify.py`：`GET /api/notifications`
+    （未读数+最近 50 条）、`POST /api/notifications/read`（全部已读）；
+    定向分享自动给收件人发通知；定时清理已读 30 天后的通知
+  - 前端：顶栏通知铃铛（未读徽章/点击跳转/自动已读）、分享弹窗新增
+    "分享给指定成员"下拉（新接口 `GET /api/members`）、分享管理页 🎯 定向
+    徽章、分享落地页对定向分享给出"去登录"引导
+- **共享相册升级**：照片时间线新增月份/拍摄者双维度——
+  - `GET /api/photos` 条目带 `month`/`uploader`（按路径归属推导：
+    private/<u>、incoming/<u> 归本人，其余共享），支持 `month=`/`uploader=` 过滤
+  - 新增 `GET /api/photos/facets`（月份/拍摄者分布）、精选专辑
+    `GET /api/albums` + `POST/DELETE /api/admin/albums`（settings 存 JSON）
+  - 前端照片页：月份/拍摄者筛选 chips、精选专辑卡片行、admin ⭐ 一键收藏月份
+- **TOTP 两步验证**（可选启用，pyotp）：
+  - users 表加 totp_secret/totp_enabled；`POST /api/auth/totp/setup|enable|disable`
+  - 登录改为两步：`/api/login` 密码正确且已启用 TOTP 时返回 `{"totp_required": true}`
+    不发会话；`/api/login/totp` 用密码+动态码换会话（验证码错误计入按账号防爆破）
+  - admin 重置成员密码同步清除其 TOTP（手机丢失恢复通道）；关闭 TOTP 需原密码
+  - 前端：登录页动态码步骤、账号设置弹窗 TOTP 管理（二维码+密钥录入）
+  - ⚠️ 取舍：WebDAV Basic 维持仅密码（客户端不支持动态码），记录于 SECURITY.md
+- **PostgreSQL 切换（生产库）**：
+  - `app/db.py` 双引擎化：`DATABASE_URL` 指向 PG 时走 psycopg 适配层
+    （`?`→`%s` 占位符转换、dict 行、autocommit）；SQLite 保持原路径，测试默认
+  - `scripts/migrate_sqlite_to_pg.py`：建表+全量重灌+序列拨号
+  - 全库 SQL 引擎中立化：`COLLATE NOCASE`→`LOWER()=LOWER()`、
+    `lastrowid`→`RETURNING id`、`rollback`→补偿 DELETE
+- 新增依赖：`pyotp`（TOTP）、`psycopg[binary]`（PG 驱动）；测试 49→**54 项**
+  （新增 test_v35.py：定向分享全流程/相册维度/精选专辑/TOTP 全流程/大小写查重）
+
 ## 2026-08-30（晚）— 分享复制拆分 + 失效页友好化
 
 - 分享管理页复制拆分为三个独立按钮：📋 复制链接 / 🌐 公网链接 /
