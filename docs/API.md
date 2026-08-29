@@ -164,6 +164,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 |------|------|------|------|
 | GET | `/api/photos?month=&uploader=` | 🔑 | 时间线条目带 `month`/`uploader`，可按月份/拍摄者过滤 |
 | GET | `/api/photos/facets` | 🔑 | `{months[], uploaders[]}` 维度分布（按本人可见范围统计） |
+| GET | `/api/photo/meta?path=` | 🔑 | 图片元数据 `{width, height, camera}`（EXIF；非图片 404） |
 | GET | `/api/albums` | 🔑 | 精选专辑列表（`{id, title, month}`） |
 | POST | `/api/admin/albums` | ⚙️ | `{title, month}` 新增精选专辑（同月唯一，month=YYYY-MM） |
 | DELETE | `/api/admin/albums/{id}` | ⚙️ | 移除精选专辑 |

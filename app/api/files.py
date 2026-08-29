@@ -430,18 +430,29 @@ async def empty_trash(request: Request, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
+# 中图档宽度阶梯：?w= 量化到最近的档位，防止任意 w 值撑爆缩略图缓存
+PREVIEW_W_LADDER = (320, 480, 640, 960, 1280, 1600, 2048, 2560, 3200, 3840)
+
+
+def _snap_w(w: int) -> int:
+    for step in PREVIEW_W_LADDER:
+        if w <= step:
+            return step
+    return PREVIEW_W_LADDER[-1]
+
+
 @app.get("/preview/{path:path}")
 async def preview_file(path: str, w: int | None = Query(default=None),
                        _user=Depends(require_user)):
-    """文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/），
-    公网/移动端省流量；缩放超过中档位后前端自行改拉原图。"""
+    """文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/，
+    w 量化到固定阶梯），公网/移动端省流量；缩放超过中档位后前端自行改拉原图。"""
     target = resolve(_user, path, "read")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     mime, _ = mimetypes.guess_type(str(target))
     # filename 走 starlette 的 RFC5987 编码（中文文件名直接拼头会炸 latin-1）
     if w and target.suffix.lower() in IMG_EXTS:
-        w = max(320, min(int(w), 3840))
+        w = _snap_w(max(320, min(int(w), 3840)))
         stat = target.stat()
         key = hashlib.md5(
             f"{path}:{stat.st_mtime_ns}:{stat.st_size}:w{w}".encode()).hexdigest()
@@ -450,7 +461,7 @@ async def preview_file(path: str, w: int | None = Query(default=None),
         cached = cache_dir / f"{key}.jpg"
         if not cached.exists():
             from PIL import Image
-            tmp = cached.with_suffix(".tmp")
+            tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
             try:
                 img = Image.open(target)
                 img.thumbnail((w, w))
@@ -580,7 +591,7 @@ def thumb_file(path: str, _user=Depends(require_user)):
     if cached.exists():
         return FileResponse(cached, media_type="image/jpeg")
 
-    tmp = cached.with_suffix(".tmp")
+    tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
     try:
         if ext in IMG_EXTS:
             img = Image.open(target)

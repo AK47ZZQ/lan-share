@@ -51,12 +51,23 @@ def _cleanup_tmp():
             f.unlink()
             if f.parent != tmp and not any(f.parent.iterdir()):
                 f.parent.rmdir()
-    # 孤儿上传临时文件（崩溃残留）：超过 1 天的 .uploading/.dav-uploading 一律回收
+    # 孤儿上传临时文件（崩溃残留）：超过 1 天的 .uploading/.dav-uploading/.dedup/.tmp-* 一律回收
     orphan_cutoff = time.time() - 86400
     for f in SHARE_ROOT.rglob("*"):
-        if f.is_file() and f.name.endswith((".uploading", ".dav-uploading", ".dedup")) \
+        if f.is_file() and (f.name.endswith((".uploading", ".dav-uploading", ".dedup"))
+                            or f.name.startswith(".tmp-")) \
                 and f.stat().st_mtime < orphan_cutoff:
             f.unlink(missing_ok=True)
+    # 缩略图缓存：30 天未再生成（即 30 天没被访问命中缺失）的档位回收，防慢性磁盘泄漏
+    thumbs = SHARE_ROOT / ".thumbs"
+    if thumbs.exists():
+        stale = time.time() - 30 * 86400
+        for f in thumbs.iterdir():
+            try:
+                if f.is_file() and f.stat().st_mtime < stale:
+                    f.unlink(missing_ok=True)
+            except OSError:
+                continue
 
 
 def _cleanup_trash():
@@ -322,8 +333,10 @@ def photo_meta(path: str = Query(..., min_length=1), _user=Depends(require_user)
             exif = im.getexif()
             make = exif.get(271)
             model = exif.get(272)
+            def _s(v):
+                return v.decode("utf-8", "ignore").strip() if isinstance(v, bytes) else str(v).strip()
             if model:
-                camera = f"{make} {model}".strip() if make else str(model).strip()
+                camera = f"{_s(make)} {_s(model)}".strip()
     except Exception:
         pass
     return {"width": width, "height": height, "camera": camera}

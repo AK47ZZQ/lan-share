@@ -39,7 +39,15 @@
 - **限速**（内存令牌桶，按类别分桶）：登录 10/分、分享取件 30/分、其它 API 120/分/IP；
   分块上传、authcheck、缩略图、预览不限（有认证保护）。
 - **CSP**：所有页面 `script-src 'self'`（前端已全部外部化 + 事件委托，无任何内联处理器），
-  `object-src 'none'`、`frame-ancestors 'none'`；样式保留 `unsafe-inline`（仅 CSS 注入风险，可接受）。
+  `object-src 'none'`、`frame-ancestors 'none'`；样式保留 `unsafe-inline`（仅 CSS 注入风险，可接受）；
+  `img-src` 含 `blob:`（docx 预览的内嵌图片由前端从文档流生成 blob URL，脚本仍被
+  `script-src 'self'` 严格限制，风险不变）。
+- **预览端点**：`/preview?w=` 的宽度量化到固定阶梯（320~3840 十档），登录用户无法用
+  任意 w 值灌满缩略图缓存；`.thumbs` 缓存由定时任务回收 30 天未使用的档位；
+  缩略图生成写临时文件唯一命名（并发请求不互相覆盖）。
+- **Markdown/docx 前端渲染（取舍记录）**：Markdown 经 DOMPurify 消毒后渲染；
+  docx 由 docx-preview 解析渲染——文本以 text node 插入、图片走 blob: URL，
+  脚本无法执行（CSP 双保险），恶意文档的排版干扰仅影响预览者本人页面，家庭场景接受。
 - **审计日志**：登录成败/锁定、上传（含秒传）、删除/恢复、分享创建/取件/撤销/密码错误、
   改密、WebDAV 写操作全记 `audit_log`（保留 1 万条），记录真实客户端 IP。
 

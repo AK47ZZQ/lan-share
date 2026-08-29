@@ -178,9 +178,13 @@ let pinch: { dist: number; scale: number } | null = null
 function onPointerDown(e: PointerEvent) {
   if (kind.value !== 'image' || scale.value === 1) return
   dragging = true; dragX = e.clientX - tx.value; dragY = e.clientY - ty.value
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)  // 拖出舞台松手也能释放
 }
 function onPointerMove(e: PointerEvent) {
-  if (dragging) { tx.value = e.clientX - dragX; ty.value = e.clientY - dragY }
+  if (dragging) {
+    tx.value = e.clientX - dragX; ty.value = e.clientY - dragY
+    clampPan()
+  }
 }
 function onPointerUp() { dragging = false }
 function onTouchStart(e: TouchEvent) {
@@ -238,12 +242,14 @@ async function loadTextLike() {
       await nextTick()
       const { renderAsync } = await import('docx-preview')
       const buf = await fetch(`/preview/${enc(it.path)}`).then(r => r.arrayBuffer())
-      if (item.value === it && docxEl.value) {
+      if (item.value !== it) return  // 过期响应丢弃
+      if (docxEl.value) {
         await renderAsync(buf, docxEl.value, undefined, { inWrapper: false })
       }
     } else {
       const { hljs, marked, purify } = await textLibs()
       let raw = await fetch(`/preview/${enc(it.path)}`).then(r => r.text())
+      if (item.value !== it) return  // 过期响应：用户已切到别的文件，丢弃
       if (raw.length > MAX_CHARS) { raw = raw.slice(0, MAX_CHARS); textTruncated.value = true }
       if (e === '.md') {
         textKind.value = 'md'
@@ -325,7 +331,10 @@ async function loadMeta() {
   const it = item.value
   metaInfo.value = null
   if (!it || kind.value !== 'image') return
-  try { metaInfo.value = await api.photoMeta(it.path) } catch { /* 无元数据不阻塞预览 */ }
+  try {
+    const m = await api.photoMeta(it.path)
+    if (item.value === it) metaInfo.value = m  // 过期响应丢弃
+  } catch { /* 无元数据不阻塞预览 */ }
 }
 const renaming = ref(false)
 const renameName = ref('')
@@ -471,7 +480,7 @@ function iconOf(it: ViewerItem): string {
               </select>
               <button class="fv-btn" title="画中画" @click="pip">⧉</button>
             </template>
-            <button class="fv-btn" title="全屏" @click="toggleFs">⛶</button>
+            <button class="fv-btn" :class="{ on: isFs }" title="全屏" @click="toggleFs">⛶</button>
             <button class="fv-btn" :class="{ on: showInfo }" title="信息 (i)" @click="showInfo = !showInfo">ℹ</button>
             <a class="fv-btn" :href="`/files/${enc(item?.path || '')}`" target="_blank" title="下载">⬇</a>
             <button class="fv-btn" title="分享" @click="doShare">🔗</button>
