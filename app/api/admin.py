@@ -380,25 +380,34 @@ def activity_clear(_admin=Depends(require_admin)):
 
 @app.get("/api/activity")
 def activity(limit: int = 50, user=Depends(require_user)):
-    """动态流：审计日志过滤为家庭可见事件。private 路径仅本人可见（E7/E8 折衷）。"""
+    """动态流：审计日志过滤为家庭可见事件。private 路径仅本人可见（E7/E8 折衷）。
+    同人同类动作在 10 分钟窗口内聚合为一条（count 表示合并条数）。"""
     cleared = _db().execute("SELECT value FROM settings WHERE key='activity_cleared_at'").fetchone()
     cutoff = float(cleared["value"]) if cleared else 0
     rows = _db().execute(
         "SELECT ts, username, action, target, detail FROM audit_log "
         "WHERE ts > ? ORDER BY id DESC LIMIT 500", (cutoff,)).fetchall()
-    show = {"upload", "upload_instant", "mkdir", "share", "share_download",
+    show = {"upload", "upload_instant", "mkdir", "share", "share_target", "share_download",
             "invite_redeemed", "trash", "restore", "move", "rename"}
     items = []
+    max_items = max(1, min(limit, 100))
     username = user["username"]
     for r in rows:
-        if r["action"] not in show or len(items) >= max(1, min(limit, 100)):
+        if r["action"] not in show or len(items) >= max_items:
             continue
         target = r["target"] or ""
         if target.startswith("private/") and not target.lower().startswith(
                 "private/" + username.lower() + "/"):
             continue
+        # 聚合：与当前组首（items[-1]）同人同类且落在 10 分钟窗口内
+        if items:
+            head = items[-1]
+            if (head["username"] == r["username"] and head["action"] == r["action"]
+                    and head["ts"] - r["ts"] <= 600):
+                head["count"] += 1
+                continue
         items.append({
             "ts": r["ts"], "username": r["username"], "action": r["action"],
-            "target": target, "detail": r["detail"],
+            "target": target, "detail": r["detail"], "count": 1,
         })
     return items

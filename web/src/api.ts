@@ -16,7 +16,7 @@ export interface ShareMeta { name: string; size_human: string; expires_in: strin
 export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string }
 
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
-export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string }
+export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string; count: number }
 export interface DiskInfo { total: string; used: string; free: string; total_human: string; used_human: string; free_human: string; total_bytes: number; used_bytes: number; free_bytes: number; share_size: string; share_size_human: string; warning: boolean }
 export interface Member { id: number; username: string; role: string }
 export interface NotificationItem { id: number; type: string; title: string; body: string | null; link: string | null; created_at: number; read: boolean }

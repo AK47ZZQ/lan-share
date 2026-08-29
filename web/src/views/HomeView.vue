@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api, uploadResumable, type Entry, type Me } from '../api'
 import { confirmDlg, promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
@@ -9,6 +10,8 @@ import ContextMenu from '../components/ContextMenu.vue'
 import FileViewer from '../components/FileViewer.vue'
 
 defineProps<{ me: Me }>()
+
+const route = useRoute()
 
 const grid = ref(localStorage.getItem('lsView') !== 'list')
 watch(grid, g => localStorage.setItem('lsView', g ? 'grid' : 'list'))
@@ -242,7 +245,7 @@ const shownItems = computed(() => {
   return items.value
 })
 
-onMounted(() => { load(''); loadPublic() })
+onMounted(() => { load(String(route.query.dir || '')); loadPublic() })
 </script>
 
 <template>

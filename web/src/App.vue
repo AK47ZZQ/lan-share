@@ -82,7 +82,7 @@ watchEffect(() => {
           <span class="bar"><i :style="{ width: diskPct + '%' }" /></span>
           {{ diskPct }}% · {{ disk.free }} 可用
         </button>
-        <NotificationsBell v-if="me" />
+        <NotificationsBell v-if="me" :me="me" />
         <button class="userchip avatar-btn" @click.stop="menuOpen = !menuOpen">
           <span class="uname">{{ me.username }}</span>
           <span class="avatar">{{ initial(me.username) }}</span>
