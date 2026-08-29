@@ -283,16 +283,16 @@ onMounted(() => load(''))
            class="gcard" :class="{ selected: selected.has(e.path) }"
            @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox gcheck" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
-        <span class="ops" @click.stop>
-          <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
-          <button class="iconbtn" title="更多操作" @click.stop="openMenu($event, e)">⋯</button>
-        </span>
         <span class="gicon" :class="e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
           <template v-else>{{ fileIcon(e) }}</template>
         </span>
         <span class="gname" :title="e.name">{{ e.name }}</span>
         <span class="gsub">{{ e.is_dir ? e.modified.slice(5, 10) : e.size_human }}</span>
+        <span class="ops gfoot" @click.stop>
+          <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
+          <button class="iconbtn" title="更多操作" @click.stop="openMenu($event, e)">⋯</button>
+        </span>
       </div>
     </div>
     <div v-else-if="shownItems.length" class="card flist" style="padding:8px">
