@@ -90,8 +90,11 @@ const imgSrc = computed(() => {
 })
 function resetZoom() {
   scale.value = 1; tx.value = 0; ty.value = 0; rot.value = 0
-  fullLoaded.value = false; imgLoaded.value = false; imgError.value = false; retryNonce.value = 0
+  fullLoaded.value = false; imgError.value = false; retryNonce.value = 0
 }
+// src 变化才重置加载态（src 不变时 img 不重载，不会触发 load——
+// 否则"适应窗口"后加载圈永远转）
+watch(imgSrc, () => { imgLoaded.value = false; imgError.value = false })
 // 倍率气泡
 const zoomPct = ref(0)
 let zoomBubbleTimer = 0
