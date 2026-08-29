@@ -46,12 +46,13 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         pwd_hash = salt.hex() + "$" + hashlib.sha256(salt + password.encode()).hexdigest()
     with _db_lock:
         _db().execute(
-            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
             (token, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), target.name,
              target.stat().st_size if target.is_file() else None,
              time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
-             _user["user_id"] if "user_id" in _user.keys() else None))
+             _user["user_id"] if "user_id" in _user.keys() else None,
+             password or None))
         _db().commit()
     audit("share_create", path, f"{expires_hours}h", client_ip(request))
     return {"ok": True, "token": token, "expires_in": f"{expires_hours}h"}
@@ -215,6 +216,7 @@ async def list_shares(_user=Depends(require_user)):
             "expires_at": datetime.fromtimestamp(s["expires_at"]).isoformat(),
             "expires_in": f"{max(0, int((s['expires_at'] - now) / 3600))}h",
             "has_password": s["password_hash"] is not None,
+            "password": s["password_plain"],
             "downloads": s["downloads"],
             "max_downloads": s["max_downloads"],
             "created_at": datetime.fromtimestamp(s["created_at"]).isoformat(),

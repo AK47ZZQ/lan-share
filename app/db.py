@@ -108,6 +108,8 @@ def _migrate_v3():
         scols = {r["name"] for r in conn.execute("PRAGMA table_info(shares)").fetchall()}
         if "owner_id" not in scols:
             conn.execute("ALTER TABLE shares ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
+        if "password_plain" not in scols:
+            conn.execute("ALTER TABLE shares ADD COLUMN password_plain TEXT")
         acols = {r["name"] for r in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
         if "username" not in acols:
             conn.execute("ALTER TABLE audit_log ADD COLUMN username TEXT NOT NULL DEFAULT ''")

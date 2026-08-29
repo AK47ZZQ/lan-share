@@ -9,7 +9,7 @@ export interface TrashItem { id: number; name: string; orig_path: string; size_h
 export interface ShareItem {
   token: string; owner: string; path: string; name: string; size: number | null
   size_human: string; expires_at: string; expires_in: string
-  has_password: boolean; downloads: number; max_downloads: number | null; created_at: string
+  has_password: boolean; password: string | null; downloads: number; max_downloads: number | null; created_at: string
 }
 export interface ShareHistoryRow { ts: number; ip: string; action: string }
 export interface ShareMeta { name: string; size_human: string; expires_in: string; needs_password: boolean; max_downloads: number | null; downloads: number }

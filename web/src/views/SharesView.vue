@@ -33,8 +33,15 @@ async function load() {
 }
 function linkOf(s: ShareItem) { return `${location.origin}/s/${s.token}` }
 async function copy(s: ShareItem) {
-  try { await navigator.clipboard.writeText(linkOf(s)); toast('链接已复制', 'ok') }
-  catch { prompt('请手动复制：', linkOf(s)) }
+  const text = s.password ? `${linkOf(s)}
+提取码：${s.password}` : linkOf(s)
+  try { await navigator.clipboard.writeText(text); toast(s.password ? '已复制链接和提取码' : '链接已复制', 'ok') }
+  catch { prompt('请手动复制：', text) }
+}
+async function copyPwd(s: ShareItem) {
+  if (!s.password) return
+  try { await navigator.clipboard.writeText(s.password); toast('提取码已复制', 'ok') }
+  catch { prompt('提取码：', s.password) }
 }
 async function revoke(s: ShareItem) {
   if (!confirm(`撤销「${s.name}」的分享？链接立即失效。`)) return
@@ -75,6 +82,8 @@ onMounted(load)
             {{ s.has_password ? '🔒' : '🔗' }}
           </span>
           <span class="sname" :title="s.name">{{ s.name }}</span>
+          <span v-if="s.password" class="status-pill" style="cursor:pointer"
+                :title="'点击复制提取码'" @click="copyPwd(s)">提取码 {{ s.password }}</span>
           <span class="status-pill" :class="statusOf(s)">{{ STATUS_LABEL[statusOf(s)] }}</span>
         </div>
         <div class="spath" :title="s.path">{{ s.path }} · {{ s.size_human }} · {{ s.expires_in }}内有效
@@ -86,7 +95,7 @@ onMounted(load)
           </span>
           <span v-else style="font-size:12px;color:var(--text-3)">已下载 {{ s.downloads }} 次 · 不限次数</span>
           <span style="display:flex;gap:6px;margin-left:auto">
-            <button class="btn ghost sm" @click="copy(s)">📋 复制</button>
+            <button class="btn ghost sm" @click="copy(s)">{{ s.password ? '📋 复制链接+提取码' : '📋 复制链接' }}</button>
             <button class="btn ghost sm" @click="qrFor = s; qrFailed = false">🔳 二维码</button>
             <button class="btn ghost sm" @click="showHistory(s)">取件记录</button>
             <button class="iconbtn danger" title="撤销分享" @click="revoke(s)">✕</button>
