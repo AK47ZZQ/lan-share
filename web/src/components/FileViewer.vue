@@ -46,6 +46,12 @@ const emit = defineEmits<{
 
 const enc = (p: string) => p.split('/').filter(Boolean).map(encodeURIComponent).join('/')
 
+// 手机/PC 配置隔离：isMobile 驱动 UI 配置（顶栏精简/底部操作条/信息面板形态），
+// 桌面端完全不受影响；布局细节另由 CSS 媒体查询处理
+const mqMobile = window.matchMedia('(max-width: 640px)')
+const isMobile = ref(mqMobile.matches)
+const onMqChange = (e: MediaQueryListEvent) => { isMobile.value = e.matches }
+
 const item = computed(() => props.items[props.modelValue])
 const IMG = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg']
 const VID = ['.mp4', '.mkv', '.mov', '.webm', '.avi']
@@ -175,8 +181,13 @@ let dragX = 0, dragY = 0
 let touchStart: { x: number; y: number } | null = null
 let swipeDx = 0, swipeDy = 0
 let pinch: { dist: number; scale: number } | null = null
+const activePtrs = new Set<number>()
+const pullY = ref(0)
 function onPointerDown(e: PointerEvent) {
+  activePtrs.add(e.pointerId)
   if (kind.value !== 'image' || scale.value === 1) return
+  // 触屏双指（捏合开始）不进入单指拖动，避免边捏边漂移
+  if (e.pointerType === 'touch' && activePtrs.size >= 2) { dragging = false; return }
   dragging = true; dragX = e.clientX - tx.value; dragY = e.clientY - ty.value
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)  // 拖出舞台松手也能释放
 }
@@ -186,10 +197,14 @@ function onPointerMove(e: PointerEvent) {
     clampPan()
   }
 }
-function onPointerUp() { dragging = false }
+function onPointerUp(e: PointerEvent) {
+  activePtrs.delete(e.pointerId)
+  dragging = false
+}
 function onTouchStart(e: TouchEvent) {
   if (kind.value !== 'image') return
   if (e.touches.length === 2) {
+    dragging = false  // 捏合开始，终止单指拖动
     const [a, b] = [e.touches[0], e.touches[1]]
     pinch = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), scale: scale.value }
   } else if (e.touches.length === 1 && scale.value === 1) {
@@ -206,17 +221,22 @@ function onTouchMove(e: TouchEvent) {
   } else if (touchStart && e.touches.length === 1) {
     swipeDx = e.touches[0].clientX - touchStart.x
     swipeDy = e.touches[0].clientY - touchStart.y
+    // 下滑跟手：图随手指下移 + 渐隐，松手未过阈值弹回
+    pullY.value = swipeDy > 0 ? Math.min(swipeDy * 0.5, 140) : 0
   }
 }
 function onTouchEnd() {
-  if (pinch) { pinch = null; return }
+  if (pinch) { pinch = null; pullY.value = 0; return }
   if (touchStart && scale.value === 1) {
     if (Math.abs(swipeDx) > 60 && Math.abs(swipeDx) > Math.abs(swipeDy)) {
       swipeDx < 0 ? go(1) : go(-1)
     } else if (swipeDy > 90 && Math.abs(swipeDx) < 60) {
       close()
+      touchStart = null
+      return
     }
   }
+  pullY.value = 0  // 未达阈值弹回
   touchStart = null
 }
 
@@ -404,6 +424,7 @@ watch(() => props.modelValue, () => {
   void loadMeta()
 }, { immediate: true })
 onMounted(() => {
+  mqMobile.addEventListener('change', onMqChange)
   window.addEventListener('keydown', onKey)
   window.addEventListener('resize', clampPan)
   document.addEventListener('fullscreenchange', onFsChange)
@@ -411,6 +432,7 @@ onMounted(() => {
   document.body.style.overflow = 'hidden'
 })
 onBeforeUnmount(() => {
+  mqMobile.removeEventListener('change', onMqChange)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', clampPan)
   document.removeEventListener('fullscreenchange', onFsChange)
@@ -461,29 +483,29 @@ function iconOf(it: ViewerItem): string {
     <div class="fv-overlay" @click.self="close">
       <div class="fv-shell" :class="{ 'with-info': showInfo }">
         <!-- 顶栏 -->
-        <header class="fv-top">
-          <div class="fv-title">
+        <header class="fv-top">          <div class="fv-title">
             <span class="fv-name" :title="item?.name">{{ item?.name }}</span>
             <span v-if="item?.size_human" class="fv-badge">{{ item.size_human }}</span>
             <span class="fv-badge">{{ extOf(item).replace('.', '').toUpperCase() || '文件' }}</span>
           </div>
           <div class="fv-ops">
-            <template v-if="kind === 'image'">
+            <!-- 手机精简：缩放/旋转/1:1 交给手势与信息面板（isMobile 配置隔离） -->
+            <template v-if="kind === 'image' && !isMobile">
               <button class="fv-btn" title="缩小 (-)" @click="zoomAt(1 / 1.25)">－</button>
               <button class="fv-btn" title="放大 (+)" @click="zoomAt(1.25)">＋</button>
               <button class="fv-btn" title="旋转" @click="rotate">↻</button>
               <button class="fv-btn" title="适应窗口 (1:1)" @click="resetZoom">1:1</button>
             </template>
-            <template v-if="kind === 'video'">
+            <template v-if="kind === 'video' && !isMobile">
               <select class="fv-btn fv-speed" :value="videoSpeed" @change="setSpeed(Number(($event.target as HTMLSelectElement).value))" title="倍速">
                 <option v-for="s in SPEEDS" :key="s" :value="s">{{ s }}x</option>
               </select>
               <button class="fv-btn" title="画中画" @click="pip">⧉</button>
             </template>
-            <button class="fv-btn" :class="{ on: isFs }" title="全屏" @click="toggleFs">⛶</button>
+            <button v-if="!isMobile" class="fv-btn" :class="{ on: isFs }" title="全屏" @click="toggleFs">⛶</button>
             <button class="fv-btn" :class="{ on: showInfo }" title="信息 (i)" @click="showInfo = !showInfo">ℹ</button>
             <a class="fv-btn" :href="`/files/${enc(item?.path || '')}`" target="_blank" title="下载">⬇</a>
-            <button class="fv-btn" title="分享" @click="doShare">🔗</button>
+            <button v-if="!isMobile" class="fv-btn" title="分享" @click="doShare">🔗</button>
             <button class="fv-btn" title="关闭 (Esc)" @click="close">✕</button>
           </div>
         </header>
@@ -508,7 +530,7 @@ function iconOf(it: ViewerItem): string {
             <template v-else>
               <div v-if="!imgLoaded" class="fv-loading"><span class="fv-spin" /></div>
               <img :key="item?.path + imgSrc" :src="imgSrc" class="fv-img"
-                   :style="{ transform: `translate(${tx}px, ${ty}px) scale(${scale}) rotate(${rot}deg)`, cursor: scale > 1 ? 'grab' : 'zoom-in' }"
+                   :style="{ transform: `translate(${tx}px, ${ty + pullY}px) scale(${scale}) rotate(${rot}deg)`, opacity: 1 - pullY / 280, cursor: scale > 1 ? 'grab' : 'zoom-in' }"
                    :class="{ dragging }"
                    @dblclick="onDblClick" @load="imgLoaded = true" @error="imgError = true" draggable="false" />
             </template>
@@ -575,6 +597,13 @@ function iconOf(it: ViewerItem): string {
           </div>
         </div>
 
+        <!-- 手机底部大按钮操作条（拇指友好；桌面无此条） -->
+        <div v-if="isMobile && item" class="fv-mobilebar">
+          <a class="fv-mb-btn" :href="`/files/${enc(item.path)}`" target="_blank">⬇ 下载</a>
+          <button class="fv-mb-btn" @click="doShare">🔗 分享</button>
+          <button class="fv-mb-btn" @click="showInfo = true">ℹ 信息</button>
+        </div>
+
         <!-- 胶片条（桌面端） -->
         <footer v-if="items.length > 1" class="fv-strip">
           <div v-for="f in filmstrip" :key="f.it.path" class="fv-thumb"
@@ -612,6 +641,7 @@ function iconOf(it: ViewerItem): string {
           <div class="fv-info-ops">
             <a class="btn ghost sm" :href="`/files/${enc(item.path)}`" target="_blank">⬇ 下载</a>
             <button class="btn ghost sm" @click="doShare">🔗 分享</button>
+            <button v-if="kind === 'image'" class="btn ghost sm" @click="rotate">↻ 旋转</button>
             <button class="btn ghost sm" @click="renaming = true; renameName = item.name">✏️ 重命名</button>
             <button class="btn danger sm" @click="doDelete">🗑️ 删除</button>
           </div>
@@ -650,6 +680,7 @@ function iconOf(it: ViewerItem): string {
 }
 .fv-top {
   display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  padding-top: max(10px, env(safe-area-inset-top));
   background: rgba(16, 16, 26, .72); border-bottom: 1px solid rgba(255, 255, 255, .08);
   flex: none;
 }
@@ -670,7 +701,7 @@ function iconOf(it: ViewerItem): string {
 .fv-btn.big { width: 44px; height: 44px; font-size: 19px; }
 .fv-speed { width: auto; padding: 0 6px; font-size: 12.5px; }
 
-.fv-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.fv-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; }
 /* flex 而非 grid：grid 的 auto 轨道会让 max-height:100% 失效（竖屏图溢出） */
 .fv-center {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -795,12 +826,36 @@ function iconOf(it: ViewerItem): string {
 .fv-uns-icon { font-size: 58px; }
 .fv-unsupported p { margin: 0; color: rgba(255, 255, 255, .5); font-size: 13px; }
 
+/* 手机底部操作条 */
+.fv-mobilebar {
+  flex: none; display: flex; gap: 8px; padding: 8px 12px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  background: rgba(16, 16, 26, .72); border-top: 1px solid rgba(255, 255, 255, .08);
+}
+.fv-mb-btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 11px 0; border-radius: 11px; border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .08); color: #fff; font-size: 14px;
+  text-decoration: none; cursor: pointer;
+}
+.fv-mb-btn:active { background: rgba(255, 255, 255, .2); }
+
+/* 手机/PC 配置隔离：桌面端样式完全不受以下媒体查询影响 */
 @media (max-width: 640px) {
-  .fv-strip { display: none; }
-  .fv-top { padding: 8px 10px; gap: 8px; }
+  .fv-strip, .fv-nav { display: none; }
+  .fv-top { padding: 8px 10px; padding-top: max(8px, env(safe-area-inset-top)); gap: 8px; }
   .fv-badge { display: none; }
-  .fv-center { padding: 14px; }
+  .fv-btn { width: 40px; height: 40px; font-size: 17px; }
+  .fv-center { padding: 12px; }
   .fv-count { top: 6px; }
+  /* 信息面板：全宽 + 单列大按钮 */
+  .fv-info { width: 100vw; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
+  .fv-info-ops { grid-template-columns: 1fr; }
+  .fv-info-ops .btn { padding: 11px 0; justify-content: center; font-size: 14px; }
+  /* 文档类排版收窄 */
+  .fv-prose { padding: 14px 16px; font-size: 14px; }
+  .fv-docx { padding: 14px; }
+  .fv-scroll { padding: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .fv-overlay, .fv-shell, .fv-drawer-enter-active { animation: none; }
