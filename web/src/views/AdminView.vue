@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { api, type AdminUser, type ActivityItem } from '../api'
 import { me } from '../auth'
 import Modal from '../components/Modal.vue'
+import AdminUserModal from '../components/AdminUserModal.vue'
 import { fmtTs, toast } from '../ui'
 
 const tab = ref<'users' | 'invites' | 'grants' | 'feed'>('users')
@@ -38,6 +39,7 @@ async function toggleActive(u: AdminUser) {
   try { await api.adminPatchUser(u.id, { is_active: !u.is_active }); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
 const quotaModal = ref<{ user: AdminUser; value: string } | null>(null)
+const credModal = ref<AdminUser | null>(null)
 function openQuota(u: AdminUser) {
   quotaModal.value = { user: u, value: u.quota_bytes ? String(Math.round(u.quota_bytes / 2**30)) : '' }
 }
@@ -128,6 +130,7 @@ onMounted(async () => {
           <select :value="u.role" style="padding:6px 8px;font-size:13px" @change="changeRole(u, $event)">
             <option value="admin">admin</option><option value="member">member</option><option value="guest">guest</option>
           </select>
+          <button class="btn ghost sm" title="修改用户名/重置密码" @click="credModal = u">✏️ 账号</button>
           <button class="btn ghost sm" title="设置私人空间配额" @click="openQuota(u)">📏 配额</button>
           <button class="btn ghost sm" @click="toggleActive(u)">{{ u.is_active ? '停用' : '启用' }}</button>
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
@@ -215,6 +218,9 @@ onMounted(async () => {
         <span class="meta">{{ fmtTs(a.ts) }}</span>
       </div>
     </div>
+
+    <!-- 成员账号弹窗（改用户名/重置密码） -->
+    <AdminUserModal v-if="credModal" :user="credModal" @close="credModal = null" @changed="loadAll" />
 
     <!-- 配额弹窗（全页签可用） -->
     <Modal v-if="quotaModal" :title="`设置配额 — ${quotaModal.user.username}`" @close="quotaModal = null">

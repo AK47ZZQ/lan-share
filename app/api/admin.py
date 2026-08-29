@@ -86,6 +86,57 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
     return {"ok": True}
 
 
+class AdminCredBody(BaseModel):
+    value: str
+
+
+@app.post("/api/admin/users/{uid}/username")
+def admin_set_username(uid: int, body: AdminCredBody, request: Request,
+                       _admin=Depends(require_admin)):
+    """管理员直接改成员用户名（同步私人目录改名；成员会话保持）。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    new_name = _clean_username(body.value)
+    if new_name == row["username"]:
+        raise HTTPException(status_code=400, detail="新用户名与当前相同")
+    if _db().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE",
+                     (new_name,)).fetchone():
+        raise HTTPException(status_code=409, detail="该用户名已被占用")
+    with _db_lock:
+        _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, uid))
+        _db().commit()
+    old_dir = SHARE_ROOT / "private" / row["username"]
+    new_dir = SHARE_ROOT / "private" / new_name
+    import os
+    if old_dir.exists() and not os.path.normcase(str(old_dir)) == os.path.normcase(str(new_dir)):
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            old_dir.rename(new_dir)
+        except OSError:
+            audit("admin_dir_rename_fail", f"{row['username']} → {new_name}", ip=client_ip(request))
+    audit("admin_rename_user", f"{row['username']} → {new_name}", ip=client_ip(request))
+    return {"ok": True, "username": new_name}
+
+
+@app.post("/api/admin/users/{uid}/password")
+def admin_set_password(uid: int, body: AdminCredBody, request: Request,
+                       _admin=Depends(require_admin)):
+    """管理员直接重置成员密码（成员全部会话吊销，需用新密码重新登录）。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if len(body.value) < 8:
+        raise HTTPException(status_code=400, detail="密码至少 8 位")
+    with _db_lock:
+        _db().execute("UPDATE users SET password_hash=? WHERE id=?",
+                      (hash_password(body.value), uid))
+        _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        _db().commit()
+    audit("admin_reset_password", row["username"], ip=client_ip(request))
+    return {"ok": True}
+
+
 @app.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin)):
     """删号（E7）：grants/会话 CASCADE；私人目录改名 .orphaned/<uid>-<名>/ 防复用占坑。"""

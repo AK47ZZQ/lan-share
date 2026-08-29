@@ -88,6 +88,10 @@ export const api = {
   adminPatchUser: (uid: number, body: { is_active?: boolean; quota_bytes?: number | null; role?: string }) =>
     fetch(`/api/admin/users/${uid}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => handle<{ ok: boolean }>(r)),
   adminDeleteUser: (uid: number) => fetch(`/api/admin/users/${uid}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  adminSetUsername: (uid: number, new_username: string) =>
+    jpost(`/api/admin/users/${uid}/username`, { value: new_username }).then(r => handle<{ ok: boolean; username: string }>(r)),
+  adminSetPassword: (uid: number, value: string) =>
+    jpost(`/api/admin/users/${uid}/password`, { value }).then(r => handle<{ ok: boolean }>(r)),
   adminCreateInvite: (role: string, hours: number) => jpost('/api/admin/invites', { role, hours }).then(r => handle<{ code: string }>(r)),
   adminInvites: () => fetch('/api/admin/invites').then(r => handle<{ code: string; role: string; expired: boolean; used: boolean }[]>(r)),
   adminDeleteInvite: (code: string) => fetch(`/api/admin/invites/${encodeURIComponent(code)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),

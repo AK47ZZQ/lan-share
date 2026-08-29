@@ -310,3 +310,32 @@ def test_webdav_member_can_read_shared_not_private_others(auth, make_user):
     r = member.request("PROPFIND", f"/dav/private/{auth.username}/",
                        headers=header)
     assert r.status_code in (403, 404)  # 别名→本人空间不存在该子目录
+
+
+def test_admin_can_rename_and_reset_member(auth, make_user):
+    """管理员直接改成员用户名/重置密码。"""
+    import server as _s
+    member = make_user("member")
+    uid = _s._db().execute("SELECT id FROM users WHERE username=?",
+                           (member.username,)).fetchone()["id"]
+    member.get("/api/files/private")  # 建私人目录
+
+    # 改用户名（保留词/重名拒绝）
+    assert auth.post(f"/api/admin/users/{uid}/username",
+                     json={"value": "shared"}).status_code == 400
+    r = auth.post(f"/api/admin/users/{uid}/username", json={"value": "renamed-member-x"})
+    assert r.status_code == 200, r.text
+    import os
+    assert os.path.isdir(os.path.join(os.environ["SHARE_ROOT"], "private", "renamed-member-x"))
+    assert not os.path.isdir(os.path.join(os.environ["SHARE_ROOT"], "private", member.username))
+
+    # 重置密码：短密码拒绝；有效后旧会话吊销、新密码可登录
+    assert auth.post(f"/api/admin/users/{uid}/password", json={"value": "short"}).status_code == 400
+    assert member.get("/api/auth/me").status_code == 200
+    r = auth.post(f"/api/admin/users/{uid}/password", json={"value": "brand-new-pass-1"})
+    assert r.status_code == 200, r.text
+    assert member.get("/api/auth/me").status_code == 401
+    from fastapi.testclient import TestClient
+    c = TestClient(_s.app, base_url="https://x")
+    assert c.post("/api/login", json={"username": "renamed-member-x",
+                                      "password": "brand-new-pass-1"}).status_code == 200
