@@ -99,7 +99,7 @@ export const api = {
   adminCreateGrant: (user_id: number, path: string, can_read: boolean, can_write: boolean, expires_hours?: number) =>
     jpost('/api/admin/grants', { user_id, path, can_read, can_write, expires_hours }).then(r => handle<{ ok: boolean }>(r)),
   adminDeleteGrant: (gid: number) => fetch(`/api/admin/grants/${gid}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
-  getPublicUrl: () => fetch('/api/admin/public-url').then(r => handle<{ public_base_url: string }>(r)),
+  getPublicUrl: () => fetch('/api/public-url').then(r => handle<{ public_base_url: string }>(r)),
   setPublicUrl: (url: string) => jpost('/api/admin/public-url', { url }).then(r => handle<{ ok: boolean }>(r)),
 }
 

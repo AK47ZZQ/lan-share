@@ -54,7 +54,9 @@ function menuAct(action: string) {
 // 弹窗
 const showMove = ref(false)
 const showQr = ref(false)
-const upUrl = location.origin + '/up' 
+const upUrl = location.origin + '/up'
+const publicBase = ref('')
+function loadPublic() { api.getPublicUrl().then(r => publicBase.value = r.public_base_url).catch(() => {}) }
 const sharePaths = ref<string[] | null>(null)
 const renameTarget = ref<Entry | null>(null)
 const renameName = ref('')
@@ -239,7 +241,7 @@ const shownItems = computed(() => {
   return items.value
 })
 
-onMounted(() => load(''))
+onMounted(() => { load(''); loadPublic() })
 </script>
 
 <template>
@@ -362,15 +364,29 @@ onMounted(() => load(''))
       <ShareModal :paths="sharePaths" @close="sharePaths = null" />
     </Modal>
 
-    <!-- 手机上传二维码 -->
+    <!-- 手机上传二维码（双地址） -->
     <Modal v-if="showQr" title="📲 手机扫码上传" @close="showQr = false">
-      <div style="text-align:center;display:grid;gap:10px;justify-items:center">
-        <img :src="`/api/qr?text=${encodeURIComponent(upUrl)}`"
-             style="width:200px;height:200px;background:#fff;padding:8px;border-radius:12px" />
-        <p style="font-size:13px;color:var(--text-2);margin:0">
-          手机扫码打开直传页，照片/文件将备份到你的 <b>incoming</b> 目录
+      <div style="display:grid;gap:14px">
+        <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
+          <div style="text-align:center;display:grid;gap:6px;justify-items:center">
+            <img :src="`/api/qr?text=${encodeURIComponent(upUrl)}`"
+                 style="width:160px;height:160px;background:#fff;padding:8px;border-radius:12px" />
+            <b style="font-size:13px">🏠 局域网</b>
+            <span style="font-size:11.5px;color:var(--text-3)">手机连家里 WiFi 时扫</span>
+            <button class="btn ghost sm" @click="copyText(upUrl)">📋 复制</button>
+          </div>
+          <div v-if="publicBase" style="text-align:center;display:grid;gap:6px;justify-items:center">
+            <img :src="`/api/qr?text=${encodeURIComponent(publicBase + '/up')}`"
+                 style="width:160px;height:160px;background:#fff;padding:8px;border-radius:12px" />
+            <b style="font-size:13px">🌐 公网 (FRP)</b>
+            <span style="font-size:11.5px;color:var(--text-3)">在外用 5G 时扫（较慢）</span>
+            <button class="btn ghost sm" @click="copyText(publicBase + '/up')">📋 复制</button>
+          </div>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-3);margin:0;text-align:center">
+          照片/文件将备份到你的 <b>incoming</b> 目录
+          <template v-if="!publicBase"> · 未配置公网地址（管理面板可设）</template>
         </p>
-        <button class="btn ghost sm" @click="copyText(upUrl)">📋 复制直传地址</button>
       </div>
     </Modal>
 

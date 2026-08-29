@@ -264,6 +264,12 @@ def get_public_url(_admin=Depends(require_admin)):
     return {"public_base_url": _get_setting("public_base_url")}
 
 
+@app.get("/api/public-url")
+def get_public_url_user(_user=Depends(require_user)):
+    """公网访问地址：全员可读（分享/直传双地址复制用，非敏感）。"""
+    return {"public_base_url": _get_setting("public_base_url")}
+
+
 @app.post("/api/admin/public-url")
 def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
     url = (body.get("url") or "").strip().rstrip("/")
