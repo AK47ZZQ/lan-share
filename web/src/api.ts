@@ -4,10 +4,10 @@ export interface Entry {
   name: string; path: string; is_dir: boolean; is_private_root?: boolean
   size: number | null; size_human: string; modified: string; ext: string | null
 }
-export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null }
+export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null; totp_enabled?: boolean }
 export interface TrashItem { id: number; name: string; orig_path: string; size_human: string; deleted_at: string; days_left: number }
 export interface ShareItem {
-  token: string; owner: string; path: string; name: string; size: number | null
+  token: string; owner: string; target: string | null; path: string; name: string; size: number | null
   size_human: string; expires_at: string; expires_in: string
   has_password: boolean; password: string | null; downloads: number; max_downloads: number | null; created_at: string
 }
@@ -18,6 +18,11 @@ export interface AdminUser { id: number; username: string; role: string; is_acti
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
 export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string }
 export interface DiskInfo { total: string; used: string; free: string; total_human: string; used_human: string; free_human: string; total_bytes: number; used_bytes: number; free_bytes: number; share_size: string; share_size_human: string; warning: boolean }
+export interface Member { id: number; username: string; role: string }
+export interface NotificationItem { id: number; type: string; title: string; body: string | null; link: string | null; created_at: number; read: boolean }
+export interface PhotoItem { path: string; name: string; taken: string; month: string; uploader: string; thumb: string }
+export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
+export interface Album { id: string; title: string; month: string }
 
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
@@ -42,7 +47,17 @@ const jpost = (url: string, body: unknown) =>
 
 export const api = {
   me: () => fetch('/api/auth/me').then(r => handle<Me>(r)),
-  login: (username: string, password: string) => jpost('/api/login', { username, password }).then(r => handle<{ ok: boolean }>(r)),
+  login: (username: string, password: string) => jpost('/api/login', { username, password }).then(r => handle<{ ok?: boolean; totp_required?: boolean; username?: string }>(r)),
+  loginTotp: (username: string, password: string, code: string) => jpost('/api/login/totp', { username, password, code }).then(r => handle<{ ok: boolean }>(r)),
+  totpSetup: () => jpost('/api/auth/totp/setup', {}).then(r => handle<{ secret: string; otpauth: string }>(r)),
+  totpEnable: (code: string) => jpost('/api/auth/totp/enable', { code }).then(r => handle<{ ok: boolean }>(r)),
+  totpDisable: (old_password: string) => jpost('/api/auth/totp/disable', { old_password }).then(r => handle<{ ok: boolean }>(r)),
+  notifications: () => fetch('/api/notifications').then(r => handle<{ unread: number; items: NotificationItem[] }>(r)),
+  notificationsRead: () => jpost('/api/notifications/read', {}).then(r => handle<{ ok: boolean }>(r)),
+  members: () => fetch('/api/members').then(r => handle<Member[]>(r)),
+  albums: () => fetch('/api/albums').then(r => handle<Album[]>(r)),
+  adminAddAlbum: (title: string, month: string) => jpost('/api/admin/albums', { title, month }).then(r => handle<{ ok: boolean }>(r)),
+  adminDeleteAlbum: (id: string) => fetch(`/api/admin/albums/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   logout: () => fetch('/api/logout', { method: 'POST' }).then(() => undefined),
   changeUsername: (new_username: string, password: string) =>
     jpost('/api/auth/username', { new_username, password }).then(r => handle<{ ok: boolean; username: string }>(r)),
@@ -65,11 +80,12 @@ export const api = {
   trashDelete: (id: number) => fetch(`/api/trash/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   trashEmpty: () => fetch('/api/trash', { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
 
-  createShare: (path: string, expires_hours: number, password: string | null, max_downloads: number | null) => {
+  createShare: (path: string, expires_hours: number, password: string | null, max_downloads: number | null, target?: string | null) => {
     const f = new FormData()
     f.append('path', path); f.append('expires_hours', String(expires_hours))
     if (password) f.append('password', password)
     if (max_downloads) f.append('max_downloads', String(max_downloads))
+    if (target) f.append('target', target)
     return fetch('/api/share', { method: 'POST', body: f }).then(r => handle<{ token: string }>(r))
   },
   shares: () => fetch('/api/shares').then(r => handle<Record<string, ShareItem>>(r)).then(d => Object.entries(d).map(([token, s]) => ({ ...s, token }))),
@@ -81,8 +97,13 @@ export const api = {
   disk: () => fetch('/api/disk').then(r => handle<DiskInfo>(r)),
   search: (q: string) => fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => handle<Entry[]>(r)),
   recent: (limit = 30) => fetch(`/api/recent?limit=${limit}`).then(r => handle<Entry[]>(r)),
-  photos: (limit: number, offset: number) =>
-    fetch(`/api/photos?limit=${limit}&offset=${offset}`).then(r => handle<{ total: number; items: { path: string; name: string; taken: string; thumb: string }[] }>(r)),
+  photos: (limit: number, offset: number, month?: string, uploader?: string) => {
+    const q = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (month) q.set('month', month)
+    if (uploader) q.set('uploader', uploader)
+    return fetch(`/api/photos?${q}`).then(r => handle<{ total: number; items: PhotoItem[] }>(r))
+  },
+  photoFacets: () => fetch('/api/photos/facets').then(r => handle<PhotoFacets>(r)),
   activity: (limit = 40) => fetch(`/api/activity?limit=${limit}`).then(r => handle<ActivityItem[]>(r)),
 
   adminUsers: () => fetch('/api/admin/users').then(r => handle<AdminUser[]>(r)),

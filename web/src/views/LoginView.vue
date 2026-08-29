@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { login as authLogin } from '../auth'
+import { login as authLogin, refreshAuth } from '../auth'
+import { api } from '../api'
 import { toast } from '../ui'
 
 const username = ref('')
 const password = ref('')
+const totpCode = ref('')
+const totpStep = ref(false)
 const busy = ref(false)
 const err = ref('')
 const route = useRoute()
@@ -21,7 +24,8 @@ async function submit() {
   err.value = ''
   busy.value = true
   try {
-    await authLogin(username.value, password.value)
+    const r = await authLogin(username.value, password.value)
+    if (r && 'totp_required' in r && r.totp_required) { totpStep.value = true; err.value = ''; return }
     toast('欢迎回来', 'ok')
     const next = String(route.query.next || '/')
     router.replace(next.startsWith('/') ? next : '/')
@@ -30,6 +34,20 @@ async function submit() {
   } finally {
     busy.value = false
   }
+}
+
+async function submitTotp() {
+  err.value = ''
+  busy.value = true
+  try {
+    await api.loginTotp(username.value, password.value, totpCode.value)
+    await refreshAuth()
+    toast('欢迎回来', 'ok')
+    const next = String(route.query.next || '/')
+    router.replace(next.startsWith('/') ? next : '/')
+  } catch (e) {
+    err.value = (e as Error).message
+  } finally { busy.value = false }
 }
 
 async function redeem() {
@@ -66,6 +84,15 @@ async function redeem() {
           {{ busy ? '创建中…' : '创建账号' }}
         </button>
         <p class="sub" style="text-align:center;margin:0"><a href="#" @click.prevent="redeeming = false">已有账号？去登录</a></p>
+      </form>
+
+      <form v-if="totpStep" @submit.prevent="submitTotp">
+        <p class="sub" style="margin:0 0 10px">两步验证已启用，请输入认证器中的 6 位动态码</p>
+        <input v-model="totpCode" placeholder="6 位动态验证码" inputmode="numeric" autocomplete="one-time-code" autofocus maxlength="6" />
+        <button class="btn" type="submit" :disabled="busy || totpCode.length !== 6">
+          {{ busy ? '验证中…' : '验证并登录' }}
+        </button>
+        <p class="sub" style="text-align:center;margin:0"><a href="#" @click.prevent="totpStep = false; err = ''">返回重新登录</a></p>
       </form>
 
       <form v-else @submit.prevent="submit">

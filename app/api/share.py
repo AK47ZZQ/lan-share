@@ -17,7 +17,7 @@ from starlette.background import BackgroundTask
 
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_TTL
 from app.db import _db, _db_lock
-from app.security import audit, client_ip, require_user
+from app.security import audit, client_ip, get_session_user, require_user
 from app.filetools import human_size
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
@@ -27,6 +27,7 @@ from app.main import app
 async def create_share(request: Request, path: str = Form(...), expires_hours: int = Form(default=72),
                        password: Optional[str] = Form(default=None),
                        max_downloads: Optional[int] = Form(default=None),
+                       target: Optional[str] = Form(default=None),
                        _user=Depends(require_user)):
     if expires_hours < 1:
         raise HTTPException(status_code=400, detail="expires_hours must be >= 1")
@@ -39,6 +40,20 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
     if target.is_dir():
         raise HTTPException(status_code=400, detail="暂不支持分享文件夹，请打包后分享")
 
+    # 定向分享：目标成员必须存在且在用
+    target_id = None
+    target_username = None
+    form = await request.form()
+    raw_target = form.get("target")
+    if raw_target and str(raw_target).strip():
+        trow = _db().execute(
+            "SELECT id, username FROM users WHERE LOWER(username)=LOWER(?) AND is_active=1",
+            (str(raw_target).strip(),)).fetchone()
+        if not trow:
+            raise HTTPException(status_code=404, detail="目标成员不存在或已停用")
+        target_id = trow["id"]
+        target_username = trow["username"]
+
     token = secrets.token_urlsafe(16)
     pwd_hash = None
     if password:
@@ -46,16 +61,37 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         pwd_hash = salt.hex() + "$" + hashlib.sha256(salt + password.encode()).hexdigest()
     with _db_lock:
         _db().execute(
-            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain, target_user_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (token, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), target.name,
              target.stat().st_size if target.is_file() else None,
              time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
              _user["user_id"] if "user_id" in _user.keys() else None,
-             password or None))
+             password or None, target_id))
+        if target_id:
+            _db().execute(
+                "INSERT INTO notifications(user_id, type, title, body, link, created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (target_id, "share", f"{_user['username']} 给你分享了文件",
+                 target.name, f"/s/{token}", time.time()))
         _db().commit()
     audit("share_create", path, f"{expires_hours}h", client_ip(request))
-    return {"ok": True, "token": token, "expires_in": f"{expires_hours}h"}
+    if target_id:
+        audit("share_target", path, f"→ {target_username}", client_ip(request))
+    return {"ok": True, "token": token, "expires_in": f"{expires_hours}h",
+            "target": target_username}
+
+
+def _target_guard(s: sqlite3.Row, request: Request) -> bool:
+    """定向分享访问判定：返回请求者是否是目标成员（或 admin）。
+    非定向分享恒返回 False（不拦截）；定向分享对无关者表现为不存在。"""
+    if s["target_user_id"] is None:
+        return False
+    u = get_session_user(request)
+    if u and (u["user_id"] == s["target_user_id"] or u["role"] == "admin"):
+        return True
+    # 404 而非 403：不向无关者泄露分享的存在；detail 供落地页给出登录引导
+    raise HTTPException(status_code=404, detail="定向分享：请登录对应成员账号")
 
 
 def _get_active_share(token: str) -> sqlite3.Row:
@@ -109,16 +145,18 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
 
 
 @app.get("/api/share/meta/{token}")
-async def share_meta(token: str):
+async def share_meta(token: str, request: Request):
     s = _get_active_share(token)
+    is_target = _target_guard(s, request)
     return {
         "name": s["name"],
         "size": s["size"],
         "size_human": human_size(s["size"]) if s["size"] is not None else "-",
         "expires_in": f"{max(0, int((s['expires_at'] - time.time()) / 3600))}h",
-        "needs_password": s["password_hash"] is not None,
+        "needs_password": s["password_hash"] is not None and not is_target,
         "max_downloads": s["max_downloads"],
         "downloads": s["downloads"],
+        "targeted": s["target_user_id"] is not None,
     }
 
 
@@ -130,7 +168,10 @@ _tickets_lock = threading.Lock()
 @app.post("/api/share/{token}/prepare")
 async def share_prepare(request: Request, token: str, body: SharePrepareBody):
     s = _get_active_share(token)
-    _check_share_password(request, s, body.password)
+    is_target = _target_guard(s, request)
+    # 定向分享的收件成员（及 admin）登录即取，无需提取码
+    if not is_target:
+        _check_share_password(request, s, body.password)
     if s["max_downloads"] and s["downloads"] >= s["max_downloads"]:
         raise HTTPException(status_code=410, detail="下载次数已达上限")
     tkt = secrets.token_urlsafe(24)
@@ -207,8 +248,10 @@ async def list_shares(_user=Depends(require_user)):
         if not is_admin and s["owner_id"] not in (None, _user["user_id"]):
             continue
         owner = _db().execute("SELECT username FROM users WHERE id=?", (s["owner_id"],)).fetchone()             if s["owner_id"] else None
+        target_user = _db().execute("SELECT username FROM users WHERE id=?", (s["target_user_id"],)).fetchone() if s["target_user_id"] else None
         active[s["token"]] = {
             "owner": owner["username"] if owner else ("早期分享" if is_admin else "我"),
+            "target": target_user["username"] if target_user else None,
             "path": s["path"],
             "name": s["name"],
             "size": s["size"],

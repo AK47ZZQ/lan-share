@@ -11,7 +11,7 @@ const pwd = ref('')
 const dlUrl = ref('')
 const busy = ref(false)
 const limitReached = ref(false)
-const gone = ref('')   // ''=存在；revoked=不存在/已撤销；expired=已过期
+const gone = ref('')   // ''=存在；revoked=不存在/已撤销；expired=已过期；targeted=定向分享需登录
 
 async function prepare() {
   busy.value = true
@@ -30,7 +30,8 @@ onMounted(async () => {
   try { meta.value = await publicApi.meta(token) }
   catch (e) {
     const m = (e as Error).message
-    if (m.toLowerCase().includes('not found') || m.includes('不存在')) gone.value = 'revoked'
+    if (m.includes('定向')) gone.value = 'targeted'
+    else if (m.toLowerCase().includes('not found') || m.includes('不存在')) gone.value = 'revoked'
     else if (m.includes('expired') || m.includes('过期')) gone.value = 'expired'
     else err.value = m
   }
@@ -67,6 +68,14 @@ onMounted(async () => {
         </button>
         <p v-else class="ok-text">下载已开始（若被拦截请检查浏览器下载栏）·
           <a :href="dlUrl" target="_blank">再下一次</a></p>
+      </div>
+      <div v-else-if="gone === 'targeted'" class="limit-box">
+        <div style="font-size:30px">🎯</div>
+        <b>这是定向分享</b>
+        <p style="font-size:13px;color:var(--text-3);margin:4px 0 10px">
+          该文件分享给了指定成员。请用对应成员账号登录后重新打开本页即可直接下载。
+        </p>
+        <a class="btn sm" :href="`/login?next=${encodeURIComponent('/s/' + token)}`">去登录</a>
       </div>
       <div v-else-if="gone" class="limit-box">
         <div style="font-size:30px">{{ gone === 'expired' ? '⏰' : '🔍' }}</div>

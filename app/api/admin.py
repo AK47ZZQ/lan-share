@@ -100,7 +100,7 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
     new_name = _clean_username(body.value)
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
-    if _db().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE",
+    if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
                      (new_name,)).fetchone():
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     with _db_lock:
@@ -129,12 +129,22 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
     if len(body.value) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
     with _db_lock:
-        _db().execute("UPDATE users SET password_hash=? WHERE id=?",
+        # 重置密码同时清除两步验证（成员手机丢失时的管理端恢复通道）
+        _db().execute("UPDATE users SET password_hash=?, totp_secret=NULL, totp_enabled=0 WHERE id=?",
                       (hash_password(body.value), uid))
         _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         _db().commit()
     audit("admin_reset_password", row["username"], ip=client_ip(request))
     return {"ok": True}
+
+
+@app.get("/api/members")
+def list_members(_user=Depends(require_user)):
+    """在用成员名单（定向分享选择收件人用；用户名经动态流已互相可见，非敏感）。"""
+    rows = _db().execute(
+        "SELECT id, username, role FROM users WHERE is_active=1 AND id != ? ORDER BY username",
+        (_user["user_id"],)).fetchall()
+    return [{"id": r["id"], "username": r["username"], "role": r["role"]} for r in rows]
 
 
 @app.delete("/api/admin/users/{uid}")
@@ -228,21 +238,24 @@ def invite_redeem(body: RedeemBody, request: Request):
     username = _clean_username(body.username)
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
-    if _db().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE",
+    if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
                      (username,)).fetchone():
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     now = time.time()
     with _db_lock:
         cur = _db().execute(
-            "INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,?)",
+            "INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,?) "
+            "RETURNING id",
             (username, hash_password(body.password), now, row["role"]))
-        uid = cur.lastrowid
+        uid = cur.fetchone()["id"]
         # 原子占位：仅当邀请未被使用且未过期时认领（并发 redeem 安全）
         claim = _db().execute(
             "UPDATE invites SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL "
             "AND expires_at > ?", (uid, now, body.code, now))
         if not claim.rowcount:
-            _db().rollback()
+            # 补偿回退（引擎中立：不等价于事务 rollback，但同样不留下孤儿账号）
+            _db().execute("DELETE FROM users WHERE id=?", (uid,))
+            _db().commit()
             audit("invite_redeem_fail", body.code[:6], ip=client_ip(request))
             raise HTTPException(status_code=403, detail="邀请码无效或已过期")
         _db().commit()

@@ -19,8 +19,9 @@ export async function refreshAuth(): Promise<Me | null> {
   return me.value
 }
 
-export async function login(username: string, password: string): Promise<Me> {
-  await api.login(username, password)
+export async function login(username: string, password: string): Promise<Me | { totp_required: true }> {
+  const r = await api.login(username, password)
+  if (r && r.totp_required) return { totp_required: true }
   return refreshAuth() as Promise<Me>
 }
 

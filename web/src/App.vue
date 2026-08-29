@@ -6,6 +6,7 @@ import { authReady, logout as authLogout, me, refreshAuth } from './auth'
 import { dlg, dlgCancel, dlgOk, toasts } from './ui'
 import DiskModal from './components/DiskModal.vue'
 import AccountModal from './components/AccountModal.vue'
+import NotificationsBell from './components/NotificationsBell.vue'
 import { applyTheme, currentTheme, type Theme } from './theme'
 
 const disk = ref<{ free: string; warning: boolean; used_bytes: number; total_bytes: number } | null>(null)
@@ -81,6 +82,7 @@ watchEffect(() => {
           <span class="bar"><i :style="{ width: diskPct + '%' }" /></span>
           {{ diskPct }}% · {{ disk.free }} 可用
         </button>
+        <NotificationsBell v-if="me" />
         <button class="userchip avatar-btn" @click.stop="menuOpen = !menuOpen">
           <span class="uname">{{ me.username }}</span>
           <span class="avatar">{{ initial(me.username) }}</span>

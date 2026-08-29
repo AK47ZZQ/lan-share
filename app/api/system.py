@@ -1,6 +1,7 @@
 """系统任务：定时清理（tmp/回收站/上传会话/zip/DB）+ 照片时间线 + 通用 QR。"""
 import asyncio
 import io
+import re
 import shutil
 import threading
 import time
@@ -9,12 +10,13 @@ from pathlib import Path
 
 import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
-from fastapi import Depends, Query, Response
+from fastapi import Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 
 from app.config import (CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS,
                         UPLOAD_SESSION_TTL, ZIP_TTL)
 from app.db import _db, _db_lock
-from app.security import audit, require_user
+from app.security import audit, require_user, require_admin
 from app.spaces import visible
 from app.api.files import _chunk_dir, _zips, _zips_lock
 from app.api.share import _tickets, _tickets_lock
@@ -110,6 +112,8 @@ def _cleanup_db():
     with _db_lock:
         _db().execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
+        _db().execute("DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < ?",
+                      (now - 30 * 86400,))
         _db().commit()
     with _tickets_lock:
         for k in [k for k, v in _tickets.items() if v["exp"] < now]:
@@ -178,14 +182,29 @@ def _scan_photos():
         _last_photo_scan = time.time()
 
 
+def _photo_uploader(rel: str) -> str:
+    """拍摄者维度：按路径归属推导（private/<u>/、incoming/<u>/ 归属本人，其余算共享）。"""
+    parts = rel.split("/")
+    if len(parts) > 1 and parts[0] in ("private", "incoming"):
+        return parts[1]
+    return "共享空间"
+
+
 @app.get("/api/photos")
 def list_photos(limit: int = Query(default=120, le=500), offset: int = Query(default=0, ge=0),
+                month: str | None = Query(default=None),
+                uploader: str | None = Query(default=None),
                 _user=Depends(require_user)):
-    """照片时间线：按拍摄日期倒序（EXIF 优先）。仅显示对当前用户可见的照片。"""
+    """照片时间线：按拍摄日期倒序（EXIF 优先）。仅显示对当前用户可见的照片。
+    可按 month=YYYY-MM 与 uploader 过滤（共享相册双维度浏览）。"""
     _scan_photos()
     all_rows = _db().execute(
         "SELECT path, taken_at FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(_user, r["path"].split("/"))]
+    if month:
+        rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
+    if uploader:
+        rows = [r for r in rows if _photo_uploader(r["path"]) == uploader]
     total = len(rows)
     rows = rows[offset:offset + limit]
     return {
@@ -194,9 +213,98 @@ def list_photos(limit: int = Query(default=120, le=500), offset: int = Query(def
             "path": r["path"],
             "name": r["path"].split("/")[-1],
             "taken": r["taken_at"],
+            "month": (r["taken_at"] or "")[:7],
+            "uploader": _photo_uploader(r["path"]),
             "thumb": f"/thumb/{r['path']}",
         } for r in rows],
     }
+
+
+@app.get("/api/photos/facets")
+def photo_facets(_user=Depends(require_user)):
+    """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。"""
+    _scan_photos()
+    rows = _db().execute("SELECT path, taken_at FROM photos ORDER BY taken_at DESC").fetchall()
+    months: dict[str, int] = {}
+    uploaders: dict[str, int] = {}
+    for r in rows:
+        if not visible(_user, r["path"].split("/")):
+            continue
+        m = (r["taken_at"] or "")[:7]
+        if len(m) == 7:
+            months[m] = months.get(m, 0) + 1
+        u = _photo_uploader(r["path"])
+        uploaders[u] = uploaders.get(u, 0) + 1
+    return {
+        "months": [{"month": m, "count": c} for m, c in sorted(months.items(), reverse=True)],
+        "uploaders": sorted(
+            [{"name": u, "count": c} for u, c in uploaders.items()],
+            key=lambda x: -x[1]),
+    }
+
+
+# ─── 精选专辑（月份集合，管理员维护，全员可见）──────────────
+
+_ALBUMS_KEY = "featured_albums"
+
+
+def _load_albums() -> list[dict]:
+    row = _db().execute("SELECT value FROM settings WHERE key=?", (_ALBUMS_KEY,)).fetchone()
+    if not row or not row["value"]:
+        return []
+    import json
+    try:
+        data = json.loads(row["value"])
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_albums(albums: list[dict]):
+    import json
+    with _db_lock:
+        _db().execute(
+            "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_ALBUMS_KEY, json.dumps(albums, ensure_ascii=False)))
+        _db().commit()
+
+
+@app.get("/api/albums")
+def list_albums(_user=Depends(require_user)):
+    return _load_albums()
+
+
+class AlbumBody(BaseModel):
+    title: str
+    month: str
+
+
+@app.post("/api/admin/albums")
+def create_album(body: AlbumBody, _admin=Depends(require_admin)):
+    title = body.title.strip()
+    if not title or len(title) > 40:
+        raise HTTPException(status_code=400, detail="专辑标题需为 1~40 字符")
+    if not re.fullmatch(r"\d{4}-\d{2}", body.month):
+        raise HTTPException(status_code=400, detail="month 需为 YYYY-MM 格式")
+    albums = _load_albums()
+    if any(a.get("month") == body.month for a in albums):
+        raise HTTPException(status_code=409, detail="该月份已是精选专辑")
+    albums.insert(0, {"id": f"al-{time.time_ns()}", "title": title, "month": body.month})
+    _save_albums(albums[:50])
+    audit("album_create", f"{title} ({body.month})")
+    return {"ok": True, "albums": albums}
+
+
+@app.delete("/api/admin/albums/{album_id}")
+def delete_album(album_id: str, _admin=Depends(require_admin)):
+    albums = _load_albums()
+    remaining = [a for a in albums if a.get("id") != album_id]
+    if len(remaining) == len(albums):
+        raise HTTPException(status_code=404, detail="专辑不存在")
+    _save_albums(remaining)
+    audit("album_delete", album_id)
+    return {"ok": True}
+
 
 @app.get("/api/qr")
 async def generic_qr(text: str = Query(..., min_length=1, max_length=512),

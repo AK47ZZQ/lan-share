@@ -1,9 +1,10 @@
-"""认证 API：初始化/登录/登出/改密/改用户名/账号状态。"""
+"""认证 API：初始化/登录(含 TOTP 两步)/登出/改密/改用户名/账号状态/两步验证管理。"""
 import os
 import re
 import time
 from typing import Optional
 
+import pyotp
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
@@ -21,6 +22,20 @@ from app.main import app
 class AuthBody(BaseModel):
     username: str
     password: str
+
+
+class TotpLoginBody(BaseModel):
+    username: str
+    password: str
+    code: str
+
+
+class TotpCodeBody(BaseModel):
+    code: str
+
+
+class TotpDisableBody(BaseModel):
+    old_password: str
 
 
 class SharePrepareBody(BaseModel):
@@ -65,26 +80,62 @@ async def setup(body: AuthBody, request: Request, response: Response):
     return {"ok": True}
 
 
-@app.post("/api/login")
-async def login(body: AuthBody, request: Request, response: Response):
-    remaining = login_locked_remaining(body.username)
+def _login_gate(username: str, request: Request):
+    """登录前置：防爆破锁定 + 账号在用检查（不含密码校验，scrypt 校验留在线程池）。"""
+    remaining = login_locked_remaining(username)
     if remaining:
-        audit("login_locked", body.username, f"{remaining}s", client_ip(request))
+        audit("login_locked", username, f"{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
-    row = _db().execute("SELECT * FROM users WHERE username=?",
-                        (body.username,)).fetchone()
+    row = _db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
     if row and not row["is_active"]:
-        audit("login_disabled", body.username, ip=client_ip(request))
+        audit("login_disabled", username, ip=client_ip(request))
         raise HTTPException(status_code=403, detail="账号已停用")
-    ok = bool(row) and await run_in_threadpool(verify_password, body.password, row["password_hash"])
+    return row
+
+
+async def _verify_pw(pw: str, stored: str) -> bool:
+    return await run_in_threadpool(verify_password, pw, stored)
+
+
+@app.post("/api/login")
+async def login(body: AuthBody, request: Request, response: Response):
+    row = _login_gate(body.username, request)
+    ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
     if not ok:
         record_login_fail(body.username)
         audit("login_fail", body.username, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="用户名或密码错误")
+    # 已启用两步验证：密码正确也不发会话，要求第二因子
+    if row["totp_enabled"]:
+        audit("login_totp_needed", body.username, ip=client_ip(request))
+        return {"totp_required": True, "username": row["username"]}
     with _rate_lock:
         _login_fails.pop(body.username.strip().lower(), None)
     audit("login", body.username, ip=client_ip(request))
+    set_session_cookie(response, request, row["id"])
+    return {"ok": True, "username": row["username"]}
+
+
+@app.post("/api/login/totp")
+async def login_totp(body: TotpLoginBody, request: Request, response: Response):
+    """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。"""
+    row = _login_gate(body.username, request)
+    ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
+    if not ok:
+        record_login_fail(body.username)
+        audit("login_fail", body.username, ip=client_ip(request))
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not row["totp_enabled"] or not row["totp_secret"]:
+        raise HTTPException(status_code=400, detail="该账号未启用两步验证")
+    code = body.code.strip().replace(" ", "")
+    if not (code.isdigit() and len(code) == 6) or not pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1):
+        record_login_fail(body.username)
+        audit("totp_fail", body.username, ip=client_ip(request))
+        raise HTTPException(status_code=401, detail="动态验证码错误")
+    with _rate_lock:
+        _login_fails.pop(body.username.strip().lower(), None)
+    audit("login", body.username, "totp", client_ip(request))
     set_session_cookie(response, request, row["id"])
     return {"ok": True, "username": row["username"]}
 
@@ -115,7 +166,59 @@ async def me(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return {"username": user["username"], "role": user["role"],
-            "quota_bytes": user["quota_bytes"]}
+            "quota_bytes": user["quota_bytes"],
+            "totp_enabled": bool(user["totp_enabled"])}
+
+
+# ─── 两步验证（TOTP，可选启用）────────────────────────────
+
+@app.post("/api/auth/totp/setup")
+def totp_setup(user=Depends(require_user)):
+    """生成 TOTP 密钥（未验证前不生效），返回密钥与 otpauth:// URI（前端转二维码）。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    if row["totp_enabled"]:
+        raise HTTPException(status_code=400, detail="两步验证已启用")
+    secret = pyotp.random_base32()
+    with _db_lock:
+        _db().execute("UPDATE users SET totp_secret=?, totp_enabled=0 WHERE id=?",
+                      (secret, user["user_id"]))
+        _db().commit()
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(name=row["username"], issuer_name="LAN Share")
+    return {"secret": secret, "otpauth": uri}
+
+
+@app.post("/api/auth/totp/enable")
+def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
+    """用动态验证码确认开通（证明认证器已正确录入）。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    if row["totp_enabled"]:
+        raise HTTPException(status_code=400, detail="两步验证已启用")
+    if not row["totp_secret"]:
+        raise HTTPException(status_code=400, detail="请先获取密钥")
+    code = body.code.strip().replace(" ", "")
+    if not (code.isdigit() and len(code) == 6) \
+            or not pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1):
+        raise HTTPException(status_code=400, detail="验证码错误，请重试")
+    with _db_lock:
+        _db().execute("UPDATE users SET totp_enabled=1 WHERE id=?", (user["user_id"],))
+        _db().commit()
+    audit("totp_enabled", row["username"], ip="")
+    return {"ok": True}
+
+
+@app.post("/api/auth/totp/disable")
+async def totp_disable(request: Request, body: TotpDisableBody, user=Depends(require_user)):
+    """关闭两步验证：需原密码确认（会话被劫持时不能随手关掉）。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    if not await _verify_pw(body.old_password, row["password_hash"]):
+        audit("totp_disable_fail", row["username"], ip=client_ip(request))
+        raise HTTPException(status_code=403, detail="原密码错误")
+    with _db_lock:
+        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?",
+                      (user["user_id"],))
+        _db().commit()
+    audit("totp_disabled", row["username"], ip=client_ip(request))
+    return {"ok": True}
 
 
 class PasswordBody(BaseModel):
@@ -180,7 +283,7 @@ async def change_username(request: Request, body: UsernameBody,
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
     if new_name.lower() in RESERVED_USERNAMES:
         raise HTTPException(status_code=400, detail="该用户名是保留名")
-    if _db().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE", (new_name,)).fetchone():
+    if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)", (new_name,)).fetchone():
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     with _db_lock:
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, row["id"]))

@@ -90,11 +90,13 @@ onMounted(async () => {
             {{ s.has_password ? '🔒' : '🔗' }}
           </span>
           <span class="sname" :title="s.name">{{ s.name }}</span>
+          <span v-if="s.target" class="status-pill targeted" title="定向分享：仅该成员可取件">🎯 {{ s.target }}</span>
           <span v-if="s.password" class="status-pill" style="cursor:pointer"
                 :title="'点击复制提取码'" @click="copyPwd(s)">提取码 {{ s.password }}</span>
           <span class="status-pill" :class="statusOf(s)">{{ STATUS_LABEL[statusOf(s)] }}</span>
         </div>
         <div class="spath" :title="s.path">{{ s.path }} · {{ s.size_human }} · {{ s.expires_in }}内有效
+          <template v-if="s.target"> · 定向分享给 {{ s.target }}</template>
           <template v-if="s.owner && s.owner !== '我'"> · {{ s.owner }}</template></div>
         <div class="bottom">
           <span class="dl-bar" v-if="s.max_downloads">

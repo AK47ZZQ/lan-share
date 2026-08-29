@@ -63,7 +63,8 @@ def get_session_user(request: Request) -> Optional[sqlite3.Row]:
         return None
     th = _sha(tok)
     row = _db().execute(
-        "SELECT s.expires_at, s.user_id, u.username, u.role, u.is_active, u.quota_bytes "
+        "SELECT s.expires_at, s.user_id, u.username, u.role, u.is_active, u.quota_bytes, "
+        "u.totp_secret, u.totp_enabled "
         "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
         (th,)).fetchone()
     if not row:

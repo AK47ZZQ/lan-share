@@ -105,11 +105,17 @@ def _migrate_v3():
         ucols = {r["name"] for r in conn.execute("PRAGMA table_info(upload_sessions)").fetchall()}
         if "user_id" not in ucols:
             conn.execute("ALTER TABLE upload_sessions ADD COLUMN user_id INTEGER")
+        if "totp_secret" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
+        if "totp_enabled" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0")
         scols = {r["name"] for r in conn.execute("PRAGMA table_info(shares)").fetchall()}
         if "owner_id" not in scols:
             conn.execute("ALTER TABLE shares ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
         if "password_plain" not in scols:
             conn.execute("ALTER TABLE shares ADD COLUMN password_plain TEXT")
+        if "target_user_id" not in scols:
+            conn.execute("ALTER TABLE shares ADD COLUMN target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
         acols = {r["name"] for r in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
         if "username" not in acols:
             conn.execute("ALTER TABLE audit_log ADD COLUMN username TEXT NOT NULL DEFAULT ''")
@@ -138,6 +144,17 @@ def _migrate_v3():
                 used_by INTEGER,
                 used_at REAL
             );
+            CREATE TABLE IF NOT EXISTS notifications(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link TEXT,
+                created_at REAL NOT NULL,
+                read_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
         """)
         conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users)")
         conn.commit()
