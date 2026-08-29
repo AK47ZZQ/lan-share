@@ -68,6 +68,16 @@ def _grant_hit(user_id: int, vkey: str, need: str) -> bool:
     return False
 
 
+
+def _own_private_rel(username: str, parts: list[str]) -> list[str]:
+    """私人空间路径统一：parts 是 "private" 之后的段。兼容两种形态——
+    虚拟形态（首段是子目录名，需补本人用户名）与物理形态（首段已是
+    本人用户名，来自目录列表的 rel path，直接使用）。"""
+    if parts and _normcase_eq(parts[0], username):
+        return ["private"] + parts
+    return ["private", username] + parts
+
+
 def resolve(user, path: str, need: str = "read"):
     """解析虚拟路径 → 物理路径；无权限一律 403（不区分 404 防探测）。
 
@@ -91,11 +101,11 @@ def resolve(user, path: str, need: str = "read"):
 
     # ── shared 空间 ──
     if parts and parts[0] == "private":
-        # 旧 UI 入口：shared:private/... 永远映射到请求者本人 private（防跨用户）
+        # 旧 UI 入口：shared:private/... 永远映射到请求者本人 private（防跨用户）。
+        # 兼容虚拟/物理两种路径形态（目录列表返回物理形态 private/<用户名>/...）
         own = SHARE_ROOT / "private" / username
         own.mkdir(parents=True, exist_ok=True)  # 私人空间永远可进入
-        rel_parts = ["private", username] + parts[1:]
-        return safe_path("/".join(rel_parts))
+        return safe_path("/".join(_own_private_rel(username, parts[1:])))
 
     if parts and parts[0] == "incoming":
         sub = parts[1:]

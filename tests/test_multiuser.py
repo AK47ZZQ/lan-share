@@ -357,3 +357,27 @@ def test_incoming_delete_own_and_by_admin(make_user, auth):
                   files={"file": ("adm.txt", b"a", "text/plain")})
     apath = r.json()["path"]
     assert auth.delete(f"/api/files/{apath}").status_code == 200
+
+
+def test_private_subpaths_physical_form(auth, make_user, workdir):
+    """回归：私人空间内列表返回的物理路径（private/<u>/...）必须可用——
+    此前别名解析二次拼接用户名，进入子目录/删除/改名全 404。"""
+    import os
+    u = make_user("member")
+    r = u.post("/api/upload/private", files={"file": ("doc.txt", b"d", "text/plain")})
+    assert r.status_code == 200
+    phys = r.json()["path"]                      # private/<u>/doc.txt
+    subdir = f"{phys.rsplit('/', 1)[0]}/子目录"
+    assert u.post(f"/api/mkdir/{subdir}").status_code == 200
+
+    # 物理形态直接访问：列子目录 / 读文件 / 删文件 / 改名
+    assert u.get(f"/api/files/{subdir}").status_code == 200
+    assert u.get(f"/preview/{phys}").status_code == 200
+    r = u.post("/api/rename", json={"path": phys, "new_name": "doc2.txt"})
+    assert r.status_code == 200, r.text
+    assert os.path.exists(os.path.join(os.environ["SHARE_ROOT"], phys.rsplit('/', 1)[0], "doc2.txt"))
+    r = u.delete(f"/api/files/{phys.rsplit('/', 1)[0]}/doc2.txt")
+    assert r.status_code == 200
+    # 跨用户物理形态仍被隔离
+    other = make_user("member")
+    assert other.get(f"/api/files/{phys.rsplit('/', 1)[0]}").status_code in (403, 404)
