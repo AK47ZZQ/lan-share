@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import qrcode
+import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
 from fastapi import Depends, Query, Response
 
 from app.config import (CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS,

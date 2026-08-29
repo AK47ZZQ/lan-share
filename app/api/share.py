@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 import qrcode
+import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
 from fastapi import (Depends, File, Form, HTTPException, Request, Response)
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask

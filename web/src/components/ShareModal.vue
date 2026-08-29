@@ -11,6 +11,15 @@ const password = ref('')
 const maxDl = ref<number | null>(null)
 const link = ref('')
 const busy = ref(false)
+const qrFailed = ref(false)
+async function copyLink() {
+  try {
+    await navigator.clipboard.writeText(link.value)
+    toast('已复制到剪贴板', 'ok')
+  } catch {
+    prompt('请手动复制：', link.value)
+  }
+}
 
 async function create() {
   busy.value = true
@@ -33,8 +42,11 @@ async function create() {
     <div v-if="link" class="share-done">
       <p style="font-size:13.5px;color:var(--text-2)">链接已生成：</p>
       <input :value="link" readonly style="width:100%" @focus="($event.target as HTMLInputElement).select()" />
+      <button class="btn sm" style="margin-top:10px" @click="copyLink">📋 复制链接</button>
       <div style="display:flex;gap:10px;justify-content:center;margin-top:14px">
-        <img :src="`/api/share/${link.split('/').pop()}/qr`" alt="QR" style="width:150px;height:150px;border-radius:10px" />
+        <img v-if="!qrFailed" :src="`/api/share/${link.split('/').pop()}/qr`" alt="二维码"
+             style="width:150px;height:150px;border-radius:10px;background:#fff;padding:6px" @error="qrFailed = true" />
+        <p v-else style="font-size:12.5px;color:var(--text-3)">二维码生成失败，可用复制链接分享</p>
       </div>
       <div class="actions"><button class="btn sm" @click="emit('close')">完成</button></div>
     </div>

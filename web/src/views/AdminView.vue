@@ -36,17 +36,25 @@ async function createInvite(role: string) {
 async function toggleActive(u: AdminUser) {
   try { await api.adminPatchUser(u.id, { is_active: !u.is_active }); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
-async function setQuota(u: AdminUser) {
-  const v = prompt(`「${u.username}」私人空间配额（GB，留空取消限制）`,
-    u.quota_bytes ? String(Math.round(u.quota_bytes / 2**30)) : '')
-  if (v === null) return
-  const gb = parseFloat(v)
-  try { await api.adminPatchUser(u.id, { quota_bytes: gb > 0 ? Math.round(gb * 2**30) : null }); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
+const quotas = ref<Record<number, string>>({})
+async function changeRole(u: AdminUser, ev: Event) {
+  const role = (ev.target as HTMLSelectElement).value
+  try { await api.adminPatchUser(u.id, { role }); toast('角色已更新', 'ok'); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
-async function setRole(u: AdminUser) {
-  const v = prompt(`「${u.username}」角色（admin / member / guest）`, u.role)
-  if (!v) return
-  try { await api.adminPatchUser(u.id, { role: v.trim() }); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
+async function changeQuota(u: AdminUser) {
+  const v = quotas.value[u.id] ?? (u.quota_bytes ? String(Math.round(u.quota_bytes / 2**30)) : '')
+  const gb = parseFloat(v)
+  const q = gb > 0 ? Math.round(gb * 2**30) : null
+  if (q === u.quota_bytes) return
+  try { await api.adminPatchUser(u.id, { quota_bytes: q }); toast('配额已更新', 'ok'); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
+}
+async function clearFeed() {
+  if (!confirm('清空当前动态？（不影响审计历史记录）')) return
+  try {
+    const r = await fetch('/api/activity/clear', { method: 'POST' })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    await loadAll(); toast('动态已清空', 'ok')
+  } catch (e) { toast((e as Error).message, 'err') }
 }
 async function delUser(u: AdminUser) {
   if (!confirm(`删除成员「${u.username}」？其私人目录将移入 .orphaned/ 保留。`)) return
@@ -82,7 +90,8 @@ onMounted(() => {
   <main class="page">
     <div class="page-head">
       <h1>管理</h1>
-      <nav class="tabs" style="flex:initial">
+      <button v-if="tab === 'feed' && feed.length" class="btn danger sm" @click="clearFeed">清空动态</button>
+      <nav class="tabs" style="flex:1">
         <a href="#" :class="{ 'router-link-active': tab === 'users' }" @click.prevent="tab = 'users'">成员</a>
         <a href="#" :class="{ 'router-link-active': tab === 'invites' }" @click.prevent="tab = 'invites'">邀请</a>
         <a href="#" :class="{ 'router-link-active': tab === 'grants' }" @click.prevent="tab = 'grants'">授权</a>
@@ -101,8 +110,12 @@ onMounted(() => {
           <small>加入于 {{ u.created_at }} · 配额 {{ u.quota_human }}</small>
         </span>
         <span class="ops" style="opacity:1">
-          <button class="btn ghost sm" @click="setRole(u)">角色</button>
-          <button class="btn ghost sm" @click="setQuota(u)">配额</button>
+          <select :value="u.role" style="padding:6px 8px;font-size:13px" @change="changeRole(u, $event)">
+            <option value="admin">admin</option><option value="member">member</option><option value="guest">guest</option>
+          </select>
+          <input style="padding:6px 8px;font-size:13px;width:74px" placeholder="配额GB"
+                 :value="quotas[u.id] ?? (u.quota_bytes ? Math.round(u.quota_bytes / 2**30) : '')"
+                 @input="quotas[u.id] = ($event.target as HTMLInputElement).value" @change="changeQuota(u)" />
           <button class="btn ghost sm" @click="toggleActive(u)">{{ u.is_active ? '停用' : '启用' }}</button>
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
         </span>
@@ -123,7 +136,7 @@ onMounted(() => {
             <small>{{ i.role }} · {{ i.used ? '已使用' : i.expired ? '已过期' : '有效' }}</small></span>
           <span class="ops" style="opacity:1">
             <button class="btn ghost sm" @click="copyInvite(i.code)">复制</button>
-            <button class="iconbtn danger" v-if="!i.used && !i.expired" @click="revokeInvite(i.code)">✕</button>
+            <button class="iconbtn danger" title="删除记录" @click="revokeInvite(i.code)">✕</button>
           </span>
         </div>
       </div>

@@ -10,6 +10,7 @@ const err = ref('')
 const pwd = ref('')
 const dlUrl = ref('')
 const busy = ref(false)
+const limitReached = ref(false)
 
 async function prepare() {
   busy.value = true
@@ -18,7 +19,10 @@ async function prepare() {
     const r = await publicApi.prepare(token, pwd.value || null)
     dlUrl.value = r.url
     window.open(r.url, '_blank')
-  } catch (e) { err.value = (e as Error).message } finally { busy.value = false }
+  } catch (e) {
+    if ((e as Error).message.includes('上限')) { limitReached.value = true; return }
+    err.value = (e as Error).message
+  } finally { busy.value = false }
 }
 
 onMounted(async () => {
@@ -44,6 +48,13 @@ onMounted(async () => {
         <label v-if="meta.needs_password && !dlUrl" class="field">提取码
           <input v-model="pwd" @keydown.enter="prepare" placeholder="请向分享者索取" />
         </label>
+        <div v-if="limitReached" class="limit-box">
+          <div style="font-size:30px">🚫</div>
+          <b>下载次数已达上限</b>
+          <p style="font-size:13px;color:var(--text-3);margin:4px 0 0">
+            该分享的下载次数已用完，请联系分享者重新创建分享链接。
+          </p>
+        </div>
         <p v-if="err" class="err">{{ err }}</p>
         <button v-if="!dlUrl" class="btn" style="width:100%;justify-content:center" :disabled="busy" @click="prepare">
           {{ busy ? '获取中…' : meta.needs_password ? '验证并下载' : '下载文件' }}

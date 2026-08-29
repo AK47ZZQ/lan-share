@@ -120,6 +120,10 @@ def _migrate_v3():
                 expires_at REAL,
                 UNIQUE(user_id, path)
             );
+            CREATE TABLE IF NOT EXISTS settings(
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
             CREATE TABLE IF NOT EXISTS invites(
                 code TEXT PRIMARY KEY,
                 role TEXT NOT NULL DEFAULT 'member',

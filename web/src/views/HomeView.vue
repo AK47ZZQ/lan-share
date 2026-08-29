@@ -239,10 +239,13 @@ onMounted(() => load(''))
 <template>
   <main class="page">
     <div class="page-head">
-      <h1>文件</h1>
-      <button v-if="path && view === 'browse'" class="btn ghost sm" @click="load(path.split('/').slice(0, -1).join('/'))">← 返回</button>
-      <input v-model="searchQ" placeholder="🔍 搜索文件…" class="searchbox"
+      <div class="title-row">
+        <h1>文件</h1>
+        <button v-if="path && view === 'browse'" class="btn ghost sm" @click="load(path.split('/').slice(0, -1).join('/'))">← 返回</button>
+      </div>
+      <input v-model="searchQ" placeholder="搜索文件…" class="searchbox"
              @keydown.enter="runSearch" @input="!searchQ && (searchResults = null)" />
+      <button class="btn ghost sm" @click="runSearch" title="搜索">🔍</button>
       <button class="btn ghost sm" @click="showRecent">{{ view === 'recent' ? '返回浏览' : '🕐 最近' }}</button>
       <button class="btn sm" @click="newFolder">＋ 文件夹</button>
       <label class="btn sm" style="position:relative">

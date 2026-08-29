@@ -153,10 +153,10 @@ def admin_list_invites(_admin=Depends(require_admin)):
 @app.delete("/api/admin/invites/{code}")
 def admin_delete_invite(code: str, request: Request, _admin=Depends(require_admin)):
     with _db_lock:
-        cur = _db().execute("DELETE FROM invites WHERE code=? AND used_by IS NULL", (code,))
+        cur = _db().execute("DELETE FROM invites WHERE code=?", (code,))
         _db().commit()
     if not cur.rowcount:
-        raise HTTPException(status_code=404, detail="邀请不存在或已使用")
+        raise HTTPException(status_code=404, detail="邀请不存在")
     audit("invite_revoked", code, ip=client_ip(request))
     return {"ok": True}
 
@@ -270,12 +270,26 @@ def admin_delete_grant(gid: int, request: Request, _admin=Depends(require_admin)
 # ─── 家庭动态流（M4-lite：审计衍生）───────────────────────
 
 
+@app.post("/api/activity/clear")
+def activity_clear(_admin=Depends(require_admin)):
+    """清空动态（软清空：记水位，审计历史仍完整保留）。"""
+    import time as _t
+    now = str(_t.time())
+    with _db_lock:
+        _db().execute("INSERT INTO settings(key, value) VALUES('activity_cleared_at', ?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (now,))
+        _db().commit()
+    return {"ok": True}
+
+
 @app.get("/api/activity")
 def activity(limit: int = 50, user=Depends(require_user)):
     """动态流：审计日志过滤为家庭可见事件。private 路径仅本人可见（E7/E8 折衷）。"""
+    cleared = _db().execute("SELECT value FROM settings WHERE key='activity_cleared_at'").fetchone()
+    cutoff = float(cleared["value"]) if cleared else 0
     rows = _db().execute(
         "SELECT ts, username, action, target, detail FROM audit_log "
-        "ORDER BY id DESC LIMIT 500").fetchall()
+        "WHERE ts > ? ORDER BY id DESC LIMIT 500", (cutoff,)).fetchall()
     show = {"upload", "upload_instant", "mkdir", "share", "share_download",
             "invite_redeemed", "trash", "restore", "move", "rename"}
     items = []

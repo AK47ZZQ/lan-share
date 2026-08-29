@@ -288,7 +288,11 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .gcard .gcheck {
   position: absolute; top: 8px; left: 8px;
 }
-.gcard .ops { position: absolute; top: 7px; right: 7px; opacity: 0; transition: opacity .12s; }
+.gcard .ops {
+  position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity .12s;
+  display: flex; gap: 1px; padding: 2px; border-radius: 8px;
+  background: var(--glass-strong); border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+}
 .gcard:hover .ops, .gcard.selected .ops { opacity: 1; }
 
 /* ── 空状态 ── */
