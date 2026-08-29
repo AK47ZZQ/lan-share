@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api, type AdminUser, type ActivityItem, type Grant } from '../api'
+import { api, type AdminUser, type Grant } from '../api'
 import { me } from '../auth'
 import Modal from '../components/Modal.vue'
 import AdminUserModal from '../components/AdminUserModal.vue'
 import { confirmDlg, fmtTs, toast } from '../ui'
 
-const tab = ref<'users' | 'invites' | 'grants' | 'feed'>('users')
+const tab = ref<'users' | 'invites' | 'grants'>('users')
 const users = ref<AdminUser[]>([])
 const invites = ref<{ code: string; role: string; expired: boolean; used: boolean }[]>([])
 const grants = ref<Grant[]>([])
-const feed = ref<ActivityItem[]>([])
 const err = ref('')
 
 // 授权表单（批量）
@@ -59,8 +58,8 @@ const memberGrantCount = (uid: number) => grants.value.filter(g => g.user_id ===
 
 async function loadAll() {
   try {
-    ;[users.value, invites.value, feed.value] = await Promise.all([
-      api.adminUsers(), api.adminInvites(), api.activity(50),
+    ;[users.value, invites.value] = await Promise.all([
+      api.adminUsers(), api.adminInvites(),
     ])
     grants.value = await api.adminGrants()
     void loadDirs()
@@ -100,14 +99,6 @@ async function changeRole(u: AdminUser, ev: Event) {
   try { await api.adminPatchUser(u.id, { role }); toast('角色已更新', 'ok'); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
 
-async function clearFeed() {
-  if (!(await confirmDlg('清空当前动态？（不影响审计历史记录）', { danger: true, okText: '清空' }))) return
-  try {
-    const r = await fetch('/api/activity/clear', { method: 'POST' })
-    if (!r.ok) throw new Error('HTTP ' + r.status)
-    await loadAll(); toast('动态已清空', 'ok')
-  } catch (e) { toast((e as Error).message, 'err') }
-}
 async function delUser(u: AdminUser) {
   if (!(await confirmDlg(`删除成员「${u.username}」？其私人目录将移入 .orphaned/ 保留。`, { danger: true, okText: '删除' }))) return
   try { await api.adminDeleteUser(u.id); await loadAll(); toast('已删除', 'ok') } catch (e) { toast((e as Error).message, 'err') }
@@ -142,12 +133,10 @@ onMounted(async () => {
   <main class="page">
     <div class="page-head">
       <h1>管理</h1>
-      <button v-if="tab === 'feed' && feed.length" class="btn danger sm" @click="clearFeed">清空动态</button>
       <nav class="tabs" style="flex:1">
         <a href="#" :class="{ 'router-link-active': tab === 'users' }" @click.prevent="tab = 'users'">成员</a>
         <a href="#" :class="{ 'router-link-active': tab === 'invites' }" @click.prevent="tab = 'invites'">邀请</a>
         <a href="#" :class="{ 'router-link-active': tab === 'grants' }" @click.prevent="tab = 'grants'">授权</a>
-        <a href="#" :class="{ 'router-link-active': tab === 'feed' }" @click.prevent="tab = 'feed'">动态</a>
       </nav>
     </div>
     <p v-if="err" class="err">{{ err }}</p>
@@ -268,17 +257,6 @@ onMounted(async () => {
             <button class="iconbtn danger" title="撤销授权" @click="delGrant(g)">✕</button>
           </span>
         </div>
-      </div>
-    </div>
-
-    <!-- 动态（入口：完整动态流已独立为全员页面 /activity） -->
-    <div v-if="tab === 'feed'" class="card empty-state">
-      <div class="art">🔔</div>
-      <div>家庭动态已独立成页（全员可见）</div>
-      <div class="hint">动态的聚合、跳转、清空都在动态页完成</div>
-      <div style="margin-top:10px;display:flex;gap:8px;justify-content:center">
-        <router-link class="btn sm" to="/activity">打开家庭动态 →</router-link>
-        <button v-if="feed.length" class="btn danger sm" @click="clearFeed">清空动态</button>
       </div>
     </div>
 
