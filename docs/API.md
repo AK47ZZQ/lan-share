@@ -126,13 +126,16 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | GET | `/api/admin/users` | 成员列表 `{id, username, role, is_active, quota_bytes, ...}` |
 | PATCH | `/api/admin/users/{uid}` | `{is_active?, quota_bytes?, role?}`；停用即吊销全部会话；最后一个 admin 不可降级/停用 |
 | DELETE | `/api/admin/users/{uid}` | 删号（grants/会话级联；私人目录改名 `.orphaned/<uid>-<名>/`） |
+| POST | `/api/admin/users/{uid}/username` | `{value}` 管理员改成员用户名（校验同自助改名的保留词/重名规则；私人目录同步改名；成员会话保持） |
+| POST | `/api/admin/users/{uid}/password` | `{value}` 管理员重置成员密码（≥8 位；该成员全部会话吊销） |
 | GET/POST | `/api/admin/invites` | 邀请码列表 / 创建 `{role: member\|guest, hours}` |
 | DELETE | `/api/admin/invites/{code}` | 删除邀请记录（任意状态） |
 | GET/POST | `/api/admin/grants` | 目录授权查询 / 创建 `{user_id, path, can_read, can_write, expires_hours?}`（仅 shared 空间目录） |
 | DELETE | `/api/admin/grants/{gid}` | 撤销授权 |
 | GET | `/api/activity?limit=` | 家庭动态流（audit 过滤 private 目标） |
 | POST | `/api/activity/clear` | 清空动态（settings 水位软清空，审计保留） |
-| GET/POST | `/api/admin/public-url` | 公网访问地址（分享双地址复制用） |
+| GET | `/api/public-url` | 🔑 全员可读公网访问地址（分享/直传双地址用） |
+| GET/POST | `/api/admin/public-url` | 查看/设置公网访问地址（POST 需 admin） |
 
 ### 分享扩展
 
