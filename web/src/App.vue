@@ -135,11 +135,13 @@ watchEffect(() => {
 .theme-seg button.on { background: var(--hover); color: var(--accent); font-weight: 600; }
 .uname { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .avatar-btn {
-  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px;
   background: var(--glass-strong); border: 1px solid var(--line);
   border-radius: 999px; padding: 4px 10px 4px 6px; cursor: pointer; color: var(--text-2);
   transition: background .12s, border-color .12s;
 }
+/* 铃铛吃掉剩余空间：通知图标靠右、紧贴头像左侧 */
+.topbar .bell { margin-left: auto; }
 .avatar-btn:hover { background: var(--hover); border-color: var(--accent); }
 .avatar-btn .caret { font-size: 10px; color: var(--text-3); }
 .usermenu {
@@ -161,7 +163,6 @@ watchEffect(() => {
 @media (max-width: 640px) {
   .disk-badge .bar, .uname, .brand-name { display: none; }
   .topbar { gap: 8px; padding: 9px 12px; }
-  .disk-badge { margin-left: auto; }
   .usermenu { right: 10px; left: 10px; }
 }
 </style>
