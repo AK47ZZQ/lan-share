@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, type NotificationItem, type ActivityItem, type Me } from '../api'
 import { fmtTs } from '../ui'
@@ -8,7 +8,7 @@ import { ACTION_ICON, activityTitle, relTime } from '../activity'
 const props = defineProps<{ me: Me }>()
 
 const open = ref(false)
-const tab = ref<'notify' | 'activity'>('notify')
+const tab = ref<'activity' | 'notify'>('activity')  // 默认落动态（高频场景）
 const unread = ref(0)
 const items = ref<NotificationItem[]>([])
 const activity = ref<ActivityItem[]>([])
@@ -17,8 +17,10 @@ const loading = ref(false)
 let timer: number | undefined
 const router = useRouter()
 
-// 新动态高亮水位：打开动态 Tab 时刷新
+// 新动态红点：最新动态时间戳 vs 已读水位（localStorage）
 const seenAt = ref(Number(localStorage.getItem('lsActivitySeen') || 0))
+const latestActTs = ref(0)
+const hasNewAct = computed(() => seenAt.value > 0 && latestActTs.value > seenAt.value)
 
 async function load() {
   try {
@@ -26,6 +28,18 @@ async function load() {
     unread.value = r.unread
     items.value = r.items
   } catch { /* 会话过期等由全局处理 */ }
+}
+
+async function probeActivity() {
+  try {
+    const r = await api.activity(1)
+    latestActTs.value = r[0]?.ts ?? 0
+    // 首次使用（无水位）：静默记水位，历史动态不算"新"
+    if (latestActTs.value && !seenAt.value) {
+      seenAt.value = latestActTs.value
+      localStorage.setItem('lsActivitySeen', String(seenAt.value))
+    }
+  } catch { /* 静默 */ }
 }
 
 async function loadActivity() {
@@ -38,36 +52,38 @@ async function loadActivity() {
 async function toggle() {
   open.value = !open.value
   if (open.value) {
-    if (tab.value === 'notify') {
+    if (tab.value === 'activity') {
+      await openActivity()
+      await load()  // 通知 Tab 红点数据保持新鲜
+    } else {
       loading.value = true
       await load()
       loading.value = false
-      if (unread.value) {
-        api.notificationsRead().then(() => { unread.value = 0 }).catch(() => {})
-      }
-    } else {
-      await openActivity()
+      if (unread.value) markRead()
     }
   }
 }
 
-async function switchTab(t: 'notify' | 'activity') {
+function markRead() {
+  api.notificationsRead().then(() => { unread.value = 0 }).catch(() => {})
+}
+
+async function switchTab(t: 'activity' | 'notify') {
   tab.value = t
-  if (t === 'notify') {
+  if (t === 'activity') {
+    await openActivity()
+  } else {
     loading.value = true
     await load()
     loading.value = false
     // 重开通知 Tab 同样清除未读（与首次打开一致）
-    if (unread.value) {
-      api.notificationsRead().then(() => { unread.value = 0 }).catch(() => {})
-    }
-  } else {
-    await openActivity()
+    if (unread.value) markRead()
   }
 }
 
 async function openActivity() {
   await loadActivity()
+  // 看到即读：刷新水位 → 动态 Tab 红点与条目蓝点清除
   seenAt.value = Math.floor(Date.now() / 1000)
   localStorage.setItem('lsActivitySeen', String(seenAt.value))
 }
@@ -85,7 +101,8 @@ function goActivityItem(n: ActivityItem) {
 
 onMounted(() => {
   load()
-  timer = window.setInterval(load, 60_000)
+  void probeActivity()
+  timer = window.setInterval(() => { void load(); void probeActivity() }, 60_000)
   document.addEventListener('click', close)
 })
 onUnmounted(() => { if (timer) clearInterval(timer); document.removeEventListener('click', close) })
@@ -93,18 +110,20 @@ function close() { open.value = false }
 </script>
 
 <template>
-  <button class="iconbtn bell" :class="{ active: unread }" title="通知与动态"
-          @click.stop="toggle">
+  <button class="iconbtn bell" :class="{ 'has-unread': unread, 'has-dot': !unread && hasNewAct }"
+          title="动态与通知" @click.stop="toggle">
     🔔
     <span v-if="unread" class="bell-badge">{{ unread > 99 ? '99+' : unread }}</span>
   </button>
   <teleport to="body">
     <div v-if="open" class="notif-panel" @click.stop>
       <div class="notif-tabs">
-        <button :class="{ on: tab === 'notify' }" @click="switchTab('notify')">
-          通知<span v-if="unread" class="tab-badge">{{ unread }}</span>
+        <button :class="{ on: tab === 'activity' }" @click="switchTab('activity')">
+          动态<span v-if="hasNewAct" class="tab-dot" />
         </button>
-        <button :class="{ on: tab === 'activity' }" @click="switchTab('activity')">动态</button>
+        <button :class="{ on: tab === 'notify' }" @click="switchTab('notify')">
+          通知<span v-if="unread" class="tab-dot" />
+        </button>
       </div>
 
       <!-- 通知 Tab -->
@@ -177,6 +196,15 @@ function close() { open.value = false }
 .tab-badge {
   min-width: 16px; height: 16px; border-radius: 999px; background: var(--danger, #e5484d);
   color: #fff; font-size: 10px; line-height: 16px; padding: 0 4px; font-weight: 700;
+}
+/* 小红点：铃铛（仅新动态时）与 Tab 角标 */
+.bell.has-dot::after {
+  content: ""; position: absolute; top: 2px; right: 2px; width: 9px; height: 9px;
+  border-radius: 999px; background: var(--danger, #e5484d); border: 2px solid var(--glass-strong, #fff);
+}
+.tab-dot {
+  width: 7px; height: 7px; border-radius: 999px; background: var(--danger, #e5484d);
+  display: inline-block; flex: none;
 }
 .notif-empty { padding: 26px 10px; text-align: center; color: var(--text-3); font-size: 13px; }
 .notif-item {
