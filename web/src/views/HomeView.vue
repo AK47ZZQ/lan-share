@@ -5,6 +5,7 @@ import { toast } from '../ui'
 import Modal from '../components/Modal.vue'
 import DirPicker from '../components/DirPicker.vue'
 import ShareModal from '../components/ShareModal.vue'
+import ContextMenu from '../components/ContextMenu.vue'
 
 defineProps<{ me: { username: string; role: string } }>()
 
@@ -28,6 +29,23 @@ const recentItems = ref<Entry[]>([])
 const selectMode = ref(false)
 const selected = ref<Set<string>>(new Set())
 const allSelected = computed(() => items.value.length > 0 && items.value.every(i => selected.value.has(i.path)))
+
+// 操作菜单（⋯ 按钮与右键共用）
+const menu = ref<{ x: number; y: number; e: Entry } | null>(null)
+function openMenu(ev: MouseEvent, e: Entry) {
+  menu.value = { x: ev.clientX, y: ev.clientY, e }
+}
+function menuAct(action: string) {
+  const e = menu.value!.e
+  menu.value = null
+  if (action === 'open') open(e)
+  else if (action === 'download') download(e)
+  else if (action === 'share') sharePaths.value = [e.path]
+  else if (action === 'rename') { renameTarget.value = e; renameName.value = e.name }
+  else if (action === 'move') { selectMode.value = true; selected.value = new Set([e.path]); showMove.value = true }
+  else if (action === 'delete') { selectMode.value = true; selected.value = new Set([e.path]); void doDelete() }
+  else if (action === 'multi') { selectMode.value = true; selected.value = new Set([e.path]) }
+}
 
 // 弹窗
 const showMove = ref(false)
@@ -262,11 +280,11 @@ onMounted(() => load(''))
     <div v-if="shownItems.length && grid && view === 'browse'" class="fgrid">
       <div v-for="(e, gi) in shownItems" :key="e.path"
            class="gcard" :class="{ selected: selected.has(e.path) }"
-           @click="open(e)" @contextmenu.prevent="startSelect(e)">
+           @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox gcheck" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
         <span class="ops" @click.stop>
           <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
-          <button class="iconbtn" title="更多" @click="startSelect(e)">⋯</button>
+          <button class="iconbtn" title="更多操作" @click.stop="openMenu($event, e)">⋯</button>
         </span>
         <span class="gicon" :class="e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
@@ -279,7 +297,7 @@ onMounted(() => load(''))
     <div v-else-if="shownItems.length" class="card flist" style="padding:8px">
       <div v-for="e in shownItems" :key="e.path"
            class="frow" :class="{ selected: selected.has(e.path) }"
-           @click="open(e)" @contextmenu.prevent="startSelect(e)">
+           @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
         <span class="icon">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
@@ -294,7 +312,7 @@ onMounted(() => load(''))
           <button class="iconbtn" title="下载" @click="download(e)" v-if="!e.is_dir">⬇</button>
           <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
           <button class="iconbtn" title="重命名" @click="renameTarget = e; renameName = e.name">✏️</button>
-          <button class="iconbtn" title="选择更多操作" @click="startSelect(e)">⋯</button>
+          <button class="iconbtn" title="更多操作" @click.stop="openMenu($event, e)">⋯</button>
         </span>
       </div>
     </div>
@@ -305,7 +323,7 @@ onMounted(() => load(''))
       <button class="btn ghost sm" @click="toggleAll">{{ allSelected ? '全不选' : '全选' }}</button>
       <button class="btn ghost sm" @click="doZip">打包下载</button>
       <button class="btn ghost sm" @click="showMove = true">移动到…</button>
-      <button class="btn ghost sm" @click="doShare">分享</button>
+      <button v-if="selected.size === 1" class="btn ghost sm" @click="doShare">分享</button>
       <button class="btn danger sm" @click="doDelete">删除</button>
       <button class="iconbtn" title="退出多选" @click="selectMode = false; selected.clear()">✕</button>
     </div>
@@ -335,6 +353,18 @@ onMounted(() => load(''))
     <Modal v-if="sharePaths" title="创建分享" @close="sharePaths = null">
       <ShareModal :paths="sharePaths" @close="sharePaths = null" />
     </Modal>
+
+    <!-- 操作菜单（⋯ / 右键） -->
+    <ContextMenu v-if="menu" :x="menu.x" :y="menu.y" @close="menu = null">
+      <button class="mi" @click="menuAct('open')">📂 {{ menu.e.is_dir ? '打开' : '预览' }}</button>
+      <button v-if="!menu.e.is_dir" class="mi" @click="menuAct('download')">⬇ 下载</button>
+      <button class="mi" @click="menuAct('share')">🔗 分享</button>
+      <button class="mi" @click="menuAct('rename')">✏️ 重命名</button>
+      <button class="mi" @click="menuAct('move')">📂 移动到…</button>
+      <div class="divider" />
+      <button class="mi danger" @click="menuAct('delete')">🗑️ 删除</button>
+      <button class="mi" @click="menuAct('multi')">☑ 多选模式</button>
+    </ContextMenu>
 
     <!-- 页内预览灯箱 -->
     <teleport to="body">
