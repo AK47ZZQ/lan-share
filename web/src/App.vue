@@ -7,7 +7,8 @@ import { toasts } from './ui'
 import DiskModal from './components/DiskModal.vue'
 import { applyTheme, currentTheme, type Theme } from './theme'
 
-const disk = ref<{ free: string; warning: boolean; disk_used_pct?: number } | null>(null)
+const disk = ref<{ free: string; warning: boolean; used_bytes: number; total_bytes: number } | null>(null)
+const diskPct = computed(() => disk.value && disk.value.total_bytes ? Math.round(disk.value.used_bytes / disk.value.total_bytes * 100) : 0)
 const route = useRoute()
 const router = useRouter()
 
@@ -52,9 +53,9 @@ watchEffect(() => {
       <header class="topbar">
         <div class="brand"><span class="logo">◈</span><span class="brand-name">LAN Share</span></div>
         <button class="disk-badge" :class="{ low: disk?.warning }" v-if="disk"
-                title="点击查看存储详情" @click.stop="showDisk = true">
-          <span class="bar"><i :style="{ width: Math.round(disk.disk_used_pct ?? 0) + '%' }" /></span>
-          {{ disk.free }} 可用
+                :title="`磁盘已用 ${diskPct}%，点击查看详情`" @click.stop="showDisk = true">
+          <span class="bar"><i :style="{ width: diskPct + '%' }" /></span>
+          {{ diskPct }}% · {{ disk.free }} 可用
         </button>
         <button class="userchip avatar-btn" @click.stop="menuOpen = !menuOpen">
           <span class="uname">{{ me.username }}</span>
@@ -73,6 +74,7 @@ watchEffect(() => {
             <router-link class="um-item" to="/photos" @click="menuOpen = false"><span>🖼️</span> 照片</router-link>
             <router-link class="um-item" to="/trash" @click="menuOpen = false"><span>🗑️</span> 回收站</router-link>
             <router-link v-if="me.role === 'admin'" class="um-item" to="/admin" @click="menuOpen = false"><span>⚙️</span> 管理</router-link>
+            <button class="um-item" @click="closeMenu(); showDisk = true"><span>💾</span> 存储空间</button>
             <div class="um-divider" />
             <div class="um-theme">
               <span style="font-size:13px;color:var(--text-3)">主题</span>
