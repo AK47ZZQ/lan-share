@@ -20,8 +20,10 @@ export interface DiskInfo { total: string; used: string; free: string; total_hum
 
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
-    // 会话过期：整页跳登录（带 next 回跳），避免停留在失效页面
-    if (!location.pathname.startsWith('/login')) {
+    // 会话过期：整页跳登录（带 next 回跳）。公开页（/s/ 分享、/login）与
+    // 登录态探测 /api/auth/me 不触发——否则未登录访客会被误弹登录页
+    const onPublicPage = location.pathname.startsWith('/s/') || location.pathname === '/login'
+    if (!onPublicPage && !location.pathname.startsWith('/login')) {
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
     }
     throw Object.assign(new Error('未登录'), { unauthorized: true })

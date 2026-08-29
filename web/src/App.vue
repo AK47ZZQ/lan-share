@@ -32,7 +32,9 @@ function initial(name: string) { return (name || '?').slice(0, 1).toUpperCase() 
 onMounted(() => { boot(); document.addEventListener('click', closeMenu) })
 
 watchEffect(() => {
-  if (!authReady.value) return
+  // 首帧路由可能尚未解析（route.name === undefined），此时禁止重定向，
+  // 否则直接打开 /s/ 分享链接的未登录用户会被误弹到登录页
+  if (!authReady.value || route.name === undefined) return
   if (!me.value && !publicRoute.value) void router.replace('/login')
   if (me.value && route.name === 'login') void router.replace('/')
 })

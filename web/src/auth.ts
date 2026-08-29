@@ -7,8 +7,11 @@ export const me = ref<Me | null>(null)
 export const authReady = ref(false)
 
 export async function refreshAuth(): Promise<Me | null> {
+  // 裸 fetch：/api/auth/me 的 401 是"未登录"的正常探测结果，
+  // 不能走 api.me()（会触发全局 401 跳登录）
   try {
-    me.value = await api.me()
+    const r = await fetch('/api/auth/me')
+    me.value = r.ok ? await r.json() : null
   } catch {
     me.value = null
   }
@@ -18,9 +21,7 @@ export async function refreshAuth(): Promise<Me | null> {
 
 export async function login(username: string, password: string): Promise<Me> {
   await api.login(username, password)
-  me.value = await api.me()
-  authReady.value = true
-  return me.value
+  return refreshAuth() as Promise<Me>
 }
 
 export async function logout(): Promise<void> {
