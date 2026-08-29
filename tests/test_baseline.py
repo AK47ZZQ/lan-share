@@ -291,3 +291,23 @@ def test_share_range_requests_count_once(auth, workdir):
         assert resp.status_code in (200, 206)
     row = _s._db().execute("SELECT downloads FROM shares WHERE token=?", (token,)).fetchone()
     assert row["downloads"] == 1, "should count exactly once"
+
+
+def test_private_root_protected(auth):
+    """回归：私人空间根目录不可删除/重命名/移动；列表显示为私人空间。"""
+    r = auth.delete("/api/files/private")
+    assert r.status_code == 400
+    assert "私人空间" in r.json()["detail"]
+    r = auth.post("/api/rename", json={"path": "private", "new_name": "x"})
+    assert r.status_code == 400
+    # 移动到共享目录也拒绝
+    auth.post("/api/mkdir/private-test-dest")
+    r = auth.post("/api/move", json={"sources": ["private"], "dest_dir": "private-test-dest"})
+    assert r.json()["results"][0]["ok"] is False
+    # 但可以正常进入（列自己的私人目录）
+    r = auth.get("/api/files/private")
+    assert r.status_code == 200
+    # 列表中显示为私人空间
+    root = auth.get("/api/files").json()["items"]
+    entry = next(e for e in root if e.get("is_private_root"))
+    assert "私人空间" in entry["name"]

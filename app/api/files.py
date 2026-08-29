@@ -36,6 +36,16 @@ def _session_owner_guard(row, user):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+def _is_own_private_root(user, target: Path) -> bool:
+    """目标是否是请求者本人的私人空间根目录（该目录不可删除/重命名/移出）。"""
+    try:
+        rel = target.relative_to(SHARE_ROOT)
+    except ValueError:
+        return False
+    return (rel.parts and rel.parts[0] == "private" and len(rel.parts) == 2
+            and rel.parts[1].lower() == user["username"].lower())
+
+
 def _under_private(path: Path, username: str) -> bool:
     try:
         rel = path.relative_to(SHARE_ROOT)
@@ -65,7 +75,14 @@ async def list_files(path: str = "", _user=Depends(require_user)):
         raise HTTPException(status_code=404, detail="Directory not found")
     if target.is_file():
         raise HTTPException(status_code=400, detail="Not a directory")
-    return dir_tree(target)
+    tree = dir_tree(target)
+    # 根目录的 private 入口显示为"私人空间"（点击进入的是本人私人目录）
+    if target == SHARE_ROOT:
+        for item in tree["items"]:
+            if item["name"] == "private" and item["is_dir"]:
+                item["name"] = "🔒 私人空间"
+                item["is_private_root"] = True
+    return tree
 
 
 def register_blob(path: Path, sha: str, size: int) -> bool:
@@ -274,6 +291,8 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
         try:
             # 移动=从源删除：源也需要写权（不能移走只有读权的共享文件）
             target = resolve(_user, src, "write")
+            if _is_own_private_root(_user, target):
+                raise HTTPException(status_code=400, detail="私人空间根目录不可移动")
             _cross_space_guard(_user, target, dest_dir)
             if not target.exists():
                 raise HTTPException(status_code=404, detail="源文件不存在")
@@ -331,6 +350,8 @@ def _move_to_trash(target: Path, orig_path: str):
 @app.delete("/api/files/{path:path}")
 async def delete_file(request: Request, path: str, _user=Depends(require_user)):
     target = resolve(_user, path, "write")
+    if _is_own_private_root(_user, target):
+        raise HTTPException(status_code=400, detail="私人空间根目录不可删除（里面的文件可以删）")
     if target == SHARE_ROOT:
         raise HTTPException(status_code=400, detail="不能删除根目录")
     if not target.exists():
@@ -491,6 +512,8 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
     target = resolve(_user, body.path, "write")
     if target == SHARE_ROOT:
         raise HTTPException(status_code=400, detail="不能重命名根目录")
+    if _is_own_private_root(_user, target):
+        raise HTTPException(status_code=400, detail="私人空间根目录不可重命名")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Not found")
     dest = target.parent / clean_filename(body.new_name)

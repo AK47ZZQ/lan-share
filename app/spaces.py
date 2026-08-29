@@ -84,12 +84,16 @@ def resolve(user, path: str, need: str = "read"):
     if space == "private":
         # private:<path>：path 相对本人私人根，任何写法都触达不到他人空间
         # （他人 private 无任何 vpath 寻址方式，admin 也不例外——E8 管理动作暂缺）
+        own = SHARE_ROOT / "private" / username
+        own.mkdir(parents=True, exist_ok=True)  # 私人空间永远可进入
         rel_parts = ["private", username] + parts
         return safe_path("/".join(rel_parts))
 
     # ── shared 空间 ──
     if parts and parts[0] == "private":
         # 旧 UI 入口：shared:private/... 永远映射到请求者本人 private（防跨用户）
+        own = SHARE_ROOT / "private" / username
+        own.mkdir(parents=True, exist_ok=True)  # 私人空间永远可进入
         rel_parts = ["private", username] + parts[1:]
         return safe_path("/".join(rel_parts))
 
