@@ -4,7 +4,7 @@
 （各模块 `from app.main import app` 依赖此处已存在的 app 对象），
 页面路由与 static 挂载殿后——与 v2 单文件的注册顺序保持一致。
 """
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import urlsplit
@@ -54,38 +54,58 @@ def html_page(name: str) -> HTMLResponse:
                         headers={"Content-Security-Policy": CSP})
 
 
+# ─── v3 前端切换：Vue SPA 即整站 ─────────────────────────
+# 构建产物 web/dist 存在时，所有页面路由（含 history 深链回退）都服务 SPA；
+# 未构建时回退旧页，保证服务永不因前端缺失而不可用。
+_spa_dist = PROJECT_ROOT / "web" / "dist"
+_SPA_READY = (_spa_dist / "index.html").exists()
+
+
+def spa_index() -> HTMLResponse:
+    return HTMLResponse((_spa_dist / "index.html").read_text(encoding="utf-8"),
+                        headers={"Content-Security-Policy": CSP})
+
+
 @app.get("/up", response_class=HTMLResponse)
 async def up_page(request: Request):
-    """手机扫码直传页（需登录）。"""
+    """手机直传页（需登录）。"""
     if not get_session_user(request):
         return RedirectResponse("/login?next=/up", status_code=307)
-    return html_page("up.html")
+    return spa_index() if _SPA_READY else html_page("up.html")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     if not get_session_user(request):
         return RedirectResponse("/login", status_code=307)
-    return html_page("index.html")
+    return spa_index() if _SPA_READY else html_page("index.html")
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
-    return html_page("login.html")
+    return spa_index() if _SPA_READY else html_page("login.html")
 
 
 @app.get("/s/{token}", response_class=HTMLResponse)
 async def share_page(token: str):
-    return html_page("share.html")
+    return spa_index() if _SPA_READY else html_page("share.html")
 
 
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
+if _SPA_READY:
+    app.mount("/assets", StaticFiles(directory=str(_spa_dist / "assets")), name="spa-assets")
 
 
-# ─── Vue3 新版前端（M2）：构建产物挂 /app，未构建则跳过 ──
-_vue_dist = PROJECT_ROOT / "web" / "dist"
-if _vue_dist.exists():
-    app.mount("/app", StaticFiles(directory=str(_vue_dist), html=True), name="vue-app")
+# history 深链回退：/photos /trash /admin 等 UI 路径 → SPA。
+# 注册在 /api、/dav、/files 等真实路由之后，仅兜底 GET HTML 请求。
+@app.get("/{spa_path:path}", response_class=HTMLResponse)
+async def spa_fallback(spa_path: str, request: Request):
+    if spa_path.startswith(("api/", "dav", "files/", "preview/", "thumb/", "static/",
+                            "assets/", "s/", "authcheck", "healthz", "up", "login")) or spa_path == "":
+        raise HTTPException(status_code=404)
+    if not get_session_user(request):
+        return RedirectResponse(f"/login?next={request.url.path}", status_code=307)
+    return spa_index()
 
 
 # ─── 入口 ─────────────────────────────────────────────────

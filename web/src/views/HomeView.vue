@@ -1,0 +1,281 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { api, uploadResumable, type Entry } from '../api'
+import { toast } from '../ui'
+import Modal from '../components/Modal.vue'
+import DirPicker from '../components/DirPicker.vue'
+import ShareModal from '../components/ShareModal.vue'
+
+defineProps<{ me: { username: string; role: string } }>()
+
+const path = ref('')
+const items = ref<Entry[]>([])
+const err = ref('')
+const searchQ = ref('')
+const searchResults = ref<Entry[] | null>(null)
+const view = ref<'browse' | 'recent'>('browse')
+const recentItems = ref<Entry[]>([])
+
+// 多选
+const selectMode = ref(false)
+const selected = ref<Set<string>>(new Set())
+const allSelected = computed(() => items.value.length > 0 && items.value.every(i => selected.value.has(i.path)))
+
+// 弹窗
+const showMove = ref(false)
+const sharePaths = ref<string[] | null>(null)
+const renameTarget = ref<Entry | null>(null)
+const renameName = ref('')
+
+// 上传队列
+const uploads = ref<{ name: string; sent: number; total: number; stage: string }[]>([])
+const uploading = ref(false)
+
+const crumbs = computed(() => {
+  const parts = path.value.split('/').filter(Boolean)
+  const out = [{ name: '根目录', path: '' }]
+  parts.forEach((p, i) => out.push({ name: p, path: parts.slice(0, i + 1).join('/') }))
+  return out
+})
+
+function thumbOf(e: Entry): string | null {
+  if (e.is_dir) return null
+  const ext = (e.ext || '').toLowerCase()
+  if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'].includes(ext)) return `/thumb/${encodeURI(e.path)}`
+  if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return `/thumb/${encodeURI(e.path)}`
+  return null
+}
+function fileIcon(e: Entry): string {
+  if (e.is_dir) return '📁'
+  const ext = (e.ext || '').toLowerCase()
+  if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return '🎬'
+  if (['.mp3', '.flac', '.wav', '.m4a'].includes(ext)) return '🎵'
+  if (['.zip', '.7z', '.rar'].includes(ext)) return '🗜️'
+  if (['.pdf'].includes(ext)) return '📕'
+  if (['.doc', '.docx'].includes(ext)) return '📘'
+  if (['.xls', '.xlsx'].includes(ext)) return '📗'
+  if (['.txt', '.md'].includes(ext)) return '📄'
+  return '📄'
+}
+
+async function load(p: string) {
+  err.value = ''
+  searchResults.value = null
+  view.value = 'browse'
+  try {
+    const r = await api.list(p)
+    path.value = r.path
+    items.value = r.items
+    selected.value.clear()
+    selectMode.value = false
+  } catch (e) { err.value = (e as Error).message }
+}
+
+function open(e: Entry) {
+  if (selectMode.value) { toggle(e.path); return }
+  if (e.is_dir) void load(e.path)
+  else window.open(`/preview/${encodeURI(e.path)}`, '_blank')
+}
+
+// ── 选择 ──
+function toggle(p: string) {
+  if (selected.value.has(p)) selected.value.delete(p)
+  else selected.value.add(p)
+  if (!selected.value.size) selectMode.value = false
+  selected.value = new Set(selected.value)
+}
+function toggleAll() {
+  if (allSelected.value) { selected.value.clear(); selectMode.value = false }
+  else selected.value = new Set(items.value.map(i => i.path))
+}
+function startSelect(e: Entry) {
+  selectMode.value = true
+  selected.value = new Set([e.path])
+}
+
+// ── 操作 ──
+async function doDelete() {
+  const paths = [...selected.value]
+  if (!confirm(`删除选中的 ${paths.length} 项？（可从回收站恢复）`)) return
+  try {
+    for (const p of paths) await api.remove(p)
+    toast(`已删除 ${paths.length} 项，可在回收站恢复`, 'ok')
+    await load(path.value)
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+async function doMove(dest: string) {
+  showMove.value = false
+  try {
+    const r = await api.move([...selected.value], dest)
+    const fails = r.results.filter(x => !x.ok)
+    if (fails.length) toast(`移动完成，${fails.length} 项失败：${fails[0].error}`, 'err')
+    else toast(`已移动 ${r.results.length} 项`, 'ok')
+    await load(path.value)
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+async function doRename() {
+  if (!renameTarget.value) return
+  try {
+    await api.rename(renameTarget.value.path, renameName.value)
+    toast('已重命名', 'ok')
+    renameTarget.value = null
+    await load(path.value)
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+function doShare() {
+  sharePaths.value = [...selected.value]
+}
+async function doZip() {
+  try {
+    const r = await api.zip([...selected.value])
+    window.open(r.url, '_blank')
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+function download(e: Entry) { window.open(`/files/${encodeURI(e.path)}`, '_blank') }
+
+// ── 上传 ──
+async function onPick(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  if (!input.files?.length) return
+  uploading.value = true
+  for (const f of Array.from(input.files)) {
+    const item = { name: f.name, sent: 0, total: f.size, stage: '排队' }
+    uploads.value.push(item)
+    try {
+      await uploadResumable(path.value, f, (sent, total, stage) => {
+        item.sent = sent; item.total = total; item.stage = stage
+      })
+      item.stage = f.size >= 5 * 1024 * 1024 ? '完成' : '完成'
+    } catch (e) {
+      item.stage = '失败：' + (e as Error).message
+      toast(`${f.name} 上传失败`, 'err')
+    }
+  }
+  uploading.value = false
+  input.value = ''
+  setTimeout(() => { uploads.value = uploads.value.filter(u => !u.stage.startsWith('完成')) }, 2500)
+  await load(path.value)
+}
+
+async function newFolder() {
+  const name = prompt('文件夹名称')
+  if (!name) return
+  try {
+    await api.mkdir([path.value, name].filter(Boolean).join('/'))
+    await load(path.value)
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+
+async function runSearch() {
+  const q = searchQ.value.trim()
+  if (!q) { searchResults.value = null; return }
+  try {
+    searchResults.value = await api.search(q)
+    view.value = 'browse'
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+async function showRecent() {
+  try {
+    recentItems.value = await api.recent(40)
+    searchResults.value = null
+    view.value = view.value === 'recent' ? 'browse' : 'recent'
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+
+const shownItems = computed(() => {
+  if (view.value === 'recent') return recentItems.value
+  if (searchResults.value) return searchResults.value
+  return items.value
+})
+
+onMounted(() => load(''))
+</script>
+
+<template>
+  <main class="page">
+    <div class="page-head">
+      <h1>文件</h1>
+      <input v-model="searchQ" placeholder="🔍 搜索文件…" style="width:210px;font-size:14px"
+             @keydown.enter="runSearch" @input="!searchQ && (searchResults = null)" />
+      <button class="btn ghost sm" @click="showRecent">{{ view === 'recent' ? '返回浏览' : '最近文件' }}</button>
+      <button class="btn sm" @click="newFolder">＋ 新建文件夹</button>
+      <label class="btn sm" style="position:relative">
+        {{ uploading ? '上传中…' : '⬆ 上传' }}
+        <input type="file" multiple hidden @change="onPick" />
+      </label>
+    </div>
+
+    <div class="crumbs" v-if="view === 'browse' && !searchResults">
+      <template v-for="(c, i) in crumbs" :key="c.path">
+        <span v-if="i" class="sep">/</span>
+        <a href="#" :class="{ cur: i === crumbs.length - 1 }" @click.prevent="load(c.path)">{{ c.name }}</a>
+      </template>
+    </div>
+    <div class="crumbs" v-else>
+      <span class="cur">{{ view === 'recent' ? '最近文件' : `搜索“${searchQ}”` }}</span>
+    </div>
+
+    <p v-if="err" class="err">{{ err }}</p>
+
+    <div class="card flist" style="padding:8px">
+      <div v-if="!shownItems.length" class="empty">{{ view === 'browse' ? '此目录为空' : '没有匹配结果' }}</div>
+      <div v-for="e in shownItems" :key="e.path"
+           class="frow" :class="{ selected: selected.has(e.path) }"
+           @click="open(e)" @contextmenu.prevent="startSelect(e)">
+        <span v-if="selectMode" class="checkbox" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
+        <span class="icon">
+          <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
+          <template v-else>{{ fileIcon(e) }}</template>
+        </span>
+        <span class="name">
+          <div>{{ e.name }}</div>
+          <small>{{ e.modified.slice(0, 16).replace('T', ' ') }}</small>
+        </span>
+        <span class="meta">{{ e.is_dir ? '' : e.size_human }}</span>
+        <span class="ops" @click.stop>
+          <button class="iconbtn" title="下载" @click="download(e)" v-if="!e.is_dir">⬇</button>
+          <button class="iconbtn" title="分享" @click="sharePaths = [e.path]">🔗</button>
+          <button class="iconbtn" title="重命名" @click="renameTarget = e; renameName = e.name">✏️</button>
+          <button class="iconbtn" title="选择更多操作" @click="startSelect(e)">⋯</button>
+        </span>
+      </div>
+    </div>
+
+    <!-- 多选操作条 -->
+    <div v-if="selectMode && selected.size" class="opsbar">
+      <span class="count">已选 {{ selected.size }}</span>
+      <button class="btn ghost sm" @click="toggleAll">{{ allSelected ? '全不选' : '全选' }}</button>
+      <button class="btn ghost sm" @click="doZip">打包下载</button>
+      <button class="btn ghost sm" @click="showMove = true">移动到…</button>
+      <button class="btn ghost sm" @click="doShare">分享</button>
+      <button class="btn danger sm" @click="doDelete">删除</button>
+      <button class="iconbtn" title="退出多选" @click="selectMode = false; selected.clear()">✕</button>
+    </div>
+
+    <!-- 上传队列 -->
+    <div v-if="uploads.length" class="upl card" style="padding:12px 16px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px">上传队列</div>
+      <div v-for="u in uploads" :key="u.name" class="item">
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ u.name }}</span>
+          <span style="color:var(--text-3)">{{ u.stage }}</span>
+        </div>
+        <div class="bar"><i :style="{ width: (u.total ? Math.round(u.sent / u.total * 100) : 0) + '%' }" /></div>
+      </div>
+    </div>
+
+    <Modal v-if="showMove" title="移动到…" wide @close="showMove = false">
+      <DirPicker @pick="doMove" @close="showMove = false" />
+    </Modal>
+    <Modal v-if="renameTarget" title="重命名" @close="renameTarget = null">
+      <input v-model="renameName" style="width:100%" @keydown.enter="doRename" />
+      <div class="actions">
+        <button class="btn ghost sm" @click="renameTarget = null">取消</button>
+        <button class="btn sm" @click="doRename">确定</button>
+      </div>
+    </Modal>
+    <Modal v-if="sharePaths" title="创建分享" @close="sharePaths = null">
+      <ShareModal :paths="sharePaths" @close="sharePaths = null" />
+    </Modal>
+  </main>
+</template>
