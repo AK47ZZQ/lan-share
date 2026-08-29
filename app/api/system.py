@@ -17,7 +17,7 @@ from app.config import (CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DA
                         UPLOAD_SESSION_TTL, ZIP_TTL)
 from app.db import _db, _db_lock
 from app.security import audit, require_user, require_admin
-from app.spaces import visible
+from app.spaces import resolve, visible
 from app.api.files import _chunk_dir, _zips, _zips_lock
 from app.api.share import _tickets, _tickets_lock
 from app.main import app
@@ -304,6 +304,29 @@ def delete_album(album_id: str, _admin=Depends(require_admin)):
     _save_albums(remaining)
     audit("album_delete", album_id)
     return {"ok": True}
+
+
+@app.get("/api/photo/meta")
+def photo_meta(path: str = Query(..., min_length=1), _user=Depends(require_user)):
+    """图片元数据：原始尺寸 + 拍摄设备（EXIF）。预览信息面板用。"""
+    from app.api.files import IMG_EXTS
+    target = resolve(_user, path, "read")
+    if not target.is_file() or target.suffix.lower() not in IMG_EXTS:
+        raise HTTPException(status_code=404, detail="Not an image")
+    width = height = None
+    camera = None
+    try:
+        from PIL import Image
+        with Image.open(target) as im:
+            width, height = im.size
+            exif = im.getexif()
+            make = exif.get(271)
+            model = exif.get(272)
+            if model:
+                camera = f"{make} {model}".strip() if make else str(model).strip()
+    except Exception:
+        pass
+    return {"width": width, "height": height, "camera": camera}
 
 
 @app.get("/api/qr")

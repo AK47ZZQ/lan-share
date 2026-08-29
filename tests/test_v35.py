@@ -212,3 +212,18 @@ def test_username_case_insensitive_unique(client):
     r = client.post("/api/invites/redeem", json={
         "code": inv2["code"], "username": case_name.lower(), "password": "case-pass-456"})
     assert r.status_code == 409  # 大小写变体仍视为占用
+
+
+def test_photo_meta_endpoint(client, workdir):
+    import io as _io
+    from PIL import Image
+    admin = _admin(client)
+    buf = _io.BytesIO()
+    Image.new("RGB", (640, 480), (200, 10, 10)).save(buf, "PNG")
+    r = admin.post("/api/upload/meta-test", files={"file": ("m.png", buf.getvalue())})
+    assert r.status_code == 200
+    r = admin.get("/api/photo/meta", params={"path": "meta-test/m.png"})
+    assert r.status_code == 200
+    d = r.json()
+    assert (d["width"], d["height"]) == (640, 480)
+    assert admin.get("/api/photo/meta", params={"path": "meta-test/missing.png"}).status_code == 404

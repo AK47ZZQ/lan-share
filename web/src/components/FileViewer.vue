@@ -71,37 +71,77 @@ const kind = computed<Kind>((old): Kind => {
   return 'none'
 })
 
-// ── 图片：缩放/平移/旋转 + 中图档（scale>1 换原图）──────────
+// ── 图片：缩放/平移/旋转 + 中图档（大屏直拉原图；scale>1 换原图）──
 const scale = ref(1)
 const tx = ref(0)
 const ty = ref(0)
 const rot = ref(0)
 const fullLoaded = ref(false)
 const imgLoaded = ref(false)
+const imgError = ref(false)
+const retryNonce = ref(0)
+// 档位策略：视口物理像素超过中图档宽度时直接用原图（否则 1280 档省流量）
+const bigScreen = window.innerWidth * (window.devicePixelRatio || 1) > 1280
 const imgSrc = computed(() => {
   if (!item.value || kind.value !== 'image') return ''
-  return fullLoaded.value
-    ? `/preview/${enc(item.value.path)}`
-    : `/preview/${enc(item.value.path)}?w=1280`
+  const base = `/preview/${enc(item.value.path)}`
+  if (fullLoaded.value || bigScreen) return retryNonce.value ? `${base}?_r=${retryNonce.value}` : base
+  return `${base}?w=1280${retryNonce.value ? `&_r=${retryNonce.value}` : ''}`
 })
 function resetZoom() {
   scale.value = 1; tx.value = 0; ty.value = 0; rot.value = 0
-  fullLoaded.value = false; imgLoaded.value = false
+  fullLoaded.value = false; imgLoaded.value = false; imgError.value = false; retryNonce.value = 0
 }
-function zoomTo(delta: number) {
-  const next = Math.min(8, Math.max(1, scale.value * delta))
-  if (next === 1) { tx.value = 0; ty.value = 0; fullLoaded.value = false }
-  else if (scale.value === 1 && next > 1) fullLoaded.value = true
+// 倍率气泡
+const zoomPct = ref(0)
+let zoomBubbleTimer = 0
+function showZoomBubble() {
+  zoomPct.value = Math.round(scale.value * 100)
+  clearTimeout(zoomBubbleTimer)
+  zoomBubbleTimer = window.setTimeout(() => { zoomPct.value = 0 }, 900)
+}
+// 平移边界：图边缘不出舞台
+function clampPan() {
+  const stage = wheelRef.value
+  const img = document.querySelector('.fv-img') as HTMLImageElement | null
+  if (!stage || !img) return
+  const swap = rot.value % 180 === 90
+  const w = (swap ? img.clientHeight : img.clientWidth) * scale.value
+  const h = (swap ? img.clientWidth : img.clientHeight) * scale.value
+  const mx = Math.max(0, (w - stage.clientWidth) / 2)
+  const my = Math.max(0, (h - stage.clientHeight) / 2)
+  tx.value = Math.min(mx, Math.max(-mx, tx.value))
+  ty.value = Math.min(my, Math.max(-my, ty.value))
+}
+// 以（可选）视口点为中心缩放：双击看细节不再跑偏
+function zoomAt(factor: number, cx?: number, cy?: number) {
+  const stage = wheelRef.value
+  if (!stage) return
+  const old = scale.value
+  const next = Math.min(8, Math.max(1, old * factor))
+  if (next === old) { clampPan(); return }
+  if (old === 1 && next > 1) fullLoaded.value = true
+  if (next === 1) {
+    tx.value = 0; ty.value = 0; fullLoaded.value = false
+    scale.value = 1; showZoomBubble(); return
+  }
+  const r = stage.getBoundingClientRect()
+  const pxr = (cx ?? r.left + r.width / 2) - r.left
+  const pyr = (cy ?? r.top + r.height / 2) - r.top
+  const ratio = next / old
+  tx.value = pxr - r.width / 2 - (pxr - r.width / 2 - tx.value) * ratio
+  ty.value = pyr - r.height / 2 - (pyr - r.height / 2 - ty.value) * ratio
   scale.value = next
+  clampPan(); showZoomBubble()
 }
 function onWheel(e: WheelEvent) {
   if (kind.value !== 'image') return
   e.preventDefault()
-  zoomTo(e.deltaY < 0 ? 1.15 : 1 / 1.15)
+  zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY)
 }
-function onDblClick() {
+function onDblClick(e: MouseEvent) {
   if (kind.value !== 'image') return
-  zoomTo(scale.value > 1 ? 1 / scale.value : 2.5)
+  zoomAt(scale.value > 1 ? 1 / scale.value : 2.5, e.clientX, e.clientY)
 }
 function rotate() {
   rot.value = (rot.value + 90) % 360
@@ -117,6 +157,14 @@ function rotate() {
     scale.value = Math.max(0.2, Math.min(8, fit))
     if (scale.value <= 1) { tx.value = 0; ty.value = 0 }
   }
+}
+// 双指捏合：绝对值设置（区别于 zoomAt 的增量式）
+function setPinchScale(target: number) {
+  const next = Math.min(8, Math.max(1, target))
+  if (next > 1 && scale.value === 1) fullLoaded.value = true
+  scale.value = next
+  if (next === 1) { tx.value = 0; ty.value = 0; fullLoaded.value = false }
+  clampPan(); showZoomBubble()
 }
 // 拖拽平移 + 触屏手势（单指滑动切换/下滑关闭，双指捏合缩放）
 let dragging = false
@@ -147,7 +195,7 @@ function onTouchMove(e: TouchEvent) {
   if (pinch && e.touches.length === 2) {
     const [a, b] = [e.touches[0], e.touches[1]]
     const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
-    zoomTo((pinch.scale * d / pinch.dist) / scale.value)
+    setPinchScale(pinch.scale * d / pinch.dist)
   } else if (touchStart && e.touches.length === 1) {
     swipeDx = e.touches[0].clientX - touchStart.x
     swipeDy = e.touches[0].clientY - touchStart.y
@@ -269,6 +317,13 @@ const canNext = computed(() => props.modelValue < props.items.length - 1)
 
 // ── 信息面板 ─────────────────────────────────────────────
 const showInfo = ref(false)
+const metaInfo = ref<{ width: number | null; height: number | null; camera: string | null } | null>(null)
+async function loadMeta() {
+  const it = item.value
+  metaInfo.value = null
+  if (!it || kind.value !== 'image') return
+  try { metaInfo.value = await api.photoMeta(it.path) } catch { /* 无元数据不阻塞预览 */ }
+}
 const renaming = ref(false)
 const renameName = ref('')
 const sharePath = ref<string[] | null>(null)
@@ -300,6 +355,16 @@ function doShare() {
   sharePath.value = [it.path]
 }
 
+// ── 全屏（⛶：隐藏工具条沉浸看图；空白点击先退全屏）────────
+const isFs = ref(false)
+async function toggleFs() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen()
+    else await document.querySelector('.fv-overlay')?.requestFullscreen()
+  } catch { toast('当前环境不支持全屏', 'err') }
+}
+function onFsChange() { isFs.value = !!document.fullscreenElement }
+
 // ── 全局键盘 / 滚轮 / 滚动锁定 ────────────────────────────
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName
@@ -313,25 +378,31 @@ function onKey(e: KeyboardEvent) {
     else if (kind.value === 'audio') { e.preventDefault(); toggleAudio() }
   }
   else if (e.key === 'i' || e.key === 'I') showInfo.value = !showInfo.value
-  else if (kind.value === 'image' && (e.key === '+' || e.key === '=')) zoomTo(1.25)
-  else if (kind.value === 'image' && e.key === '-') zoomTo(1 / 1.25)
+  else if (kind.value === 'image' && (e.key === '+' || e.key === '=')) zoomAt(1.25)
+  else if (kind.value === 'image' && e.key === '-') zoomAt(1 / 1.25)
 }
 const wheelRef = ref<HTMLElement | null>(null)
-// 切换文件：重置缩放/播放器状态，文本类按需加载内容
+// 切换文件：重置缩放/播放器状态，文本类按需加载内容，图片拉元数据
 // （必须在所有 ref 声明之后注册——immediate 回调同步执行，放前面会踩 TDZ）
 watch(() => props.modelValue, () => {
   resetZoom()
   audioPlaying.value = false; audioCur.value = 0; audioDur.value = 0
   videoSpeed.value = 1
   void loadTextLike()
+  void loadMeta()
 }, { immediate: true })
 onMounted(() => {
   window.addEventListener('keydown', onKey)
+  window.addEventListener('resize', clampPan)
+  document.addEventListener('fullscreenchange', onFsChange)
   wheelRef.value?.addEventListener('wheel', onWheel, { passive: false })
   document.body.style.overflow = 'hidden'
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('resize', clampPan)
+  document.removeEventListener('fullscreenchange', onFsChange)
+  clearTimeout(zoomBubbleTimer)
   wheelRef.value?.removeEventListener('wheel', onWheel)
   document.body.style.overflow = ''
 })
@@ -344,6 +415,7 @@ function close() { emit('close') }
 
 // 空白点击：有信息面板先收面板，否则退出预览（点在媒体/按钮/正文上不触发）
 function onBlankClick(e: MouseEvent) {
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return }
   const t = e.target as HTMLElement
   if (t === e.currentTarget || t.classList.contains('fv-center')
       || t.classList.contains('fv-audio')) {
@@ -385,10 +457,10 @@ function iconOf(it: ViewerItem): string {
           </div>
           <div class="fv-ops">
             <template v-if="kind === 'image'">
-              <button class="fv-btn" title="缩小 (-)" @click="zoomTo(1 / 1.25)">－</button>
-              <button class="fv-btn" title="放大 (+)" @click="zoomTo(1.25)">＋</button>
+              <button class="fv-btn" title="缩小 (-)" @click="zoomAt(1 / 1.25)">－</button>
+              <button class="fv-btn" title="放大 (+)" @click="zoomAt(1.25)">＋</button>
               <button class="fv-btn" title="旋转" @click="rotate">↻</button>
-              <button class="fv-btn" title="原始尺寸" @click="resetZoom">1:1</button>
+              <button class="fv-btn" title="适应窗口 (1:1)" @click="resetZoom">1:1</button>
             </template>
             <template v-if="kind === 'video'">
               <select class="fv-btn fv-speed" :value="videoSpeed" @change="setSpeed(Number(($event.target as HTMLSelectElement).value))" title="倍速">
@@ -396,6 +468,7 @@ function iconOf(it: ViewerItem): string {
               </select>
               <button class="fv-btn" title="画中画" @click="pip">⧉</button>
             </template>
+            <button class="fv-btn" title="全屏" @click="toggleFs">⛶</button>
             <button class="fv-btn" :class="{ on: showInfo }" title="信息 (i)" @click="showInfo = !showInfo">ℹ</button>
             <a class="fv-btn" :href="`/files/${enc(item?.path || '')}`" target="_blank" title="下载">⬇</a>
             <button class="fv-btn" title="分享" @click="doShare">🔗</button>
@@ -411,14 +484,22 @@ function iconOf(it: ViewerItem): string {
           <button v-if="canPrev" class="fv-nav prev" @click="go(-1)">‹</button>
           <button v-if="canNext" class="fv-nav next" @click="go(1)">›</button>
           <span class="fv-count">{{ modelValue + 1 }} / {{ items.length }}</span>
+          <div v-if="zoomPct" class="fv-zoom-bubble">{{ zoomPct }}%</div>
 
           <!-- 图片 -->
           <div v-if="kind === 'image'" class="fv-center">
-            <div v-if="!imgLoaded" class="fv-loading"><span class="fv-spin" /></div>
-            <img :key="item?.path + imgSrc" :src="imgSrc" class="fv-img"
-                 :style="{ transform: `translate(${tx}px, ${ty}px) scale(${scale}) rotate(${rot}deg)`, cursor: scale > 1 ? 'grab' : 'zoom-in' }"
-                 :class="{ dragging }"
-                 @dblclick="onDblClick" @load="imgLoaded = true" draggable="false" />
+            <div v-if="imgError" class="fv-unsupported">
+              <div class="fv-uns-icon">🖼️</div>
+              <b>图片加载失败</b>
+              <button class="btn sm" @click="retryNonce++; imgError = false">↻ 重试</button>
+            </div>
+            <template v-else>
+              <div v-if="!imgLoaded" class="fv-loading"><span class="fv-spin" /></div>
+              <img :key="item?.path + imgSrc" :src="imgSrc" class="fv-img"
+                   :style="{ transform: `translate(${tx}px, ${ty}px) scale(${scale}) rotate(${rot}deg)`, cursor: scale > 1 ? 'grab' : 'zoom-in' }"
+                   :class="{ dragging }"
+                   @dblclick="onDblClick" @load="imgLoaded = true" @error="imgError = true" draggable="false" />
+            </template>
           </div>
 
           <!-- 视频 -->
@@ -503,6 +584,13 @@ function iconOf(it: ViewerItem): string {
             <dt>名称</dt><dd :title="item.name">{{ item.name }}</dd>
             <dt>路径</dt><dd :title="item.path">{{ item.path }}</dd>
             <dt>大小</dt><dd>{{ item.size_human || human(item.size ?? null) }}</dd>
+            <template v-if="metaInfo">
+              <dt>原始尺寸</dt>
+              <dd>{{ metaInfo.width && metaInfo.height ? `${metaInfo.width} × ${metaInfo.height}` : '未知' }}</dd>
+              <template v-if="metaInfo.camera">
+                <dt>拍摄设备</dt><dd>{{ metaInfo.camera }}</dd>
+              </template>
+            </template>
             <dt v-if="item.modified">修改时间</dt><dd v-if="item.modified">{{ item.modified.slice(0, 16).replace('T', ' ') }}</dd>
             <template v-if="item.taken">
               <dt>拍摄日期</dt><dd>{{ item.taken }}</dd>
@@ -608,6 +696,17 @@ function iconOf(it: ViewerItem): string {
   font-size: 12px; color: rgba(255, 255, 255, .6); background: rgba(0, 0, 0, .35);
   border-radius: 999px; padding: 3px 12px;
 }
+.fv-zoom-bubble {
+  position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 6;
+  font-size: 13px; font-weight: 600; color: #fff; background: rgba(0, 0, 0, .5);
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: 999px; padding: 4px 14px;
+  animation: fv-fade .15s ease; pointer-events: none;
+}
+
+/* 全屏沉浸：隐藏工具条与胶片条 */
+.fv-overlay:fullscreen { background: #000; }
+.fv-overlay:fullscreen .fv-top,
+.fv-overlay:fullscreen .fv-strip { display: none; }
 
 .fv-iframe { width: 100%; height: 100%; border: 0; border-radius: 10px; background: #fff; }
 .fv-docx { background: #fff; border-radius: 8px; padding: 24px 32px; max-width: 900px; margin: 0 auto; color: #222; }

@@ -104,6 +104,7 @@ export const api = {
     return fetch(`/api/photos?${q}`).then(r => handle<{ total: number; items: PhotoItem[] }>(r))
   },
   photoFacets: () => fetch('/api/photos/facets').then(r => handle<PhotoFacets>(r)),
+  photoMeta: (path: string) => fetch(`/api/photo/meta?path=${encodeURIComponent(path)}`).then(r => handle<{ width: number | null; height: number | null; camera: string | null }>(r)),
   activity: (limit = 40) => fetch(`/api/activity?limit=${limit}`).then(r => handle<ActivityItem[]>(r)),
 
   adminUsers: () => fetch('/api/admin/users').then(r => handle<AdminUser[]>(r)),
