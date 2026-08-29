@@ -316,6 +316,20 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .empty-state .art { font-size: 52px; margin-bottom: 10px; filter: grayscale(.2); }
 .empty-state .hint { font-size: 13px; margin-top: 6px; }
 
+/* ── 窄屏：行布局两行化（信息行 + 操作行），杜绝横向溢出 ── */
+@media (max-width: 640px) {
+  .page { overflow-x: hidden; }
+  .frow { flex-wrap: wrap; }
+  .frow .name { flex: 1 1 calc(100% - 54px); min-width: 0; }
+  .frow .meta { display: none; }
+  .frow .ops, .frow .ops[style] {
+    opacity: 1; width: 100%; justify-content: flex-end;
+    border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px;
+  }
+  .frow .ops .btn.sm, .frow .ops select, .frow .ops input { flex: 0 0 auto; }
+  .modal-card { max-height: 88vh; }
+}
+
 /* ── 触屏适配：没有 hover，操作按钮常显、点击区加大 ── */
 @media (hover: none) {
   .frow .ops, .gcard .ops { opacity: 1; }
@@ -330,4 +344,10 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
   .frow:hover .ops { opacity: 1; }  /* 操作按钮仍常显（见上方 hover:none 块） */
   .iconbtn:hover { background: transparent; color: var(--text-2); }
   nav.tabs a:hover { background: transparent; color: var(--text-2); }
+}
+
+/* ── iOS 安全区（底部 home 条）── */
+@supports (padding: max(0px)) {
+  body { padding-bottom: env(safe-area-inset-bottom); }
+  .opsbar { bottom: calc(14px + env(safe-area-inset-bottom)); }
 }

@@ -207,7 +207,7 @@ async def list_shares(_user=Depends(require_user)):
             continue
         owner = _db().execute("SELECT username FROM users WHERE id=?", (s["owner_id"],)).fetchone()             if s["owner_id"] else None
         active[s["token"]] = {
-            "owner": owner["username"] if owner else ("我" if s["owner_id"] == _user["user_id"] else "（未知）") if is_admin else "我",
+            "owner": owner["username"] if owner else ("早期分享" if is_admin else "我"),
             "path": s["path"],
             "name": s["name"],
             "size": s["size"],

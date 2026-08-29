@@ -9,8 +9,9 @@ export function toast(text: string, kind: 'ok' | 'err' | 'info' = 'info') {
   setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1) }, 3200)
 }
 
-export function fmtTs(ts: number): string {
-  const d = new Date(ts * 1000)
+export function fmtTs(ts: number | string): string {
+  const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts)
+  if (isNaN(d.getTime())) return '-'
   return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
