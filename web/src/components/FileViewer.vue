@@ -328,6 +328,16 @@ watch(wheelRef, (el, old) => {
 
 function close() { emit('close') }
 
+// 空白点击：有信息面板先收面板，否则退出预览（点在媒体/按钮/正文上不触发）
+function onBlankClick(e: MouseEvent) {
+  const t = e.target as HTMLElement
+  if (t === e.currentTarget || t.classList.contains('fv-center')
+      || t.classList.contains('fv-audio')) {
+    if (showInfo.value) showInfo.value = false
+    else close()
+  }
+}
+
 // ── 胶片条（桌面端）───────────────────────────────────────
 const filmstrip = computed(() => {
   const lo = Math.max(0, props.modelValue - 30)
@@ -379,8 +389,8 @@ function iconOf(it: ViewerItem): string {
           </div>
         </header>
 
-        <!-- 内容区 -->
-        <div class="fv-stage" ref="wheelRef"
+        <!-- 内容区（点空白：收信息面板 / 退出预览） -->
+        <div class="fv-stage" ref="wheelRef" @click="onBlankClick"
              @pointerdown="onPointerDown" @pointermove="onPointerMove"
              @pointerup="onPointerUp" @pointercancel="onPointerUp"
              @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
@@ -470,8 +480,11 @@ function iconOf(it: ViewerItem): string {
 
       <!-- 信息面板 -->
       <transition name="fv-drawer">
-        <aside v-if="showInfo && item" class="fv-info">
-          <h3>文件信息</h3>
+        <aside v-if="showInfo && item" class="fv-info" @click.stop>
+          <div class="fv-info-head">
+            <h3>文件信息</h3>
+            <button class="fv-btn" title="收起" @click="showInfo = false">✕</button>
+          </div>
           <dl>
             <dt>名称</dt><dd :title="item.name">{{ item.name }}</dd>
             <dt>路径</dt><dd :title="item.path">{{ item.path }}</dd>
@@ -639,7 +652,8 @@ function iconOf(it: ViewerItem): string {
   background: rgba(18, 18, 30, .92); backdrop-filter: blur(20px);
   border-left: 1px solid rgba(255, 255, 255, .1); padding: 20px 20px 12px; overflow: auto;
 }
-.fv-info h3 { margin: 0 0 14px; color: #fff; font-size: 15px; }
+.fv-info h3 { margin: 0; color: #fff; font-size: 15px; }
+.fv-info-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .fv-info dl { display: grid; grid-template-columns: 64px 1fr; gap: 8px 10px; margin: 0 0 18px; }
 .fv-info dt { color: rgba(255, 255, 255, .45); font-size: 12.5px; }
 .fv-info dd { margin: 0; color: #e8e8f0; font-size: 13px; word-break: break-all; }
