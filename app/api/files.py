@@ -622,6 +622,8 @@ def disk_info(_user=Depends(require_user)):
         "total": human_size(usage.total),
         "used": human_size(usage.used),
         "free": human_size(usage.free),
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
         "free_bytes": usage.free,
         "share_size": human_size(share_physical),
         "warning": usage.free < 15 * 1024**3,
@@ -629,20 +631,38 @@ def disk_info(_user=Depends(require_user)):
 
 
 @app.get("/api/disk/detail")
-def disk_detail(_admin=Depends(require_admin)):
-    """分目录明细仅 admin（成员可见磁盘总况 /api/disk，见不到各文件夹构成）。"""
+def disk_detail(user=Depends(require_user)):
+    """存储详情：磁盘总况全员可见；分目录构成仅 admin；
+    成员返回自己的配额用量（private 空间逻辑字节）。"""
     usage = shutil.disk_usage(str(SHARE_ROOT))
     share_physical, cat_sizes = _scan_share_sizes()
-    categories = {name: {"size": size, "size_human": human_size(size)}
-                  for name, size in cat_sizes.items()}
-    return {
+    resp = {
         "total": usage.total, "total_human": human_size(usage.total),
         "used": usage.used, "used_human": human_size(usage.used),
         "free": usage.free, "free_human": human_size(usage.free),
         "warning": usage.free < 15 * 1024**3,
         "share_size": share_physical, "share_size_human": human_size(share_physical),
-        "categories": categories,
+        "categories": None, "private_used": None, "quota_bytes": None,
     }
+    if user["role"] == "admin":
+        resp["categories"] = {name: {"size": size, "size_human": human_size(size)}
+                              for name, size in cat_sizes.items()}
+    else:
+        used = 0
+        own = SHARE_ROOT / "private" / user["username"]
+        if own.exists():
+            for f in own.rglob("*"):
+                if f.is_file():
+                    try:
+                        used += f.stat().st_size
+                    except OSError:
+                        continue
+        resp["private_used"] = used
+        try:
+            resp["quota_bytes"] = user["quota_bytes"]
+        except (IndexError, KeyError):
+            resp["quota_bytes"] = None
+    return resp
 
 
 # ─── 分享链接 ─────────────────────────────────────────────

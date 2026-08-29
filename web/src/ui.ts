@@ -19,3 +19,13 @@ export const ACTION_NAMES: Record<string, string> = {
   share_download: '有人下载了分享', invite_redeemed: '加入了家庭空间',
   trash: '删除了', restore: '恢复了', move: '移动了', rename: '重命名了',
 }
+
+export function human(size: number | null | undefined): string {
+  if (size == null) return '-'
+  let s = size
+  for (const unit of ['B', 'KB', 'MB', 'GB', 'TB']) {
+    if (s < 1024) return `${s.toFixed(s < 10 && unit !== 'B' ? 1 : 0)} ${unit}`
+    s /= 1024
+  }
+  return `${s.toFixed(1)} PB`
+}

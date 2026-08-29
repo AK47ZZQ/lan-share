@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth } from './auth'
 import { toasts } from './ui'
+import DiskModal from './components/DiskModal.vue'
 import { applyTheme, currentTheme, type Theme } from './theme'
 
 const disk = ref<{ free: string; warning: boolean; disk_used_pct?: number } | null>(null)
@@ -19,6 +20,7 @@ async function boot() {
 }
 
 const menuOpen = ref(false)
+const showDisk = ref(false)
 const theme = ref<Theme>(currentTheme())
 function setTheme(th: Theme) { theme.value = th; applyTheme(th) }
 function closeMenu() { menuOpen.value = false }
@@ -49,15 +51,17 @@ watchEffect(() => {
     <template v-else-if="me">
       <header class="topbar">
         <div class="brand"><span class="logo">◈</span><span class="brand-name">LAN Share</span></div>
-        <span class="disk-badge" :class="{ low: disk?.warning }" v-if="disk" title="磁盘已用比例">
+        <button class="disk-badge" :class="{ low: disk?.warning }" v-if="disk"
+                title="点击查看存储详情" @click.stop="showDisk = true">
           <span class="bar"><i :style="{ width: Math.round(disk.disk_used_pct ?? 0) + '%' }" /></span>
           {{ disk.free }} 可用
-        </span>
+        </button>
         <button class="userchip avatar-btn" @click.stop="menuOpen = !menuOpen">
           <span class="uname">{{ me.username }}</span>
           <span class="avatar">{{ initial(me.username) }}</span>
           <span class="caret">▾</span>
         </button>
+        <DiskModal v-if="showDisk" :me="me" @close="showDisk = false" />
         <teleport to="body">
           <div v-if="menuOpen" class="usermenu" @click.stop>
             <div class="um-head">
