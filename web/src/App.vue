@@ -53,7 +53,9 @@ watchEffect(() => {
 
     <template v-else-if="me">
       <header class="topbar">
-        <div class="brand"><span class="logo">◈</span><span class="brand-name">LAN Share</span></div>
+        <router-link to="/" class="brand" title="回到主页">
+          <span class="logo">◈</span><span class="brand-name">LAN Share</span>
+        </router-link>
         <button class="disk-badge" :class="{ low: disk?.warning }" v-if="disk"
                 :title="`磁盘已用 ${diskPct}%，点击查看详情`" @click.stop="showDisk = true">
           <span class="bar"><i :style="{ width: diskPct + '%' }" /></span>
