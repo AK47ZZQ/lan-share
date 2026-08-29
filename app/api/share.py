@@ -46,11 +46,12 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         pwd_hash = salt.hex() + "$" + hashlib.sha256(salt + password.encode()).hexdigest()
     with _db_lock:
         _db().execute(
-            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads) "
-            "VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
             (token, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), target.name,
              target.stat().st_size if target.is_file() else None,
-             time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads))
+             time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
+             _user["user_id"] if "user_id" in _user.keys() else None))
         _db().commit()
     audit("share_create", path, f"{expires_hours}h", client_ip(request))
     return {"ok": True, "token": token, "expires_in": f"{expires_hours}h"}
@@ -198,9 +199,15 @@ async def list_shares(_user=Depends(require_user)):
     with _db_lock:
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
         _db().commit()
+    is_admin = _user["role"] == "admin"
+    rows = _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall()
     active = {}
-    for s in _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall():
+    for s in rows:
+        if not is_admin and s["owner_id"] not in (None, _user["user_id"]):
+            continue
+        owner = _db().execute("SELECT username FROM users WHERE id=?", (s["owner_id"],)).fetchone()             if s["owner_id"] else None
         active[s["token"]] = {
+            "owner": owner["username"] if owner else ("我" if s["owner_id"] == _user["user_id"] else "（未知）") if is_admin else "我",
             "path": s["path"],
             "name": s["name"],
             "size": s["size"],
@@ -217,10 +224,12 @@ async def list_shares(_user=Depends(require_user)):
 
 @app.get("/api/shares/{token}/history")
 async def share_history(token: str, _user=Depends(require_user)):
-    """某分享的取件记录（下载成功 + 密码错误尝试）。"""
+    """某分享的取件记录（下载成功 + 密码错误尝试）。仅创建者与 admin。"""
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
+    if _user["role"] != "admin" and s["owner_id"] not in (None, _user["user_id"]):
+        raise HTTPException(status_code=403, detail="Forbidden")
     rows = _db().execute(
         "SELECT ts, ip, action FROM audit_log "
         "WHERE (action='share_download' AND target=?) OR (action='share_badpwd' AND target=?) "
@@ -231,6 +240,11 @@ async def share_history(token: str, _user=Depends(require_user)):
 
 @app.delete("/api/shares/{token}")
 async def revoke_share(request: Request, token: str, _user=Depends(require_user)):
+    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    if not s:
+        raise HTTPException(status_code=404, detail="Share not found")
+    if _user["role"] != "admin" and s["owner_id"] not in (None, _user["user_id"]):
+        raise HTTPException(status_code=403, detail="Forbidden")
     with _db_lock:
         cur = _db().execute("DELETE FROM shares WHERE token=?", (token,))
         _db().commit()

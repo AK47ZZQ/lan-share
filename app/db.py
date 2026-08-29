@@ -105,6 +105,9 @@ def _migrate_v3():
         ucols = {r["name"] for r in conn.execute("PRAGMA table_info(upload_sessions)").fetchall()}
         if "user_id" not in ucols:
             conn.execute("ALTER TABLE upload_sessions ADD COLUMN user_id INTEGER")
+        scols = {r["name"] for r in conn.execute("PRAGMA table_info(shares)").fetchall()}
+        if "owner_id" not in scols:
+            conn.execute("ALTER TABLE shares ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
         acols = {r["name"] for r in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
         if "username" not in acols:
             conn.execute("ALTER TABLE audit_log ADD COLUMN username TEXT NOT NULL DEFAULT ''")

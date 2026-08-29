@@ -6,7 +6,12 @@ export interface Entry {
 }
 export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null }
 export interface TrashItem { id: number; name: string; orig_path: string; size_human: string; deleted_at: string; days_left: number }
-export interface ShareItem { token: string; name: string; path: string; size_human: string; expires_at: number; downloads: number; max_downloads: number | null }
+export interface ShareItem {
+  token: string; owner: string; path: string; name: string; size: number | null
+  size_human: string; expires_at: string; expires_in: string
+  has_password: boolean; downloads: number; max_downloads: number | null; created_at: string
+}
+export interface ShareHistoryRow { ts: number; ip: string; action: string }
 export interface ShareMeta { name: string; size_human: string; expires_in: string; needs_password: boolean; max_downloads: number | null; downloads: number }
 export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string }
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
@@ -60,7 +65,8 @@ export const api = {
     if (max_downloads) f.append('max_downloads', String(max_downloads))
     return fetch('/api/share', { method: 'POST', body: f }).then(r => handle<{ token: string }>(r))
   },
-  shares: () => fetch('/api/shares').then(r => handle<ShareItem[]>(r)),
+  shares: () => fetch('/api/shares').then(r => handle<Record<string, ShareItem>>(r)).then(d => Object.entries(d).map(([token, s]) => ({ ...s, token }))),
+  shareHistory: (token: string) => fetch(`/api/shares/${encodeURIComponent(token)}/history`).then(r => handle<ShareHistoryRow[]>(r)),
   revokeShare: (token: string) => fetch(`/api/shares/${token}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   shareQrUrl: (token: string) => `/api/share/${token}/qr`,
   shareLink: (token: string) => `${location.origin}/s/${token}`,
