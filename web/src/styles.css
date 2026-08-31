@@ -1,17 +1,16 @@
 /* LAN Share v3 设计令牌与全局样式 —— 玻璃拟态语言 */
 
-/* 滚动条：中性半透明细条（Windows Chrome 默认白亮滚动条在深色主题刺眼）。
-   只用 webkit 伪元素并强制经典模式——若同时写标准属性 scrollbar-color，
-   Chrome 121+ 会禁用 webkit 样式改用系统 fluent 渲染（浅色系统下轨道发白）。
-   Firefox 走 @supports 分支的标准属性。 */
-::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: rgba(127, 127, 145, 0.45); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 145, 0.7); background-clip: padding-box; }
-::-webkit-scrollbar-track { background: transparent; }
+/* 滚动条：中性半透明细条（深色主题下系统白滚动条刺眼）。
+   双机制并存、各管一段：
+   - 标准属性：Chrome/Edge 121+ 的 fluent 悬浮滚动条只认这个（跟随系统主题，
+     webkit 伪元素对它无效）；Firefox 同样走这里。
+   - webkit 伪元素：老内核 Chromium 的经典滚动条（不支持标准属性时生效）。 */
+* { scrollbar-width: thin; scrollbar-color: rgba(138, 140, 158, 0.6) rgba(24, 26, 40, 0.35); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(138, 140, 158, 0.55); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(138, 140, 158, 0.75); background-clip: padding-box; }
+::-webkit-scrollbar-track { background: rgba(24, 26, 40, 0.35); }
 ::-webkit-scrollbar-corner { background: transparent; }
-@supports not selector(::-webkit-scrollbar) {
-  * { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 145, 0.45) transparent; }
-}
 
 :root {
   --bg: linear-gradient(135deg, #e9edff 0%, #f7f2ff 55%, #eef7ff 100%);
