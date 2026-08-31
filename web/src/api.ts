@@ -1,5 +1,6 @@
 // 全量 API 客户端（cookie 会话）
 import { confirmDlg } from './ui'
+import { previewAs } from './previewAs'
 
 export interface Entry {
   name: string; path: string; is_dir: boolean; is_private_root?: boolean
@@ -14,7 +15,7 @@ export interface ShareItem {
 }
 export interface ShareHistoryRow { ts: number; ip: string; action: string }
 export interface ShareMeta { name: string; size_human: string; expires_in: string; needs_password: boolean; max_downloads: number | null; downloads: number }
-export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string }
+export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string; webdav_set?: boolean }
 
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
 export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string; count: number }
@@ -45,6 +46,9 @@ async function handle<T>(r: Response): Promise<T> {
 const enc = (p: string) => p.split('/').filter(Boolean).map(encodeURIComponent).join('/')
 const jpost = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+// 成员视角预览：只读 GET 附带 X-As-User（后端仅 admin 生效，其余请求一律原身份）
+const getAs = (url: string) =>
+  fetch(url, previewAs.value ? { headers: { 'X-As-User': previewAs.value } } : undefined)
 
 export const api = {
   me: () => fetch('/api/auth/me').then(r => handle<Me>(r)),
@@ -64,8 +68,17 @@ export const api = {
     jpost('/api/auth/username', { new_username, password }).then(r => handle<{ ok: boolean; username: string }>(r)),
   changePassword: (old_password: string, new_password: string) =>
     jpost('/api/auth/password', { old_password, new_password }).then(r => handle<{ ok: boolean }>(r)),
+  webdavPwdStatus: () => fetch('/api/auth/webdav-password').then(r => handle<{ set: boolean }>(r)),
+  setWebdavPwd: (current_password: string, webdav_password: string) =>
+    jpost('/api/auth/webdav-password', { current_password, webdav_password }).then(r => handle<{ ok: boolean; set: boolean }>(r)),
+  adminSetWebdavPwd: (uid: number, value: string) =>
+    jpost(`/api/admin/users/${uid}/webdav-password`, { value }).then(r => handle<{ ok: boolean; set: boolean }>(r)),
 
-  list: (path: string) => fetch(`/api/files/${enc(path)}`).then(r => handle<{ path: string; items: Entry[] }>(r)),
+  getWebhook: () => fetch('/api/admin/webhook').then(r => handle<{ url: string }>(r)),
+  setWebhook: (url: string) => jpost('/api/admin/webhook', { url }).then(r => handle<{ ok: boolean; url: string }>(r)),
+  testWebhook: () => jpost('/api/admin/webhook/test', {}).then(r => handle<{ ok: boolean }>(r)),
+
+  list: (path: string) => getAs(`/api/files/${enc(path)}`).then(r => handle<{ path: string; items: Entry[] }>(r)),
   mkdir: (path: string) => fetch(`/api/mkdir/${enc(path)}`, { method: 'POST' }).then(r => handle<{ ok: boolean }>(r)),
   rename: (path: string, new_name: string) => jpost('/api/rename', { path, new_name }).then(r => handle<{ ok: boolean }>(r)),
   remove: (path: string) => fetch(`/api/files/${enc(path)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
@@ -89,7 +102,7 @@ export const api = {
     if (target) f.append('target', target)
     return fetch('/api/share', { method: 'POST', body: f }).then(r => handle<{ token: string }>(r))
   },
-  shares: () => fetch('/api/shares').then(r => handle<Record<string, ShareItem>>(r)).then(d => Object.entries(d).map(([token, s]) => ({ ...s, token }))),
+  shares: () => getAs('/api/shares').then(r => handle<Record<string, ShareItem>>(r)).then(d => Object.entries(d).map(([token, s]) => ({ ...s, token }))),
   shareHistory: (token: string) => fetch(`/api/shares/${encodeURIComponent(token)}/history`).then(r => handle<ShareHistoryRow[]>(r)),
   revokeShare: (token: string) => fetch(`/api/shares/${token}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   shareQrUrl: (token: string) => `/api/share/${token}/qr`,
@@ -102,9 +115,9 @@ export const api = {
     const q = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (month) q.set('month', month)
     if (uploader) q.set('uploader', uploader)
-    return fetch(`/api/photos?${q}`).then(r => handle<{ total: number; items: PhotoItem[] }>(r))
+    return getAs(`/api/photos?${q}`).then(r => handle<{ total: number; items: PhotoItem[] }>(r))
   },
-  photoFacets: () => fetch('/api/photos/facets').then(r => handle<PhotoFacets>(r)),
+  photoFacets: () => getAs('/api/photos/facets').then(r => handle<PhotoFacets>(r)),
   photoMeta: (path: string) => fetch(`/api/photo/meta?path=${encodeURIComponent(path)}`).then(r => handle<{ width: number | null; height: number | null; camera: string | null }>(r)),
   activity: (limit = 40) => fetch(`/api/activity?limit=${limit}`).then(r => handle<ActivityItem[]>(r)),
 

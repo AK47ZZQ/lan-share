@@ -19,6 +19,7 @@ _ROOT = tempfile.mkdtemp(prefix="lan-share-test-")
 os.environ["SHARE_ROOT"] = _ROOT
 
 import server  # noqa: E402  (SHARE_ROOT 设置后才允许导入)
+import app.api.system as _system  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 ADMIN_USER = "admin"
@@ -44,6 +45,7 @@ def _reset_in_memory_state():
     server._login_fails.clear()
     server._share_fails.clear()
     server._tickets.clear()
+    _system._last_photo_scan = 0.0   # 照片扫描 60s 节流：不重置会跨测试串残留行
     yield
     server._rate.clear()
     server._login_fails.clear()

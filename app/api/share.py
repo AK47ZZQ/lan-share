@@ -17,10 +17,11 @@ from starlette.background import BackgroundTask
 
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_TTL
 from app.db import _db, _db_lock
-from app.security import audit, client_ip, get_session_user, require_user
+from app.security import audit, client_ip, get_session_user, preview_user, require_user
 from app.filetools import human_size
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
+from app.api.notify import push_webhook
 from app.main import app
 
 @app.post("/api/share")
@@ -78,6 +79,8 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
     audit("share_create", path, f"{expires_hours}h", client_ip(request))
     if target_id:
         audit("share_target", path, f"→ {target_username}", client_ip(request))
+        push_webhook("📬 收到定向分享",
+                     f"{_user['username']} 分享给 {target_username}：{target.name}")
     return {"ok": True, "token": token, "expires_in": f"{expires_hours}h",
             "target": target_username}
 
@@ -236,16 +239,17 @@ async def share_qr(token: str, request: Request, _user=Depends(require_user)):
 
 
 @app.get("/api/shares")
-async def list_shares(_user=Depends(require_user)):
+async def list_shares(request: Request, _user=Depends(require_user)):
     now = time.time()
     with _db_lock:
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
         _db().commit()
-    is_admin = _user["role"] == "admin"
+    viewer = preview_user(request, _user)   # admin 成员视角预览
+    is_admin = viewer["role"] == "admin"
     rows = _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall()
     active = {}
     for s in rows:
-        if not is_admin and s["owner_id"] not in (None, _user["user_id"]):
+        if not is_admin and s["owner_id"] not in (None, viewer["user_id"]):
             continue
         owner = _db().execute("SELECT username FROM users WHERE id=?", (s["owner_id"],)).fetchone()             if s["owner_id"] else None
         target_user = _db().execute("SELECT username FROM users WHERE id=?", (s["target_user_id"],)).fetchone() if s["target_user_id"] else None
