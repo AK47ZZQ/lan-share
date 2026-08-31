@@ -29,6 +29,30 @@ def test_chunk_size_deterministic():
     assert chunk_size_for(3 * GB) == chunk_size_for(3 * GB)
 
 
+def test_chunk_rejects_wrong_body_size(auth):
+    # 暂停/断网会产生半截请求体：非末块必须整块接收，不足即拒且不落 part（原子写保护续传）
+    import time as _time
+    r = auth.post("/api/upload/init", json={
+        "dest_dir": "", "filename": f"trunc-{_time.time()}.bin", "size": 12 * 1024 * 1024})
+    sid = r.json()["session"]
+    try:
+        # index=0 应收满 5MB；只发 1MB → 400，且不产生 part-000000
+        resp = auth.post(f"/api/upload/chunk/{sid}?index=0", content=b"x" * (1024 * 1024))
+        assert resp.status_code == 400
+        from app.api.files import _chunk_dir
+        assert not (_chunk_dir(sid) / "part-000000").exists()
+        st = auth.get(f"/api/upload/state/{sid}").json()
+        assert 0 not in st["received"]
+    finally:
+        from app.db import _db, _db_lock
+        from app.api.files import _chunk_dir
+        import shutil
+        with _db_lock:
+            _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
+            _db().commit()
+        shutil.rmtree(_chunk_dir(sid), ignore_errors=True)
+
+
 # ── 分片上传接口 ──────────────────────────────────────────
 
 def test_init_accepts_over_2gb_with_adaptive_chunk(auth, tmp_path):
@@ -59,7 +83,10 @@ def test_chunk_index_bound_uses_adaptive_size(auth):
     sid = r.json()["session"]
     try:
         assert auth.post(f"/api/upload/chunk/{sid}?index=192").status_code == 400
-        assert auth.post(f"/api/upload/chunk/{sid}?index=191").status_code == 200
+        # 末块(index=191)应收 3GB - 191*16MB = 18789120 字节（尺寸守卫要求整块）
+        last = 3 * GB - 191 * (16 * 1024 * 1024)
+        assert auth.post(f"/api/upload/chunk/{sid}?index=191",
+                         content=b"\0" * last).status_code == 200
     finally:
         from app.db import _db, _db_lock
         import shutil

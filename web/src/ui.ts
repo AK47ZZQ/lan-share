@@ -43,6 +43,11 @@ export function iconForName(name: string): string {
   return '📄'
 }
 
+export function fmtSpeed(bps: number): string {
+  if (!isFinite(bps) || bps <= 0) return '--'
+  return bps >= 1024 * 1024 ? `${(bps / 1024 / 1024).toFixed(1)} MB/s` : `${Math.round(bps / 1024)} KB/s`
+}
+
 // ── Vue 版确认/输入对话框（替代浏览器原生 confirm/prompt）──
 export const dlg = reactive({
   open: false,

@@ -31,7 +31,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/upload/{path}` | 🔑 | multipart 单请求上传（≤2GB）；返回 `{sha256, deduped, ...}` |
 | POST | `/api/upload/init` | 🔑 | `{dest_dir, filename, size, sha256?}` → 命中指纹 `{instant:true,...}` 秒传硬链接；否则 `{session, chunk_size, received:[]}`。分片大小自适应（≤2GB→5MB / ≤5GB→16MB / ≤10GB→32MB / 更大→64MB）；总大小硬上限 64GB |
 | GET | `/api/upload/state/{sid}` | 🔑 | `{received:[块序号]}`（断点续传，chunk_size 与 init 一致） |
-| POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速） |
+| POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速）；原子落盘，字节数不符整块即拒（中断不留半截分片） |
 | POST | `/api/upload/finish/{sid}` | 🔑 | 合并 + SHA256/大小校验 → 入库去重；同名覆盖时旧版本进回收站；`{path, size, sha256, deduped}` |
 | POST | `/api/mkdir/{path}` | 🔑 | 逐段清洗后创建目录 |
 | POST | `/api/move` | 🔑 | `{sources:[路径], dest_dir}` 批量移动（≤500 项）；同盘 rename（硬链接/指纹不受影响）。逐项返回 `{results:[{src, ok, dest\|error}]}`；重名原子改名 `(2)`/`(3)`（`os.rename` 目标存在必抛错，无覆盖窗口），移入自身子目录 400，已在目标目录 400 |

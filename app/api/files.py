@@ -187,9 +187,19 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     if index < 0 or index >= total:
         raise HTTPException(status_code=400, detail="Chunk index out of range")
     part = _chunk_dir(sid) / f"part-{index:06d}"
-    async with aiofiles.open(part, "wb") as f:
+    # 原子写：客户端中断（暂停/断网）时只留下 _tmp_*（不匹配 part-*，续传不会误信半截分片）
+    tmp = _chunk_dir(sid) / f"_tmp_{index:06d}"
+    expected = min(cs, row["total_size"] - index * cs)
+    size = 0
+    async with aiofiles.open(tmp, "wb") as f:
         async for chunk in request.stream():
+            size += len(chunk)
             await f.write(chunk)
+    if size != expected:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=400,
+                            detail=f"Chunk {index}: got {size} bytes, expected {expected}")
+    os.replace(tmp, part)
     return {"ok": True, "index": index}
 
 

@@ -202,35 +202,56 @@ function xhrSendChunk(url: string, blob: Blob, signal: AbortSignal | undefined,
   })
 }
 
-/** 分块上传：≤100MB 计算 sha256 走秒传；自适应分片（服务端下发）；≥256MB 并发 3 路；每块重试 3 次；显示速度/剩余时间 */
+export interface UploadHooks {
+  signal?: AbortSignal
+  resumeSid?: string                       // 断点续传：复用既有会话（跨刷新）
+  onSession?: (sid: string) => void        // 会话建立后回调（调用方持久化）
+}
+
+/** 分块上传：≤100MB 计算 sha256 走秒传；自适应分片（服务端下发）；≥256MB 并发 3 路；
+ *  每块重试 3 次；显示速度/剩余时间；支持 resumeSid 断点续传（会话失效自动回落新会话） */
 export async function uploadResumable(
   destDir: string, file: File,
   onProgress: (sent: number, total: number, stage: string) => void,
-  signal?: AbortSignal,
+  hooks: UploadHooks = {},
 ): Promise<{ instant: boolean }> {
   const total = file.size
+  const { signal } = hooks
   let sha: string | undefined
-  if (total <= 100 * 1024 * 1024) {
+  if (!hooks.resumeSid && total <= 100 * 1024 * 1024) {
     signal?.throwIfAborted()
     onProgress(0, total, '计算指纹…')
     sha = await sha256Hex(await file.arrayBuffer())
   }
   signal?.throwIfAborted()
-  const init = await fetch('/api/upload/init', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dest_dir: destDir, filename: file.name, size: total, sha256: sha }),
-  }).then(r => handle<{ instant: boolean; session?: string; chunk_size?: number }>(r))
-  if (init.instant) { onProgress(total, total, '秒传'); return { instant: true } }
 
-  const sid = init.session!
-  const chunkSize = init.chunk_size ?? CHUNK
+  let sid = hooks.resumeSid ?? ''
+  let chunkSize = CHUNK
+  let received = new Set<number>()
+  if (sid) {
+    // 续传：校验会话仍存活，拿已收块与分片大小
+    try {
+      const st = await fetch(`/api/upload/state/${sid}`)
+        .then(r => handle<{ received: number[]; chunk_size: number }>(r))
+      for (const i of st.received) received.add(i)
+      chunkSize = st.chunk_size
+    } catch {
+      sid = ''          // 会话已过期/被清理 → 回落新会话
+      received = new Set()
+    }
+  }
+  if (!sid) {
+    const init = await fetch('/api/upload/init', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dest_dir: destDir, filename: file.name, size: total, sha256: sha }),
+    }).then(r => handle<{ instant: boolean; session?: string; chunk_size?: number }>(r))
+    if (init.instant) { onProgress(total, total, '秒传'); return { instant: true } }
+    sid = init.session!
+    chunkSize = init.chunk_size ?? CHUNK
+  }
+  hooks.onSession?.(sid)
+
   const chunks = Math.ceil(total / chunkSize)
-  // 断点续传：查询已收块
-  const received = new Set<number>()
-  try {
-    const st = await fetch(`/api/upload/state/${sid}`).then(r => handle<{ received: number[] }>(r))
-    for (const i of st.received) received.add(i)
-  } catch { /* */ }
 
   let doneBytes = 0
   for (const i of received) doneBytes += Math.min(chunkSize, total - i * chunkSize)
