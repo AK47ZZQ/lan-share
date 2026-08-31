@@ -24,8 +24,8 @@ from app.config import (MAX_CHUNKED_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, UPLOAD_SE
                         ZIP_TTL, SHARE_ROOT, chunk_size_for)
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, require_user, require_admin
-from app.filetools import (_file_dict, clean_filename, dir_tree, human_size, safe_path,
-                           save_upload)
+from app.filetools import (_file_dict, clean_filename, dir_tree, human_size, move_to_trash,
+                           safe_path, save_upload)
 from app.spaces import enforce_quota, resolve, sync_grants_on_move, visible
 from app.main import app
 
@@ -140,8 +140,8 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             sample = Path(row["sample_path"])
             if sample.is_file():
                 try:
-                    if dest.exists():
-                        dest.unlink()
+                    if dest.exists():  # 覆盖秒传：旧版本进回收站
+                        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     os.link(sample, dest)
                     audit("upload_instant", str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
@@ -237,6 +237,8 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
     enforce_quota(owner, dest, size)
+    if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
+        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     os.replace(tmp, dest)
     deduped = register_blob(dest, real_sha, size)
     shutil.rmtree(d, ignore_errors=True)
@@ -334,22 +336,8 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
 
 
 def _move_to_trash(target: Path, orig_path: str):
-    """把文件/目录移入回收站并登记（界面删除与 WebDAV 删除/覆盖共用）。"""
-    trash_root = SHARE_ROOT / ".trash"
-    trash_root.mkdir(exist_ok=True)
-    trash_path = trash_root / f"{time.time_ns()}_{target.name}"
-    try:
-        os.replace(target, trash_path)
-    except OSError:
-        shutil.move(str(target), str(trash_path))
-    size = None
-    if trash_path.is_file():
-        size = trash_path.stat().st_size
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO trash(orig_path, trash_path, name, size, deleted_at) VALUES(?,?,?,?,?)",
-            (orig_path, f".trash/{trash_path.name}", target.name, size, time.time()))
-        _db().commit()
+    """兼容别名：实现已下沉 filetools.move_to_trash（webdav/system 从此处导入）。"""
+    move_to_trash(target, orig_path)
 
 
 @app.delete("/api/files/{path:path}")

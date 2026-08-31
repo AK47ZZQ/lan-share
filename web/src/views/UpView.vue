@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { confirmLargeUpload, uploadResumable } from '../api'
 import { me, refreshAuth } from '../auth'
 import { toast } from '../ui'
+import { uploadFiles, uploadingNow } from '../uploader'
+import UploadQueue from '../components/UploadQueue.vue'
 
 const props = defineProps<{ me?: { username: string; role: string } }>()
 const checking = ref(true)
-const uploads = ref<{ name: string; sent: number; total: number; stage: string }[]>([])
-const busy = ref(false)
+const busy = uploadingNow
 
 onMounted(async () => {
   if (!props.me) await refreshAuth()
@@ -17,21 +17,11 @@ onMounted(async () => {
 async function onPick(ev: Event) {
   const input = ev.target as HTMLInputElement
   if (!input.files?.length) return
-  busy.value = true
-  for (const f of Array.from(input.files)) {
-    if (!(await confirmLargeUpload(f))) continue  // 公网大文件：用户取消则跳过该文件
-    const item = { name: f.name, sent: 0, total: f.size, stage: '上传中' }
-    uploads.value.push(item)
-    try {
-      const r = await uploadResumable('incoming', f, (sent, total, stage) => { item.sent = sent; item.total = total; item.stage = stage })
-      item.stage = r.instant ? '秒传完成 ✓' : '完成 ✓'
-      toast(`${f.name} 已备份`, 'ok')
-    } catch (e) {
-      item.stage = '失败：' + (e as Error).message
-      toast(`${f.name} 上传失败`, 'err')
-    }
-  }
-  busy.value = false
+  await uploadFiles(Array.from(input.files), {
+    destDir: 'incoming',
+    onEachDone: n => toast(`${n} 已备份`, 'ok'),
+    onEachFail: n => toast(`${n} 上传失败`, 'err'),
+  })
   input.value = ''
 }
 </script>
@@ -55,15 +45,7 @@ async function onPick(ev: Event) {
           <input type="file" multiple hidden accept="*/*" @change="onPick" />
         </label>
       </div>
-      <div v-if="uploads.length" class="upl card" style="position:static;width:auto;margin-top:14px;padding:12px 16px">
-        <div v-for="u in uploads" :key="u.name" class="item">
-          <div style="display:flex;justify-content:space-between;gap:10px">
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ u.name }}</span>
-            <span style="color:var(--text-3)">{{ u.stage }}</span>
-          </div>
-          <div class="bar"><i :style="{ width: (u.total ? Math.round(u.sent / u.total * 100) : 0) + '%' }" /></div>
-        </div>
-      </div>
+      <UploadQueue dest-dir="incoming" />
       <p style="text-align:center;margin-top:16px">
         <a href="/" style="font-size:13px;color:var(--text-3)">打开完整网盘 →</a>
       </p>

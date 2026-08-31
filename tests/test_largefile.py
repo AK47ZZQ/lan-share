@@ -95,3 +95,34 @@ def test_simple_upload_still_capped(auth):
     from app.config import MAX_UPLOAD_SIZE, MAX_WEBDAV_SIZE
     assert MAX_UPLOAD_SIZE == 2 * GB
     assert MAX_WEBDAV_SIZE == 20 * GB
+
+
+# ── 覆盖上传：旧版本进回收站（分片/秒传/单请求三条路径）──
+
+def _trash_names(client):
+    from app.db import _db
+    return {r["name"] for r in _db().execute("SELECT name FROM trash").fetchall()}
+
+
+def test_chunked_upload_overwrite_trashes_old(auth):
+    data1 = b"version-one-content"
+    data2 = b"version-two-content-different"
+    name = "overwrite-test.txt"
+    for data in (data1, data2):
+        r = auth.post("/api/upload/init", json={
+            "dest_dir": "", "filename": name, "size": len(data),
+            "sha256": __import__("hashlib").sha256(data).hexdigest()})
+        d = r.json()
+        if d.get("instant"):
+            continue
+        sid = d["session"]
+        assert auth.post(f"/api/upload/chunk/{sid}?index=0", content=data).status_code == 200
+        assert auth.post(f"/api/upload/finish/{sid}").status_code == 200
+    assert name in _trash_names(auth)  # 第一次上传的旧版本被回收站接住
+
+
+def test_simple_upload_overwrite_trashes_old(auth):
+    name = "overwrite-simple.txt"
+    assert auth.post(f"/api/upload/?path=", files={"file": (name, b"first")}).status_code == 200
+    assert auth.post(f"/api/upload/?path=", files={"file": (name, b"second")}).status_code == 200
+    assert name in _trash_names(auth)

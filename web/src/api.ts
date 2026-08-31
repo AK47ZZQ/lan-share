@@ -186,17 +186,36 @@ export async function confirmLargeUpload(file: File): Promise<boolean> {
   return confirmDlg(tip, { title: '🌐 公网上传大文件提醒', okText: '继续上传' })
 }
 
+/** XHR 发送单个分块（fetch 不支持上传进度；XHR upload.onprogress 可逐字节回报） */
+function xhrSendChunk(url: string, blob: Blob, signal: AbortSignal | undefined,
+                      onSent: (loaded: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return }
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', url)
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true })
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onSent(e.loaded) }
+    xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`))
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'))
+    xhr.send(blob)
+  })
+}
+
 /** 分块上传：≤100MB 计算 sha256 走秒传；自适应分片（服务端下发）；≥256MB 并发 3 路；每块重试 3 次；显示速度/剩余时间 */
 export async function uploadResumable(
   destDir: string, file: File,
   onProgress: (sent: number, total: number, stage: string) => void,
+  signal?: AbortSignal,
 ): Promise<{ instant: boolean }> {
   const total = file.size
   let sha: string | undefined
   if (total <= 100 * 1024 * 1024) {
+    signal?.throwIfAborted()
     onProgress(0, total, '计算指纹…')
     sha = await sha256Hex(await file.arrayBuffer())
   }
+  signal?.throwIfAborted()
   const init = await fetch('/api/upload/init', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ dest_dir: destDir, filename: file.name, size: total, sha256: sha }),
@@ -215,6 +234,7 @@ export async function uploadResumable(
 
   let doneBytes = 0
   for (const i of received) doneBytes += Math.min(chunkSize, total - i * chunkSize)
+  const inflight = new Map<number, number>()   // 进行中分块已发送字节（平滑进度）
   let nextIndex = 0
   let lastReport = 0
   const samples: { t: number; b: number }[] = []
@@ -223,29 +243,38 @@ export async function uploadResumable(
     const now = performance.now()
     if (now - lastReport < 400) return
     lastReport = now
-    samples.push({ t: now, b: doneBytes })
+    let sent = doneBytes
+    for (const v of inflight.values()) sent += v
+    sent = Math.min(sent, total)
+    samples.push({ t: now, b: sent })
     while (samples.length > 2 && now - samples[0].t > 3000) samples.shift()
     let s = stage
     const dt = (now - samples[0].t) / 1000
-    const db = doneBytes - samples[0].b
+    const db = sent - samples[0].b
     if (dt > 0.5 && db > 0) {
       const speed = db / dt
       s += ` · ${speed >= 1024 * 1024 ? (speed / 1024 / 1024).toFixed(1) + ' MB/s' : Math.round(speed / 1024) + ' KB/s'}`
-      if (doneBytes < total) s += ` · 剩余 ${fmtDur((total - doneBytes) / speed)}`
+      if (sent < total) s += ` · 剩余 ${fmtDur((total - sent) / speed)}`
     }
-    onProgress(Math.min(doneBytes, total), total, s)
+    onProgress(sent, total, s)
   }
 
   const sendChunk = async (i: number): Promise<void> => {
     const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, total))
     for (let retry = 0; retry < 3; retry++) {
       try {
-        const r = await fetch(`/api/upload/chunk/${sid}?index=${i}`, { method: 'POST', body: blob })
-        if (!r.ok) throw new Error(`chunk ${i}`)
+        signal?.throwIfAborted()
+        await xhrSendChunk(`/api/upload/chunk/${sid}?index=${i}`, blob, signal,
+          loaded => { inflight.set(i, loaded); report(received.size ? '续传中' : '上传中') })
         doneBytes += blob.size
+        inflight.delete(i)
         report(received.size ? '续传中' : '上传中')
         return
-      } catch { if (retry === 2) throw new Error(`分块 ${i} 上传失败`) }
+      } catch (e) {
+        inflight.delete(i)
+        if ((e as Error).name === 'AbortError') throw e
+        if (retry === 2) throw new Error(`分块 ${i} 上传失败`)
+      }
     }
   }
 
@@ -267,6 +296,7 @@ export async function uploadResumable(
     }
   }
 
+  signal?.throwIfAborted()
   onProgress(total, total, '合并校验…')
   const fin = await fetch(`/api/upload/finish/${sid}`, { method: 'POST' })
     .then(r => handle<{ ok: boolean; deduped: boolean }>(r))

@@ -2,6 +2,8 @@
 import hashlib
 import os
 import re
+import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +11,7 @@ import aiofiles
 from fastapi import HTTPException, UploadFile
 
 from app.config import MAX_UPLOAD_SIZE, SHARE_ROOT
+from app.db import _db, _db_lock
 
 # ─── 文件工具 ─────────────────────────────────────────────
 
@@ -70,8 +73,29 @@ def dir_tree(path: Path) -> dict:
     return {"path": rel_path if rel_path != "." else "", "items": items}
 
 
+def move_to_trash(target: Path, orig_path: str):
+    """把文件/目录移入回收站并登记（界面删除、WebDAV 删除/覆盖、上传覆盖共用）。"""
+    trash_root = SHARE_ROOT / ".trash"
+    trash_root.mkdir(exist_ok=True)
+    trash_path = trash_root / f"{time.time_ns()}_{target.name}"
+    try:
+        os.replace(target, trash_path)
+    except OSError:
+        shutil.move(str(target), str(trash_path))
+    size = None
+    if trash_path.is_file():
+        size = trash_path.stat().st_size
+    with _db_lock:
+        _db().execute(
+            "INSERT INTO trash(orig_path, trash_path, name, size, deleted_at) VALUES(?,?,?,?,?)",
+            (orig_path, f".trash/{trash_path.name}", target.name, size, time.time()))
+        _db().commit()
+
+
 async def save_upload(file: UploadFile, dest: Path) -> dict:
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
+        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     size = 0
     sha256 = hashlib.sha256()
     async with aiofiles.open(dest, "wb") as f:

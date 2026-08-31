@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { api, confirmLargeUpload, uploadResumable, type Entry, type Me } from '../api'
+import { api, type Entry, type Me } from '../api'
 import { confirmDlg, promptDlg, toast } from '../ui'
+import { uploadFiles, uploadingNow } from '../uploader'
 import Modal from '../components/Modal.vue'
 import DirPicker from '../components/DirPicker.vue'
 import ShareModal from '../components/ShareModal.vue'
 import ContextMenu from '../components/ContextMenu.vue'
 import FileViewer from '../components/FileViewer.vue'
+import UploadQueue from '../components/UploadQueue.vue'
 
 defineProps<{ me: Me }>()
 
@@ -70,9 +72,7 @@ const sharePaths = ref<string[] | null>(null)
 const renameTarget = ref<Entry | null>(null)
 const renameName = ref('')
 
-// 上传队列
-const uploads = ref<{ name: string; sent: number; total: number; stage: string }[]>([])
-const uploading = ref(false)
+// 上传队列（共享引擎见 uploader.ts）
 
 const crumbs = computed(() => {
   const parts = path.value.split('/').filter(Boolean)
@@ -176,29 +176,55 @@ async function doZip() {
 }
 function download(e: Entry) { window.open(`/files/${encodeURI(e.path)}`, '_blank') }
 
-// ── 上传 ──
+// ── 上传（队列引擎在 uploader.ts；粘贴/拖拽入口在此）──
+const uploading = uploadingNow
+
+async function startUpload(files: File[]) {
+  if (!files.length) return
+  await uploadFiles(files, {
+    destDir: path.value,
+    existsNames: items.value.map(e => e.name),
+    onEachFail: n => toast(`${n} 上传失败`, 'err'),
+  })
+  await load(path.value)
+}
+
 async function onPick(ev: Event) {
   const input = ev.target as HTMLInputElement
   if (!input.files?.length) return
-  uploading.value = true
-  for (const f of Array.from(input.files)) {
-    if (!(await confirmLargeUpload(f))) continue  // 公网大文件：用户取消则跳过该文件
-    const item = { name: f.name, sent: 0, total: f.size, stage: '排队' }
-    uploads.value.push(item)
-    try {
-      await uploadResumable(path.value, f, (sent, total, stage) => {
-        item.sent = sent; item.total = total; item.stage = stage
-      })
-      item.stage = f.size >= 5 * 1024 * 1024 ? '完成' : '完成'
-    } catch (e) {
-      item.stage = '失败：' + (e as Error).message
-      toast(`${f.name} 上传失败`, 'err')
-    }
-  }
-  uploading.value = false
+  await startUpload(Array.from(input.files))
   input.value = ''
-  setTimeout(() => { uploads.value = uploads.value.filter(u => !u.stage.startsWith('完成')) }, 2500)
-  await load(path.value)
+}
+
+// 粘贴上传：Ctrl+V 文件/截图（截图自动命名），输入框聚焦时不抢
+function stampName(name: string): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `截图-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${name.match(/(\.\w+)$/)?.[1] ?? '.png'}`
+}
+function onPaste(ev: ClipboardEvent) {
+  const t = ev.target as HTMLElement | null
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+  const files = Array.from(ev.clipboardData?.files ?? [])
+  if (!files.length) return
+  ev.preventDefault()
+  startUpload(files.map(f => /^image(\.\w+)?$/i.test(f.name) && f.type.startsWith('image/')
+    ? new File([f], stampName(f.name), { type: f.type }) : f))
+}
+
+// 全屏拖拽上传覆盖层
+const dragDepth = ref(0)
+function hasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+}
+function onDragEnter(e: DragEvent) { if (hasFiles(e)) { e.preventDefault(); dragDepth.value++ } }
+function onDragOver(e: DragEvent) { if (hasFiles(e)) e.preventDefault() }
+function onDragLeave() { dragDepth.value = Math.max(0, dragDepth.value - 1) }
+function onDrop(e: DragEvent) {
+  e.preventDefault()
+  dragDepth.value = 0
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  if (files.length) startUpload(files)
 }
 
 async function newFolder() {
@@ -246,7 +272,22 @@ const shownItems = computed(() => {
   return items.value
 })
 
-onMounted(() => { load(String(route.query.dir || '')); loadPublic() })
+onMounted(() => {
+  load(String(route.query.dir || ''))
+  loadPublic()
+  window.addEventListener('paste', onPaste)
+  window.addEventListener('dragenter', onDragEnter)
+  window.addEventListener('dragover', onDragOver)
+  window.addEventListener('dragleave', onDragLeave)
+  window.addEventListener('drop', onDrop)
+})
+onUnmounted(() => {
+  window.removeEventListener('paste', onPaste)
+  window.removeEventListener('dragenter', onDragEnter)
+  window.removeEventListener('dragover', onDragOver)
+  window.removeEventListener('dragleave', onDragLeave)
+  window.removeEventListener('drop', onDrop)
+})
 </script>
 
 <template>
@@ -343,17 +384,19 @@ onMounted(() => { load(String(route.query.dir || '')); loadPublic() })
       <button class="iconbtn" title="退出多选" @click="selectMode = false; selected.clear()">✕</button>
     </div>
 
-    <!-- 上传队列 -->
-    <div v-if="uploads.length" class="upl card" style="padding:12px 16px">
-      <div style="font-size:13px;font-weight:600;margin-bottom:4px">上传队列</div>
-      <div v-for="u in uploads" :key="u.name" class="item">
-        <div style="display:flex;justify-content:space-between;gap:10px">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ u.name }}</span>
-          <span style="color:var(--text-3)">{{ u.stage }}</span>
+    <!-- 上传队列（共享组件） -->
+    <UploadQueue :dest-dir="path" />
+
+    <!-- 拖拽上传覆盖层 -->
+    <teleport to="body">
+      <div v-if="dragDepth" class="drop-overlay">
+        <div class="drop-hint">
+          <div style="font-size:44px">📥</div>
+          <div style="font-size:16px;font-weight:600">松开上传到当前目录</div>
+          <div style="font-size:13px;color:var(--text-3)">/{{ path }}</div>
         </div>
-        <div class="bar"><i :style="{ width: (u.total ? Math.round(u.sent / u.total * 100) : 0) + '%' }" /></div>
       </div>
-    </div>
+    </teleport>
 
     <Modal v-if="showMove" title="移动到…" wide @close="showMove = false">
       <DirPicker @pick="doMove" @close="showMove = false" />

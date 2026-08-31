@@ -31,6 +31,18 @@ export function human(size: number | null | undefined): string {
   return `${s.toFixed(1)} PB`
 }
 
+export function iconForName(name: string): string {
+  const ext = (name.match(/\.(\w+)$/)?.[1] ?? '').toLowerCase()
+  if (['mp4', 'mkv', 'mov', 'webm', 'avi'].includes(ext)) return '🎬'
+  if (['mp3', 'flac', 'wav', 'm4a'].includes(ext)) return '🎵'
+  if (['zip', '7z', 'rar'].includes(ext)) return '🗜️'
+  if (ext === 'pdf') return '📕'
+  if (['doc', 'docx'].includes(ext)) return '📘'
+  if (['xls', 'xlsx'].includes(ext)) return '📗'
+  if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic'].includes(ext)) return '🖼️'
+  return '📄'
+}
+
 // ── Vue 版确认/输入对话框（替代浏览器原生 confirm/prompt）──
 export const dlg = reactive({
   open: false,
