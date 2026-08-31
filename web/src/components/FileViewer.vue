@@ -53,7 +53,7 @@ const isMobile = ref(mqMobile.matches)
 const onMqChange = (e: MediaQueryListEvent) => { isMobile.value = e.matches }
 
 const item = computed(() => props.items[props.modelValue])
-const IMG = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg']
+const IMG = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']
 const VID = ['.mp4', '.mkv', '.mov', '.webm', '.avi']
 const AUD = ['.mp3', '.flac', '.wav', '.m4a', '.ogg']
 const TEXT = ['.txt', '.md', '.log', '.json', '.csv', '.py', '.js', '.ts', '.vue', '.css',
@@ -91,6 +91,10 @@ const bigScreen = window.innerWidth * (window.devicePixelRatio || 1) > 1280
 const imgSrc = computed(() => {
   if (!item.value || kind.value !== 'image') return ''
   const base = `/preview/${enc(item.value.path)}`
+  // HEIC/HEIF 浏览器直接渲染不了，任何屏幕都走服务端转码的中图档（3840 顶档保清晰度）
+  if (['.heic', '.heif'].includes(extOf(item.value))) {
+    return `${base}?w=3840${retryNonce.value ? `&_r=${retryNonce.value}` : ''}`
+  }
   if (fullLoaded.value || bigScreen) return retryNonce.value ? `${base}?_r=${retryNonce.value}` : base
   return `${base}?w=1280${retryNonce.value ? `&_r=${retryNonce.value}` : ''}`
 })

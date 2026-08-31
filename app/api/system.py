@@ -10,17 +10,20 @@ from pathlib import Path
 
 import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
-from fastapi import Depends, HTTPException, Query, Response
+from fastapi import Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from app.config import (CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS,
                         UPLOAD_SESSION_TTL, ZIP_TTL)
 from app.db import _db, _db_lock
-from app.security import audit, require_user, require_admin
+from app.security import audit, preview_user, require_user, require_admin
 from app.spaces import resolve, visible
 from app.api.files import _chunk_dir, _zips, _zips_lock
 from app.api.share import _tickets, _tickets_lock
+from app.filetools import ensure_heif_support
 from app.main import app
+
+ensure_heif_support()   # HEIC/HEIF 解码注册（照片时间线 EXIF/元数据需要）
 
 @app.on_event("startup")
 async def start_cleanup():
@@ -132,7 +135,7 @@ def _cleanup_db():
 
 # ─── 照片时间线 ───────────────────────────────────────────
 
-PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
 _last_photo_scan = 0.0
 _photo_scan_lock = threading.Lock()
 
@@ -140,7 +143,7 @@ _photo_scan_lock = threading.Lock()
 def _photo_taken_at(f: Path) -> str:
     """优先 EXIF DateTimeOriginal，其次 EXIF DateTime，最后文件修改时间。返回 'YYYY-MM-DD'。"""
     mtime = datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d")
-    if f.suffix.lower() not in (".jpg", ".jpeg", ".webp", ".bmp"):
+    if f.suffix.lower() not in (".jpg", ".jpeg", ".webp", ".bmp", ".heic", ".heif"):
         return mtime
     try:
         from PIL import Image
@@ -202,16 +205,18 @@ def _photo_uploader(rel: str) -> str:
 
 
 @app.get("/api/photos")
-def list_photos(limit: int = Query(default=120, le=500), offset: int = Query(default=0, ge=0),
+def list_photos(request: Request, limit: int = Query(default=120, le=500),
+                offset: int = Query(default=0, ge=0),
                 month: str | None = Query(default=None),
                 uploader: str | None = Query(default=None),
                 _user=Depends(require_user)):
     """照片时间线：按拍摄日期倒序（EXIF 优先）。仅显示对当前用户可见的照片。
     可按 month=YYYY-MM 与 uploader 过滤（共享相册双维度浏览）。"""
+    user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos()
     all_rows = _db().execute(
         "SELECT path, taken_at FROM photos ORDER BY taken_at DESC, path").fetchall()
-    rows = [r for r in all_rows if visible(_user, r["path"].split("/"))]
+    rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
     if uploader:
@@ -232,14 +237,15 @@ def list_photos(limit: int = Query(default=120, le=500), offset: int = Query(def
 
 
 @app.get("/api/photos/facets")
-def photo_facets(_user=Depends(require_user)):
+def photo_facets(request: Request, _user=Depends(require_user)):
     """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。"""
+    user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos()
     rows = _db().execute("SELECT path, taken_at FROM photos ORDER BY taken_at DESC").fetchall()
     months: dict[str, int] = {}
     uploaders: dict[str, int] = {}
     for r in rows:
-        if not visible(_user, r["path"].split("/")):
+        if not visible(user, r["path"].split("/")):
             continue
         m = (r["taken_at"] or "")[:7]
         if len(m) == 7:

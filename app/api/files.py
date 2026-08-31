@@ -23,11 +23,13 @@ from starlette.background import BackgroundTask
 from app.config import (MAX_CHUNKED_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, UPLOAD_SESSION_TTL,
                         ZIP_TTL, SHARE_ROOT, chunk_size_for)
 from app.db import _db, _db_lock
-from app.security import audit, client_ip, require_user, require_admin
-from app.filetools import (_file_dict, clean_filename, dir_tree, human_size, move_to_trash,
-                           safe_path, save_upload)
+from app.security import audit, client_ip, preview_user, require_user, require_admin
+from app.filetools import (_file_dict, clean_filename, dir_tree, ensure_heif_support,
+                           human_size, move_to_trash, safe_path, save_upload)
 from app.spaces import enforce_quota, resolve, sync_grants_on_move, visible
 from app.main import app
+
+ensure_heif_support()   # HEIC/HEIF 解码注册（iPhone 默认照片格式）
 
 
 def _session_owner_guard(row, user):
@@ -69,8 +71,9 @@ def _cross_space_guard(user, src: Path, dest: Path):
 
 @app.get("/api/files/{path:path}")
 @app.get("/api/files")
-async def list_files(path: str = "", _user=Depends(require_user)):
-    target = resolve(_user, path, "read")
+async def list_files(request: Request, path: str = "", _user=Depends(require_user)):
+    user = preview_user(request, _user)   # admin 成员视角预览（X-As-User，只读）
+    target = resolve(user, path, "read")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Directory not found")
     if target.is_file():
@@ -463,10 +466,11 @@ async def preview_file(path: str, w: int | None = Query(default=None),
         cache_dir.mkdir(exist_ok=True)
         cached = cache_dir / f"{key}.jpg"
         if not cached.exists():
-            from PIL import Image
+            from PIL import Image, ImageOps
             tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
             try:
                 img = Image.open(target)
+                img = ImageOps.exif_transpose(img)   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
                 img.thumbnail((w, w))
                 img.convert("RGB").save(tmp, "JPEG", quality=82)
                 os.replace(tmp, cached)
@@ -571,7 +575,7 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
 
 # ─── 缩略图 ───────────────────────────────────────────────
 
-IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"}
 VID_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 
 
@@ -597,7 +601,9 @@ def thumb_file(path: str, _user=Depends(require_user)):
     tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
     try:
         if ext in IMG_EXTS:
+            from PIL import Image, ImageOps
             img = Image.open(target)
+            img = ImageOps.exif_transpose(img)   # 同 preview：EXIF 方向矫正后再缩放
             img.thumbnail((320, 320))
             img.convert("RGB").save(tmp, "JPEG", quality=80)
         else:

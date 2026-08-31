@@ -15,6 +15,23 @@ from app.db import _db, _db_lock
 
 # ─── 文件工具 ─────────────────────────────────────────────
 
+_heif_registered = False
+
+
+def ensure_heif_support():
+    """让 PIL 能解码 HEIC/HEIF（iPhone「高效」模式默认照片格式）。幂等；
+    pillow-heif 缺失时静默降级（仅损失 HEIC 缩略图/预览，不影响其它功能）。"""
+    global _heif_registered
+    if _heif_registered:
+        return
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+        _heif_registered = True
+    except ImportError:
+        pass
+
+
 def human_size(size_bytes: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size_bytes < 1024:

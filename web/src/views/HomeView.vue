@@ -98,7 +98,7 @@ function parentDir(p: string): string {
 function thumbOf(e: Entry): string | null {
   if (e.is_dir) return null
   const ext = (e.ext || '').toLowerCase()
-  if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return null
+  if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic', '.heif', '.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return null
   // encodeURI 不编码 # ? % 等字符——含这些字符的文件名会截断/破坏 URL，逐段 encodeURIComponent
   return `/thumb/${e.path.split('/').map(encodeURIComponent).join('/')}`
 }
