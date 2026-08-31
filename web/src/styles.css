@@ -183,8 +183,7 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .frow .name div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .frow .name small { color: var(--text-3); font-size: 12px; }
 .frow .meta { color: var(--text-3); font-size: 12.5px; white-space: nowrap; text-align: right; }
-.frow .ops { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
-.frow:hover .ops, .frow.selected .ops { opacity: 1; }
+.frow .ops { display: flex; gap: 4px; }
 .iconbtn {
   width: 30px; height: 30px; border: 0; border-radius: 8px; cursor: pointer;
   background: transparent; color: var(--text-2); font-size: 15px;
@@ -350,11 +349,9 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 }
 .gcard .gfoot {
   justify-self: stretch; display: flex; justify-content: flex-end; align-items: center;
-  gap: 1px; margin-top: -2px; opacity: 0; transition: opacity .12s;
+  gap: 1px; margin-top: -2px;
   border-top: 1px solid var(--line); padding-top: 4px;
 }
-.gcard:hover .gfoot { opacity: 1; }
-.gcard:hover .ops, .gcard.selected .ops { opacity: 1; }
 
 /* ── 空状态 ── */
 .empty-state { text-align: center; padding: 64px 16px; color: var(--text-3); }
