@@ -1,4 +1,13 @@
 /* LAN Share v3 设计令牌与全局样式 —— 玻璃拟态语言 */
+
+/* 滚动条：中性半透明细条（Windows Chrome 默认白亮滚动条在深色主题刺眼） */
+* { scrollbar-width: thin; scrollbar-color: rgba(127, 127, 145, 0.45) transparent; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: rgba(127, 127, 145, 0.45); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(127, 127, 145, 0.7); background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 :root {
   --bg: linear-gradient(135deg, #e9edff 0%, #f7f2ff 55%, #eef7ff 100%);
   --glass: rgba(255, 255, 255, 0.66);
