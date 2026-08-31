@@ -240,6 +240,10 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .badge.warn { color: var(--warn); }
 .badge.danger { color: var(--danger); }
 
+/* 进度条（通用基础：磁盘徽标/DiskModal/SharesView/上传队列共用） */
+.bar { height: 5px; border-radius: 99px; background: var(--hover); overflow: hidden; margin-top: 5px; }
+.bar i { display: block; height: 100%; background: var(--grad); border-radius: 99px; transition: width .2s; }
+
 /* 上传队列（UploadQueue 组件） */
 .upl { position: fixed; right: 18px; bottom: 18px; z-index: 70; width: min(360px, 92vw); padding: 10px 14px; max-height: min(62vh, 440px); overflow: auto; }
 .upl-head { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 600; padding: 2px 0 6px; user-select: none; }
@@ -257,8 +261,7 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .up-pct { color: var(--text-3); font-size: 12px; flex: none; }
 .up-stage { color: var(--text-3); font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-acts { flex: none; display: flex; align-items: center; }
-.upl .bar { height: 5px; border-radius: 99px; background: var(--hover); overflow: hidden; margin-top: 5px; }
-.upl .bar i { display: block; height: 100%; background: var(--grad); border-radius: 99px; transition: width .2s; position: relative; }
+.upl .bar i { position: relative; }   /* 条纹动画 ::after 需要 */
 /* 进行中：条纹流动动画 */
 .st-up .bar i::after {
   content: ''; position: absolute; inset: 0;
