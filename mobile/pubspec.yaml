@@ -1,0 +1,26 @@
+name: lanshare_app
+description: "LAN Share 家庭网盘 · 手机 App（Flutter，APP-DESIGN v0.1）"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # 依赖原则（沿 PLAN-v3 §6）：每新增一项在此记录理由（详见 CHANGELOG）。
+  dio: ^5.7.0                    # 网络：Bearer 拦截器/401 统一处理/上传进度与取消
+  flutter_riverpod: ^2.6.1       # 状态管理（APP-DESIGN §1 选型定稿）
+  flutter_secure_storage: ^9.2.2 # 设备 Token 安全存储（Keystore/Keychain）
+  shared_preferences: ^2.3.3     # 非敏感设置（服务器地址列表等）
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

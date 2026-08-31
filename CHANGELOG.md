@@ -1,6 +1,6 @@
 # 更新日志
 
-## 2026-09-01（晚）— M-A0 设备 Token 上线（手机 App 里程碑第一步）
+## 2026-09-01（晚）— M-A0 设备 Token + Flutter 骨架（手机 App 里程碑第一步）
 
 按 `APP-DESIGN §3` 契约实现并冻结（Flutter 阶段 1 的服务端前置）：
 - **Token 三端点**：`POST /api/auth/token`（会话换设备 Token，明文仅返回一次）、
@@ -8,11 +8,26 @@
   （吊销，审计留痕）
 - **Bearer 中间件**：`require_user` 先 Cookie 后 `Authorization: Bearer`，App 全
   业务端点免改造直通；90 天滑动过期（续期节流 24h）、last_seen 节流 1h、停用
-  账号即刻失效；审计中间件同等识别 Bearer 操作者
+  账号即刻失效；审计中间件与 `/api/auth/me` 同等识别 Bearer 操作者
 - 新表 `device_tokens`（双引擎）；单账号 20 台上限、签发限速 20 次/时
 - 新增测试 4 项（tests/test_devicetoken.py），全量 **83 项 pytest 绿**
 - 契约要点（App 侧实现依据）：401 → 清 Token → 登录页；TOTP 账号先走
   `/api/login/totp` 拿会话再换 Token
+
+**Flutter 骨架（`mobile/`，M-A0 出口标准"App 骨架可登录"）**：
+- Flutter 3.47.1 stable（`C:\flutter\flutter`，未入 PATH）；项目经
+  `C:\lan-share\mobile`（ASCII junction）操作——**Dart 分析器 LSP 在含中文的
+  路径上会崩**（JSON 消息多字节截断），中文路径下只能用 `dart analyze`
+- 已实现：登录页（服务器地址管理 + 账号密码 + TOTP 按需动态码）→ 会话换
+  设备 Token（Cookie 用完即弃）→ SecureStore 存储 → Dio Bearer 拦截器 +
+  401 清 Token 回登录页；主页显示登录身份
+- pub 依赖记录（沿 §6 原则）：`dio`（网络/拦截器/进度取消，§1 选型）、
+  `flutter_riverpod`（状态管理，§1 选型）、`flutter_secure_storage`（Token
+  Keystore/Keychain 加密，官方插件）、`shared_preferences`（非敏感设置）
+- Dart 侧 3 项单测（Cookie 头解析起步）；`dart analyze` 零问题
+- ⚠️ 待办（上真机前）：Android SDK/许可未装（无法出 APK）；自签证书 SPKI
+  pinning 未接（§5，Android 默认不信任自签）；设备名暂手填（M-A1 换
+  device_info_plus）
 
 ## 2026-09-01 — 四小项批次（挂账清单清空）
 
