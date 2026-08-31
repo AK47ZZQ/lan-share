@@ -61,49 +61,63 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
 
 
-def html_page(name: str) -> HTMLResponse:
-    return HTMLResponse((PROJECT_ROOT / "static" / name).read_text(encoding="utf-8"),
-                        headers={"Content-Security-Policy": CSP})
-
-
 # ─── v3 前端切换：Vue SPA 即整站 ─────────────────────────
-# 构建产物 web/dist 存在时，所有页面路由（含 history 深链回退）都服务 SPA；
-# 未构建时回退旧页，保证服务永不因前端缺失而不可用。
+# 构建产物 web/dist 存在时，所有页面路由（含 history 深链回退）都服务 SPA。
+# dist 每次请求现查（而非启动时判定一次）：服务运行期间 dist 被删/损坏时
+# 返回 503 维护页，而不是对页面路由 500。
 _spa_dist = PROJECT_ROOT / "web" / "dist"
-_SPA_READY = (_spa_dist / "index.html").exists()
+
+
+def _spa_ok() -> bool:
+    return (_spa_dist / "index.html").is_file()
+
+
+_MAINTENANCE_PAGE = (
+    "<!doctype html><html lang='zh-CN'><meta charset='utf-8'>"
+    "<title>LAN Share · 维护中</title>"
+    "<body style='font-family:system-ui,sans-serif;padding:3em;color:#333'>"
+    "<h2>前端资源缺失，维护中</h2>"
+    "<p>页面构建产物 web/dist 缺失。API 仍在正常服务。</p>"
+    "<p>管理员请在 web/ 目录执行 <code>npm install &amp;&amp; npm run build</code> 后刷新。</p>"
+    "</body></html>"
+)
 
 
 def spa_index() -> HTMLResponse:
-    return HTMLResponse((_spa_dist / "index.html").read_text(encoding="utf-8"),
+    index = _spa_dist / "index.html"
+    if not index.is_file():
+        return HTMLResponse(_MAINTENANCE_PAGE, status_code=503,
+                            headers={"Retry-After": "60", "Content-Security-Policy": CSP})
+    return HTMLResponse(index.read_text(encoding="utf-8"),
                         headers={"Content-Security-Policy": CSP})
 
 
 @app.get("/up", response_class=HTMLResponse)
 async def up_page():
     """手机直传页：SPA 自带未登录引导（页内"去登录"带 next 回跳）。"""
-    return spa_index() if _SPA_READY else html_page("up.html")
+    return spa_index()
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     if not get_session_user(request):
         return RedirectResponse("/login", status_code=307)
-    return spa_index() if _SPA_READY else html_page("index.html")
+    return spa_index()
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
-    return spa_index() if _SPA_READY else html_page("login.html")
+    return spa_index()
 
 
 @app.get("/s/{token}", response_class=HTMLResponse)
 async def share_page(token: str):
-    return spa_index() if _SPA_READY else html_page("share.html")
+    return spa_index()
 
 
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
-if _SPA_READY:
-    app.mount("/assets", StaticFiles(directory=str(_spa_dist / "assets")), name="spa-assets")
+app.mount("/assets", StaticFiles(directory=str(_spa_dist / "assets"), check_dir=False),
+          name="spa-assets")
 
 
 # history 深链回退：/photos /trash /admin 等 UI 路径 → SPA。
@@ -131,13 +145,13 @@ async def spa_fallback(spa_path: str, request: Request):
     if spa_path.startswith(("api/", "dav", "files/", "preview/", "thumb/", "static/",
                             "assets/", "s/", "authcheck", "healthz", "up", "login")) or spa_path == "":
         raise HTTPException(status_code=404)
-    if _SPA_READY and (spa_path in _PWA_PUBLIC_FILES or spa_path.startswith(_PWA_PUBLIC_PREFIX)):
+    if _spa_ok() and (spa_path in _PWA_PUBLIC_FILES or spa_path.startswith(_PWA_PUBLIC_PREFIX)):
         f = _dist_file(spa_path)
         if f:
             return f
     if not get_session_user(request):
         return RedirectResponse(f"/login?next={request.url.path}", status_code=307)
-    if _SPA_READY:
+    if _spa_ok():
         f = _dist_file(spa_path)
         if f:
             return f
