@@ -212,17 +212,23 @@ function onPaste(ev: ClipboardEvent) {
     ? new File([f], stampName(f.name), { type: f.type }) : f))
 }
 
-// 全屏拖拽上传覆盖层
+// 全屏拖拽上传覆盖层（dragover 心跳兜底：Esc 取消/拖出窗口不触发 leave 也不卡层）
 const dragDepth = ref(0)
+let dragHeartbeat: ReturnType<typeof setTimeout> | null = null
+function dragAlive() {
+  if (dragHeartbeat) clearTimeout(dragHeartbeat)
+  dragHeartbeat = setTimeout(() => { dragDepth.value = 0; dragHeartbeat = null }, 450)
+}
 function hasFiles(e: DragEvent): boolean {
   return Array.from(e.dataTransfer?.types ?? []).includes('Files')
 }
-function onDragEnter(e: DragEvent) { if (hasFiles(e)) { e.preventDefault(); dragDepth.value++ } }
-function onDragOver(e: DragEvent) { if (hasFiles(e)) e.preventDefault() }
+function onDragEnter(e: DragEvent) { if (hasFiles(e)) { e.preventDefault(); dragDepth.value++; dragAlive() } }
+function onDragOver(e: DragEvent) { if (hasFiles(e)) { e.preventDefault(); dragAlive() } }
 function onDragLeave() { dragDepth.value = Math.max(0, dragDepth.value - 1) }
 function onDrop(e: DragEvent) {
   e.preventDefault()
   dragDepth.value = 0
+  if (dragHeartbeat) { clearTimeout(dragHeartbeat); dragHeartbeat = null }
   const files = Array.from(e.dataTransfer?.files ?? [])
   if (files.length) startUpload(files)
 }

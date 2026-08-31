@@ -274,8 +274,8 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .st-paused .bar i { background: var(--warn); opacity: .8; }
 
 /* 速度曲线 sparkline */
-.upl-spark { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; font-weight: 400; }
-.upl-spark svg { width: 56px; height: 18px; display: block; color: var(--grad, #5b6cff); }
+.upl-spark { display: inline-flex; align-items: center; gap: 6px; color: #8b96ff; font-size: 12px; font-weight: 400; }
+.upl-spark svg { width: 56px; height: 18px; display: block; }
 
 /* 拖拽上传覆盖层 */
 .drop-overlay { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(10, 10, 20, .55); backdrop-filter: blur(2px); }

@@ -4,13 +4,17 @@ import { fmtSpeed, iconForName } from '../ui'
 import {
   cancelAll, cancelItem, clearFinished, clearResumables, hasFinished, pauseItem,
   resumables, resumeItem, retryItem, toggleCollapsed, upl, uplSpeed, uplSummary,
-  type UploadOpts,
 } from '../uploader'
 
-const props = defineProps<{ destDir: string; retryOpts?: Partial<UploadOpts> }>()
+// destDir 仅作展示语义占位（回调已随 item 走）；保留声明以便父组件传参不散落为 attr
+defineProps<{ destDir?: string }>()
 
 function pct(sent: number, total: number): number {
   return total ? Math.min(100, Math.round(sent / total * 100)) : 0
+}
+// 合并校验阶段服务端收尾不可逆：藏 ❚❚/✕，避免状态与实际落盘结果脱节
+function merging(stage: string): boolean {
+  return stage.startsWith('合并')
 }
 
 // sparkline：速度采样归一化到 100×24 视图
@@ -29,10 +33,6 @@ const spark = computed(() => {
     now: fmtSpeed(s[s.length - 1]),
   }
 })
-
-function retryOptsFull(): UploadOpts {
-  return { destDir: props.destDir, ...props.retryOpts }
-}
 </script>
 
 <template>
@@ -84,10 +84,10 @@ function retryOptsFull(): UploadOpts {
           <div class="up-stage">{{ u.stage }}</div>
         </div>
         <span class="up-acts">
-          <button v-if="u.status === 'up'" class="iconbtn" title="暂停" @click="pauseItem(u)">❚❚</button>
-          <button v-if="u.status === 'paused'" class="iconbtn" title="继续" @click="resumeItem(retryOptsFull(), u)">▶</button>
-          <button v-if="u.status === 'up' || u.status === 'queue' || u.status === 'paused'" class="iconbtn" title="取消上传" @click="cancelItem(u)">✕</button>
-          <button v-else-if="u.status === 'fail' || u.status === 'cancel'" class="iconbtn" title="重新上传" @click="retryItem(retryOptsFull(), u)">↻</button>
+          <button v-if="u.status === 'up' && !merging(u.stage)" class="iconbtn" title="暂停" @click="pauseItem(u)">❚❚</button>
+          <button v-if="u.status === 'paused'" class="iconbtn" title="继续" @click="resumeItem(u)">▶</button>
+          <button v-if="(u.status === 'up' && !merging(u.stage)) || u.status === 'queue' || u.status === 'paused'" class="iconbtn" title="取消上传" @click="cancelItem(u)">✕</button>
+          <button v-else-if="u.status === 'fail' || u.status === 'cancel'" class="iconbtn" title="重新上传" @click="retryItem(u)">↻</button>
         </span>
       </div>
     </template>

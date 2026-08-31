@@ -280,12 +280,18 @@ export async function uploadResumable(
     onProgress(sent, total, s)
   }
 
+  // 内部联动中止：任一 worker 失败即停其余（防僵尸 worker 后台空跑整个文件）；
+  // 用户 signal 中止时同样联动
+  const inner = new AbortController()
+  const onOuterAbort = () => inner.abort()
+  signal?.addEventListener('abort', onOuterAbort, { once: true })
+
   const sendChunk = async (i: number): Promise<void> => {
     const blob = file.slice(i * chunkSize, Math.min((i + 1) * chunkSize, total))
     for (let retry = 0; retry < 3; retry++) {
       try {
-        signal?.throwIfAborted()
-        await xhrSendChunk(`/api/upload/chunk/${sid}?index=${i}`, blob, signal,
+        inner.signal.throwIfAborted()
+        await xhrSendChunk(`/api/upload/chunk/${sid}?index=${i}`, blob, inner.signal,
           loaded => { inflight.set(i, loaded); report(received.size ? '续传中' : '上传中') })
         doneBytes += blob.size
         inflight.delete(i)
@@ -294,7 +300,7 @@ export async function uploadResumable(
       } catch (e) {
         inflight.delete(i)
         if ((e as Error).name === 'AbortError') throw e
-        if (retry === 2) throw new Error(`分块 ${i} 上传失败`)
+        if (retry === 2) { inner.abort(); throw new Error(`分块 ${i} 上传失败`) }
       }
     }
   }
@@ -303,23 +309,32 @@ export async function uploadResumable(
     // 大文件并发 3 路：减少高延迟链路空转
     const worker = async () => {
       while (true) {
+        if (inner.signal.aborted) return
         const i = nextIndex++
         if (i >= chunks) return
         if (received.has(i)) continue
         await sendChunk(i)
       }
     }
-    await Promise.all(Array.from({ length: 3 }, () => worker()))
+    try {
+      await Promise.all(Array.from({ length: 3 }, () => worker()))
+    } finally {
+      signal?.removeEventListener('abort', onOuterAbort)
+    }
   } else {
-    for (let i = 0; i < chunks; i++) {
-      if (received.has(i)) continue
-      await sendChunk(i)
+    try {
+      for (let i = 0; i < chunks; i++) {
+        if (received.has(i)) continue
+        await sendChunk(i)
+      }
+    } finally {
+      signal?.removeEventListener('abort', onOuterAbort)
     }
   }
 
   signal?.throwIfAborted()
   onProgress(total, total, '合并校验…')
-  const fin = await fetch(`/api/upload/finish/${sid}`, { method: 'POST' })
+  const fin = await fetch(`/api/upload/finish/${sid}`, { method: 'POST', signal })
     .then(r => handle<{ ok: boolean; deduped: boolean }>(r))
   return { instant: fin.deduped }
 }

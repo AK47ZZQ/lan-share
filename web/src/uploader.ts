@@ -16,10 +16,10 @@ export interface UplItem {
   ctrl: AbortController | null
   destDir: string
   key: string              // 断点续传键：destDir|name|size|lastModified
+  uopts: Pick<UploadOpts, 'onEachDone' | 'onEachFail'>   // 回调随 item 走（全局泵防批次串扰）
 }
 
 let seq = 0
-let batchAborted = false
 let carryBytes = 0        // 已完成文件字节数（速度采样分母连续性）
 
 export const upl = reactive({
@@ -63,6 +63,7 @@ function ensureTicker() {
   ticker = setInterval(() => {
     if (!uploadingNow.value) {
       clearInterval(ticker!); ticker = null; lastAgg = -1
+      uplSpeed.samples.splice(0)          // 清残影：下次上传从头画
       return
     }
     const agg = carryBytes + upl.items.reduce((a, i) => a + (i.status === 'up' ? i.sent : 0), 0)
@@ -136,9 +137,9 @@ export interface UploadOpts {
   onEachDone?: (name: string) => void
   onEachFail?: (name: string) => void
 }
+type ItemCallbacks = Pick<UploadOpts, 'onEachDone' | 'onEachFail'>
 
 export async function uploadFiles(files: File[], opts: UploadOpts): Promise<void> {
-  batchAborted = false
   ensureNotifPerm()
   // 同名覆盖提醒（一次性列出；取消则跳过这些文件）
   if (opts.existsNames?.length) {
@@ -166,12 +167,13 @@ export async function uploadFiles(files: File[], opts: UploadOpts): Promise<void
       id: ++seq, name: f.name, sent: 0, total: f.size, stage: '排队',
       status: 'queue', file: f, ctrl: null,
       destDir: opts.destDir, key: upKey(opts.destDir, f),
+      uopts: { onEachDone: opts.onEachDone, onEachFail: opts.onEachFail },
     })
   }
   upl.items.push(...batch)
   ensureTicker()
   const startedAt = Date.now()
-  await pumpAll(opts)
+  await pumpAll()
   const done = batch.filter(i => i.status === 'done').length
   const failed = batch.filter(i => i.status === 'fail').length
   if (batch.length) notifyDone(startedAt, done, failed)
@@ -179,27 +181,27 @@ export async function uploadFiles(files: File[], opts: UploadOpts): Promise<void
 
 // 队列泵：顺序跑所有排队项；暂停/失败即停，恢复/重试时重新驱动
 let pumping = false
-async function pumpAll(opts: UploadOpts) {
+async function pumpAll() {
   if (pumping) return
   pumping = true
   try {
     while (true) {
       const next = upl.items.find(i => i.status === 'queue')
       if (!next) break
-      await runItem(opts, next)
+      await runItem(next)
       if (next.status === 'paused') break
     }
   } finally { pumping = false }
 }
 
-async function runItem(opts: UploadOpts, item: UplItem) {
+async function runItem(item: UplItem) {
   if (item.status === 'cancel') return  // 排队时已被取消
   item.status = 'up'; item.stage = '准备…'; item.sent = 0
   item.ctrl = new AbortController()
   const sidMap = loadSidMap()
   const resumeSid = sidMap[item.key]?.sid
   try {
-    const r = await uploadResumable(item.destDir || opts.destDir, item.file, (sent, total, stage) => {
+    const r = await uploadResumable(item.destDir, item.file, (sent, total, stage) => {
       item.sent = sent; item.total = total; item.stage = stage
     }, {
       signal: item.ctrl.signal,
@@ -214,7 +216,7 @@ async function runItem(opts: UploadOpts, item: UplItem) {
     carryBytes += item.total
     const m = loadSidMap()
     if (m[item.key]) { delete m[item.key]; saveSidMap(m) }   // 传完清持久化会话
-    opts.onEachDone?.(item.name)
+    item.uopts.onEachDone?.(item.name)
     setTimeout(() => {
       const k = upl.items.indexOf(item)
       if (k >= 0 && upl.items[k].status === 'done') upl.items.splice(k, 1)
@@ -232,23 +234,28 @@ async function runItem(opts: UploadOpts, item: UplItem) {
       }
     } else {
       item.status = 'fail'; item.stage = '失败：' + (e as Error).message
-      opts.onEachFail?.(item.name)
+      item.uopts.onEachFail?.(item.name)
     }
   }
 }
 
-export function retryItem(opts: UploadOpts, item: UplItem) {
+export function retryItem(item: UplItem) {
   if (item.status !== 'fail' && item.status !== 'cancel') return
   item.status = 'queue'  // 绕过 runItem 的"排队时已取消"守卫
   ensureTicker()
-  return pumpAll(opts)
+  return pumpAll()
 }
 
-export function resumeItem(opts: UploadOpts, item: UplItem) {
+export function resumeItem(item: UplItem) {
   if (item.status !== 'paused') return
   item.status = 'queue'
   ensureTicker()
-  return pumpAll(opts)
+  return pumpAll()
+}
+
+function dropSidEntry(item: UplItem) {
+  const m = loadSidMap()
+  if (m[item.key]) { delete m[item.key]; saveSidMap(m) }
 }
 
 export function pauseItem(item: UplItem) {
@@ -260,12 +267,13 @@ export function pauseItem(item: UplItem) {
 
 export function cancelItem(item: UplItem) {
   if (item.status === 'queue') { item.status = 'cancel'; item.stage = '已取消'; return }
+  const wasPaused = item.status === 'paused'
   item.status = 'cancel'
   item.ctrl?.abort()
+  if (wasPaused) dropSidEntry(item)   // 暂停项被取消：清持久化会话（runItem 已返回，无人再清）
 }
 
 export function cancelAll() {
-  batchAborted = true
   for (const i of upl.items) {
     if (i.status === 'queue') { i.status = 'cancel'; i.stage = '已取消' }
     else if (i.status === 'up' || i.status === 'paused') cancelItem(i)
@@ -273,6 +281,9 @@ export function cancelAll() {
 }
 
 export function clearFinished() {
+  for (const i of upl.items) {
+    if (i.status === 'paused') dropSidEntry(i)   // 被丢弃的暂停项不留续传记录
+  }
   upl.items = upl.items.filter(i => i.status === 'up' || i.status === 'queue' || i.status === 'paused')
 }
 

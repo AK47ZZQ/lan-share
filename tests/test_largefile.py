@@ -43,6 +43,12 @@ def test_chunk_rejects_wrong_body_size(auth):
         assert not (_chunk_dir(sid) / "part-000000").exists()
         st = auth.get(f"/api/upload/state/{sid}").json()
         assert 0 not in st["received"]
+        # 补发整块 → 成功落 part 且无 _tmp_ 残留（原子写）
+        ok = auth.post(f"/api/upload/chunk/{sid}?index=0", content=b"x" * (5 * 1024 * 1024))
+        assert ok.status_code == 200
+        from app.api.files import _chunk_dir
+        assert (_chunk_dir(sid) / "part-000000").exists()
+        assert not (_chunk_dir(sid) / "_tmp_000000").exists()
     finally:
         from app.db import _db, _db_lock
         from app.api.files import _chunk_dir
