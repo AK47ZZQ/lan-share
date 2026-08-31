@@ -79,6 +79,11 @@ build-tools + 许可全接受）；JDK 17（RedHat）；flutter doctor Android �
   pinning 未接（§5，Android 默认不信任自签）；设备名暂手填（M-A1 换
   device_info_plus）
 
+**同批杂项**：视角预览退出按钮配色修复（白底白字不可读）；窄屏成员行操作
+按钮溢出裁切修复（flex-wrap）；备份计划任务改**每日 23:30** + 错过开机补跑
+（机器 2 点自动关机，原 03:30 从不触发）；`.gitignore` 的 `data/` 规则锚定
+根目录（此前误伤 mobile/lib/data，App 数据层源码已补入库）。
+
 ## 2026-09-01 — 四小项批次（挂账清单清空）
 
 ① **HEIC/HEIF 缩略图与预览**：iPhone「高效」照片格式全链路支持——缩略图/

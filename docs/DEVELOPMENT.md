@@ -36,6 +36,21 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 # static/* 变更无需重启，刷新即生效
 ```
 
+## 手机 App（mobile/，Flutter）
+
+- Flutter 3.47 stable 在 `C:\flutter\flutter`（**不在 PATH**）；Android SDK 在
+  `C:\tools\android-sdk`（许可已接受）；JDK17（RedHat）供 Gradle 用
+- **出包必须用 `scripts\build-apk.bat [debug|release]`**：仓库真实路径含中文，
+  NDK/CMake 在中文路径下编不出 `libdartjni.so`——脚本会把 mobile/ 镜像到
+  `C:\lan-share-mobile`（纯 ASCII 物理路径）构建后把 APK 拷回
+  `mobile\build\apk\`。flutter/dart 命令一律经 `C:\lan-share\mobile`（junction）
+  执行，且 Dart 分析器对中文路径敏感
+- pub 拉包慢/挂死时切国内镜像：`PUB_HOSTED_URL=https://pub.flutter-io.cn`
+  与 `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn`
+- **交付前必过**：`dart analyze` 零问题 + `flutter test` + 安卓模拟器全流程
+  （登录→信任框→照片/文件/我的）；模拟器经 NAT 可直连宿主机 LAN 地址
+- 新增 pub 依赖按 §6 原则记 CHANGELOG
+
 ## 部署/测试约定
 
 1. **沙箱先行**：所有改动先在 `SHARE_ROOT=测试目录` 的 8768 实例上验证，
