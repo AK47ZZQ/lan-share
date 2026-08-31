@@ -1,5 +1,29 @@
 # 更新日志
 
+## 2026-09-01（凌晨）— 两轮 review + 两轮对抗性审查（全量复审批次）
+
+对本次会话全部改动（四小项 + M-A0 + M-A1 + 各修复，fc0448a..HEAD）做
+2 轮代码审查（后端/Flutter 各一位）+ 2 轮对抗性实弹（20 项探测）。
+**修复汇总**（commit a0e7316 / 5bd814d）：
+
+- **审查第 1 轮（后端/Flutter 双视角）**：SecureStore 双写互斥、
+  onUnauthorized 注入时机前移、登录流程互斥 + x-login-flow 全覆盖、
+  loginTotp 带当前地址、401 只清当前 token、trust 先持久化 + warmup
+  幂等、图片非 2xx 不入缓存、照片分页代际、dispose 补齐、路径编码；
+  服务端 IntegrityError 重试 + no-store、独立密码防爆破按入口分账、
+  preview_as 审计补 IP
+- **对抗性实弹**：认证边界（伪造/空/过期/停用 Bearer、member 打管理接口、
+  X-As-User 组合攻击、跨源 Origin、WebDAV 免认证/冒充、限速绕过、滑动
+  续期边界、轮换竞态、响应卫生）——全部 PASS 零漏洞；两项误报经源码核对
+  排除（sqlite 线程连接、member 私人目录 200 为合法行为）
+- **审查第 2 轮（交叉视角 + 修复验证）**：确认第 1 轮修复全部成立；新抓
+  3 个 P1 并修复——trust warmup 失败永久卡死（SecureStore.string 不抛错
+  + finally 置位）、change_password/change_username 防爆破按入口分账、
+  bootstrap 网络失败区分提示；P2：logout 清内存密码、改名重名检查进锁
+
+**最终状态**：pytest 84 项绿；dart analyze 零问题；Flutter 单测 3 项；
+APK 重建覆盖上传（分享链接不变）。
+
 ## 2026-09-01（凌晨）— 安卓模拟器端到端验证 + 指纹显示修复
 
 补上该做没做的模拟器自测：ZCode 内装齐 emulator + API35 x86_64 镜像 +
