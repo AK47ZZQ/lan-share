@@ -47,9 +47,11 @@ def test_device_token_full_lifecycle(client):
     tok = data["token"]
     assert tok and data["device_id"] > 0 and data["name"] == "小米 14"
 
-    # Bearer 无 Cookie 访问业务端点
+    # Bearer 无 Cookie 访问业务端点（业务端点 + 身份探测）
     h = {"Authorization": f"Bearer {tok}"}
     assert bare.get("/api/files/", headers=h).status_code == 200
+    me = bare.get("/api/auth/me", headers=h).json()
+    assert me["username"] == ADMIN_USER and "role" in me
 
     # 设备列表：Cookie 会话可见设备但 current=false；Bearer 会话 current=true
     devs = admin.get("/api/auth/devices").json()["devices"]

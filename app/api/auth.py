@@ -15,9 +15,9 @@ from app.config import (COOKIE_NAME, DEVICE_TOKEN_MAX, DEVICE_TOKEN_TTL, SESSION
                         SHARE_ROOT)
 from app.db import _db, _db_lock
 from app.security import (audit, allow_rate, clear_login_fails, client_ip, create_session,
-                          get_session_user, hash_password, is_https, is_public_entry,
-                          login_locked_remaining, record_login_fail, require_user,
-                          verify_password, _sha)
+                          get_bearer_user, get_session_user, hash_password, is_https,
+                          is_public_entry, login_locked_remaining, record_login_fail,
+                          require_user, verify_password, _sha)
 from app.spaces import RESERVED_USERNAMES, _normcase_eq
 from app.main import app
 
@@ -165,7 +165,8 @@ async def authcheck(request: Request):
 
 @app.get("/api/auth/me")
 async def me(request: Request):
-    user = get_session_user(request)
+    # Cookie 会话与 App Bearer 设备 Token 并存（App 登录后用它确认身份）
+    user = get_session_user(request) or get_bearer_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return {"username": user["username"], "role": user["role"],

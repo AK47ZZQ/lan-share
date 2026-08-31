@@ -103,7 +103,7 @@ def get_bearer_user(request: Request) -> Optional[sqlite3.Row]:
     th = _sha(auth[7:].strip())
     row = _db().execute(
         "SELECT t.id AS device_id, t.user_id, t.expires_at, t.last_seen, "
-        "u.username, u.role, u.is_active, u.quota_bytes "
+        "u.username, u.role, u.is_active, u.quota_bytes, u.totp_enabled "
         "FROM device_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
         (th,)).fetchone()
     if not row or not row["is_active"]:
