@@ -12,7 +12,8 @@ from pydantic import BaseModel
 from app.config import SHARE_ROOT
 from app.db import _db, _db_lock
 from app.filetools import human_size
-from app.security import audit, client_ip, hash_password, require_admin, require_user
+from app.security import (audit, client_ip, hash_password, require_admin, require_user,
+                          reset_netloc_cache)
 from app.spaces import RESERVED_USERNAMES
 from app.main import app
 
@@ -292,6 +293,7 @@ def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
         _db().execute("INSERT INTO settings(key, value) VALUES('public_base_url', ?) "
                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (url,))
         _db().commit()
+    reset_netloc_cache()   # 入口判定即时生效
     audit("public_url_set", url, ip=client_ip(request))
     return {"ok": True, "public_base_url": url}
 

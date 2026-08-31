@@ -12,7 +12,8 @@ from urllib.parse import urlsplit
 from app.config import (API_RATE_LIMIT, LOGIN_RATE_LIMIT, PROJECT_ROOT, SHARE_RATE_LIMIT,
                         SHARE_ROOT)
 from app.db import init_db
-from app.security import allow_rate, client_ip, get_session_user, set_audit_user
+from app.security import (allow_rate, client_ip, get_session_user, is_public_entry,
+                          set_audit_user)
 
 app = FastAPI(title="LAN Share", version="2.0.0")
 
@@ -30,8 +31,12 @@ async def security_middleware(request: Request, call_next):
         return JSONResponse({"detail": "CSRF check failed"}, status_code=403)
     path = request.url.path
     ip = client_ip(request)
+    # 公网入口管控：healthz 不对公网暴露（磁盘水位信息泄露 + 探测面）
+    if path == "/healthz" and is_public_entry(request):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
     if path == "/api/login":
-        limit, bucket = LOGIN_RATE_LIMIT, "login"
+        # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）
+        limit, bucket = LOGIN_RATE_LIMIT, ("login@pub" if is_public_entry(request) else "login")
     elif path.startswith("/api/upload/chunk/"):
         limit, bucket = 0, None  # 分块上传按块数计频，不受常规限速（仍有会话认证保护）
     elif path.startswith("/api/share/") or path == "/api/share":

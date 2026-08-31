@@ -1,4 +1,4 @@
-"""认证与安全：审计、scrypt 密码、会话、防爆破、限速、client_ip。"""
+"""认证与安全：审计、scrypt 密码、会话、防爆破、限速、client_ip、公网入口判定。"""
 import hashlib
 import hmac
 import secrets
@@ -7,6 +7,7 @@ import threading
 import time
 from contextvars import ContextVar
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
@@ -126,6 +127,39 @@ _rate: dict[str, list[float]] = {}
 _rate_lock = threading.Lock()
 _login_fails: dict[str, list[float]] = {}
 
+# ─── 公网入口判定 ─────────────────────────────────────────
+# FRP 隧道使公网流量 client_ip 全为 127.0.0.1，无法按 IP 区分内外，只能靠 Host
+# （Caddy 对 8765/8767 都透传原始 Host：局域网=192.168.x:8765，公网=frp 域名）。
+_netloc_cache: list = []   # [netloc, ts]
+
+
+def public_netloc() -> str:
+    """管理面板配置的公网地址 netloc（如 your-frp-domain.com:xxxxx），60s 缓存；未配置返回空。"""
+    now = time.time()
+    if _netloc_cache and now - _netloc_cache[1] < 60:
+        return _netloc_cache[0]
+    netloc = ""
+    try:
+        row = _db().execute("SELECT value FROM settings WHERE key='public_base_url'").fetchone()
+        if row and row["value"]:
+            netloc = (urlsplit(row["value"]).netloc or "").lower()
+    except Exception:
+        netloc = ""
+    _netloc_cache[:] = [netloc, now]
+    return netloc
+
+
+def reset_netloc_cache():
+    """管理面板改公网地址后立即生效（否则等 60s 缓存过期）。"""
+    _netloc_cache[:] = ["", 0]
+
+
+def is_public_entry(request: Request) -> bool:
+    """请求是否来自公网入口。防爆破/限速/healthz 管控的判定基础：
+    公网侧的失败只锁公网侧，LAN 家人登录永不因公网攻击被锁（DoS 隔离）。"""
+    host = (request.headers.get("host") or "").lower()
+    return bool(host) and host == public_netloc()
+
 
 def allow_rate(key: str, limit: int, window: int = 60) -> bool:
     now = time.time()
@@ -143,12 +177,18 @@ def allow_rate(key: str, limit: int, window: int = 60) -> bool:
         return True
 
 
-def login_locked_remaining(username: str) -> int:
+def _lock_key(username: str, public: bool) -> str:
+    """锁定/失败计数键：公网入口与局域网入口分账——
+    公网攻击者只能锁住公网侧自己的路，LAN 家人登录不受波及。"""
+    u = username.strip().lower()   # 小写化：防大小写变体绕过锁定
+    return f"{u}@pub" if public else u
+
+
+def login_locked_remaining(username: str, public: bool = False) -> int:
     """账号连续失败 LOGIN_MAX_FAILS 次后的剩余锁定秒数，0 = 未锁。"""
     now = time.time()
     with _rate_lock:
-        # key 与 record_login_fail 一致：小写化，防大小写变体绕过锁定
-        q = _login_fails.get(username.strip().lower(), [])
+        q = _login_fails.get(_lock_key(username, public), [])
         while q and q[0] <= now - LOGIN_LOCK_SECONDS:
             q.pop(0)
         if len(q) >= LOGIN_MAX_FAILS:
@@ -156,10 +196,15 @@ def login_locked_remaining(username: str) -> int:
         return 0
 
 
-def record_login_fail(username: str):
+def record_login_fail(username: str, public: bool = False):
     with _rate_lock:
-        # key 统一小写：Windows/SQLite 侧用户名大小写变体不能绕过锁定
-        _login_fails.setdefault(username.strip().lower(), []).append(time.time())
+        _login_fails.setdefault(_lock_key(username, public), []).append(time.time())
+
+
+def clear_login_fails(username: str, public: bool = False):
+    """登录成功后清当前入口的失败计数（不清另一入口——公网攻击者的锁定不因 LAN 登录解除）。"""
+    with _rate_lock:
+        _login_fails.pop(_lock_key(username, public), None)
 
 
 def client_ip(request: Request) -> str:

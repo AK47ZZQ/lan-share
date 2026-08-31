@@ -16,8 +16,8 @@ from fastapi.responses import FileResponse
 
 from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.db import _db
-from app.security import (audit, client_ip, get_session_user, login_locked_remaining,
-                          record_login_fail, verify_password)
+from app.security import (audit, client_ip, get_session_user, is_public_entry,
+                          login_locked_remaining, record_login_fail, verify_password)
 from app.filetools import _RESERVED_NAME, human_size
 from app.spaces import enforce_quota, resolve
 from app.api.files import _move_to_trash
@@ -49,9 +49,10 @@ async def _dav_auth(request: Request):
     except Exception:
         raise HTTPException(status_code=401, detail="Unauthorized",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
-    remaining = login_locked_remaining(username)
+    pub = is_public_entry(request)   # 公网侧失败只锁公网侧（DoS 隔离）
+    remaining = login_locked_remaining(username, pub)
     if remaining:
-        audit("login_locked", username, f"{remaining}s", client_ip(request))
+        audit("login_locked", username, f"{'pub ' if pub else ''}{remaining}s", client_ip(request))
         raise HTTPException(status_code=401, detail="Locked",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
     row = _db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
@@ -61,8 +62,8 @@ async def _dav_auth(request: Request):
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
     ok = bool(row) and await run_in_threadpool(verify_password, password, row["password_hash"])
     if not ok:
-        record_login_fail(username)
-        audit("login_fail", username, ip=client_ip(request))
+        record_login_fail(username, pub)
+        audit("login_fail", username, "pub" if pub else "", client_ip(request))
         raise HTTPException(status_code=401, detail="Unauthorized",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
     return row

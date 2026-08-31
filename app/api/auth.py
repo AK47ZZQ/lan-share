@@ -12,10 +12,10 @@ from pydantic import BaseModel
 
 from app.config import COOKIE_NAME, SESSION_TTL, SHARE_ROOT
 from app.db import _db, _db_lock
-from app.security import (audit, client_ip, create_session, get_session_user,
-                          hash_password, is_https, login_locked_remaining,
-                          record_login_fail, require_user, verify_password,
-                          _login_fails, _rate_lock, _sha)
+from app.security import (audit, clear_login_fails, client_ip, create_session,
+                          get_session_user, hash_password, is_https, is_public_entry,
+                          login_locked_remaining, record_login_fail, require_user,
+                          verify_password, _sha)
 from app.spaces import RESERVED_USERNAMES, _normcase_eq
 from app.main import app
 
@@ -81,10 +81,11 @@ async def setup(body: AuthBody, request: Request, response: Response):
 
 
 def _login_gate(username: str, request: Request):
-    """登录前置：防爆破锁定 + 账号在用检查（不含密码校验，scrypt 校验留在线程池）。"""
-    remaining = login_locked_remaining(username)
+    """登录前置：防爆破锁定（按入口分账）+ 账号在用检查（不含密码校验，scrypt 校验留在线程池）。"""
+    pub = is_public_entry(request)
+    remaining = login_locked_remaining(username, pub)
     if remaining:
-        audit("login_locked", username, f"{remaining}s", client_ip(request))
+        audit("login_locked", username, f"{'pub ' if pub else ''}{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     row = _db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
@@ -100,18 +101,18 @@ async def _verify_pw(pw: str, stored: str) -> bool:
 
 @app.post("/api/login")
 async def login(body: AuthBody, request: Request, response: Response):
+    pub = is_public_entry(request)
     row = _login_gate(body.username, request)
     ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
     if not ok:
-        record_login_fail(body.username)
-        audit("login_fail", body.username, ip=client_ip(request))
+        record_login_fail(body.username, pub)
+        audit("login_fail", body.username, "pub" if pub else "", client_ip(request))
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     # 已启用两步验证：密码正确也不发会话，要求第二因子
     if row["totp_enabled"]:
         audit("login_totp_needed", body.username, ip=client_ip(request))
         return {"totp_required": True, "username": row["username"]}
-    with _rate_lock:
-        _login_fails.pop(body.username.strip().lower(), None)
+    clear_login_fails(body.username, pub)
     audit("login", body.username, ip=client_ip(request))
     set_session_cookie(response, request, row["id"])
     return {"ok": True, "username": row["username"]}
@@ -120,21 +121,21 @@ async def login(body: AuthBody, request: Request, response: Response):
 @app.post("/api/login/totp")
 async def login_totp(body: TotpLoginBody, request: Request, response: Response):
     """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。"""
+    pub = is_public_entry(request)
     row = _login_gate(body.username, request)
     ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
     if not ok:
-        record_login_fail(body.username)
-        audit("login_fail", body.username, ip=client_ip(request))
+        record_login_fail(body.username, pub)
+        audit("login_fail", body.username, "pub" if pub else "", client_ip(request))
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not row["totp_enabled"] or not row["totp_secret"]:
         raise HTTPException(status_code=400, detail="该账号未启用两步验证")
     code = body.code.strip().replace(" ", "")
     if not (code.isdigit() and len(code) == 6) or not pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1):
-        record_login_fail(body.username)
+        record_login_fail(body.username, pub)
         audit("totp_fail", body.username, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="动态验证码错误")
-    with _rate_lock:
-        _login_fails.pop(body.username.strip().lower(), None)
+    clear_login_fails(body.username, pub)
     audit("login", body.username, "totp", client_ip(request))
     set_session_cookie(response, request, row["id"])
     return {"ok": True, "username": row["username"]}
