@@ -161,8 +161,11 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .crumbs .sep { color: var(--text-3); }
 
 /* ── 文件列表 ── */
-.flist { display: grid; gap: 6px; }
+.flist { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr); }
 .frow {
+  /* grid item 的 min-width:auto 会被 nowrap 长名的 min-content 顶破卡片，
+     按钮整排出屏（手机列表模式）——显式允许收缩，让名字的 ellipsis 生效 */
+  min-width: 0;
   display: flex; align-items: center; gap: 12px; padding: 11px 14px;
   border-radius: var(--radius-sm); cursor: pointer; border: 1px solid transparent;
   transition: background .12s, border-color .12s; background: transparent;
