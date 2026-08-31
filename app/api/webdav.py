@@ -18,7 +18,7 @@ from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.db import _db
 from app.security import (audit, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail, verify_password)
-from app.filetools import _RESERVED_NAME, human_size
+from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve
 from app.api.files import _move_to_trash
 from app.main import app
@@ -97,7 +97,9 @@ def _dav_destination(request: Request, user) -> Path:
         return resolve(user, "", "write")
     if not p.startswith("/dav/"):
         raise HTTPException(status_code=400, detail="Invalid Destination")
-    return resolve(user, p[len("/dav/"):], "write")
+    segs = [s for s in p[len("/dav/"):].replace("\\", "/").split("/") if s not in ("", ".")]
+    cleaned = "/".join(clean_filename(s) for s in segs)  # 目标名同界面规则清洗
+    return resolve(user, cleaned, "write")
 
 
 _READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNLOCK"}
@@ -108,6 +110,9 @@ _READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNL
 async def dav_handler(request: Request, path: str = ""):
     user = await _dav_auth(request)
     method = request.method
+    if path:  # 逐段清洗 Windows 非法字符（与界面 mkdir/rename 同规则），防落盘 OSError
+        segs = [s for s in path.replace("\\", "/").split("/") if s not in ("", ".")]
+        path = "/".join(clean_filename(s) for s in segs)
     need = "read" if method in _READ_METHODS or method == "COPY" else "write"
     target = resolve(user, path, need) if path else (
         SHARE_ROOT if need == "read" else resolve(user, "", "write"))
