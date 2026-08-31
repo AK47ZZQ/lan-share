@@ -138,17 +138,22 @@ Naive UI + VueUse、Pillow、qrcode、ffmpeg（可选）。
 （现有双地址分享机制天然支持并存）。迁移时后端改三点：Caddy 信任 CF-Connecting-IP
 （client_ip 取真实 IP）、is_public_entry 按新域名匹配、WAF 可选国内放行规则。
 
-### 7.3 安卓 App：三阶段路线
+### 7.3 移动 App：三阶段路线（2026-09-01 技术选型定稿：**Flutter 跨端**）
+
+> 决策变更：用户确认未来不排除 iPhone + 考虑上架商店 → 由 Kotlin 原生改为
+> Flutter 跨端（Android + iOS 一套代码）。需求与设计已成文：
+> `docs/DESIGN-v3/APP-REQUIREMENTS.md`（需求规格）与
+> `docs/DESIGN-v3/APP-DESIGN.md`（技术方案，含 Flutter 后台执行风险的
+> 职责拆分设计：原生层管"何时醒"、Dart 层管"怎么传"）。
 
 - **阶段 0（已完成 2026-08-31）**：PWA——manifest + SW + 图标，浏览器"添加到
   主屏幕"即全屏独立应用；验证家人对 App 形态的真实需求
-- **阶段 1（原生核心三件事，Kotlin + Jetpack Compose）**：① 相册自动备份
-  （WorkManager + MediaStore 监听 → 分片续传 API，杀手级场景）② 文件浏览/下载
-  ③ 系统分享接入。后端需补：长效 Bearer Token 认证端点
-- **阶段 2**：推送通知（国行 FCM 不可靠：起步 WorkManager 轮询未读，后期厂商
-  通道）、离线缓存、WebDAV 凭据引导
-- 不采用 Flutter/RN：单 Android 目标 + 深度后台任务/系统分享，Kotlin 原生最快；
-  工具链（构建/模拟器/UI 自动化）已就绪
+- **阶段 1（Flutter 核心）**：登录(TOTP)/照片墙/文件浏览 → 手动传输（分片续传
+  全量对齐）→ **相册自动备份引擎**（默认仅照片、视频开关；仅 Wi-Fi/充电约束；
+  账本去重；Android WorkManager+MediaStore、iOS BGTaskScheduler）
+- **阶段 2**：推送通知（轮询起步，后期厂商通道）、离线缓存、系统分享接收、
+  上架评估（软著/隐私政策/iOS 开发者账号）
+- 后端前置：`/api/auth/token` 长效设备 Token 三端点（设计见 APP-DESIGN §3）
 
 ### 7.4 待选小项（随做随记）
 
