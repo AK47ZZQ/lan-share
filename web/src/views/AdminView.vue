@@ -1,10 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { api, type AdminUser, type Grant } from '../api'
 import { me } from '../auth'
+import { setPreviewAs } from '../previewAs'
 import Modal from '../components/Modal.vue'
 import AdminUserModal from '../components/AdminUserModal.vue'
 import { confirmDlg, fmtTs, toast } from '../ui'
+
+const router = useRouter()
+function viewAs(username: string) {
+  setPreviewAs(username)
+  router.push('/files')
+  toast(`已切换到「${username}」视角浏览（只读预览）`, 'ok')
+}
 
 const tab = ref<'users' | 'invites' | 'grants'>('users')
 const users = ref<AdminUser[]>([])
@@ -119,6 +128,19 @@ async function savePubUrl() {
   try { await api.setPublicUrl(pubUrl.value.trim()); toast('公网地址已保存', 'ok') } catch (e) { toast((e as Error).message, 'err') }
 }
 
+// 事件推送（通知 bot）
+const hookUrl = ref('')
+const hookBusy = ref(false)
+async function saveHook() {
+  hookBusy.value = true
+  try { await api.setWebhook(hookUrl.value.trim()); toast('推送地址已保存', 'ok') }
+  catch (e) { toast((e as Error).message, 'err') } finally { hookBusy.value = false }
+}
+async function testHook() {
+  try { await api.testWebhook(); toast('测试消息已发送，去手机上看看', 'ok') }
+  catch (e) { toast((e as Error).message, 'err') }
+}
+
 onMounted(async () => {
   if (me.value && me.value.role !== 'admin') {
     err.value = '需要管理员权限'
@@ -126,6 +148,7 @@ onMounted(async () => {
   }
   void loadAll()
   try { pubUrl.value = (await api.getPublicUrl()).public_base_url } catch { /* */ }
+  try { hookUrl.value = (await api.getWebhook()).url } catch { /* */ }
 })
 </script>
 
@@ -154,7 +177,8 @@ onMounted(async () => {
           <select :value="u.role" style="padding:6px 8px;font-size:13px" @change="changeRole(u, $event)">
             <option value="admin">admin</option><option value="member">member</option><option value="guest">guest</option>
           </select>
-          <button class="btn ghost sm" title="修改用户名/重置密码" @click="credModal = u">✏️ 账号</button>
+          <button v-if="u.username !== me?.username" class="btn ghost sm" title="以此成员的视角浏览（只读预览）" @click="viewAs(u.username)">👁 视角</button>
+          <button class="btn ghost sm" title="修改用户名/重置密码/WebDAV 密码" @click="credModal = u">✏️ 账号</button>
           <button class="btn ghost sm" title="设置私人空间配额" @click="openQuota(u)">📏 配额</button>
           <button class="btn ghost sm" @click="toggleActive(u)">{{ u.is_active ? '停用' : '启用' }}</button>
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
@@ -170,6 +194,19 @@ onMounted(async () => {
         <button class="btn sm" @click="savePubUrl">保存</button>
       </div>
       <p style="font-size:12px;color:var(--text-3);margin:0">设置后，分享卡片会同时提供局域网/公网两个复制按钮。</p>
+    </div>
+
+    <!-- 事件推送（通知 bot） -->
+    <div v-if="tab === 'users'" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
+      <div style="font-size:13.5px;font-weight:600">📮 事件推送（通知 bot）</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input v-model="hookUrl" placeholder="GET 模板 URL，需含 {title}/{body} 占位符" style="flex:1;min-width:260px;font-size:14px" />
+        <button class="btn sm" :disabled="hookBusy" @click="saveHook">保存</button>
+        <button class="btn ghost sm" :disabled="hookBusy || !hookUrl" @click="testHook">发送测试</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-3);margin:0">
+        定向分享、新成员加入时推送到站外（GET 模板，占位符经 URL 编码后替换）。示例：<span v-pre>ntfy <code>https://ntfy.sh/你的主题/{title}</code> · Bark <code>https://api.day.app/你的key/{title}/{body}</code> · Server酱 <code>https://sctapi.ftqq.com/你的key.send?title={title}&desp={body}</code></span>
+      </p>
     </div>
 
     <!-- 邀请 -->

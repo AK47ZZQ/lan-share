@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth } from './auth'
 import { dlg, dlgCancel, dlgOk, toasts } from './ui'
+import { previewAs, setPreviewAs } from './previewAs'
 import DiskModal from './components/DiskModal.vue'
 import AccountModal from './components/AccountModal.vue'
 import NotificationsBell from './components/NotificationsBell.vue'
@@ -31,6 +32,11 @@ function closeMenu() { menuOpen.value = false }
 function doLogout() { closeMenu(); authLogout().then(() => router.replace('/login')) }
 
 function initial(name: string) { return (name || '?').slice(0, 1).toUpperCase() }
+
+function exitPreview() {
+  setPreviewAs('')
+  void router.push('/admin')
+}
 
 onMounted(() => { boot(); document.addEventListener('click', closeMenu) })
 
@@ -73,6 +79,11 @@ watchEffect(() => {
     <router-view v-if="publicRoute" />
 
     <template v-else-if="me">
+      <!-- 成员视角预览横幅（admin 专用） -->
+      <div v-if="previewAs" style="position:sticky;top:0;z-index:70;display:flex;gap:10px;align-items:center;justify-content:center;padding:7px 12px;font-size:13px;background:var(--accent,#4f7cff);color:#fff">
+        <span>👁 正在以 <b>{{ previewAs }}</b> 的视角浏览（只读预览，操作仍按你的管理员权限执行）</span>
+        <button class="btn sm" style="background:#fff;color:inherit;border:none" @click="exitPreview">退出视角</button>
+      </div>
       <header class="topbar">
         <router-link to="/" class="brand" title="回到主页">
           <span class="logo">◈</span><span class="brand-name">LAN Share</span>
