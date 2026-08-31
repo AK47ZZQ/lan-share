@@ -25,7 +25,8 @@ from app.main import app
 
 # ─── WebDAV ───────────────────────────────────────────────
 # 挂载为网络磁盘：RaiDrive / WinSCP / Cyberduck / ES文件管理器等客户端连 https://<host>:8765/dav/
-# 认证：WebDAV 客户端走 Basic（管理员账号密码，复用 scrypt 校验与防爆破锁定），浏览器会话同样有效。
+# 认证：WebDAV 客户端走 Basic（优先账号的 WebDAV 独立密码，未设置则回退登录密码；
+# 复用 scrypt 校验与防爆破锁定），浏览器会话同样有效。
 
 DAV_METHODS = ["OPTIONS", "PROPFIND", "PROPPATCH", "GET", "HEAD", "PUT",
                "MKCOL", "DELETE", "MOVE", "COPY", "LOCK", "UNLOCK"]
@@ -60,7 +61,11 @@ async def _dav_auth(request: Request):
         audit("login_disabled", username, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="Unauthorized",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
-    ok = bool(row) and await run_in_threadpool(verify_password, password, row["password_hash"])
+    # 独立密码启用后 WebDAV 只认它（与登录密码隔离：泄露面独立、可单独轮换）；
+    # 未设置时回退登录密码。TOTP 对 Basic Auth 不可用（协议无第二步，见 SECURITY.md）
+    stored = row["webdav_password_hash"] if row and row["webdav_password_hash"] else (
+        row["password_hash"] if row else None)
+    ok = bool(row) and stored and await run_in_threadpool(verify_password, password, stored)
     if not ok:
         record_login_fail(username, pub)
         audit("login_fail", username, "pub" if pub else "", client_ip(request))

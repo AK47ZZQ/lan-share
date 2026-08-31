@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { api, type Me } from '../api'
 import { refreshAuth } from '../auth'
 import { toast } from '../ui'
@@ -67,6 +67,28 @@ async function totpDisable() {
 async function copySecret() {
   try { await navigator.clipboard.writeText(totpSecret.value); toast('密钥已复制', 'ok') }
   catch { toast('复制失败，请手动记录密钥', 'err') }
+}
+
+// WebDAV 独立密码
+const davSet = ref(false)
+const davEditing = ref(false)
+const davCur = ref('')
+const davNew = ref('')
+const davBusy = ref(false)
+const davErr = ref('')
+onMounted(async () => {
+  try { davSet.value = (await api.webdavPwdStatus()).set } catch { /* 忽略，默认未设置 */ }
+})
+
+async function saveDav() {
+  davErr.value = ''
+  davBusy.value = true
+  try {
+    const r = await api.setWebdavPwd(davCur.value, davNew.value)
+    davSet.value = r.set
+    davEditing.value = false; davCur.value = ''; davNew.value = ''
+    toast(r.set ? 'WebDAV 独立密码已生效（WebDAV 客户端需改用新密码）' : '已清除：WebDAV 回退用登录密码挂载', 'ok')
+  } catch (e) { davErr.value = (e as Error).message } finally { davBusy.value = false }
 }
 
 async function doRename() {
@@ -159,6 +181,32 @@ async function doPwd() {
             <button class="btn sm" :disabled="totpBusy" @click="totpSetup">启用两步验证</button>
           </template>
           <p v-if="totpErr" class="err" style="margin:0">{{ totpErr }}</p>
+        </div>
+
+        <div style="height:1px;background:var(--line);margin:16px 0" />
+
+        <!-- WebDAV 独立密码 -->
+        <div style="display:grid;gap:9px">
+          <div style="font-size:13.5px;font-weight:600">🗄️ WebDAV 独立密码</div>
+          <p style="font-size:12.5px;color:var(--text-3);margin:0">
+            {{ davSet
+              ? '已启用：WebDAV 挂载只认独立密码，登录密码对 /dav/ 无效。两者互相独立，可单独轮换。'
+              : '未设置：WebDAV 挂载（RaiDrive / Windows 映射 / 手机 ES 管理器等）目前使用登录密码。' }}
+          </p>
+          <template v-if="davEditing">
+            <input v-model="davCur" type="password" placeholder="当前登录密码（确认）" autocomplete="current-password" />
+            <input v-model="davNew" type="password" placeholder="WebDAV 新密码（至少 8 位，留空=清除）" autocomplete="new-password" />
+            <div style="display:flex;gap:8px">
+              <button class="btn sm" :disabled="davBusy || !davCur" @click="saveDav">
+                {{ davBusy ? '提交中…' : (davNew ? '保存' : '清除独立密码') }}
+              </button>
+              <button class="btn ghost sm" @click="davEditing = false; davErr = ''">取消</button>
+            </div>
+          </template>
+          <template v-else>
+            <button class="btn sm" @click="davEditing = true">{{ davSet ? '修改 / 清除' : '设置独立密码' }}</button>
+          </template>
+          <p v-if="davErr" class="err" style="margin:0">{{ davErr }}</p>
         </div>
 
         <div class="actions"><button class="btn ghost sm" @click="emit('close')">关闭</button></div>

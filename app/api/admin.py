@@ -15,6 +15,7 @@ from app.filetools import human_size
 from app.security import (audit, client_ip, hash_password, require_admin, require_user,
                           reset_netloc_cache)
 from app.spaces import RESERVED_USERNAMES
+from app.api.notify import get_webhook_url, push_webhook, webhook_send
 from app.main import app
 
 
@@ -35,13 +36,14 @@ def _clean_username(name: str) -> str:
 @app.get("/api/admin/users")
 def admin_list_users(_admin=Depends(require_admin)):
     rows = _db().execute(
-        "SELECT id, username, role, is_active, quota_bytes, created_at "
+        "SELECT id, username, role, is_active, quota_bytes, created_at, webdav_password_hash "
         "FROM users ORDER BY id").fetchall()
     return [{
         "id": r["id"], "username": r["username"], "role": r["role"],
         "is_active": bool(r["is_active"]), "quota_bytes": r["quota_bytes"],
         "quota_human": human_size(r["quota_bytes"]) if r["quota_bytes"] else "-",
         "created_at": time.strftime("%Y-%m-%d", time.localtime(r["created_at"])),
+        "webdav_set": bool(r["webdav_password_hash"]),
     } for r in rows]
 
 
@@ -137,6 +139,28 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
         _db().commit()
     audit("admin_reset_password", row["username"], ip=client_ip(request))
     return {"ok": True}
+
+
+@app.post("/api/admin/users/{uid}/webdav-password")
+def admin_set_webdav_password(uid: int, body: AdminCredBody, request: Request,
+                              _admin=Depends(require_admin)):
+    """管理员重置/清除成员的 WebDAV 独立密码。value 空 = 清除（回退登录密码挂载）。
+    只动 WebDAV 凭据，不吊销网页会话（与重置登录密码不同）。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if body.value:
+        if len(body.value) < 8:
+            raise HTTPException(status_code=400, detail="密码至少 8 位")
+        new_hash = hash_password(body.value)
+    else:
+        new_hash = None
+    with _db_lock:
+        _db().execute("UPDATE users SET webdav_password_hash=? WHERE id=?", (new_hash, uid))
+        _db().commit()
+    audit("admin_webdav_password" if new_hash else "admin_webdav_password_clear",
+          row["username"], ip=client_ip(request))
+    return {"ok": True, "set": bool(new_hash)}
 
 
 @app.get("/api/members")
@@ -262,6 +286,7 @@ def invite_redeem(body: RedeemBody, request: Request):
         _db().commit()
     (SHARE_ROOT / "private" / username).mkdir(parents=True, exist_ok=True)
     audit("invite_redeemed", username, row["role"], client_ip(request))
+    push_webhook("👋 新成员加入", f"{username}（{row['role']}）已激活账号")
     return {"ok": True, "username": username, "role": row["role"]}
 
 
@@ -296,6 +321,46 @@ def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
     reset_netloc_cache()   # 入口判定即时生效
     audit("public_url_set", url, ip=client_ip(request))
     return {"ok": True, "public_base_url": url}
+
+
+# ─── 事件推送（通知 bot）──────────────────────────────────
+
+
+@app.get("/api/admin/webhook")
+def admin_get_webhook(_admin=Depends(require_admin)):
+    return {"url": get_webhook_url()}
+
+
+@app.post("/api/admin/webhook")
+def admin_set_webhook(body: dict, request: Request, _admin=Depends(require_admin)):
+    url = (body.get("url") or "").strip()
+    if url:
+        if not url.startswith(("https://", "http://")):
+            raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
+        if "{title}" not in url and "{body}" not in url:
+            raise HTTPException(status_code=400,
+                                detail="URL 需包含 {title} 或 {body} 占位符（URL 编码后替换）")
+    with _db_lock:
+        _db().execute("INSERT INTO settings(key, value) VALUES('notify_webhook_url', ?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (url,))
+        _db().commit()
+    audit("webhook_set" if url else "webhook_cleared", url[:120], ip=client_ip(request))
+    return {"ok": True, "url": url}
+
+
+@app.post("/api/admin/webhook/test")
+def admin_test_webhook(request: Request, _admin=Depends(require_admin)):
+    """同步发一条测试消息，失败原样带回错误（配置排错用）。"""
+    url = get_webhook_url()
+    if not url:
+        raise HTTPException(status_code=400, detail="尚未配置推送地址")
+    who = _admin["username"]
+    try:
+        webhook_send(url, "LAN Share 测试推送", f"来自 {who} 的配置测试，收到即说明链路 OK")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"推送失败：{str(e)[:200]}")
+    audit("webhook_test", ip=client_ip(request))
+    return {"ok": True}
 
 
 # ─── 目录授权 ─────────────────────────────────────────────

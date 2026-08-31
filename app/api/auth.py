@@ -304,4 +304,48 @@ async def change_username(request: Request, body: UsernameBody,
     return {"ok": True, "username": new_name}
 
 
+# ─── WebDAV 独立密码（与登录密码隔离的挂载凭据）────────────
+
+class WebDavPasswordBody(BaseModel):
+    current_password: str
+    webdav_password: str = ""   # 空串 = 清除（回退为登录密码挂载）
+
+
+@app.get("/api/auth/webdav-password")
+def webdav_password_status(user=Depends(require_user)):
+    """只暴露是否已设置，绝不回传哈希。"""
+    row = _db().execute("SELECT webdav_password_hash FROM users WHERE id=?",
+                        (user["user_id"],)).fetchone()
+    return {"set": bool(row and row["webdav_password_hash"])}
+
+
+@app.post("/api/auth/webdav-password")
+async def set_webdav_password(request: Request, body: WebDavPasswordBody,
+                              user=Depends(require_user)):
+    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    # 与改密同款防线：密码确认失败计入防爆破锁定（否则会话被劫持后可无限试）
+    remaining = login_locked_remaining(row["username"])
+    if remaining:
+        audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
+        raise HTTPException(status_code=429,
+                            detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
+    if not await run_in_threadpool(verify_password, body.current_password, row["password_hash"]):
+        record_login_fail(row["username"])
+        audit("webdav_password_fail", row["username"], ip=client_ip(request))
+        raise HTTPException(status_code=403, detail="当前密码错误")
+    if body.webdav_password:
+        if len(body.webdav_password) < 8:
+            raise HTTPException(status_code=400, detail="WebDAV 密码至少 8 位")
+        new_hash = await run_in_threadpool(hash_password, body.webdav_password)
+    else:
+        new_hash = None
+    with _db_lock:
+        _db().execute("UPDATE users SET webdav_password_hash=? WHERE id=?",
+                      (new_hash, row["id"]))
+        _db().commit()
+    audit("webdav_password_set" if new_hash else "webdav_password_clear",
+          row["username"], ip=client_ip(request))
+    return {"ok": True, "set": bool(new_hash)}
+
+
 # ─── 文件 API（需登录）─────────────────────────────────────
