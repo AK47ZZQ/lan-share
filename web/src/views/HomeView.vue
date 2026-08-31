@@ -74,12 +74,26 @@ const renameName = ref('')
 
 // 上传队列（共享引擎见 uploader.ts）
 
-const crumbs = computed(() => {
-  const parts = path.value.split('/').filter(Boolean)
+// 私人空间路径按"逻辑层级"展示：private/<用户>/子目录 → 🏠 / 🔒 私人空间 / 子目录
+// （private 别名段自指，直接折叠掉，避免面包屑与返回键在私人根打转）
+function logicalCrumbs(p: string): { name: string; path: string }[] {
+  const parts = p.split('/').filter(Boolean)
   const out = [{ name: '🏠', path: '' }]
+  if (parts[0] === 'private') {
+    out.push({ name: '🔒 私人空间', path: parts.slice(0, 2).join('/') })
+    for (let i = 2; i < parts.length; i++) out.push({ name: parts[i], path: parts.slice(0, i + 1).join('/') })
+    return out
+  }
   parts.forEach((p, i) => out.push({ name: p, path: parts.slice(0, i + 1).join('/') }))
   return out
-})
+}
+const crumbs = computed(() => logicalCrumbs(path.value))
+
+// 返回上一级：private/<用户>（私人根）的父级是 private 别名（自指），直接回主页
+function parentDir(p: string): string {
+  const parent = p.split('/').slice(0, -1).join('/')
+  return parent === 'private' ? '' : parent
+}
 
 function thumbOf(e: Entry): string | null {
   if (e.is_dir) return null
@@ -300,7 +314,7 @@ onUnmounted(() => {
   <main class="page">
     <div class="page-head">
       <div class="title-row"><h1>文件</h1></div>
-      <button v-if="path && view === 'browse'" class="btn ghost sm" title="返回上一级" @click="load(path.split('/').slice(0, -1).join('/'))">← 返回</button>
+      <button v-if="path && view === 'browse'" class="btn ghost sm" title="返回上一级" @click="load(parentDir(path))">← 返回</button>
       <input v-model="searchQ" placeholder="搜索文件…" class="searchbox"
              @keydown.enter="runSearch" @input="!searchQ && (searchResults = null)" />
       <button class="btn ghost sm" @click="runSearch" title="搜索">🔍</button>
