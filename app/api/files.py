@@ -20,8 +20,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.config import (CHUNK_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, UPLOAD_SESSION_TTL,
-                        ZIP_TTL, SHARE_ROOT)
+from app.config import (MAX_CHUNKED_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, UPLOAD_SESSION_TTL,
+                        ZIP_TTL, SHARE_ROOT, chunk_size_for)
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, require_user, require_admin
 from app.filetools import (_file_dict, clean_filename, dir_tree, human_size, safe_path,
@@ -128,6 +128,9 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
     dest = dest_dir / clean_filename(body.filename)
     if body.size <= 0:
         raise HTTPException(status_code=400, detail="Invalid size")
+    if body.size > MAX_CHUNKED_SIZE:
+        raise HTTPException(status_code=413,
+                            detail=f"File too large for chunked upload (max {human_size(MAX_CHUNKED_SIZE)})")
     enforce_quota(_user, dest, body.size)
 
     # 秒传：库里有同 sha256 内容（服务端算的，可信），直接硬链接
@@ -157,7 +160,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             (sid, body.dest_dir, dest.name, body.size, body.sha256, time.time(),
              _user["user_id"]))
         _db().commit()
-    return {"instant": False, "session": sid, "chunk_size": CHUNK_SIZE, "received": []}
+    return {"instant": False, "session": sid, "chunk_size": chunk_size_for(body.size), "received": []}
 
 
 @app.get("/api/upload/state/{sid}")
@@ -169,7 +172,7 @@ async def upload_state(sid: str, _user=Depends(require_user)):
     _session_owner_guard(row, _user)
     d = _chunk_dir(sid)
     received = sorted(int(p.stem.split("-")[1]) for p in d.glob("part-*")) if d.exists() else []
-    return {"session": sid, "chunk_size": CHUNK_SIZE, "received": received}
+    return {"session": sid, "chunk_size": chunk_size_for(row["total_size"]), "received": received}
 
 
 @app.post("/api/upload/chunk/{sid}")
@@ -179,7 +182,8 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
     _session_owner_guard(row, _user)
-    total = (row["total_size"] + CHUNK_SIZE - 1) // CHUNK_SIZE
+    cs = chunk_size_for(row["total_size"])
+    total = (row["total_size"] + cs - 1) // cs
     if index < 0 or index >= total:
         raise HTTPException(status_code=400, detail="Chunk index out of range")
     part = _chunk_dir(sid) / f"part-{index:06d}"
@@ -196,7 +200,8 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise HTTPException(status_code=404, detail="Upload session not found")
     _session_owner_guard(row, _user)
     d = _chunk_dir(sid)
-    total = (row["total_size"] + CHUNK_SIZE - 1) // CHUNK_SIZE
+    cs = chunk_size_for(row["total_size"])
+    total = (row["total_size"] + cs - 1) // cs
     parts = sorted(d.glob("part-*"))
     if len(parts) != total:
         raise HTTPException(status_code=400,

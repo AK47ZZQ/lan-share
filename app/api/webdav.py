@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from app.config import MAX_UPLOAD_SIZE, SHARE_ROOT
+from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.db import _db
 from app.security import (audit, client_ip, get_session_user, login_locked_remaining,
                           record_login_fail, verify_password)
@@ -162,7 +162,7 @@ async def dav_handler(request: Request, path: str = ""):
         async with aiofiles.open(tmp, "wb") as f:
             async for chunk in request.stream():
                 size += len(chunk)
-                if size > MAX_UPLOAD_SIZE:
+                if size > MAX_WEBDAV_SIZE:
                     tmp.unlink(missing_ok=True)
                     raise HTTPException(status_code=413)
                 await f.write(chunk)

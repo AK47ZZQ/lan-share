@@ -26,3 +26,22 @@ SHARE_RATE_LIMIT = 30             # 分享取件 每分钟每 IP
 LOGIN_MAX_FAILS = 5               # 连续失败次数
 LOGIN_LOCK_SECONDS = 15 * 60      # 账号锁定时长
 TICKET_TTL = 10 * 60              # 分下载票据有效期（秒）
+
+# ── 大文件上传（v3.6）────────────────────────────────────
+MAX_WEBDAV_SIZE = 20 * 1024 * 1024 * 1024   # WebDAV PUT 上限 20GB（流式写盘，PC 互传挂盘用）
+MAX_CHUNKED_SIZE = 64 * 1024 * 1024 * 1024  # 分片上传总大小硬上限 64GB
+_GB = 1024 * 1024 * 1024
+
+
+def chunk_size_for(total_size: int) -> int:
+    """按文件大小自适应分片——纯函数，init/state/chunk/finish 四处一致（断点续传依赖）。
+
+    10GB@5MB=2048 个请求；自适应后 32MB=320 个，减少 HTTP 往返开销。
+    """
+    if total_size <= 2 * _GB:
+        return CHUNK_SIZE            # 5MB
+    if total_size <= 5 * _GB:
+        return 16 * 1024 * 1024      # 16MB
+    if total_size <= 10 * _GB:
+        return 32 * 1024 * 1024      # 32MB
+    return 64 * 1024 * 1024          # 64MB

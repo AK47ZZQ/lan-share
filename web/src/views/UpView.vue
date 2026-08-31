@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { uploadResumable } from '../api'
+import { confirmLargeUpload, uploadResumable } from '../api'
 import { me, refreshAuth } from '../auth'
 import { toast } from '../ui'
 
@@ -19,6 +19,7 @@ async function onPick(ev: Event) {
   if (!input.files?.length) return
   busy.value = true
   for (const f of Array.from(input.files)) {
+    if (!(await confirmLargeUpload(f))) continue  // 公网大文件：用户取消则跳过该文件
     const item = { name: f.name, sent: 0, total: f.size, stage: '上传中' }
     uploads.value.push(item)
     try {

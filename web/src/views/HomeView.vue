@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { api, uploadResumable, type Entry, type Me } from '../api'
+import { api, confirmLargeUpload, uploadResumable, type Entry, type Me } from '../api'
 import { confirmDlg, promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
 import DirPicker from '../components/DirPicker.vue'
@@ -182,6 +182,7 @@ async function onPick(ev: Event) {
   if (!input.files?.length) return
   uploading.value = true
   for (const f of Array.from(input.files)) {
+    if (!(await confirmLargeUpload(f))) continue  // 公网大文件：用户取消则跳过该文件
     const item = { name: f.name, sent: 0, total: f.size, stage: '排队' }
     uploads.value.push(item)
     try {

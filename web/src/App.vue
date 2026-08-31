@@ -59,7 +59,7 @@ watchEffect(() => {
         <div class="actions">
           <button class="btn ghost sm" @click="dlgCancel">取消</button>
           <button class="btn sm" :class="{ danger: dlg.danger }" @click="dlgOk">
-            {{ dlg.kind === 'prompt' ? '确定' : dlg.danger ? '确认删除' : '确认' }}
+            {{ dlg.okText || (dlg.kind === 'prompt' ? '确定' : dlg.danger ? '确认删除' : '确认') }}
           </button>
         </div>
       </div>

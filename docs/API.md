@@ -29,8 +29,8 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 |------|------|------|------|
 | GET | `/api/files/{path}` | 🔑 | 目录列表 `{path, items:[{name,path,is_dir,size,size_human,modified,ext}]}`；隐藏（点前缀）目录不返回 |
 | POST | `/api/upload/{path}` | 🔑 | multipart 单请求上传（≤2GB）；返回 `{sha256, deduped, ...}` |
-| POST | `/api/upload/init` | 🔑 | `{dest_dir, filename, size, sha256?}` → 命中指纹 `{instant:true,...}` 秒传硬链接；否则 `{session, chunk_size:5242880, received:[]}` |
-| GET | `/api/upload/state/{sid}` | 🔑 | `{received:[块序号]}`（断点续传） |
+| POST | `/api/upload/init` | 🔑 | `{dest_dir, filename, size, sha256?}` → 命中指纹 `{instant:true,...}` 秒传硬链接；否则 `{session, chunk_size, received:[]}`。分片大小自适应（≤2GB→5MB / ≤5GB→16MB / ≤10GB→32MB / 更大→64MB）；总大小硬上限 64GB |
+| GET | `/api/upload/state/{sid}` | 🔑 | `{received:[块序号]}`（断点续传，chunk_size 与 init 一致） |
 | POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速） |
 | POST | `/api/upload/finish/{sid}` | 🔑 | 合并 + SHA256/大小校验 → 入库去重；`{path, size, sha256, deduped}` |
 | POST | `/api/mkdir/{path}` | 🔑 | 逐段清洗后创建目录 |
@@ -89,7 +89,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | OPTIONS | 返回 `DAV: 1, 2` 与 Allow 列表 |
 | PROPFIND | Depth 0/1（按 1 处理 infinity）；不列出点前缀条目 |
 | GET / HEAD | 文件内容，支持 Range |
-| PUT | 覆盖前旧版本移入回收站；≤2GB |
+| PUT | 覆盖前旧版本移入回收站；≤20GB（流式写盘） |
 | MKCOL | 创建目录（保留名拒绝） |
 | DELETE | 移入回收站 |
 | MOVE / COPY | Destination 头定位；`Overwrite: T` 时旧目标进回收站 |

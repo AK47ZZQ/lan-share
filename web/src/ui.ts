@@ -37,18 +37,21 @@ export const dlg = reactive({
   kind: 'confirm' as 'confirm' | 'prompt',
   title: '', text: '', value: '', placeholder: '',
   danger: false,
+  okText: '',
   _resolve: null as null | ((v: unknown) => void),
 })
 export function confirmDlg(text: string, opts?: { title?: string; danger?: boolean; okText?: string }): Promise<boolean> {
   return new Promise(resolve => {
     Object.assign(dlg, { open: true, kind: 'confirm', title: opts?.title ?? '请确认', text,
-      value: '', danger: !!opts?.danger, _resolve: resolve as (v: unknown) => void })
+      value: '', danger: !!opts?.danger, okText: opts?.okText ?? '',
+      _resolve: resolve as (v: unknown) => void })
   })
 }
 export function promptDlg(text: string, value = '', opts?: { title?: string; placeholder?: string }): Promise<string | null> {
   return new Promise(resolve => {
     Object.assign(dlg, { open: true, kind: 'prompt', title: opts?.title ?? '请输入', text,
-      value, placeholder: opts?.placeholder ?? '', danger: false, _resolve: resolve as (v: unknown) => void })
+      value, placeholder: opts?.placeholder ?? '', danger: false, okText: '',
+      _resolve: resolve as (v: unknown) => void })
   })
 }
 export function dlgOk() {
