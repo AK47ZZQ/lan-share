@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'data/api/api_client.dart' show onUnauthorized;
+import 'data/api/api_client.dart';
 import 'state/session.dart';
-import 'ui/home_page.dart';
+import 'ui/home_shell.dart';
 import 'ui/login_page.dart';
 
 void main() {
@@ -33,7 +33,7 @@ class LanShareApp extends ConsumerWidget {
         colorScheme: ColorScheme.fromSeed(
             seedColor: const Color(0xFF5B6CFF), brightness: Brightness.dark),
       ),
-      home: session.loggedIn ? const HomePage() : const LoginPage(),
+      home: session.loggedIn ? const HomeShell() : const LoginPage(),
     );
   }
 }

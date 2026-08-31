@@ -1,5 +1,29 @@
 # 更新日志
 
+## 2026-09-01（深夜）— M-A1 阶段：App 照片墙/文件浏览/设备管理 + 自签证书信任流
+
+**Flutter 侧（mobile/）**：
+- **自签证书信任（APP-DESIGN §5 落地）**：首次连接证书错误 → 拦截器打包
+  `TrustRequiredError`（SHA256 指纹）→ 登录页弹"信任此服务器"确认框 → 按
+  host:port 存 SecureStore；之后指纹匹配放行、服务器换证书需重新确认；
+  Dio 适配器与缩略图下载共用同一信任策略
+- **照片墙**：/api/photos 无限滚动网格 + 下拉刷新；点击进入全屏查看
+  （左右滑动 + 双指缩放，?w=1280 中图档省流量）
+- **文件浏览**：/api/files 目录列表 + 面包屑导航（栈式前进/回退不重新请求）；
+  文件类型图标；私人空间入口标识
+- **我的页**：登录身份、当前服务器、**已登录设备列表 + 吊销**（M-A0 三端点
+  的 App 侧落地，吊销本机自动登出）、退出登录
+- **图片组件 AuthImage**：flutter_cache_manager 自定义 FileService（http.IOClient
+  注入信任策略 + Bearer 头）实现缩略图两级缓存——**不引入 cached_network_image**：
+  其 4.0.0（镜像解析产物）与社区 fork _ce 均与需求错位（自带另一套缓存接口），
+  自封装 ~50 行反而少一个依赖且完全可控
+- pub 依赖新增记录（§6 原则）：`flutter_cache_manager`（缩略图磁盘缓存）、
+  `http`（FileService 的 http 载体，IOClient 注入 HttpClient）、`crypto`
+  （SHA256 指纹/秒传流式哈希，§1 选型）
+
+**环境事实**：Android SDK 早已就位（C:\tools\android-sdk，platforms 34/35/36 +
+build-tools + 许可全接受）；JDK 17（RedHat）；flutter doctor Android 工具链 √。
+
 ## 2026-09-01（晚）— M-A0 设备 Token + Flutter 骨架（手机 App 里程碑第一步）
 
 按 `APP-DESIGN §3` 契约实现并冻结（Flutter 阶段 1 的服务端前置）：

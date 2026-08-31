@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/api/api_client.dart';
+import '../data/api/trust.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 
@@ -36,6 +38,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       if (next.loggedIn) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('欢迎，${next.username ?? ''}')));
+      }
+      // 自签证书首次连接：弹"信任此服务器"确认框（APP-DESIGN §5）
+      if (next.trustIssue != null && (prev?.trustIssue == null ||
+          prev!.trustIssue?.fingerprint != next.trustIssue!.fingerprint)) {
+        _askTrust(next.trustIssue!);
       }
     });
 
@@ -116,6 +123,37 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           server: _server.text.trim(),
           username: _username.text.trim(),
           password: _password.text);
+    }
+  }
+
+  /// 证书信任确认：展示指纹，用户显式勾选后重试登录
+  Future<void> _askTrust(TrustRequiredError issue) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('信任此服务器？'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
+            CrossAxisAlignment.start, children: [
+          Text('该服务器的证书不是由公共 CA 签发的（家庭自建属正常）。',
+              style: Theme.of(ctx).textTheme.bodySmall),
+          const SizedBox(height: 10),
+          const Text('证书指纹 (SHA256)：', style: TextStyle(fontSize: 12)),
+          SelectableText(issue.pretty,
+              style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+          const SizedBox(height: 10),
+          const Text('请核对指纹与服务器管理员（你）记录的一致后再信任。',
+              style: TextStyle(fontSize: 12)),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('信任此服务器')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await TrustStore.I.trust(issue.host, issue.port, issue.fingerprint);
+      _submit(); // 信任后自动重试
     }
   }
 }

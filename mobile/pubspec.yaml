@@ -16,6 +16,9 @@ dependencies:
   flutter_riverpod: ^2.6.1       # 状态管理（APP-DESIGN §1 选型定稿）
   flutter_secure_storage: ^9.2.2 # 设备 Token 安全存储（Keystore/Keychain）
   shared_preferences: ^2.3.3     # 非敏感设置（服务器地址列表等）
+  http: ^1.2.0                    # flutter_cache_manager FileService 的 http 客户端载体
+  flutter_cache_manager: ^3.4.2
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

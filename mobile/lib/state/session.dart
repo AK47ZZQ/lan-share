@@ -17,9 +17,10 @@ class SessionState {
   final String? role;
   final String? error;
   final bool needTotp;   // 服务端要求动态验证码
+  final TrustRequiredError? trustIssue; // 自签证书待确认
   const SessionState(
       {this.checking = false, this.loggedIn = false, this.username,
-      this.role, this.error, this.needTotp = false});
+      this.role, this.error, this.needTotp = false, this.trustIssue});
 }
 
 class SessionController extends StateNotifier<SessionState> {
@@ -67,7 +68,7 @@ class SessionController extends StateNotifier<SessionState> {
       }
       await _exchangeToken(dio, r);
     } on DioException catch (e) {
-      state = SessionState(error: _errMsg(e));
+      state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
     } catch (e) {
       state = SessionState(error: e.toString());
     }
@@ -83,7 +84,7 @@ class SessionController extends StateNotifier<SessionState> {
       });
       await _exchangeToken(dio, r);
     } on DioException catch (e) {
-      state = SessionState(error: _errMsg(e), needTotp: true);
+      state = SessionState(error: _errMsg(e), needTotp: true, trustIssue: _trustOf(e));
     } catch (e) {
       state = SessionState(error: e.toString(), needTotp: true);
     }
@@ -105,14 +106,19 @@ class SessionController extends StateNotifier<SessionState> {
         role: me.data['role'] as String?);
   }
 
+  static TrustRequiredError? _trustOf(DioException e) {
+    return e.error is TrustRequiredError ? e.error as TrustRequiredError : null;
+  }
+
   static String _errMsg(DioException e) {
     final d = e.response?.data;
     if (d is Map && d['detail'] != null) return d['detail'].toString();
+    if (e.error is TrustRequiredError) return '服务器证书需要确认';
     return '连接失败，请检查服务器地址与网络';
   }
 
   Future<void> logout() async {
-    await SecureStore.clear();
+    await SecureStore.clearToken();
     state = const SessionState();
   }
 }
