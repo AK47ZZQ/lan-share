@@ -5,11 +5,11 @@
    - 标准属性：Chrome/Edge 121+ 的 fluent 悬浮滚动条只认这个（跟随系统主题，
      webkit 伪元素对它无效）；Firefox 同样走这里。
    - webkit 伪元素：老内核 Chromium 的经典滚动条（不支持标准属性时生效）。 */
-* { scrollbar-width: thin; scrollbar-color: rgba(138, 140, 158, 0.6) rgba(24, 26, 40, 0.35); }
+* { scrollbar-width: thin; scrollbar-color: var(--sb-thumb) var(--sb-track); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: rgba(138, 140, 158, 0.55); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background: rgba(138, 140, 158, 0.75); background-clip: padding-box; }
-::-webkit-scrollbar-track { background: rgba(24, 26, 40, 0.35); }
+::-webkit-scrollbar-thumb { background: var(--sb-thumb); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--sb-thumb); background-clip: padding-box; filter: brightness(1.35); }
+::-webkit-scrollbar-track { background: var(--sb-track); }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 :root {
@@ -32,6 +32,8 @@
   --radius-sm: 10px;
   --hover: rgba(91, 108, 255, 0.09);
   --line: rgba(35, 38, 61, 0.08);
+  --sb-thumb: rgba(91, 108, 255, 0.28);
+  --sb-track: rgba(76, 82, 166, 0.07);
 }
 /* 深色令牌：跟随系统（auto）或手动 data-theme='dark'；data-theme='light' 强制浅色 */
 :root[data-theme='dark'] {
@@ -46,6 +48,8 @@
   --text-3: #6f7494;
   --hover: rgba(122, 134, 255, 0.16);
   --line: rgba(230, 232, 247, 0.09);
+  --sb-thumb: rgba(139, 146, 210, 0.32);
+  --sb-track: rgba(16, 18, 32, 0.55);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
@@ -60,6 +64,8 @@
     --text-3: #6f7494;
     --hover: rgba(122, 134, 255, 0.16);
     --line: rgba(230, 232, 247, 0.09);
+    --sb-thumb: rgba(139, 146, 210, 0.32);
+    --sb-track: rgba(16, 18, 32, 0.55);
   }
 }
 * { box-sizing: border-box; }
