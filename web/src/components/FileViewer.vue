@@ -97,6 +97,7 @@ const imgSrc = computed(() => {
 function resetZoom() {
   scale.value = 1; tx.value = 0; ty.value = 0; rot.value = 0
   fullLoaded.value = false; imgError.value = false; retryNonce.value = 0
+  pullY.value = 0   // 触摸中断（touchcancel 不触发 end）残留的下拉偏移，切图/重开必须清零
 }
 // src 变化才重置加载态（src 不变时 img 不重载，不会触发 load——
 // 否则"适应窗口"后加载圈永远转）
@@ -514,7 +515,8 @@ function iconOf(it: ViewerItem): string {
         <div class="fv-stage" ref="wheelRef" @click="onBlankClick"
              @pointerdown="onPointerDown" @pointermove="onPointerMove"
              @pointerup="onPointerUp" @pointercancel="onPointerUp"
-             @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
+             @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd"
+             @touchcancel="onTouchEnd">
           <button v-if="canPrev" class="fv-nav prev" @click="go(-1)">‹</button>
           <button v-if="canNext" class="fv-nav next" @click="go(1)">›</button>
           <span class="fv-count">{{ modelValue + 1 }} / {{ items.length }}</span>
