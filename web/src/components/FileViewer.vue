@@ -678,6 +678,7 @@ function iconOf(it: ViewerItem): string {
 @keyframes fv-pop { from { opacity: 0; transform: scale(.96) } }
 .fv-shell {
   display: flex; flex-direction: column; width: 100%; height: 100%;
+  min-width: 0;   /* grid item 的 min-width:auto 会被多图胶片条的 min-content 顶破视口（1820px→图片偏右+右箭头出屏） */
   animation: fv-pop .18s ease;
 }
 .fv-top {
@@ -796,6 +797,7 @@ function iconOf(it: ViewerItem): string {
 /* 胶片条 */
 .fv-strip {
   flex: none; display: flex; gap: 6px; overflow-x: auto; padding: 8px 14px;
+  min-width: 0;   /* 同上：超出部分内部横向滚动，不外溢 */
   background: rgba(16, 16, 26, .72); border-top: 1px solid rgba(255, 255, 255, .08);
 }
 .fv-thumb {
