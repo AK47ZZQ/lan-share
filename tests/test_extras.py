@@ -225,15 +225,13 @@ def test_share_and_redeem_trigger_push(client, monkeypatch):
                                        "target": uname}, cookies=dict(admin.cookies))
     assert r.status_code == 200, r.text
 
-    deadline = time.time() + 5
+    deadline = time.time() + 10
     while len(events) < 2 and time.time() < deadline:
         time.sleep(0.05)
     assert len(events) >= 2
-    try:
-        # 清空，避免影响同会话后续测试
-        assert admin.post("/api/admin/webhook", json={"url": ""}).status_code == 200
-    finally:
-        pass
+    time.sleep(0.3)   # 等 worker 池排空，避免 monkeypatch 撤销后真实出网
+    # 清空，避免影响同会话后续测试
+    assert admin.post("/api/admin/webhook", json={"url": ""}).status_code == 200
 
 
 # ── ④ admin 成员视角预览（X-As-User，只读）───────────────────

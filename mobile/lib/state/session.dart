@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/auth_cache.dart';
 import '../data/api/cookies.dart';
 import '../data/local/prefs.dart';
 import '../data/local/secure_store.dart';
@@ -26,10 +27,12 @@ class SessionState {
 class SessionController extends StateNotifier<SessionState> {
   String _username = '';
   String _password = '';
+  bool _busy = false;    // 登录流程互斥（连点/双入口防重入）
 
   SessionController() : super(const SessionState(checking: true));
 
-  /// 启动探测：本地有 Token 则用 /api/auth/me 确认（失效会被拦截器清掉）
+  /// 启动探测：本地有 Token 则用 /api/auth/me 确认（失效会被拦截器清掉）。
+  /// 网络失败不清 Token——临时不可达不应抹掉本地凭据。
   Future<void> bootstrap() async {
     final token = await SecureStore.token();
     if (token == null) {
@@ -38,7 +41,8 @@ class SessionController extends StateNotifier<SessionState> {
     }
     try {
       final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/auth/me');
+      final r = await dio.get('/api/auth/me',
+          options: Options(headers: {'x-login-flow': '1'}));
       state = SessionState(
           loggedIn: true,
           username: r.data['username'] as String?,
@@ -54,14 +58,17 @@ class SessionController extends StateNotifier<SessionState> {
     required String username,
     required String password,
   }) async {
+    if (_busy) return;
+    _busy = true;
     _username = username;
     _password = password;
     state = const SessionState(checking: true);
     try {
       await ApiClient.I.switchServer(server);
       final dio = await ApiClient.I.dio();
-      final r = await dio.post(
-          '/api/login', data: {'username': username, 'password': password});
+      final r = await dio.post('/api/login',
+          options: Options(headers: {'x-login-flow': '1'}),
+          data: {'username': username, 'password': password});
       if (r.data['totp_required'] == true) {
         state = const SessionState(needTotp: true);
         return;
@@ -71,27 +78,34 @@ class SessionController extends StateNotifier<SessionState> {
       state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
     } catch (e) {
       state = SessionState(error: _brief(e));
+    } finally {
+      _busy = false;
     }
   }
 
-  /// 第二步：TOTP 动态码换会话（仅 needTotp 后调用）
-  Future<void> loginTotp(String code) async {
+  /// 第二步：TOTP 动态码换会话（仅 needTotp 后调用）。
+  /// server 由 UI 传入当前地址框值——防止用户在 TOTP 等待期改地址后仍打旧地址。
+  Future<void> loginTotp(String code, {required String server}) async {
+    if (_busy) return;
+    _busy = true;
     state = const SessionState(checking: true, needTotp: true);
     try {
+      await ApiClient.I.switchServer(server);
       final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/login/totp', data: {
-        'username': _username, 'password': _password, 'code': code,
-      });
+      final r = await dio.post('/api/login/totp',
+          options: Options(headers: {'x-login-flow': '1'}),
+          data: {'username': _username, 'password': _password, 'code': code});
       await _exchangeToken(dio, r);
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), needTotp: true, trustIssue: _trustOf(e));
     } catch (e) {
       state = SessionState(error: _brief(e), needTotp: true);
+    } finally {
+      _busy = false;
     }
   }
 
-  /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）。
-  /// 标记 x-login-flow：此阶段 401 不触发全局登出（诊断信息透传给 UI）。
+  /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）
   Future<void> _exchangeToken(Dio dio, Response r) async {
     final cookie = cookieHeaderFrom(r.headers['set-cookie']);
     final deviceName = await Prefs.deviceName();
@@ -129,6 +143,8 @@ class SessionController extends StateNotifier<SessionState> {
 
   Future<void> logout() async {
     await SecureStore.clearToken();
+    // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
+    await AuthCacheManager.I.emptyCache();
     state = const SessionState();
   }
 }

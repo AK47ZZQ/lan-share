@@ -59,9 +59,14 @@ class ApiClient {
           }
         }
         if (e.response?.statusCode == 401) {
-          final opts = e.requestOptions;
-          final inLogin = opts.headers['x-login-flow'] == '1';
-          if (!inLogin && await SecureStore.token() != null) {
+          // 只清"当前存储的 token 就是本次失败请求所带的那个"——
+          // 防止并发场景下（登录中签发了新 token）误删新凭据
+          final sent = e.requestOptions.headers['authorization'] as String?;
+          final sentTok =
+              sent != null && sent.startsWith('Bearer ') ? sent.substring(7).trim() : null;
+          final cur = await SecureStore.token();
+          final inLogin = e.requestOptions.headers['x-login-flow'] == '1';
+          if (!inLogin && cur != null && (sentTok == null || sentTok == cur)) {
             await SecureStore.clearToken();
             onUnauthorized?.call();
           }

@@ -40,6 +40,7 @@ class _PhotosPageState extends State<PhotosPage> {
   bool _failed = false;
   bool _done = false;
   int _offset = 0;
+  int _gen = 0;                 // 加载代际：刷新后丢弃过期响应，防重复/漂移
   static const _limit = 120;
 
   @override
@@ -57,6 +58,7 @@ class _PhotosPageState extends State<PhotosPage> {
 
   Future<void> _loadMore() async {
     if (_loading || _done || !mounted) return;
+    final gen = _gen;
     setState(() => _loading = true);
     try {
       final dio = await ApiClient.I.dio();
@@ -65,7 +67,7 @@ class _PhotosPageState extends State<PhotosPage> {
       final list = (r.data['items'] as List)
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
           .toList();
-      if (!mounted) return;
+      if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
       setState(() {
         _items.addAll(list);
         _offset += list.length;
@@ -73,13 +75,14 @@ class _PhotosPageState extends State<PhotosPage> {
         _failed = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted && gen == _gen) setState(() => _failed = true);
     } finally {
       _loading = false;
     }
   }
 
   Future<void> _refresh() async {
+    _gen++;
     setState(() {
       _items.clear();
       _offset = 0;
@@ -87,6 +90,12 @@ class _PhotosPageState extends State<PhotosPage> {
       _failed = false;
     });
     await _loadMore();
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
   }
 
   @override
@@ -125,7 +134,7 @@ class _PhotosPageState extends State<PhotosPage> {
                         }
                         final it = _items[i];
                         return GestureDetector(
-                          onTap: () => _openViewer(i),
+                          onTap: _base == null ? null : () => _openViewer(i),
                           child: AuthImage(
                               url: '$_base/thumb/${_encPath(it.path)}'),
                         );

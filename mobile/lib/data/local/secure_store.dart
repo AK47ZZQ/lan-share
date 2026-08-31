@@ -1,6 +1,8 @@
 // 设备 Token 存储：优先 Keystore/Keychain 加密（flutter_secure_storage）；
 // 部分安卓机 EncryptedSharedPreferences 会抛 PlatformException，此时降级
-// SharedPreferences（家用取舍：仅存可吊销的设备 Token，2026-09-01）。
+// SharedPreferences（家用取舍：仅存可吊销的设备 Token）。
+// 两路互斥：Keystore 写成功→清 fallback；写失败→清 Keystore 键再写 fallback。
+// 避免分裂双写（读旧写新的错位）。
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,7 +15,10 @@ class SecureStore {
   static Future<void> saveToken(String token) async {
     try {
       await _storage.write(key: _kToken, value: token);
+      final sp = await SharedPreferences.getInstance();
+      await sp.remove(_kTokenFallback);        // Keystore 为准，清掉降级副本
     } catch (_) {
+      await _storage.delete(key: _kToken);      // 两路互斥：先清失败的 Keystore
       final sp = await SharedPreferences.getInstance();
       await sp.setString(_kTokenFallback, token);
     }

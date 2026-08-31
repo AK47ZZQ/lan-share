@@ -91,11 +91,13 @@ def test_device_token_expiry_and_disabled_account(client):
     assert bare.get("/api/files/", headers=h2).status_code == 200
     uid = server._db().execute(
         "SELECT id FROM users WHERE username=?", (ADMIN_USER,)).fetchone()["id"]
-    server._db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
-    server._db().commit()
-    assert bare.get("/api/files/", headers=h2).status_code == 401
-    server._db().execute("UPDATE users SET is_active=1 WHERE id=?", (uid,))
-    server._db().commit()
+    try:
+        server._db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
+        server._db().commit()
+        assert bare.get("/api/files/", headers=h2).status_code == 401
+    finally:
+        server._db().execute("UPDATE users SET is_active=1 WHERE id=?", (uid,))
+        server._db().commit()
     assert bare.get("/api/files/", headers=h2).status_code == 200
 
 

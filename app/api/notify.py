@@ -64,7 +64,8 @@ _webhook_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="webhook-pu
 
 def push_webhook(title: str, body: str = "") -> None:
     """业务事件出口：有界线程池（2 worker）发送，失败只记审计、绝不阻塞/影响请求方；
-    突发事件在池内排队（超出队列的极端洪峰会丢弃,可控内存）。"""
+    突发事件在池的默认无界队列中排队（Python 标准库无有界队列，极端洪峰靠
+    限速/低频业务语义兜底）。"""
     url = get_webhook_url()
     if not url:
         return

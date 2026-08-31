@@ -17,6 +17,7 @@ class TrustStore {
   // host:port → 最近一次被拒证书的指纹（UI 读取后弹确认框）
   final Map<String, String> _pending = {};
   bool _warmed = false;
+  Future<void>? _warmupFuture;   // 并发 warmup 复用同一次 IO
 
   static String fingerprint(X509Certificate cert) =>
       sha256.convert(cert.der).toString();
@@ -29,13 +30,17 @@ class TrustStore {
         .replaceFirst(RegExp(r':$'), '');
   }
 
-  Future<void> warmup() async {
-    if (_warmed) return;
+  Future<void> warmup() {
+    if (_warmed) return Future.value();
+    return _warmupFuture ??= _doWarmup();
+  }
+
+  Future<void> _doWarmup() async {
     final raw = await SecureStore.string('trust_hosts');
     for (final key in raw?.split('\n') ?? const []) {
       if (key.isEmpty) continue;
       final fp = await SecureStore.string('trust_$key');
-      if (fp != null) _trusted[key] = fp;
+      if (fp != null && fp.isNotEmpty) _trusted[key] = fp;
     }
     _warmed = true;
   }

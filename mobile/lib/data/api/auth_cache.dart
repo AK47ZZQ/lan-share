@@ -19,6 +19,11 @@ class AuthFileService extends FileService {
     req.headers['authorization'] = 'Bearer ${token ?? ''}';
     if (headers != null) req.headers.addAll(headers);
     final resp = await _client.send(req);
+    // 非 2xx 绝不入缓存（否则 401 错误页会被当图片缓存住）
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      await resp.stream.drain<void>();
+      throw Exception('image fetch HTTP ${resp.statusCode}');
+    }
     return HttpGetResponse(resp);
   }
 }

@@ -22,6 +22,15 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   List<String> _addresses = const [];
 
   @override
+  void dispose() {
+    _server.dispose();
+    _username.dispose();
+    _password.dispose();
+    _totp.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     () async {
@@ -117,7 +126,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   void _submit() {
     final s = ref.read(sessionProvider);
     if (s.needTotp) {
-      ref.read(sessionProvider.notifier).loginTotp(_totp.text.trim());
+      ref.read(sessionProvider.notifier)
+          .loginTotp(_totp.text.trim(), server: _server.text.trim());
     } else {
       ref.read(sessionProvider.notifier).login(
           server: _server.text.trim(),

@@ -2,13 +2,14 @@
 import os
 import re
 import secrets
+import sqlite3
 import time
 from typing import Optional
 
 import pyotp
 from fastapi import Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from app.config import (COOKIE_NAME, DEVICE_TOKEN_MAX, DEVICE_TOKEN_TTL, SESSION_TTL,
@@ -326,14 +327,16 @@ def webdav_password_status(user=Depends(require_user)):
 async def set_webdav_password(request: Request, body: WebDavPasswordBody,
                               user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
-    # 与改密同款防线：密码确认失败计入防爆破锁定（否则会话被劫持后可无限试）
-    remaining = login_locked_remaining(row["username"])
+    # 与改密同款防线：密码确认失败计入防爆破锁定（否则会话被劫持后可无限试）。
+    # 公网侧失败只记公网侧，避免公网攻击者锁掉本人 LAN 登录（与 _dav_auth 同策略）
+    pub = is_public_entry(request)
+    remaining = login_locked_remaining(row["username"], pub)
     if remaining:
         audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await run_in_threadpool(verify_password, body.current_password, row["password_hash"]):
-        record_login_fail(row["username"])
+        record_login_fail(row["username"], pub)
         audit("webdav_password_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="当前密码错误")
     if body.webdav_password:
@@ -376,6 +379,7 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
                             detail=f"设备数已达上限（{DEVICE_TOKEN_MAX}），请先吊销不用的设备")
     token = secrets.token_urlsafe(32)
     now = time.time()
+    # 轮换判定 + UPDATE/INSERT 必须整体在 _db_lock 内（SELECT-then-write 竞态面）
     with _db_lock:
         # 同名设备轮换（App 重装/重复登录不产生僵尸设备）：直接换新凭据
         existing = _db().execute(
@@ -387,14 +391,24 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
                 (_sha(token), now, now, now + DEVICE_TOKEN_TTL, existing["id"]))
             device_id = existing["id"]
         else:
-            cur = _db().execute(
-                "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
-                "VALUES(?,?,?,?,?,?) RETURNING id",
-                (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
-            device_id = cur.fetchone()["id"]
+            try:
+                cur = _db().execute(
+                    "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
+                    "VALUES(?,?,?,?,?,?) RETURNING id",
+                    (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
+                device_id = cur.fetchone()["id"]
+            except sqlite3.IntegrityError:
+                # token_hash UNIQUE 极端碰撞：换一枚重试一次
+                token = secrets.token_urlsafe(32)
+                cur = _db().execute(
+                    "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
+                    "VALUES(?,?,?,?,?,?) RETURNING id",
+                    (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
+                device_id = cur.fetchone()["id"]
         _db().commit()
     audit("device_token_create", name, ip=client_ip(request))
-    return {"token": token, "device_id": device_id, "name": name, "created_at": now}
+    return JSONResponse({"token": token, "device_id": device_id, "name": name,
+                         "created_at": now}, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/auth/devices")

@@ -164,7 +164,7 @@ def preview_user(request: Request, user: sqlite3.Row) -> "sqlite3.Row | dict":
         "SELECT * FROM users WHERE username=? AND is_active=1", (as_name,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="预览目标成员不存在或已停用")
-    audit("preview_as", as_name, ip="")
+    audit("preview_as", as_name, ip=client_ip(request))
     d = dict(row)
     d["user_id"] = d["id"]
     return d

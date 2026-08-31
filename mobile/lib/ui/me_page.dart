@@ -27,6 +27,7 @@ class _MePageState extends ConsumerState<MePage> {
 
   Future<void> _load() async {
     _server = await Prefs.lastAddress();
+    if (mounted) setState(() {});
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/auth/devices');

@@ -70,15 +70,17 @@ class _FilesPageState extends State<FilesPage> {
   String get _path => _stack.isEmpty ? '' : _stack.last.path;
   List<Entry> get _current => _stack.isEmpty ? const [] : _stack.last.items;
 
-  /// 进入一层目录（push）
+  /// 进入一层目录（push）。加载中忽略新请求（防连点导致栈错乱）
   Future<void> _push(String path) async {
+    if (_loading) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final dio = await ApiClient.I.dio();
-      final r = await dio.get(path.isEmpty ? '/api/files' : '/api/files/$path');
+      final enc = path.split('/').map(Uri.encodeComponent).join('/');
+      final r = await dio.get(path.isEmpty ? '/api/files' : '/api/files/$enc');
       final items = (r.data['items'] as List)
           .map((e) => Entry.fromJson(e as Map<String, dynamic>))
           .toList()
@@ -102,10 +104,12 @@ class _FilesPageState extends State<FilesPage> {
 
   /// 刷新当前层（替换栈顶）
   Future<void> _refresh() async {
+    if (_loading) return;
     final target = _path;
     try {
       final dio = await ApiClient.I.dio();
-      final r = await dio.get(target.isEmpty ? '/api/files' : '/api/files/$target');
+      final enc = target.split('/').map(Uri.encodeComponent).join('/');
+      final r = await dio.get(target.isEmpty ? '/api/files' : '/api/files/$enc');
       final items = (r.data['items'] as List)
           .map((e) => Entry.fromJson(e as Map<String, dynamic>))
           .toList()

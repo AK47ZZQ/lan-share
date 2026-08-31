@@ -7,7 +7,15 @@ import 'ui/home_shell.dart';
 import 'ui/login_page.dart';
 
 void main() {
-  runApp(const ProviderScope(child: LanShareApp()));
+  // 回调在 runApp 前注入：避免"启动期 401 拦截器无回调"的窗口期
+  final container = ProviderContainer();
+  onUnauthorized = () {
+    if (container.read(sessionProvider).loggedIn) {
+      container.read(sessionProvider.notifier).logout();
+    }
+  };
+  runApp(UncontrolledProviderScope(
+      container: container, child: const LanShareApp()));
 }
 
 class LanShareApp extends ConsumerWidget {
@@ -15,12 +23,6 @@ class LanShareApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Token 失效（401 拦截器清掉后）→ 清会话回登录页
-    onUnauthorized = () {
-      if (ref.read(sessionProvider).loggedIn) {
-        ref.read(sessionProvider.notifier).logout();
-      }
-    };
     final session = ref.watch(sessionProvider);
     return MaterialApp(
       title: 'LAN Share',
