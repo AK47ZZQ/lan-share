@@ -82,7 +82,7 @@ watchEffect(() => {
       <!-- 成员视角预览横幅（admin 专用） -->
       <div v-if="previewAs" style="position:sticky;top:0;z-index:70;display:flex;gap:10px;align-items:center;justify-content:center;padding:7px 12px;font-size:13px;background:var(--accent,#4f7cff);color:#fff">
         <span>👁 正在以 <b>{{ previewAs }}</b> 的视角浏览（只读预览，操作仍按你的管理员权限执行）</span>
-        <button class="btn sm" style="background:#fff;color:inherit;border:none" @click="exitPreview">退出视角</button>
+        <button class="btn sm" style="background:#fff;color:#1f2430;border:none;font-weight:600" @click="exitPreview">退出视角</button>
       </div>
       <header class="topbar">
         <router-link to="/" class="brand" title="回到主页">
