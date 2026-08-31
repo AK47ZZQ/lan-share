@@ -102,6 +102,17 @@ function thumbOf(e: Entry): string | null {
   if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return `/thumb/${encodeURI(e.path)}`
   return null
 }
+// 缩略图懒加载体验：加载完成淡入（CSS 据此停掉占位微光）；失败自动重试一次（瞬时错误自愈）
+function thumbLoad(ev: Event) { (ev.target as HTMLImageElement).classList.add('th-ok') }
+function thumbError(ev: Event) {
+  const img = ev.target as HTMLImageElement
+  if (!img.dataset.retried) {
+    img.dataset.retried = '1'
+    img.src = img.src + (img.src.includes('?') ? '&' : '?') + '_r=1'
+  } else {
+    img.classList.add('th-fail')  // 重试仍失败：停掉微光，静默保持占位
+  }
+}
 function fileIcon(e: Entry): string {
   if (e.is_dir) return '📁'
   const ext = (e.ext || '').toLowerCase()
@@ -359,7 +370,7 @@ onUnmounted(() => {
            @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox gcheck" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
         <span class="gicon" :class="e.is_private_root ? 'private' : e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
-          <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
+          <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" @load="thumbLoad" @error="thumbError" />
           <template v-else>{{ e.is_private_root ? '🔒' : fileIcon(e) }}</template>
         </span>
         <span class="gname" :title="e.name">{{ e.name }}</span>
@@ -376,7 +387,7 @@ onUnmounted(() => {
            @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
         <span class="icon" :class="{ 'icon-private': e.is_private_root }">
-          <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" />
+          <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" @load="thumbLoad" @error="thumbError" />
           <template v-else>{{ e.is_private_root ? '🔒' : fileIcon(e) }}</template>
         </span>
         <span class="name">

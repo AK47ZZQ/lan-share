@@ -193,6 +193,18 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
   overflow: hidden;
 }
 .frow .icon img { width: 100%; height: 100%; object-fit: cover; }
+/* 缩略图懒加载占位：加载中微光流动，完成/最终失败后停止——
+   大文件夹滚动时占位可见"在加载"，不再是莫名的空白格子 */
+.frow .icon img:not(.th-ok), .gcard .gicon img:not(.th-ok) {
+  background: linear-gradient(100deg, rgba(127, 127, 145, .10) 35%, rgba(127, 127, 145, .26) 50%, rgba(127, 127, 145, .10) 65%);
+  background-size: 200% 100%;
+  animation: th-shimmer 1.1s linear infinite;
+}
+.frow .icon img.th-fail, .gcard .gicon img.th-fail { animation: none; background: rgba(127, 127, 145, .10); }
+@keyframes th-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .frow .icon img:not(.th-ok), .gcard .gicon img:not(.th-ok) { animation: none; background: rgba(127, 127, 145, .14); }
+}
 .frow .name { flex: 1; min-width: 0; font-size: 14.5px; }
 .frow .name div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .frow .name small { color: var(--text-3); font-size: 12px; }
