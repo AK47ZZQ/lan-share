@@ -9,7 +9,7 @@ import os
 
 import pyotp
 
-from conftest import ADMIN_PASS, ADMIN_USER
+from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
 import server  # noqa: E402  (conftest 已先设置 SHARE_ROOT 并导入)
 
@@ -18,7 +18,7 @@ def _rand() -> str:
     return os.urandom(3).hex()
 
 
-def _member_session(client, username: str, password: str = "member-pass-123"):
+def _member_session(client, username: str, password: str = MEMBER_PASS):
     c = client.__class__(server.app, base_url="https://testserver")
     r = c.post("/api/login", json={"username": username, "password": password})
     assert r.status_code == 200
@@ -32,7 +32,7 @@ def _admin(client):
     return c
 
 
-def _mk_member(client, username: str, password: str = "member-pass-123"):
+def _mk_member(client, username: str, password: str = MEMBER_PASS):
     """邀请码建号（覆盖邀请链路），返回可登录凭据。"""
     admin = _admin(client)
     inv = admin.post("/api/admin/invites", json={"role": "member", "hours": 24},

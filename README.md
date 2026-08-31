@@ -13,9 +13,10 @@
 ├── 安全模型 .......... docs/SECURITY.md
 ├── 开发指南 .......... docs/DEVELOPMENT.md
 ├── v3 实施状态 ....... docs/STATUS-v3.md
+├── 移动 App 规划 ..... docs/DESIGN-v3/APP-REQUIREMENTS.md + APP-DESIGN.md
 ├── 版本历史 .......... CHANGELOG.md
 ├── Git 工作流 ........ docs/GIT.md
-└── 演进规划 .......... PLAN-v3.md（v2 存档：PLAN.md）
+└── 演进规划 .......... PLAN-v3.md（§7 远景：CF Tunnel/移动 App；v2 存档：PLAN.md）
 ```
 
 ## 快速开始
@@ -90,6 +91,10 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 
 **手机直传**：`/up` 页上传到 `incoming/<用户名>/`；文件页 `incoming/` 卡片
 即本人目录。
+
+**移动端**：PWA 已支持——手机浏览器"添加到主屏幕"即得全屏独立应用
+（自定义图标/启动画面/静态资产离线缓存）；原生 App（Flutter 跨端，含
+相册自动备份）已完成需求规格与技术设计，见 `docs/DESIGN-v3/APP-*.md`。
 
 **WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
 
@@ -167,7 +172,11 @@ tail -f logs/api-stderr.log logs/caddy-stderr.log
 
 v2 个人网盘（P0–P3）✅ → v3 家庭团队版：M0 拆包 ✅ · M1 数据层 ✅（v3.5 起
 **PostgreSQL 16 生产库**，SQLite 仅测试）· M2 Vue 全站 ✅ · M3 多用户核心 ✅
-（TOTP 可选启用）· M4 团队体验 ✅（定向分享/通知/动态流/共享相册双维度；
-通知 bot 挂账）· M5 可靠性 ✅（每日 pg_dump 备份保留 2 天；第二块备份盘
-与恢复演练挂账）。
-详见 `docs/STATUS-v3.md`；规划见 `PLAN-v3.md`。
+（TOTP 可选启用）· M4 团队体验 ✅（定向分享/通知/动态流/共享相册双维度/
+大文件上传/暂停续传/移动 PWA；通知 bot 挂账）· M5 可靠性 ✅（每日 pg_dump
+备份保留 2 天；公网入口隔离加固——防爆破分账/healthz 公网 404/限速分桶；
+第二块备份盘与恢复演练挂账）。
+**移动方向**：PWA 阶段 0 ✅（添加到主屏幕）；原生 App（Flutter 跨端，含相册
+自动备份）需求规格与技术设计已成文（`docs/DESIGN-v3/APP-*.md`），待启动
+M-A0（设备 Token 后端）。
+详见 `docs/STATUS-v3.md`；规划见 `PLAN-v3.md`（§7 远景：CF Tunnel/域名试点）。

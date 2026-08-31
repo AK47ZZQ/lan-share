@@ -9,7 +9,7 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import server
+from conftest import MEMBER_PASS2, server
 
 
 @pytest.fixture()
@@ -23,10 +23,10 @@ def make_user(auth, client):
         assert r.status_code == 200, r.text
         code = r.json()["code"]
         r = client.post("/api/invites/redeem", json={
-            "code": code, "username": username, "password": "pass-12345678"})
+            "code": code, "username": username, "password": MEMBER_PASS2})
         assert r.status_code == 200, r.text
         c = TestClient(server.app, base_url="https://testserver")
-        r = c.post("/api/login", json={"username": username, "password": "pass-12345678"})
+        r = c.post("/api/login", json={"username": username, "password": MEMBER_PASS2})
         assert r.status_code == 200, r.text
         c.username = username
         created.append(username)
@@ -50,13 +50,13 @@ def test_redeem_reserved_username_rejected(auth, client):
     code = auth.get("/api/admin/invites").json()[0]["code"]
     for bad in ("shared", "private", "incoming", "tmp"):
         r = client.post("/api/invites/redeem", json={
-            "code": code, "username": bad, "password": "pass-12345678"})
+            "code": code, "username": bad, "password": MEMBER_PASS2})
         assert r.status_code == 400, bad
 
 
 def test_redeem_bad_code_rejected(client):
     assert client.post("/api/invites/redeem", json={
-        "code": "no-such-code", "username": "someone1", "password": "pass-12345678"
+        "code": "no-such-code", "username": "someone1", "password": MEMBER_PASS2
     }).status_code == 403
 
 
@@ -281,7 +281,7 @@ def test_disabled_account_sessions_revoked(auth, make_user):
     # 既有会话立即失效；重新登录被拒
     assert member.get("/api/auth/me").status_code == 401
     r = member.post("/api/login",
-                    json={"username": member.username, "password": "pass-12345678"})
+                    json={"username": member.username, "password": MEMBER_PASS2})
     assert r.status_code == 403
 
 
@@ -303,7 +303,7 @@ def test_webdav_member_can_read_shared_not_private_others(auth, make_user):
     import base64
     member = make_user("member")
     header = {"Authorization": "Basic " + base64.b64encode(
-        f"{member.username}:pass-12345678".encode()).decode()}
+        f"{member.username}:{MEMBER_PASS2}".encode()).decode()}
     r = member.request("PROPFIND", "/dav/", headers=header)
     assert r.status_code == 207
     # 别人的私人目录经 WebDAV 也是 403（resolve 同源）

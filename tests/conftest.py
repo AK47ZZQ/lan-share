@@ -23,6 +23,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 ADMIN_USER = "admin"
 ADMIN_PASS = "test-pass-123"
+MEMBER_PASS = "member-pass-123"    # 测试成员默认口令（一次性内存实例，非真实凭据）
+MEMBER_PASS2 = "pass-12345678"      # 同上：多用户测试备用口令
 
 
 @pytest.fixture(scope="session")
