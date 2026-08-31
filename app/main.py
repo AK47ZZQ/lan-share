@@ -5,7 +5,7 @@
 页面路由与 static 挂载殿后——与 v2 单文件的注册顺序保持一致。
 """
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import urlsplit
 
@@ -107,13 +107,39 @@ if _SPA_READY:
 
 # history 深链回退：/photos /trash /admin 等 UI 路径 → SPA。
 # 注册在 /api、/dav、/files 等真实路由之后，仅兜底 GET HTML 请求。
+_PWA_PUBLIC_FILES = {"manifest.webmanifest", "sw.js"}          # 免登录（OS/浏览器拉取不带会话）
+_PWA_PUBLIC_PREFIX = ("icons/",)
+
+
+def _dist_file(spa_path: str):
+    """dist 内真实文件直供（PWA 资产等）；防穿越，越界返回 None。"""
+    candidate = (_spa_dist / spa_path).resolve()
+    try:
+        candidate.relative_to(_spa_dist.resolve())
+    except ValueError:
+        return None
+    if candidate.is_file():
+        mt = "application/manifest+json" if candidate.suffix == ".webmanifest" else (
+            "application/javascript" if candidate.suffix == ".js" else "image/png" if candidate.suffix == ".png" else None)
+        return FileResponse(candidate, media_type=mt or "application/octet-stream")
+    return None
+
+
 @app.get("/{spa_path:path}", response_class=HTMLResponse)
 async def spa_fallback(spa_path: str, request: Request):
     if spa_path.startswith(("api/", "dav", "files/", "preview/", "thumb/", "static/",
                             "assets/", "s/", "authcheck", "healthz", "up", "login")) or spa_path == "":
         raise HTTPException(status_code=404)
+    if _SPA_READY and (spa_path in _PWA_PUBLIC_FILES or spa_path.startswith(_PWA_PUBLIC_PREFIX)):
+        f = _dist_file(spa_path)
+        if f:
+            return f
     if not get_session_user(request):
         return RedirectResponse(f"/login?next={request.url.path}", status_code=307)
+    if _SPA_READY:
+        f = _dist_file(spa_path)
+        if f:
+            return f
     return spa_index()
 
 
