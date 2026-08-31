@@ -412,7 +412,7 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
   .frow:not(.file-row) .name { flex: 1 1 calc(100% - 54px); min-width: 0; }
   .frow:not(.file-row) .meta { display: none; }
   .frow:not(.file-row) .ops, .frow:not(.file-row) .ops[style] {
-    opacity: 1; width: 100%; justify-content: flex-end;
+    opacity: 1; width: 100%; justify-content: flex-end; flex-wrap: wrap;
     border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px;
   }
   .modal-card { max-height: 88vh; }
