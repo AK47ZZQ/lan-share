@@ -37,7 +37,9 @@ def safe_path(rel: str) -> Path:
 
 
 def clean_filename(name: str) -> str:
-    n = re.sub(r'[/\\:\x00-\x1f]', '_', name or 'unnamed')  # 分隔符/冒号(NTFS ADS)/控制符
+    # Windows 文件名非法字符全集：/ \ : * ? " < > | 与控制符——手机端（Linux FS）
+    # 传来的文件名可含后者，漏洗会在落盘时 OSError 500
+    n = re.sub(r'[/\\:*?"<>|\x00-\x1f]', '_', name or 'unnamed')
     n = n.strip().rstrip('. ')                              # 结尾点/空格（NTFS 会静默剥离）
     if not n:
         n = 'unnamed'

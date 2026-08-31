@@ -98,9 +98,9 @@ function parentDir(p: string): string {
 function thumbOf(e: Entry): string | null {
   if (e.is_dir) return null
   const ext = (e.ext || '').toLowerCase()
-  if (['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'].includes(ext)) return `/thumb/${encodeURI(e.path)}`
-  if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return `/thumb/${encodeURI(e.path)}`
-  return null
+  if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return null
+  // encodeURI 不编码 # ? % 等字符——含这些字符的文件名会截断/破坏 URL，逐段 encodeURIComponent
+  return `/thumb/${e.path.split('/').map(encodeURIComponent).join('/')}`
 }
 // 缩略图懒加载体验：加载完成淡入（CSS 据此停掉占位微光）；失败自动重试一次（瞬时错误自愈）
 function thumbLoad(ev: Event) { (ev.target as HTMLImageElement).classList.add('th-ok') }
@@ -199,7 +199,7 @@ async function doZip() {
     window.open(r.url, '_blank')
   } catch (e) { toast((e as Error).message, 'err') }
 }
-function download(e: Entry) { window.open(`/files/${encodeURI(e.path)}`, '_blank') }
+function download(e: Entry) { window.open(`/files/${e.path.split('/').map(encodeURIComponent).join('/')}`, '_blank') }
 
 // ── 上传（队列引擎在 uploader.ts；粘贴/拖拽入口在此）──
 const uploading = uploadingNow

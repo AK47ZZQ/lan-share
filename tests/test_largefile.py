@@ -159,3 +159,12 @@ def test_simple_upload_overwrite_trashes_old(auth):
     assert auth.post(f"/api/upload/?path=", files={"file": (name, b"first")}).status_code == 200
     assert auth.post(f"/api/upload/?path=", files={"file": (name, b"second")}).status_code == 200
     assert name in _trash_names(auth)
+
+
+def test_upload_sanitizes_windows_illegal_chars(auth):
+    # 手机端（Linux FS）可传来 Windows 非法字符 ? * < > | ——须清洗而非 500
+    name = 'bad?name|with*chars<x>.txt'
+    r = auth.post("/api/upload/?path=", files={"file": (name, b"content")})
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == 'bad_name_with_chars_x_.txt'
+    auth.delete("/api/files/" + r.json()["path"])

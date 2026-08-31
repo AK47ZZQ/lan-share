@@ -177,7 +177,7 @@ export async function confirmLargeUpload(file: File): Promise<boolean> {
   const est = fmtDur(file.size / (3.75 * 1024 * 1024)) // 按家庭上行 30Mbps ≈ 3.75MB/s 估算
   let tip: string
   if (file.size >= 10 * GB) {
-    tip = `这是一个 ${gb} GB 的大文件，当前正在通过公网上传，预计需要 ${est} 甚至更久（家庭上行带宽通常远低于局域网）。中断后可断点续传，但强烈建议回到局域网（http://192.168.1.11:8765）再传。`
+    tip = `这是一个 ${gb} GB 的大文件，当前正在通过公网上传，预计需要 ${est} 甚至更久（家庭上行带宽通常远低于局域网）。中断后可断点续传，但强烈建议回到局域网（http://192.168.1.100:8765）再传。`
   } else if (file.size >= 5 * GB) {
     tip = `这是一个 ${gb} GB 的大文件，当前正在通过公网上传，预计需要 ${est} 左右（按上行 30Mbps 估算）。回到局域网内传输会快得多，确定现在继续吗？`
   } else {
@@ -186,17 +186,20 @@ export async function confirmLargeUpload(file: File): Promise<boolean> {
   return confirmDlg(tip, { title: '🌐 公网上传大文件提醒', okText: '继续上传' })
 }
 
-/** XHR 发送单个分块（fetch 不支持上传进度；XHR upload.onprogress 可逐字节回报） */
+/** XHR 发送单个分块（fetch 不支持上传进度；XHR upload.onprogress 可逐字节回报）。
+ *  120s 超时：半开连接（断网/休眠唤醒）否则会永久卡死并发 worker */
 function xhrSendChunk(url: string, blob: Blob, signal: AbortSignal | undefined,
                       onSent: (loaded: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return }
     const xhr = new XMLHttpRequest()
     xhr.open('POST', url)
+    xhr.timeout = 120_000
     signal?.addEventListener('abort', () => xhr.abort(), { once: true })
     xhr.upload.onprogress = e => { if (e.lengthComputable) onSent(e.loaded) }
     xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`HTTP ${xhr.status}`))
     xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.ontimeout = () => reject(new Error('超时'))
     xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'))
     xhr.send(blob)
   })
