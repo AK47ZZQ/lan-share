@@ -1,8 +1,8 @@
 """站内通知：定向分享等事件的收件箱（每人只读自己的）+ 站外事件推送（通知 bot）。"""
-import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import Depends
 
@@ -59,8 +59,12 @@ def webhook_send(url: str, title: str, body: str = "") -> None:
         resp.read(64)   # 读完一小段确保送达，随即关闭
 
 
+_webhook_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="webhook-push")
+
+
 def push_webhook(title: str, body: str = "") -> None:
-    """业务事件出口：后台线程发送，任何失败只记审计、绝不阻塞/影响请求方。"""
+    """业务事件出口：有界线程池（2 worker）发送，失败只记审计、绝不阻塞/影响请求方；
+    突发事件在池内排队（超出队列的极端洪峰会丢弃,可控内存）。"""
     url = get_webhook_url()
     if not url:
         return
@@ -71,4 +75,4 @@ def push_webhook(title: str, body: str = "") -> None:
         except Exception as e:
             audit("webhook_fail", title[:60], str(e)[:120])
 
-    threading.Thread(target=_run, daemon=True, name="webhook-push").start()
+    _webhook_pool.submit(_run)

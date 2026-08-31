@@ -48,7 +48,7 @@ async function saveDav() {
   try {
     await api.adminSetWebdavPwd(props.user.id, davPwd.value)
     await navigator.clipboard?.writeText(davPwd.value).catch(() => {})
-    toast(`「${props.user.username}」WebDAV 密码已更新并复制到剪贴板`, 'ok')
+    toast(`WebDAV 密码已更新并复制到剪贴板（密码会留在剪贴板历史，请尽快粘贴到安全渠道发送）`, 'ok')
     davPwd.value = ''
     emit('changed')
   } catch (e) { toast((e as Error).message, 'err') } finally { davBusy.value = false }

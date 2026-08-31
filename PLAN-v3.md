@@ -155,7 +155,8 @@ Naive UI + VueUse、Pillow、qrcode、ffmpeg（可选）。
   上架评估（软著/隐私政策/iOS 开发者账号）
 - 后端前置：`/api/auth/token` 长效设备 Token 三端点（设计见 APP-DESIGN §3）
 
-### 7.4 待选小项（随做随记）
+### 7.4 待选小项（随做随记）——2026-09-01 全部完成
 
-HEIC 缩略图/预览（iPhone 用户，需引入 pillow-heif 依赖并记录）、通知 bot、
-WebDAV 独立应用密码、管理面板成员视角预览。
+✅ HEIC 缩略图/预览（pillow-heif，已按 §6 在 CHANGELOG 记录）、✅ 通知 bot
+（通用 GET 模板 Webhook，admin 可配）、✅ WebDAV 独立应用密码（设置后 DAV
+只认它）、✅ 管理面板成员视角预览（X-As-User 只读，四个列表接口）。

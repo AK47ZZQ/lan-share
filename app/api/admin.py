@@ -7,6 +7,7 @@ import secrets
 import time
 
 from fastapi import Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
@@ -349,14 +350,16 @@ def admin_set_webhook(body: dict, request: Request, _admin=Depends(require_admin
 
 
 @app.post("/api/admin/webhook/test")
-def admin_test_webhook(request: Request, _admin=Depends(require_admin)):
-    """同步发一条测试消息，失败原样带回错误（配置排错用）。"""
+async def admin_test_webhook(request: Request, _admin=Depends(require_admin)):
+    """同步发一条测试消息，失败原样带回错误（配置排错用）。走线程池执行网络请求，
+    不长期占用事件循环。"""
     url = get_webhook_url()
     if not url:
         raise HTTPException(status_code=400, detail="尚未配置推送地址")
     who = _admin["username"]
     try:
-        webhook_send(url, "LAN Share 测试推送", f"来自 {who} 的配置测试，收到即说明链路 OK")
+        await run_in_threadpool(
+            webhook_send, url, "LAN Share 测试推送", f"来自 {who} 的配置测试，收到即说明链路 OK")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"推送失败：{str(e)[:200]}")
     audit("webhook_test", ip=client_ip(request))

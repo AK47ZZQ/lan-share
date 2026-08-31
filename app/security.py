@@ -121,11 +121,13 @@ def require_admin(request: Request) -> sqlite3.Row:
     return user
 
 
-def preview_user(request: Request, user: sqlite3.Row) -> sqlite3.Row:
-    """admin 成员视角预览：只读列表接口（文件/相册/分享）带 X-As-User 头时，
+def preview_user(request: Request, user: sqlite3.Row) -> "sqlite3.Row | dict":
+    """admin 成员视角预览：只读列表接口（文件/相册/分享/元数据）带 X-As-User 头时，
     以目标成员身份做可见性解析；非 admin 一律原样返回（成员传该头无效）。
     仅影响"能看到什么"——写操作仍按真实会话身份走（前端横幅有提示）。
-    返回 dict 并补 user_id=id：会话行的主键名是 user_id，users 表本身是 id。"""
+    命中预览记审计（防被劫持会话静默侦察用户名）。
+    返回 dict 并补 user_id=id（users 表主键是 id，会话行叫 user_id）；dict 与
+    Row 的键访问/`.keys()` 语义一致，resolve/visible 的取值写法两者兼容。"""
     as_name = (request.headers.get("x-as-user") or "").strip()
     if not as_name or user["role"] != "admin":
         return user
@@ -133,6 +135,7 @@ def preview_user(request: Request, user: sqlite3.Row) -> sqlite3.Row:
         "SELECT * FROM users WHERE username=? AND is_active=1", (as_name,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="预览目标成员不存在或已停用")
+    audit("preview_as", as_name, ip="")
     d = dict(row)
     d["user_id"] = d["id"]
     return d

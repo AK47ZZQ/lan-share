@@ -324,10 +324,12 @@ def delete_album(album_id: str, _admin=Depends(require_admin)):
 
 
 @app.get("/api/photo/meta")
-def photo_meta(path: str = Query(..., min_length=1), _user=Depends(require_user)):
+def photo_meta(request: Request, path: str = Query(..., min_length=1),
+               _user=Depends(require_user)):
     """图片元数据：原始尺寸 + 拍摄设备（EXIF）。预览信息面板用。"""
     from app.api.files import IMG_EXTS
-    target = resolve(_user, path, "read")
+    user = preview_user(request, _user)   # 与列表接口一致：admin 视角下按成员身份解析
+    target = resolve(user, path, "read")
     if not target.is_file() or target.suffix.lower() not in IMG_EXTS:
         raise HTTPException(status_code=404, detail="Not an image")
     width = height = None

@@ -22,7 +22,7 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
 
 ## 环境与运行
 
-- Python 3.11 + FastAPI/uvicorn/aiofiles/Pillow/qrcode（既有 venv，见 `install-service.bat` 中的 PYTHON 路径）
+- Python 3.11 + FastAPI/uvicorn/aiofiles/Pillow/qrcode/pillow-heif（既有 venv，见 `install-service.bat` 中的 PYTHON 路径；pillow-heif 为 HEIC 解码插件，缺失时静默降级）
 - Caddy v2.11 原生二进制（`caddy.exe`，**不要**换成需要插件的构建）
 - ffmpeg（可选）：仅视频缩略图用，缺失时视频缩略图返回 404，不影响其它功能
 

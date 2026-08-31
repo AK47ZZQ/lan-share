@@ -21,9 +21,16 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | GET | `/api/auth/me` | 🔑 | `{username, role, quota_bytes}`；401=未登录（前端以此为登录态探测） |
 | POST | `/api/auth/password` | 🔑 | `{old_password, new_password}`；改密吊销全部会话并重签当前 |
 | POST | `/api/auth/username` | 🔑 | `{new_username, password}` 改用户名，需当前密码确认（失败计入防爆破锁定，锁定期 429）；登录态不变；空白/控制字符/超 64 字符 400，同名（不分大小写）400，密码错误 403 |
+| GET | `/api/auth/webdav-password` | 🔑 | `{set}` 是否已设置 WebDAV 独立密码（不回传哈希） |
+| POST | `/api/auth/webdav-password` | 🔑 | `{current_password, webdav_password}` 设置/清除（空串=清除）WebDAV 独立密码；需当前密码确认（失败计入防爆破）；≥8 位 |
 | GET | `/authcheck` | 🔓 | Caddy forward_auth 子请求入口；200=会话有效 / 401 |
 
 ## 文件
+
+> **成员视角预览（09-01）**：`GET /api/files`、`GET /api/photos`、
+> `GET /api/photos/facets`、`GET /api/shares`、`GET /api/photo/meta` 支持请求头
+> `X-As-User: <成员名>`——admin 会话以该成员身份解析可见性（只读；成员传头
+> 无效；目标不存在 404；命中记 `preview_as` 审计）。
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
@@ -42,7 +49,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | GET | `/api/search?q=` | 🔑 | 文件名搜索，最多 50 条 |
 | GET | `/api/recent?limit=` | 🔑 | 最近修改（≤100） |
 | GET | `/api/disk` · `/api/disk/detail` | 🔑 | C 盘用量 + 网盘统计（`share_size` 按文件索引去重，硬链接只计一次；detail 附各一级目录逻辑大小 `categories`） |
-| GET | `/api/photos?limit=&offset=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,thumb}]}`（EXIF 日期倒序） |
+| GET | `/api/photos?limit=&offset=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,thumb}]}`（EXIF 日期倒序；jpg/jpeg/png/webp/bmp/heic/heif） |
 
 ## 回收站
 
@@ -135,6 +142,10 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | DELETE | `/api/admin/users/{uid}` | 删号（grants/会话级联；私人目录改名 `.orphaned/<uid>-<名>/`） |
 | POST | `/api/admin/users/{uid}/username` | `{value}` 管理员改成员用户名（校验同自助改名的保留词/重名规则；私人目录同步改名；成员会话保持） |
 | POST | `/api/admin/users/{uid}/password` | `{value}` 管理员重置成员密码（≥8 位；该成员全部会话吊销） |
+| POST | `/api/admin/users/{uid}/webdav-password` | `{value}` 重置成员 WebDAV 独立密码（≥8 位）；`{value:""}` 清除回退登录密码；不动网页会话 |
+| GET | `/api/admin/webhook` | 查看事件推送 Webhook 模板 URL |
+| POST | `/api/admin/webhook` | `{url}` 设置推送模板（http(s) 且含 `{title}/{body}` 占位符；空串清除） |
+| POST | `/api/admin/webhook/test` | 同步发测试消息；失败 502 带原因，未配置 400 |
 | GET/POST | `/api/admin/invites` | 邀请码列表 / 创建 `{role: member\|guest, hours}` |
 | DELETE | `/api/admin/invites/{code}` | 删除邀请记录（任意状态） |
 | GET/POST | `/api/admin/grants` | 目录授权查询 / 创建 `{user_id, path, can_read, can_write, expires_hours?}`（仅 shared 空间目录） |
