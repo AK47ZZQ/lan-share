@@ -1,5 +1,5 @@
 # ---- 运行数据 / 用户文件（data/ 是网盘数据根，含 .meta.db 账号库） ----
-data/
+/data/
 logs/
 __pycache__/
 *.pyc
