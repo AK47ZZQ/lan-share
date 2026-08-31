@@ -300,7 +300,7 @@ onUnmounted(() => {
   <main class="page">
     <div class="page-head">
       <div class="title-row"><h1>文件</h1></div>
-      <button v-if="path && view === 'browse'" class="btn ghost sm" @click="load(path.split('/').slice(0, -1).join('/'))">← 返回</button>
+      <button v-if="path && view === 'browse'" class="btn ghost sm" title="回到文件主页" @click="load('')">← 返回主页</button>
       <input v-model="searchQ" placeholder="搜索文件…" class="searchbox"
              @keydown.enter="runSearch" @input="!searchQ && (searchResults = null)" />
       <button class="btn ghost sm" @click="runSearch" title="搜索">🔍</button>
