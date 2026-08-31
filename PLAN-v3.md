@@ -153,7 +153,8 @@ Naive UI + VueUse、Pillow、qrcode、ffmpeg（可选）。
   账本去重；Android WorkManager+MediaStore、iOS BGTaskScheduler）
 - **阶段 2**：推送通知（轮询起步，后期厂商通道）、离线缓存、系统分享接收、
   上架评估（软著/隐私政策/iOS 开发者账号）
-- 后端前置：`/api/auth/token` 长效设备 Token 三端点（设计见 APP-DESIGN §3）
+- 后端前置：~~`/api/auth/token` 长效设备 Token 三端点~~ ✅ **M-A0 已上线**
+  （2026-09-01，含 Bearer 中间件与 4 项测试，契约见 APP-DESIGN §3 并已冻结）
 
 ### 7.4 待选小项（随做随记）——2026-09-01 全部完成
 

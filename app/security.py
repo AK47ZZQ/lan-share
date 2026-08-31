@@ -11,8 +11,8 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
-from app.config import (AUDIT_KEEP, COOKIE_NAME, LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS,
-                        SESSION_RENEW_AFTER, SESSION_TTL)
+from app.config import (AUDIT_KEEP, COOKIE_NAME, DEVICE_TOKEN_TTL, LOGIN_LOCK_SECONDS,
+                        LOGIN_MAX_FAILS, SESSION_RENEW_AFTER, SESSION_TTL)
 from app.db import _db, _db_lock
 
 # 当前请求的登录用户名：中间件注入，audit() 自动带上（公开入口为空串）
@@ -93,6 +93,35 @@ def get_session_user(request: Request) -> Optional[sqlite3.Row]:
     return row
 
 
+def get_bearer_user(request: Request) -> Optional[sqlite3.Row]:
+    """App 设备 Token 认证（Authorization: Bearer，APP-DESIGN §3），与 Cookie 会话并存。
+    库存 SHA256 哈希；90 天滑动过期（距上次续期超 24h 才写库）；last_seen 节流 1h；
+    停用账号即失效（JOIN users 过滤）。浏览器不会自动携带该头，无 CSRF 面。"""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    th = _sha(auth[7:].strip())
+    row = _db().execute(
+        "SELECT t.id AS device_id, t.user_id, t.expires_at, t.last_seen, "
+        "u.username, u.role, u.is_active, u.quota_bytes "
+        "FROM device_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
+        (th,)).fetchone()
+    if not row or not row["is_active"]:
+        return None
+    now = time.time()
+    if now > row["expires_at"]:
+        return None
+    with _db_lock:
+        if row["expires_at"] < now + DEVICE_TOKEN_TTL - SESSION_RENEW_AFTER:
+            _db().execute("UPDATE device_tokens SET expires_at=? WHERE id=?",
+                          (now + DEVICE_TOKEN_TTL, row["device_id"]))
+        if not row["last_seen"] or now - row["last_seen"] > 3600:
+            _db().execute("UPDATE device_tokens SET last_seen=? WHERE id=?",
+                          (now, row["device_id"]))
+        _db().commit()
+    return row
+
+
 def create_session(request: Request, user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     now = time.time()
@@ -107,7 +136,7 @@ def create_session(request: Request, user_id: int) -> str:
 
 
 def require_user(request: Request) -> sqlite3.Row:
-    user = get_session_user(request)
+    user = get_session_user(request) or get_bearer_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user

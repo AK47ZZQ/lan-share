@@ -1,5 +1,19 @@
 # 更新日志
 
+## 2026-09-01（晚）— M-A0 设备 Token 上线（手机 App 里程碑第一步）
+
+按 `APP-DESIGN §3` 契约实现并冻结（Flutter 阶段 1 的服务端前置）：
+- **Token 三端点**：`POST /api/auth/token`（会话换设备 Token，明文仅返回一次）、
+  `GET /api/auth/devices`（设备列表 + current 标记）、`DELETE /api/auth/devices/{id}`
+  （吊销，审计留痕）
+- **Bearer 中间件**：`require_user` 先 Cookie 后 `Authorization: Bearer`，App 全
+  业务端点免改造直通；90 天滑动过期（续期节流 24h）、last_seen 节流 1h、停用
+  账号即刻失效；审计中间件同等识别 Bearer 操作者
+- 新表 `device_tokens`（双引擎）；单账号 20 台上限、签发限速 20 次/时
+- 新增测试 4 项（tests/test_devicetoken.py），全量 **83 项 pytest 绿**
+- 契约要点（App 侧实现依据）：401 → 清 Token → 登录页；TOTP 账号先走
+  `/api/login/totp` 拿会话再换 Token
+
 ## 2026-09-01 — 四小项批次（挂账清单清空）
 
 ① **HEIC/HEIF 缩略图与预览**：iPhone「高效」照片格式全链路支持——缩略图/

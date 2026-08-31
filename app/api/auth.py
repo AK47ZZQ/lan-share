@@ -1,6 +1,7 @@
-"""认证 API：初始化/登录(含 TOTP 两步)/登出/改密/改用户名/账号状态/两步验证管理。"""
+"""认证 API：初始化/登录(含 TOTP 两步)/登出/改密/改用户名/账号状态/两步验证管理/设备 Token。"""
 import os
 import re
+import secrets
 import time
 from typing import Optional
 
@@ -10,9 +11,10 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from app.config import COOKIE_NAME, SESSION_TTL, SHARE_ROOT
+from app.config import (COOKIE_NAME, DEVICE_TOKEN_MAX, DEVICE_TOKEN_TTL, SESSION_TTL,
+                        SHARE_ROOT)
 from app.db import _db, _db_lock
-from app.security import (audit, clear_login_fails, client_ip, create_session,
+from app.security import (audit, allow_rate, clear_login_fails, client_ip, create_session,
                           get_session_user, hash_password, is_https, is_public_entry,
                           login_locked_remaining, record_login_fail, require_user,
                           verify_password, _sha)
@@ -346,6 +348,71 @@ async def set_webdav_password(request: Request, body: WebDavPasswordBody,
     audit("webdav_password_set" if new_hash else "webdav_password_clear",
           row["username"], ip=client_ip(request))
     return {"ok": True, "set": bool(new_hash)}
+
+
+# ─── 设备 Token（App 专用，APP-DESIGN §3 / 里程碑 M-A0）──────
+
+class DeviceTokenBody(BaseModel):
+    name: str
+
+
+@app.post("/api/auth/token")
+async def create_device_token(request: Request, body: DeviceTokenBody,
+                              user=Depends(require_user)):
+    """登录会话（Cookie）换长效设备 Token。明文仅本次响应返回一次，库内只存
+    SHA256；90 天滑动过期；吊销由 DELETE /api/auth/devices/{id} 完成。"""
+    if not allow_rate(f"devtok:{user['user_id']}", 20, 3600):
+        raise HTTPException(status_code=429, detail="签发过于频繁，请稍后再试")
+    name = body.name.strip()
+    # 允许内部空格（"小米 14"），禁控制字符（换行/制表等）与首尾空白
+    if not name or len(name) > 64 or re.search(r"[\u0000-\u001f\u007f]", name):
+        raise HTTPException(status_code=400,
+                            detail="设备名不能为空，且不能含控制字符，不超过 64 字符")
+    n = _db().execute("SELECT COUNT(*) AS c FROM device_tokens WHERE user_id=?",
+                      (user["user_id"],)).fetchone()["c"]
+    if n >= DEVICE_TOKEN_MAX:
+        raise HTTPException(status_code=400,
+                            detail=f"设备数已达上限（{DEVICE_TOKEN_MAX}），请先吊销不用的设备")
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with _db_lock:
+        cur = _db().execute(
+            "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
+            "VALUES(?,?,?,?,?,?) RETURNING id",
+            (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
+        device_id = cur.fetchone()["id"]
+        _db().commit()
+    audit("device_token_create", name, ip=client_ip(request))
+    return {"token": token, "device_id": device_id, "name": name, "created_at": now}
+
+
+@app.get("/api/auth/devices")
+def list_devices(request: Request, user=Depends(require_user)):
+    """本账号的设备列表（他人不可见）。current 标记本次请求所用的 Bearer 设备。"""
+    auth = request.headers.get("authorization", "")
+    cur_hash = _sha(auth[7:].strip()) if auth.startswith("Bearer ") else None
+    rows = _db().execute(
+        "SELECT id, name, created_at, last_seen, token_hash FROM device_tokens "
+        "WHERE user_id=? ORDER BY id", (user["user_id"],)).fetchall()
+    return {"devices": [{
+        "id": r["id"], "name": r["name"],
+        "created_at": r["created_at"], "last_seen": r["last_seen"],
+        "current": bool(cur_hash and r["token_hash"] == cur_hash),
+    } for r in rows]}
+
+
+@app.delete("/api/auth/devices/{device_id}")
+def revoke_device(device_id: int, request: Request, user=Depends(require_user)):
+    """吊销本人设备（被吊销端下次请求即 401）。"""
+    row = _db().execute("SELECT * FROM device_tokens WHERE id=? AND user_id=?",
+                        (device_id, user["user_id"])).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="设备不存在")
+    with _db_lock:
+        _db().execute("DELETE FROM device_tokens WHERE id=?", (device_id,))
+        _db().commit()
+    audit("device_revoke", row["name"], ip=client_ip(request))
+    return {"ok": True}
 
 
 # ─── 文件 API（需登录）─────────────────────────────────────

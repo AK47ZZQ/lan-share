@@ -192,7 +192,17 @@ _PG_SCHEMA = """
         created_at DOUBLE PRECISION NOT NULL,
         read_at DOUBLE PRECISION
     );
+    CREATE TABLE IF NOT EXISTS device_tokens(
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at DOUBLE PRECISION NOT NULL,
+        last_seen DOUBLE PRECISION,
+        expires_at DOUBLE PRECISION NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
+    CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
 """
 
 _PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications")
@@ -385,7 +395,17 @@ def _migrate_v3():
                 created_at REAL NOT NULL,
                 read_at REAL
             );
+            CREATE TABLE IF NOT EXISTS device_tokens(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at REAL NOT NULL,
+                last_seen REAL,
+                expires_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
+            CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
         """)
         conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users)")
         conn.commit()

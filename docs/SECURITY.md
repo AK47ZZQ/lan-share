@@ -26,6 +26,11 @@
 - **成员视角预览（09-01 批次）**：admin 在四个只读接口带 X-As-User 以成员身份
   解析可见性。⚠️ 边界：仅影响"能看到什么"，写操作仍按 admin 真实会话执行；
   成员传该头无效；命中记 `preview_as` 审计。
+- **设备 Token（App 专用，M-A0）**：登录会话换长效 `Authorization: Bearer`
+  Token，90 天滑动过期、库内只存 SHA256、明文仅签发时返回一次；单账号上限
+  20 台、签发限速 20 次/时；用户可在 App/网页吊销（审计留痕），停用账号即刻
+  失效（JOIN users 过滤）。浏览器不自动携带 Authorization 头，无 CSRF 面；
+  与 Cookie 会话并存（require_user 先 Cookie 后 Bearer）。
 - **会话**：32 字节随机 token 放 HttpOnly + SameSite=Lax + Secure Cookie；DB 只存 token 的 SHA256；
   30 天滑动过期（距上次刷新 >24h 才写库）；改密/登出即吊销。
 - **登录防爆破**：按**账号**锁定——连续失败 5 次锁 15 分钟（FRP 隧道下所有公网请求的下游 IP 都是

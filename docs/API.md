@@ -23,6 +23,13 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/auth/username` | 🔑 | `{new_username, password}` 改用户名，需当前密码确认（失败计入防爆破锁定，锁定期 429）；登录态不变；空白/控制字符/超 64 字符 400，同名（不分大小写）400，密码错误 403 |
 | GET | `/api/auth/webdav-password` | 🔑 | `{set}` 是否已设置 WebDAV 独立密码（不回传哈希） |
 | POST | `/api/auth/webdav-password` | 🔑 | `{current_password, webdav_password}` 设置/清除（空串=清除）WebDAV 独立密码；需当前密码确认（失败计入防爆破）；≥8 位 |
+| POST | `/api/auth/token` | 🔑 | 📱`{name}` 会话换设备 Token（App 用，M-A0）：`{token, device_id, name, created_at}`——**明文仅本次返回**，库内只存 SHA256；90 天滑动过期；20 台/账号；20 次/时 |
+| GET | `/api/auth/devices` | 🔑 | 📱本账号设备列表 `{devices:[{id, name, created_at, last_seen, current}]}`（current=本次请求所用 Bearer 设备） |
+| DELETE | `/api/auth/devices/{id}` | 🔑 | 📱吊销本人设备（被吊销端下次请求 401）；他人设备 404 |
+
+> 📱 **Bearer 认证（App 专用，与 Cookie 并存）**：所有 🔑 端点均可带
+> `Authorization: Bearer <token>` 访问（无需 Cookie）。浏览器不会自动携带该头，
+> 无 CSRF 面；停用账号即刻失效；审计操作者同等记录。
 | GET | `/authcheck` | 🔓 | Caddy forward_auth 子请求入口；200=会话有效 / 401 |
 
 ## 文件
