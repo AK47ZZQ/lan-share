@@ -17,7 +17,7 @@ class TrustStore {
   // host:port → 最近一次被拒证书的指纹（UI 读取后弹确认框）
   final Map<String, String> _pending = {};
   bool _warmed = false;
-  Future<void>? _warmupFuture;   // 并发 warmup 复用同一次 IO
+  Future<void>? _warmupFuture; // 并发 warmup 复用同一次 IO
 
   static String fingerprint(X509Certificate cert) =>
       sha256.convert(cert.der).toString();
@@ -26,7 +26,8 @@ class TrustStore {
   /// 分组引用，必须用 replaceAllMapped（曾经渲染出 "$1:$1:..."）。
   static String pretty(String hexFp) {
     final up = hexFp.toUpperCase();
-    return up.replaceAllMapped(RegExp(r'.{2}'), (m) => '${m[0]}:')
+    return up
+        .replaceAllMapped(RegExp(r'.{2}'), (m) => '${m[0]}:')
         .replaceFirst(RegExp(r':$'), '');
   }
 
@@ -36,13 +37,18 @@ class TrustStore {
   }
 
   Future<void> _doWarmup() async {
-    final raw = await SecureStore.string('trust_hosts');
-    for (final key in raw?.split('\n') ?? const []) {
-      if (key.isEmpty) continue;
-      final fp = await SecureStore.string('trust_$key');
-      if (fp != null && fp.isNotEmpty) _trusted[key] = fp;
+    try {
+      final raw = await SecureStore.string('trust_hosts');
+      for (final key in raw?.split('\n') ?? const []) {
+        if (key.isEmpty) continue;
+        final fp = await SecureStore.string('trust_$key');
+        if (fp != null && fp.isNotEmpty) _trusted[key] = fp;
+      }
+    } finally {
+      // SecureStore.string 已不抛错，这里是兜底：失败的最坏后果 =
+      // 已信任服务器需重新确认一次，而不是所有连接永久失败。
+      _warmed = true;
     }
-    _warmed = true;
   }
 
   /// badCertificateCallback 用（同步）：已信任且指纹匹配 → 放行；

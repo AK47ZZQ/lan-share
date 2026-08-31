@@ -47,6 +47,13 @@ class SessionController extends StateNotifier<SessionState> {
           loggedIn: true,
           username: r.data['username'] as String?,
           role: r.data['role'] as String?);
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 401) {
+        // 非凭据问题（服务器不可达等）：不假装登出，给出提示
+        state = const SessionState(error: '服务器暂时不可达，请检查网络后重试');
+        return;
+      }
+      state = const SessionState();
     } catch (_) {
       state = const SessionState();
     }
@@ -142,6 +149,8 @@ class SessionController extends StateNotifier<SessionState> {
   }
 
   Future<void> logout() async {
+    _username = '';
+    _password = '';
     await SecureStore.clearToken();
     // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
     await AuthCacheManager.I.emptyCache();

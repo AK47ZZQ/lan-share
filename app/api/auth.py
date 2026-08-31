@@ -235,14 +235,16 @@ class PasswordBody(BaseModel):
 async def change_password(request: Request, response: Response, body: PasswordBody,
                           user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
-    # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）
-    remaining = login_locked_remaining(row["username"])
+    # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）；
+    # 公网侧失败只记公网侧（与登录/_dav_auth 同策略，防跨入口锁人）
+    pub = is_public_entry(request)
+    remaining = login_locked_remaining(row["username"], pub)
     if remaining:
         audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await run_in_threadpool(verify_password, body.old_password, row["password_hash"]):
-        record_login_fail(row["username"])
+        record_login_fail(row["username"], pub)
         audit("password_change_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     if len(body.new_password) < 8:
@@ -268,14 +270,16 @@ class UsernameBody(BaseModel):
 async def change_username(request: Request, body: UsernameBody,
                           user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
-    # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）
-    remaining = login_locked_remaining(row["username"])
+    # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）；
+    # 公网侧失败只记公网侧（与登录/_dav_auth 同策略，防跨入口锁人）
+    pub = is_public_entry(request)
+    remaining = login_locked_remaining(row["username"], pub)
     if remaining:
         audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await run_in_threadpool(verify_password, body.password, row["password_hash"]):
-        record_login_fail(row["username"])
+        record_login_fail(row["username"], pub)
         audit("username_change_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="密码错误")
     new_name = body.new_username.strip()
@@ -288,9 +292,11 @@ async def change_username(request: Request, body: UsernameBody,
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
     if new_name.lower() in RESERVED_USERNAMES:
         raise HTTPException(status_code=400, detail="该用户名是保留名")
-    if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)", (new_name,)).fetchone():
-        raise HTTPException(status_code=409, detail="该用户名已被占用")
+    # 重名检查与 UPDATE 同锁（否则并发改名可双双通过检查）
     with _db_lock:
+        if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
+                         (new_name,)).fetchone():
+            raise HTTPException(status_code=409, detail="该用户名已被占用")
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, row["id"]))
         _db().commit()
     # 私人空间目录跟随用户名迁移（Windows 大小写不敏感：仅大小写变化时 rename 会变 no-op）

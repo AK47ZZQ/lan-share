@@ -33,11 +33,21 @@ class SecureStore {
     return sp.getString(_kTokenFallback);
   }
 
-  // 通用键值（证书信任指纹等）
-  static Future<String?> string(String key) => _storage.read(key: key);
+  // 通用键值（证书信任指纹等）。永不抛错：Keystore 异常机型上 trust 预热
+  // 不能被一颗坏键卡死（否则所有 HTTPS 连接都会失败且无提示）。
+  static Future<String?> string(String key) async {
+    try {
+      return await _storage.read(key: key);
+    } catch (_) {
+      return null;
+    }
+  }
 
-  static Future<void> setString(String key, String value) =>
-      _storage.write(key: key, value: value);
+  static Future<void> setString(String key, String value) async {
+    try {
+      await _storage.write(key: key, value: value);
+    } catch (_) {}
+  }
 
   /// 退出登录：只清 Token（两种存储都清），保留证书信任等
   static Future<void> clearToken() async {
