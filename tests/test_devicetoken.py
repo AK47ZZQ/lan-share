@@ -116,6 +116,23 @@ def test_device_token_sliding_renewal(client):
     assert row["expires_at"] > time.time() + 80 * 86400
 
 
+def test_device_token_rotation_same_name(client):
+    """同名设备重复签发 = 轮换（重装/重复登录不产生僵尸设备）。"""
+    admin = _admin(client)
+    bare = _bare(client)
+    r1 = admin.post("/api/auth/token", json={"name": "轮换机"}).json()
+    r2 = admin.post("/api/auth/token", json={"name": "轮换机"}).json()
+    assert r1["device_id"] == r2["device_id"] and r1["token"] != r2["token"]
+    # 旧 token 失效、新 token 可用；同名设备仍只有一台
+    assert bare.get("/api/files/", headers={
+        "Authorization": f"Bearer {r1['token']}"}).status_code == 401
+    assert bare.get("/api/files/", headers={
+        "Authorization": f"Bearer {r2['token']}"}).status_code == 200
+    same = [d for d in admin.get("/api/auth/devices").json()["devices"]
+            if d["name"] == "轮换机"]
+    assert len(same) == 1
+
+
 def test_device_token_isolation_and_validation(client):
     admin = _admin(client)
     bare = _bare(client)

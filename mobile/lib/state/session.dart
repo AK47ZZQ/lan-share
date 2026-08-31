@@ -70,7 +70,7 @@ class SessionController extends StateNotifier<SessionState> {
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
     } catch (e) {
-      state = SessionState(error: e.toString());
+      state = SessionState(error: _brief(e));
     }
   }
 
@@ -86,20 +86,22 @@ class SessionController extends StateNotifier<SessionState> {
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), needTotp: true, trustIssue: _trustOf(e));
     } catch (e) {
-      state = SessionState(error: e.toString(), needTotp: true);
+      state = SessionState(error: _brief(e), needTotp: true);
     }
   }
 
-  /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）
+  /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）。
+  /// 标记 x-login-flow：此阶段 401 不触发全局登出（诊断信息透传给 UI）。
   Future<void> _exchangeToken(Dio dio, Response r) async {
     final cookie = cookieHeaderFrom(r.headers['set-cookie']);
     final deviceName = await Prefs.deviceName();
     final tr = await dio.post('/api/auth/token',
-        options: Options(headers: {'Cookie': cookie}),
+        options: Options(headers: {'Cookie': cookie, 'x-login-flow': '1'}),
         data: {'name': deviceName});
     await SecureStore.saveToken(tr.data['token'] as String);
 
-    final me = await dio.get('/api/auth/me');
+    final me = await dio.get('/api/auth/me',
+        options: Options(headers: {'x-login-flow': '1'}));
     state = SessionState(
         loggedIn: true,
         username: me.data['username'] as String?,
@@ -114,7 +116,15 @@ class SessionController extends StateNotifier<SessionState> {
     final d = e.response?.data;
     if (d is Map && d['detail'] != null) return d['detail'].toString();
     if (e.error is TrustRequiredError) return '服务器证书需要确认';
+    final status = e.response?.statusCode;
+    if (status != null) return '服务端返回 HTTP $status';
     return '连接失败，请检查服务器地址与网络';
+  }
+
+  /// 登录任何一步失败都把具体原因带上屏（方便远程排障）
+  static String _brief(Object e) {
+    final s = e.toString();
+    return s.length > 200 ? s.substring(0, 200) : s;
   }
 
   Future<void> logout() async {

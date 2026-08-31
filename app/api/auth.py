@@ -377,11 +377,21 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
     token = secrets.token_urlsafe(32)
     now = time.time()
     with _db_lock:
-        cur = _db().execute(
-            "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
-            "VALUES(?,?,?,?,?,?) RETURNING id",
-            (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
-        device_id = cur.fetchone()["id"]
+        # 同名设备轮换（App 重装/重复登录不产生僵尸设备）：直接换新凭据
+        existing = _db().execute(
+            "SELECT id FROM device_tokens WHERE user_id=? AND name=?",
+            (user["user_id"], name)).fetchone()
+        if existing:
+            _db().execute(
+                "UPDATE device_tokens SET token_hash=?, created_at=?, last_seen=?, expires_at=? WHERE id=?",
+                (_sha(token), now, now, now + DEVICE_TOKEN_TTL, existing["id"]))
+            device_id = existing["id"]
+        else:
+            cur = _db().execute(
+                "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
+                "VALUES(?,?,?,?,?,?) RETURNING id",
+                (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
+            device_id = cur.fetchone()["id"]
         _db().commit()
     audit("device_token_create", name, ip=client_ip(request))
     return {"token": token, "device_id": device_id, "name": name, "created_at": now}
