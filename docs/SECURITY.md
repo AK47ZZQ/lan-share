@@ -31,13 +31,27 @@
   20 台、签发限速 20 次/时；用户可在 App/网页吊销（审计留痕），停用账号即刻
   失效（JOIN users 过滤）。浏览器不自动携带 Authorization 头，无 CSRF 面；
   与 Cookie 会话并存（require_user 先 Cookie 后 Bearer）。
-- **会话**：32 字节随机 token 放 HttpOnly + SameSite=Lax + Secure Cookie；DB 只存 token 的 SHA256；
+- **设备 Token（App 专用，M-A0）**：登录会话换长效 `Authorization: Bearer`
+  Token，90 天滑动过期、库内只存 SHA256、明文仅签发时返回一次；单账号上限
+  20 台、签发限速 20 次/时；同名设备重复签发**原地轮换**（重装/重复登录不产生僵尸设备，
+  旧凭据立即失效）；用户可在 App/网页吊销（审计留痕），停用账号即刻失效
+  （JOIN users 过滤）。浏览器不自动携带 Authorization 头，无 CSRF 面；
+  与 Cookie 会话并存（require_user 先 Cookie 后 Bearer）。Token 响应附
+  `Cache-Control: no-store` 防中间缓存。
+- **WebDAV 独立密码（v3.7，可选）**：账号设置里自助设置与登录密码无关的
+  WebDAV 专用凭据（scrypt 同强度）。设置后 DAV 入口只认独立密码、登录密码
+  对 `/dav/` 失效——凭据泄露面隔离，可单独轮换而不动主密码/不解锁 TOTP 账号；
+  admin 可重置/清除成员的独立密码（不影响其网页会话）。未设置时回退登录密码
+  （兼容存量客户端配置）。改密失败同样计入防爆破锁定（与登录/改密同策略）。
   30 天滑动过期（距上次刷新 >24h 才写库）；改密/登出即吊销。
 - **登录防爆破**：按**账号**锁定——连续失败 5 次锁 15 分钟（FRP 隧道下所有公网请求的下游 IP 都是
   127.0.0.1，按 IP 锁无意义且会自锁）。WebDAV Basic 认证复用同一套锁定。
-  锁定 key 统一小写化（大小写变体不能绕过）。改密/改用户名的**当前密码确认失败**同样计入
-  锁定（否则会话被劫持后可在限速窗口内无限试密码）。改用户名的重名检查用 `LOWER()=LOWER()`
-  （引擎中立：SQLite/PostgreSQL 行为一致，"admin"/"Admin" 不会共存）。
+  锁定 key 统一小写化（大小写变体不能绕过）。改密/改用户名/WebDAV 独立密码
+  的**当前密码确认失败**同样计入锁定（否则会话被劫持后可在限速窗口内无限试
+  密码）。**所有路径按入口分账**（`is_public_entry`）：公网侧失败只锁公网侧、
+  LAN 侧失败只锁 LAN 侧——公网攻击者挤占不了家人的 LAN 登录。改用户名的
+  重名检查用 `LOWER()=LOWER()`（引擎中立：SQLite/PostgreSQL 行为一致，
+  "admin"/"Admin" 不会共存），并与 UPDATE 走同一 `_db_lock` 防并发改名。
 - **首次初始化**：`/api/setup` 仅在用户表为空时可用；线上已预建账号，该入口永久关闭。
 
 ## 网络层
@@ -113,8 +127,16 @@
 
 1. WebDAV LOCK 是假锁：两客户端并发编辑同一文件会互相覆盖，靠回收站兜底。
 2. 数据目录内若人工放入 junction/symlink，词法路径校验不阻止其指向外部（单管理员自担）。
-3. 无每日自动备份（用户决策）：磁盘故障会丢 `data/` 全部内容，重要文件请自行另备。
+3. **每日自动备份**（v3.5 起）：`backup.bat` 由 NSSM 计划任务 `lan-share-backup`
+   每日 23:30 跑（机器 2 点自动关机，原 03:30 从不触发）；脚本：
+   `pg_dump -Fc`（NSSM 环境变量里的 `PGPASSWORD` + `pgpass.conf`）+ 文件目录
+   robocopy 增量（按 mtime）+ dump 保留 2 天自动清理。`StartWhenAvailable=true`
+   错过开机补跑。脚本不向云端投递——**第二块异地备份盘仍待上线**（物理盘未到位）。
 4. 管理员密码强度自担：系统只强制 ≥8 位，建议 12 位以上；泄露疑似时立即用 🔑 改密（会踢掉全部会话）。
+5. 自签 HTTPS：浏览器首次访问点"继续访问"；客户端登录页会弹"信任此服务器"指纹确认框（App 走 SPKI pinning 落 Keystore）。
+6. 事件推送 Webhook：admin 凭据可配置任意 http(s) URL（含内网/外网），占位符经 URL 编码替换，无内联注入面；admin 失守面等同可改 Caddyfile，信任边界一致。
+7. **HEIC 解码**：上传体积受配额与 `MAX_UPLOAD_SIZE` 约束，但 PIL 解码后的内存不受直接限制。家庭自传为主，可接受；公网开放前应在 `filetools.ensure_heif_support()` 加 `Image.MAX_IMAGE_PIXELS` 显式上限。
+8. **成员视角预览**（admin 专用）：`X-As-User` 头仅 admin 生效，以目标成员身份做可见性解析；写操作仍按真实会话身份执行（前端顶栏横幅明示），成员传该头无效；管理端点（`/api/admin/*`）完全隔离不受波及。审计 `preview_as` 记录目标用户名与 IP。
 
 ## 安全检查清单（改动后自查）
 

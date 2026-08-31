@@ -1,5 +1,16 @@
 # v3 设计 · 前端升级（FRONTEND）
 
+> 实际落地与本文略有偏差（2026-09 状态）：
+> - **Pinia 未引入**——M3 拆包时 Pinia 在桌面上"全家桶"过重、且本项目跨 session/跨 tab
+>   的全局状态只有登录态一处，用 `web/src/auth.ts` 单例 + Vue 内置 `provide/inject` 即足够
+>   （如 `App.vue` 直接持 `me` ref）。需要时再迁 Pinia 不晚。
+> - **Naive UI 改自封装玻璃拟态组件**（vue3 + CSS 变量主题，深浅色一键切换），主因
+>   Naive UI 的样式主题与现有玻璃拟态色调有冲突、改造成本高于收益；自封装约 20 个
+>   组件已够覆盖全部页面。
+> - **Vitest 改 check.bat 后端门禁 + 真实浏览器点验**——前端单元测试维护成本高，
+>   而 M3 权限边界由后端 18 项 pytest 覆盖；前端靠"改后真浏览器/手机视口点一遍"兜底。
+> - `static/` 旧 HTML/JS 已删（`app/main.py` 的 SPA 回退直供 `web/dist` 真实文件）。
+>
 > 原生 HTML/JS（零构建）→ Vue 3 + Vite + TypeScript。CSP `script-src 'self'`
 > **不放宽**。渐进替换四页，M2 完成后删除旧 `static/*.js`。
 

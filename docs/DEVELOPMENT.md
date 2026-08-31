@@ -22,18 +22,25 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
 
 ## 环境与运行
 
-- Python 3.11 + FastAPI/uvicorn/aiofiles/Pillow/qrcode/pillow-heif（既有 venv，见 `install-service.bat` 中的 PYTHON 路径；pillow-heif 为 HEIC 解码插件，缺失时静默降级）
+- Python 3.11 + FastAPI/uvicorn/aiofiles/Pillow/qrcode/pillow-heif + **psycopg**
+  + **pyotp**（既有 venv，见 `install-service.bat` 中的 PYTHON 路径；pillow-heif
+  为 HEIC 解码插件，缺失时静默降级）
 - Caddy v2.11 原生二进制（`caddy.exe`，**不要**换成需要插件的构建）
+- PostgreSQL 16：NSSM 服务 `lan-share-postgresql`（127.0.0.1:5433），
+  `DATABASE_URL` 在 `lan-share-api` 的 NSSM 环境变量；不设时回退 SQLite
+  （`SHARE_ROOT/.meta.db`，仅测试）
 - ffmpeg（可选）：仅视频缩略图用，缺失时视频缩略图返回 404，不影响其它功能
 
 ```bash
 # 开发实例（不碰线上服务）
 SHARE_ROOT=C:/somewhere/sandbox python -m uvicorn server:app --host 127.0.0.1 --port 8768
+# 或连 PG 调：DATABASE_URL=postgresql://lanshare:<密码>@127.0.0.1:5433/lanshare ...
 
 # 线上（注意 C:\lan-share 是本项目目录的 junction，改这里就是改线上）
-net stop lan-share-api && net start lan-share-api     # server.py 变更
+net stop lan-share-api && net start lan-share-api     # server.py / app/** 变更
 net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
-# static/* 变更无需重启，刷新即生效
+# static/* 与 web/dist 变更无需重启，刷新即生效（v3 拆包后 main.py 直供 dist 真实文件）
+# mobile/ 需重新出 APK（见下）
 ```
 
 ## 手机 App（mobile/，Flutter）
@@ -68,33 +75,43 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 ```
 app/
 ├── main.py            应用组装：app+中间件 → 路由模块 → SPA 页面路由/深链回退 → 静态挂载
-├── config.py          全部常量与 env（SHARE_ROOT/DB_PATH 等）
-├── db.py              SQLite 每线程连接 + 写锁 + init_db + _migrate_v3（幂等迁移）
-├── security.py        审计/scrypt/会话/防爆破/限速/require_user/require_admin
-├── filetools.py       safe_path/clean_filename/dir_tree/save_upload
+├── config.py          全部常量与 env（SHARE_ROOT/DB_PATH/DATABASE_URL/TTL/限速等）
+├── db.py              双引擎（PG：psycopg autocommit；SQLite：每线程连接 + 写锁 +
+│                      init_db + _migrate_v3 幂等迁移）
+├── security.py        审计/scrypt/会话/防爆破/限速/get_session_user/get_bearer_user
+│                      /require_user/require_admin/preview_user
+├── filetools.py       safe_path/clean_filename/dir_tree/save_upload/ensure_heif_support
 ├── spaces.py          v3 空间解析 resolve()/授权判定/配额/可见性过滤（安全核心）
-├── api/auth.py        认证 API（setup/login/logout/改密/改用户名/authcheck）
+├── api/auth.py        认证 API（setup/login/logout/改密/改用户名/TOTP/设备 Token/账号管理）
 ├── api/files.py       文件 API（列表/上传/移动/回收站/预览/zip/缩略图/搜索/磁盘）
-├── api/share.py       分享 API（外链/票据/QR/取件记录；按 owner 隔离）
-├── api/webdav.py      WebDAV（与网页同一 resolve 权限源）
-├── api/system.py      定时清理/照片时间线/通用 QR/healthz
-├── api/admin.py       成员/邀请/授权/动态流/公网地址
+├── api/share.py       分享 API（外链/票据/QR/取件记录；按 owner 隔离；定向分享触发通知）
+├── api/webdav.py      WebDAV（与网页同一 resolve 权限源；独立密码支持）
+├── api/system.py      定时清理/照片时间线/通用 QR/healthz/通知 bot
+├── api/admin.py       成员/邀请/授权/动态流/公网地址/相册
+├── api/notify.py      站内通知 + 事件推送 Webhook（push_webhook + 端点）
 server.py             兼容 shim（NSSM 入口 server:app 不变；测试 import server）
-web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/auth.ts
-                      共享登录态、src/views/ 七个页面；构建产物 dist/ 即时生效
-static/               仅 favicon（旧页面已删，git 历史可回滚）
+web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/views/ 七个页面；
+                      构建产物 dist/ 由 main.py 直供（gitignore node_modules + dist）
+mobile/               Flutter App（mobile/lib/ 源码 + android/ ios/；build/ 与 .dart_tool/ 已 gitignore）
+certs/                自签证书配置（san.cnf；*.pem 私钥不入库）
+data/                 运行时数据根（不入库：用户文件/.meta.db/.trash/...）
 docs/            API.md / SECURITY.md / DEVELOPMENT.md / GIT.md / DEBUG-ACCOUNT.md(不入库)
+                       DESIGN-v3/ {OVERVIEW,FRONTEND,DATABASE,PERMISSIONS,APP-*}
 ```
 
-## 前端约定（CSP 硬约束）
+## 前端约定（Vue3 + Vite + TS，web/ 工程）
 
-- **禁止**任何内联事件处理器（`onclick=` 等）与内联 `<script>`——CSP `script-src 'self'` 会拦截。
-- 交互统一走 **`data-act` 事件委托**：元素加 `data-act="动作名"` + `data-*` 参数，
-  在 `index.js` 的 `ACTIONS` 表注册处理函数。动态生成的 HTML 同样如此。
-- 动态值入属性用 `esc()`；**不再需要** escJs（旧的 JS 字符串拼接模式已移除）。
-- 图片加载失败用 document 捕获阶段的 `error` 委托处理（error 事件不冒泡）。
-- 新增浮层注意 z-index 层级：列表 < 预览(110) < 弹窗(120) < Toast(200)。
-- 按钮/容器内的 `<svg>` 必须显式定宽高（有 `.btn svg` 兜底，但自定义容器要自己加）。
+- **M3 拆包后已全面 Vue 化**：M0-M1 时期的事件委托 + `data-act` + `escJs` 模式
+  已废弃。SFC `<script setup>` + Pinia（如需全局状态）+ 模板内 Vue 表达式即可，
+  无需担心 CSP（预编译模板 + 静态 import 都不需要 `unsafe-eval`）。
+- 模板渲染 Markdown/HTML 用 `DOMPurify.sanitize`（`import DOMPurify from
+  'dompurify'`）；插值表达式 `{{ v }}` 自动 escape，不用手写 esc。
+- SVG 走 `lucide-vue-next` 或封装组件；自定义 `<svg>` 在 `.btn` 外需显式定宽高。
+- 主题与色板用 CSS 变量 + Pinia store；不写魔法值。
+- **图标的 SVG 内联即可**（不要拼字符串到 innerHTML），避免 CSP 与 XSS 双风险。
+- 深浅主题在 `theme.ts` 集中管理；本地偏好 `localStorage` 记忆。
+- 弹窗/Toast 走 `ui.ts` 的 `confirmDlg/promptDlg/toast`（已禁用浏览器原生
+  confirm/prompt，统一 Promise 风格 + App 根级渲染）；不要在业务里直接 `alert`。
 
 ## 后端约定
 
@@ -104,7 +121,10 @@ docs/            API.md / SECURITY.md / DEVELOPMENT.md / GIT.md / DEBUG-ACCOUNT.
 - 可-dispatch 的耗时 IO 用 `async def` + aiofiles；CPU/阻塞型（缩略图、zip）用 `def` 同步端点跑线程池；
   scrypt 这类密码学操作用 `run_in_threadpool`。
 - 关键操作 `audit(...)`，action 命名见 `audit_log` 现有值。
-- 新增表/列：改 `init_db()` 的 executescript（CREATE TABLE IF NOT EXISTS，服务重启自动迁移）。
+- 新增表/列：PG 走 `ALTER TABLE IF NOT EXISTS` 显式补列（`_PG_SCHEMA` + `init_db` 里
+  各加一行）；SQLite 走 `_migrate_v3` 的 `PRAGMA table_info` 增量补列；三路幂等迁移。
+- 防爆破与限速按入口分账（`is_public_entry`）：所有改密/改用户名/WebDAV 独立密码
+  路径都接收 `pub` 参数。
 
 ## 已知陷阱（踩过的坑）
 

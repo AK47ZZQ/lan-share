@@ -1,5 +1,7 @@
 # v3 设计 · 架构总览
 
+> 实际落地偏离见 `DATABASE.md`（Alembic 未引入，走 init_db 幂等迁移）与
+> `FRONTEND.md`（Pinia/Naive UI/Vitest 偏离为轻量自封装）。
 > v3 规划见 `PLAN-v3.md`；权限模型见 `PERMISSIONS.md`；数据库见 `DATABASE.md`；
 > 前端见 `FRONTEND.md`。
 

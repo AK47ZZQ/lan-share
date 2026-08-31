@@ -6,8 +6,9 @@
 
 | 入库 | 不入库（见 `.gitignore`） |
 |------|--------------------------|
-| server.py / Caddyfile / static/ / docs/ / *.bat | `data/`（用户文件 + .meta.db 账号库） |
-| README / PLAN / CHANGELOG / backup/v1 | `logs/`、`__pycache__/` |
+| server.py / Caddyfile / docs/ / *.bat / web/src/ / mobile/lib/ | `data/`（用户文件 + .meta.db）、`logs/`、`__pycache__/` |
+| README / PLAN-v3 / CHANGELOG | `caddy.exe`（49MB）、`certs/*.pem`（私钥严禁）、`web/node_modules/`、`web/dist/`、`mobile/build/`、`.mimosa/`、`.pytest_cache/` |
+| `mobile/android/.gradle/`、`mobile/.dart_tool/`、`mobile/ios/Pods/` 与 build 缓存同理 | `C:\lan-share-mobile\`（镜像构建工作区，脚本自动管理） |
 | `certs/san.cnf`（证书生成配置） | `caddy.exe`（49MB，官网下载）、`certs/*.pem`（私钥严禁入库） |
 
 ## 日常流程
