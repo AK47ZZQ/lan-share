@@ -56,7 +56,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | GET | `/api/search?q=` | 🔑 | 文件名搜索，最多 50 条 |
 | GET | `/api/recent?limit=` | 🔑 | 最近修改（≤100） |
 | GET | `/api/disk` · `/api/disk/detail` | 🔑 | C 盘用量 + 网盘统计（`share_size` 按文件索引去重，硬链接只计一次；detail 附各一级目录逻辑大小 `categories`） |
-| GET | `/api/photos?limit=&offset=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,thumb}]}`（EXIF 日期倒序；jpg/jpeg/png/webp/bmp/heic/heif） |
+| GET | `/api/photos?limit=&offset=&month=&uploader=&refresh=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,month,uploader,thumb}]}`（EXIF 日期倒序；jpg/jpeg/png/webp/bmp/heic/heif）；`month=YYYY-MM`/`uploader` 过滤；`refresh=1` 放宽扫描节流（App 备份完成后拉最新，地板 5s 防滥用） |
 
 ## 回收站
 

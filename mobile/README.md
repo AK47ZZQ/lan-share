@@ -154,3 +154,12 @@ scripts\build-apk.bat debug|release
   服务端 finish 仍会自算校验
 - 分享接收的缓存副本**上传完成即删**：传输引擎队列恢复只对"未完成"任务查
   本地文件存在性，已完成任务副本被清不改判错误（否则重启满屏假错误）
+- **图片链路缓存为四层**（0.4.3~0.4.5）：AuthImage 进程内已解析文件记忆表
+  （滚动往返零转圈）→ AuthCacheManager 磁盘缓存 5000 对象/180 天（默认
+  200 会被大相册反复挤掉）→ 服务端 .thumbs 内容寻址缓存（JPEG draft 快
+  解码）→ 网页/PWA 走 ETag 304（Caddy 对 /thumb/* 放开 no-store）。⚠️
+  自写 FileService 必须**剥 If-None-Match**：cache manager 带条件头走 304
+  时拿不到文件体，全员坏图（0.4.4 真机复现）
+- **照片时间线为 Sliver 虚拟化**（0.4.4）：CustomScrollView + 按日
+  SliverGrid + 置顶改随滚日期头（悬浮头压照片，真机反馈弃用）；勿改回
+  shrinkWrap 网格——整组销毁重建会让已加载图片划走即消失

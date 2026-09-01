@@ -209,9 +209,29 @@ ArrayList 路径同核心代码）；传输中心显示已上传且 share_inbox 
 `mobile/android/keys/` gitignored + 异地备份；gradle 缺 key.properties 回退
 debug 签名）+ 品牌启动图标（`scripts/make-app-icon.py`，PWA 同款
 紫渐变 + 白 L，自适应 anydpi-v26 含 monochrome 主题图标 + 遗留圆角，
-零新依赖）；当前 **v0.4.1+5**。R8 教训：Flutter 插件默认给 release 开
+零新依赖）；当前 **v0.4.5+9**。R8 教训：Flutter 插件默认给 release 开
 裁剪/混淆，WorkManager 的 Room 库启动即崩且 debug 从不暴露——
 `gradle.properties → shrink=false` 关掉。换签设备须卸载重装
+
+### 8.8 真机反馈与性能批次落地注记（09-01 深夜，v0.4.2~v0.4.5）
+
+- **备份约束收口**：WorkManager 约束只管任务启动——Observer 即时任务原本
+  无约束、引擎跑起来后无人复查。引擎逐张经 `lanshare/backup` 通道
+  `checkStop` 复查（isStopped/网络是否计费/是否充电，无网按计费）+ 重读
+  开关 → `status=paused` 优雅暂停，账本断点约束恢复自动续
+- **照片统一落位**：`照片/手机相册/<用户名>/`（手动上传与备份一致）；
+  服务端 `_photo_uploader` 按此归属"拍摄者"；`incoming/<u>/手机相册` 存量
+  已迁移
+- **照片墙准实时**：引擎完成写 `backup_last_done_at` → 照片页 10s 轮询
+  → `/api/photos?refresh=1`（扫描节流对 force 放宽 5s）
+- **图片链路四层缓存**：AuthImage 进程内已解析文件记忆表（滚动往返零转圈）
+  → AuthCacheManager 磁盘缓存 5000 对象/180 天 → 服务端 .thumbs 内容寻址
+  （draft 快解码）→ ETag 协商缓存 304（Caddy 对 /thumb/* 放开 no-store）。
+  **教训**：自写 FileService 必须剥 `If-None-Match`——cache manager 带
+  条件头走 304 时拿不到文件体，全员坏图（0.4.4 真机复现）
+- **时间线 Sliver 虚拟化**：CustomScrollView + 按日 SliverMainAxisGroup +
+  SliverGrid，日期头随内容滚动不悬浮；照片量不设限；长按多选（下载/
+  删除进回收站/单选分享，guest 隐藏危险操作）
 
 **顺带修复**：154201b 的"progress 刷新前台通知"代码无法编译（在
 BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接

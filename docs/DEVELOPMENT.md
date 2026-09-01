@@ -57,7 +57,10 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 - **交付前必过**：`dart analyze` 零问题 + `flutter test` + 安卓模拟器全流程
   （登录→信任框→照片/文件/我的/分享接收/分享管理）；模拟器经 NAT 可直连宿主机
   LAN 地址。⚠️ **改了 Kotlin 必须再跑一次真构建**——`dart analyze`/`flutter test`
-  都不编译 Kotlin（154201b 曾带着编译错误提交，M-A4 构建时才暴露）
+  都不编译 Kotlin（154201b 曾带着编译错误提交，M-A4 构建时才暴露）。
+  ⚠️ **改了照片墙/图片链路必须加跑快滑压力测试**：连滑 5 屏再快速返回，
+  已加载图片不得变转圈/坏图（0.4.4 曾因 shrinkWrap + ETag 304 双 bug 翻车，
+  现架构=Sliver 虚拟化 + 四层缓存，见 mobile/README 已知取舍）
 - **release 签名（2026-09-01 起）**：`flutter build apk --release` 经
   `scripts\build-apk.bat release` 出正式签名包。密钥库
   `mobile/android/keys/lanshare-release.jks`（alias `lanshare`，10000 天，
@@ -72,7 +75,7 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 - **签名切换注意**：debug 包与 release 包签名不同，**不能覆盖安装**——
   已装旧 debug 包的设备须先卸载（数据如登录态/备份账本随之清除；账本丢失
   后重传由服务端秒传兜底，不产生重复流量）。分发件现为
-  `App安装包/lanshare.apk`（v0.4.1+5，品牌图标见 `scripts/make-app-icon.py`）
+  `App安装包/lanshare.apk`（v0.4.5+9，品牌图标见 `scripts/make-app-icon.py`）
 - 新增 pub 依赖按 §6 原则记 CHANGELOG
 
 ## 部署/测试约定
