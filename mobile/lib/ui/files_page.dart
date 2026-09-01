@@ -157,13 +157,27 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           .pickFiles(type: FileType.any, allowMultiple: true);
       if (res == null || res.files.isEmpty) return;
       var n = 0;
+      final enqueued = <TransferTask>[];
       for (final f in res.files) {
         if (f.path == null) continue;
-        if (TransferEngine.I.enqueueUpload(
-            localPath: f.path!, destDir: _path, name: f.name) !=
-            null) {
+        final t = TransferEngine.I.enqueueUpload(
+            localPath: f.path!, destDir: _path, name: f.name);
+        if (t != null) {
+          enqueued.add(t);
           n++;
         }
+      }
+      // 上传完成后刷新当前目录列表，否则从传输页回来仍是旧列表
+      final dirAtEnqueue = _path;
+      if (enqueued.isNotEmpty) {
+        void watch() {
+          if (!enqueued.any((t) => !t.finished)) {
+            TransferEngine.I.removeListener(watch);
+            if (mounted && _path == dirAtEnqueue) _refresh();
+          }
+        }
+
+        TransferEngine.I.addListener(watch);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

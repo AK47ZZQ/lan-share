@@ -93,7 +93,7 @@ class _SharesPageState extends State<SharesPage> {
     await Clipboard.setData(ClipboardData(text: url));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('已复制（$_addrTag(chosen)）'),
+          content: Text('已复制（${_addrTag(chosen)}）'),
           duration: const Duration(seconds: 2)));
     }
   }

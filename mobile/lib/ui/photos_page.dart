@@ -15,6 +15,7 @@ import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
+import '../transfer/transfer_task.dart';
 import 'share_create_sheet.dart';
 import 'widgets/auth_image.dart';
 
@@ -80,6 +81,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _checkBackupDone() async {
     if (!mounted || _loading) return;
     final sp = await SharedPreferences.getInstance();
+    // 引擎在独立 headless isolate 写 prefs，UI isolate 的插件缓存不 reload
+    // 永远读到旧值——0.4.3 的准实时因此从未生效过
+    await sp.reload();
     final v = sp.getInt('backup_last_done_at');
     if (v != _lastBackupDone) {
       await _refresh();
@@ -146,13 +150,26 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final dest = '照片/手机相册/$username';
     final engine = TransferEngine.I;
     var n = 0;
+    final enqueued = <TransferTask>[];
     for (final f in res.files) {
       if (f.path == null) continue;
-      if (engine.enqueueUpload(
-              localPath: f.path!, destDir: dest, name: f.name) !=
-          null) {
+      final t = engine.enqueueUpload(
+          localPath: f.path!, destDir: dest, name: f.name);
+      if (t != null) {
+        enqueued.add(t);
         n++;
       }
+    }
+    // 手动上传也要准实时：任务全部完成即整页强刷，不等 10s 备份轮询
+    if (enqueued.isNotEmpty) {
+      void watch() {
+        if (!enqueued.any((t) => !t.finished)) {
+          engine.removeListener(watch);
+          if (mounted) _refresh();
+        }
+      }
+
+      engine.addListener(watch);
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(

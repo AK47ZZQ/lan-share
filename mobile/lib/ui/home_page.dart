@@ -55,6 +55,8 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   Future<void> _loadLocal() async {
     final sp = await SharedPreferences.getInstance();
+    // 引擎在独立 isolate 写 prefs，不 reload 就永远是首帧缓存（备份卡假死）
+    await sp.reload();
     if (!mounted) return;
     setState(() {
       _backupOn = sp.getBool('backup_enabled') ?? false;
