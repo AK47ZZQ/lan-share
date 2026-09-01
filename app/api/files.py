@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 import aiofiles
-from fastapi import (Depends, File, HTTPException, Query, Request, UploadFile)
+from fastapi import (Depends, File, HTTPException, Query, Request, UploadFile,
+                     Response)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -598,8 +599,10 @@ VID_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 
 
 @app.get("/thumb/{path:path}")
-def thumb_file(path: str, _user=Depends(require_user)):
-    """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。"""
+def thumb_file(request: Request, path: str, _user=Depends(require_user)):
+    """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。
+    ETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存
+    自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。"""
     from PIL import Image
     target = resolve(_user, path, "read")
     if not target.is_file():
@@ -610,17 +613,28 @@ def thumb_file(path: str, _user=Depends(require_user)):
 
     stat = target.stat()
     key = hashlib.md5(f"{path}:{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()
+    etag = f'W/"{key}"'
+    # Cache-Control 由 Caddy 对 /thumb/* 统一设置（private, no-cache），
+    # 这里只负责 ETag 与 304——两边都设会出重复头
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
     cache_dir = SHARE_ROOT / ".thumbs"
     cache_dir.mkdir(exist_ok=True)
     cached = cache_dir / f"{key}.jpg"
+    resp_headers = {"ETag": etag}
     if cached.exists():
-        return FileResponse(cached, media_type="image/jpeg")
+        return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)
 
     tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
     try:
         if ext in IMG_EXTS:
             from PIL import Image, ImageOps
             img = Image.open(target)
+            # JPEG draft 解码：直接按 1/2、1/4… 尺寸解码再缩放，大图首生成快数倍
+            try:
+                img.draft("JPEG", (320, 320))
+            except (AttributeError, ValueError):
+                pass
             img = ImageOps.exif_transpose(img)   # 同 preview：EXIF 方向矫正后再缩放
             img.thumbnail((320, 320))
             img.convert("RGB").save(tmp, "JPEG", quality=80)
@@ -642,7 +656,7 @@ def thumb_file(path: str, _user=Depends(require_user)):
     except Exception:
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Thumbnail error")
-    return FileResponse(cached, media_type="image/jpeg")
+    return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)
 
 
 @app.get("/api/search")

@@ -32,7 +32,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   int? _lastDoneAt;
   int _diskUsed = 0, _diskTotal = 0;
   String _shareSize = '';
-  Timer? _tick;
+  Timer? _tick, _diskTick;
 
   @override
   void initState() {
@@ -42,12 +42,14 @@ class _HomePageState extends ConsumerState<HomePage> {
     // 本地状态（备份开关/待备数/传输动态）轻，2s 一刷保证跨页回来也是新的；
     // 磁盘要服务端 rglob 统计，30s 一刷 + 下拉手动刷
     _tick = Timer.periodic(const Duration(seconds: 2), (_) => _loadLocal());
-    Timer.periodic(const Duration(seconds: 30), (_) => _loadDisk());
+    // ⚠️ 必须持有并在 dispose 取消：匿名 Timer 会登出后继续空转（泄漏）
+    _diskTick = Timer.periodic(const Duration(seconds: 30), (_) => _loadDisk());
   }
 
   @override
   void dispose() {
     _tick?.cancel();
+    _diskTick?.cancel();
     super.dispose();
   }
 

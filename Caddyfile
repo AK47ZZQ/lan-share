@@ -17,7 +17,6 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		-Server
-		Cache-Control "no-cache, no-store, must-revalidate"
 	}
 
 	handle /files/* {
@@ -30,15 +29,25 @@
 		file_server browse
 	}
 
+	handle /thumb/* {
+		# 缩略图内容寻址（服务端 ETag 按 mtime+size），协商缓存省大流量；
+		# 必须覆盖上面的全局 no-store，否则浏览器不缓存、时间线每次全量重拉
+		header Cache-Control "private, no-cache"
+		reverse_proxy localhost:8766
+	}
+
 	handle /api/* {
+		header Cache-Control "no-cache, no-store, must-revalidate"
 		reverse_proxy localhost:8766
 	}
 
 	handle /s/* {
+		header Cache-Control "no-cache, no-store, must-revalidate"
 		reverse_proxy localhost:8766
 	}
 
 	handle {
+		header Cache-Control "no-cache, no-store, must-revalidate"
 		reverse_proxy localhost:8766
 	}
 

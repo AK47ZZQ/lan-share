@@ -129,6 +129,7 @@
 7. **HEIC 解码**：上传体积受配额与 `MAX_UPLOAD_SIZE` 约束，但 PIL 解码后的内存不受直接限制。家庭自传为主，可接受；公网开放前应在 `filetools.ensure_heif_support()` 加 `Image.MAX_IMAGE_PIXELS` 显式上限。
 8. **成员视角预览**（admin 专用）：`X-As-User` 头仅 admin 生效，以目标成员身份做可见性解析；写操作仍按真实会话身份执行（前端顶栏横幅明示），成员传该头无效；管理端点（`/api/admin/*`）完全隔离不受波及。审计 `preview_as` 记录目标用户名与 IP。
 9. **客户端密钥材料**：自签 HTTPS 证书私钥 `certs/*.pem` 不入库（可按 san.cnf 重签）；App release 签名 keystore `mobile/android/keys/` 与 `key.properties` 不入库，异地备份在 `<仓库外的私有备份位置>\`——**签名丢失即无法覆盖安装更新**，按最高敏感级保管；release 包已关 R8（无混淆，自分发家庭 App 无逆向动机，换取 WorkManager/Room 稳定性）。
+10. **照片时间线两处家庭信任边界**（0.4.2/0.4.3 新面，如实记录）：① `/api/photos?refresh=1` 放宽扫描节流至 5s（App 备份完成后拉最新用）——成员可持续触发全盘 rglob，放大磁盘/CPU 开销，节流下限 5s + 扫描锁防并发，家庭信任模型下接受；② 时间线"拍摄者"按路径 `照片/手机相册/<用户名>/` 推导，成员故意往他人目录传文件可造成归属错——共享空间本就可写（与 WebDAV 同级），admin 可移动纠错，不做服务端强校验。
 
 ## 安全检查清单（改动后自查）
 

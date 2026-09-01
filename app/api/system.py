@@ -157,14 +157,17 @@ def _photo_taken_at(f: Path) -> str:
     return mtime
 
 
-def _scan_photos():
-    """增量扫描图片库：新/变更文件提取拍摄日期，消失的文件清理条目。60s 内不重复扫。"""
+def _scan_photos(force: bool = False):
+    """增量扫描图片库：新/变更文件提取拍摄日期，消失的文件清理条目。
+    60s 内不重复扫；force（客户端已知有新照片，如备份刚完成）放宽到 5s——
+    既保证备份后时间线及时更新，又不给高频请求开无门槛的全盘扫描。"""
     global _last_photo_scan
     now = time.time()
-    if now - _last_photo_scan < 60:
+    floor = 5 if force else 60
+    if now - _last_photo_scan < floor:
         return
     with _photo_scan_lock:
-        if time.time() - _last_photo_scan < 60:
+        if time.time() - _last_photo_scan < floor:
             return
         seen = set()
         updates = []
@@ -212,11 +215,13 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
                 offset: int = Query(default=0, ge=0),
                 month: str | None = Query(default=None),
                 uploader: str | None = Query(default=None),
+                refresh: bool = Query(default=False),
                 _user=Depends(require_user)):
     """照片时间线：按拍摄日期倒序（EXIF 优先）。仅显示对当前用户可见的照片。
-    可按 month=YYYY-MM 与 uploader 过滤（共享相册双维度浏览）。"""
+    可按 month=YYYY-MM 与 uploader 过滤（共享相册双维度浏览）。
+    refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
-    _scan_photos()
+    _scan_photos(force=refresh)
     all_rows = _db().execute(
         "SELECT path, taken_at FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))]

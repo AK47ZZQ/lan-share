@@ -275,11 +275,12 @@ object BackupDartRunner {
         }
     }
 
-    /** 当前活动网络是否按流量计费（蜂窝/热点）。取不到网络按不计费处理。 */
+    /** 当前活动网络是否按流量计费（蜂窝/热点）。无活动网络/取不到能力一律按
+     *  计费处理——仅 Wi-Fi 语义下"没网"同样该停，别让引擎空转撞失败冷却。 */
     private fun netMetered(ctx: Context): Boolean {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return false
-        val net = cm.activeNetwork ?: return false
+            ?: return true
+        val net = cm.activeNetwork ?: return true
         val cap = cm.getNetworkCapabilities(net) ?: return true
         return !cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }

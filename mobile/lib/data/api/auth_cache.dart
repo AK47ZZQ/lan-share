@@ -35,7 +35,11 @@ class AuthCacheManager extends CacheManager {
   static AuthCacheManager get I => _instance;
 
   AuthCacheManager._()
-      : super(Config('authCachedImageData', fileService: AuthFileService()));
+      : super(Config('authCachedImageData', fileService: AuthFileService(),
+          // 默认 200 个对象——上千张照片的时间线会把缓存反复挤掉，
+          // "每次都转圈"的元凶之一；缩略图单张几十 KB，放宽到 5000/180 天
+          maxNrOfCacheObjects: 5000,
+          stalePeriod: const Duration(days: 180)));
 }
 
 /// 相对路径（如 /thumb/a/b.jpg）→ 服务器绝对 URL
