@@ -1,5 +1,19 @@
 # 更新日志
 
+## 2026-09-01（深夜 III）— 品牌启动图标：与 PWA 一致的"紫渐变 + 白 L"，v0.4.1+5
+
+- 告别 Flutter 默认图标。新增 `scripts/make-app-icon.py`（PIL，零新依赖）：
+  按 `web/public/icons/icon-512.png` 实测的几何/配色（#5B6BFF→#895BFF 渐变、
+  白 L 竖杆 41/底脚 110×34 @512 母版）生成三套资产——
+  ① `mipmap-anydpi-v26/ic_launcher.xml` 自适应装配：背景=drawable 渐变
+  （非 PNG），前景=白 L 透明底 PNG（5 密度 108dp 画布），并挂 monochrome
+  支持 Android 13 主题图标；② 遗留 `ic_launcher.png`（圆角全出血，5 密度）
+  ③ 单色层复用前景
+- release 重构建（0.4.1+5），模拟器验证：抽屉图标=品牌样式、启动正常、
+  照片墙/登录态无损（install -r 原地升级）
+- 分发件原地覆盖 `App安装包/lanshare.apk`（60,659,437B，sha256 d358082d…，
+  服务端 finish 校验一致）——分享链接不变，家人直接取到新包
+
 ## 2026-09-01（深夜 II）— release 签名：正式签名 APK 替换分发件，版本 0.4.0+4
 
 - **签名**：自建 keystore（RSA 2048 / 10000 天 / alias `lanshare`，证书指纹

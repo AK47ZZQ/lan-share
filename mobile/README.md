@@ -115,6 +115,11 @@ scripts\build-apk.bat debug|release
 替代：仓库已建 ASCII 结点路径 `C:\lan-share` → 真实目录，在该路径下
 直接 `flutter build apk --debug` 也可（M-A2/M-A3 实测，避开中文路径同理）。
 
+启动图标由 `scripts/make-app-icon.py`（hermes venv 的 PIL）生成：与 PWA
+同品牌（紫渐变 + 白 L，几何/配色按 `web/public/icons/icon-512.png` 实测），
+产出自适应（anydpi-v26 + monochrome）与遗留圆角两套；改品牌先改脚本常量
+再重跑、重新构建。
+
 ## 签名与发布（v0.4.0+4 起 release 为正式签名）
 
 - 密钥库 `android/keys/lanshare-release.jks` + 凭据 `android/key.properties`
