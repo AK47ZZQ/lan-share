@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'backup_settings_page.dart';
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
@@ -98,6 +99,15 @@ class _MePageState extends ConsumerState<MePage> {
           title: Text(_server ?? ''),
           subtitle: const Text('当前服务器'),
         ),
+        // 访客只读：无备份（APP-REQUIREMENTS §2）
+        if (session.role != 'guest')
+          ListTile(
+            leading: const Icon(Icons.backup_outlined),
+            title: const Text('自动备份'),
+            subtitle: const Text('手机相册自动存进网盘'),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const BackupSettingsPage())),
+          ),
         const Divider(),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -126,7 +136,7 @@ class _MePageState extends ConsumerState<MePage> {
           onTap: () => ref.read(sessionProvider.notifier).logout(),
         ),
         const SizedBox(height: 12),
-        const Center(child: Text('LAN Share App · M-A1',
+        const Center(child: Text('LAN Share App · M-A3',
             style: TextStyle(fontSize: 11, color: Colors.grey))),
         const SizedBox(height: 24),
       ]),

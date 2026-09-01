@@ -14,7 +14,7 @@
 | 序列化 | kotlinx 无——**Dart: json_serializable** | 与服务端 JSON 契约对齐（下划线字段名） |
 | 安全存储 | flutter_secure_storage | Token（Android Keystore / iOS Keychain 加密） |
 | 设置存储 | shared_preferences | 非敏感开关 |
-| 备份账本 | **drift**（SQLite ORM） | 类型安全查询；账本对账/迁移 |
+| 备份账本 | **SQLite（sqflite 裸 SQL）** | 设计原选 drift；落地改裸 SQL：单表场景省掉 build_runner 代码链，类型安全由 LedgerRow 模型类保证（§8.6） |
 | 哈希 | crypto（流式 sha256） | 秒传指纹；照片 ≤100MB 全落在现有指纹协议内 |
 | 图片 | flutter_cache_manager + CachedNetworkImage | 缩略图两级缓存 |
 | 后台调度 | **平台薄原生层 + Dart 传输核心**（§4 专述） | Flutter 后台最大风险点的解法 |
@@ -110,7 +110,7 @@ BGTaskScheduler ───────▶ 同上（后台窗口短：iOS 策略=�
 | M-A0 契约冻结 | Token 三端点上线（含测试）、本设计评审通过 | 服务端测试含 Bearer 路径；App 骨架可登录 | ✅ 2026-09-01 |
 | M-A1 只读可用 | 登录(+TOTP) / 照片墙 / 文件浏览 | 小米真机日常浏览一周 | ✅ 已交付（模拟器端到端验证；真机验收进行中） |
 | M-A2 手动传输 | 上传/下载/传输中心（暂停续传重试） | 500MB 杀进程续传验收（需求 FR-5） | ✅ 2026-09-01（模拟器 E2E 全程验证） |
-| M-A3 自动备份 | 备份引擎 + 设置页 + 账本 | 需求 FR-2 全部验收点 + 72h 稳定 | 待开工 |
+| M-A3 自动备份 | 备份引擎 + 设置页 + 账本 | 需求 FR-2 全部验收点 + 72h 稳定 | ✅ 2026-09-01（FR-2 验收点模拟器全通过；72h 挂机留真机阶段） |
 | M-A4 分享与发布 | 系统分享接收 / 分享管理 / APK 分发 | APK 经自家分享链接装到全家手机 | 待开工（debug APK 已在用自家分享链接分发） |
 
 ## 8.5 M-A2 传输引擎落地注记（2026-09-01）
@@ -131,6 +131,44 @@ BGTaskScheduler ───────▶ 同上（后台窗口短：iOS 策略=�
   `move_to_trash(dest)` 会把 sample（=dest 自身）一起挪走导致 os.link
   WinError 2，现以 samestat 先判同文件直接判定完成（`files.py`）；静默
   `except OSError` 改为 WARNING 日志，不再吞错
+
+## 8.6 M-A3 自动备份落地注记（2026-09-01）
+
+按 §4 设计落地，职责拆分兑现：**原生只管"何时醒"，传输协议 100% Dart**。
+
+- **Kotlin 薄桥**（`mobile/android/.../`，4 个文件约 300 行）：`BackupScheduler`
+  （PeriodicWorkRequest 15min + 约束 UPDATE 原地换）、`BackupWorker`
+  （CoroutineWorker：前置检查 → setForeground → 拉起后台 isolate → 按结果
+  success/retry → 完成通知）、`BackupDartRunner`（FlutterEngineGroup 每次任务
+  拉起独立引擎跑 `backupMain`，用完即毁；"ready" 握手防 invoke 早于 handler）、
+  `MediaStoreBridge`（query 全量紧凑数组 / open 拷缓存临时文件）。未引第三方
+  后台插件，仅新增 `androidx.work:work-runtime-ktx`
+- **Dart 侧**（`mobile/lib/backup/`）：`backup_engine.dart`（账本 diff → 逐张
+  sha256 流式 → init 秒传 → 分片 → finish；并发 1 顺序传；失败率 >30%(≥10 张)
+  冷却 30min 防风暴雨）、`backup_ledger.dart`（sqflite 单表）、`media_source.dart`、
+  `backup_bridge.dart`、`backup_config.dart`
+- **账本字段相对 §4 设计的调整**：`mtime` 代替 `generation`（DATE_MODIFIED 全
+  API 级可用，(id,mtime,size) 变了即重传）；增列 `session_id`/`received`/`name`
+  （跨进程续传凭据与账本页展示）；`uploading` 中断行由下轮 diff 自动纳入
+  （state 探测续传），等价设计里的"启动对账"
+- **约束默认**：仅 Wi-Fi + 仅充电时默认开（FR-2）；`runOnce` 一次性任务不带
+  约束（用户显式动作立即生效）；开关状态经 `flutter.backup_enabled` 键被
+  Kotlin 直读（shared_preferences 同文件，免双写）
+- **前台服务**：Worker 开始即 setForeground（dataSync 类型，Android 14 合规），
+  12+ 后台启动受限时 try/catch 降级——小批量 10min 窗口内完成，大批量靠账本
+  断点分多轮跑完，不丢数据。**实测踩坑：前台通知与结果通知同 ID（1001）会
+  在 Worker 结束时被系统连带撤掉 → 结果通知改用 2001**
+- **§6 公网保护**：域名非 `.local/.lan`、IP 非 RFC1918/localhost 一律判公网，
+  默认 skip（可开"公网地址也备份"）
+- **E2E 硬验收**（模拟器 API 35）：60 张照片开启即全自动备份（服务端 60/60、
+  字节数一致、抽查 sha 一致）；"立即备份"重跑服务端 mtime 零变化（账本去重）；
+  视频默认不传；250MB 杀进程续传——**服务端 .chunks 会话 part-000000..012 的
+  mtime 在续传前后原封不动（零重传的物理证据），仅新增 13..49，finish 后
+  262144000 字节 + SHA256 一致**；模拟器重启后 JobScheduler 周期任务持久恢复
+  （约束 CHARGING+CONNECTIVITY 未满足即等待）；ContentObserver 防抖 10s 即时
+  触发；完成通知可见
+- **遗留**：72h 连续挂机验收留真机阶段（FR-2 验收总纲）；iOS BGTaskScheduler
+  属 M-A4 后远期
 
 ## 9. 风险清单
 

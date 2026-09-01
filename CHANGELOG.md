@@ -1,5 +1,48 @@
 # 更新日志
 
+## 2026-09-01（晚）— M-A3 自动备份引擎：WorkManager + 账本 + 前台服务（手机 App 里程碑第四步）
+
+原生只管"何时醒"，传输协议 100% Dart（APP-DESIGN §4 设计兑现）。模拟器 E2E
+全部 FR-2 验收点通过；**零重传拿到物理证据**（服务端分片文件 mtime 前后一致）。
+
+- **后台调度（自写 Kotlin 薄桥，不引第三方后台插件）**：`BackupScheduler`
+  PeriodicWorkRequest 15min（系统约束：仅 Wi-Fi→UNMETERED + 仅充电，默认均开，
+  约束变化 UPDATE 原地换）；`MediaObserver` 监听 MediaStore 变更防抖 10s 即时
+  触发一次性任务；JobScheduler 跨重启持久（实测 reboot 后任务存活、约束未满足
+  即等待）；开关状态 Kotlin 直读 shared_preferences 同名文件（flutter.backup_enabled）
+- **BackupWorker**：前置检查 → setForeground（dataSync 类型，Android 14 合规；
+  12+ 后台启动受限 try/catch 降级）→ 拉起独立 FlutterEngine 跑 `backupMain`
+  后台 isolate（ready 握手防 invoke 竞态）→ 按结果 success/retry → 完成通知
+- **备份引擎（mobile/lib/backup/）**：MediaStore 扫描（自写通道，紧凑数组）
+  → sqflite 账本 diff（新文件/变更文件/未完成项；(id,mtime,size) 变了即重传）
+  → 逐张 sha256 流式（≤200MB）→ init 秒传 → 分片 → finish 全协议；断点凭据
+  session_id 落账本，恢复一律服务端 state 探测；并发 1 顺序传；失败率 >30%
+  （≥10 张）冷却 30 分钟防风暴雨；失败项自动重试（attempts>5 置 error，账本页
+  可手动重试）
+- **设置 UI**：我的页新增"自动备份"（guest 不可见）→ 设置页（总开关/仅 Wi-Fi/
+  仅充电/包含视频/完成提醒/公网也备份/统计卡"已备份 N · 待备份 M · 失败 K ·
+  最近备份时间"/立即备份/账本入口/单向备份说明）；备份账本页（状态过滤 chips +
+  重试失败项）；用户名持久化供后台 isolate 拼目标目录
+- **§6 公网保护**：非 RFC1918/localhost IP、非 .local/.lan 域名默认不自动备份
+  （实测切公网地址即跳过、切回自动补传）
+- **验收（FR-2）**：60 张照片开启即全自动备份（服务端 60/60、字节一致、抽查
+  sha 一致）；重跑立即备份服务端 mtime 零变化（账本去重）；视频默认不传；
+  **250MB 杀进程续传：13/50 块时 force-stop → 重开自动续传 → 服务端
+  .chunks part-000000..012 mtime 原封不动（零重传物理证据）→ finish 后
+  262144000 字节 + SHA256 一致**；模拟器重启后周期任务持久恢复
+
+**新增依赖**（沿 PLAN-v3 §6 逐项记理由）：
+- `sqflite ^2.4.1`：备份账本 SQLite。设计原选 drift（ORM），落地改裸 SQL——
+  单表场景省掉 build_runner 代码链，类型安全由 LedgerRow 模型类保证（APP-DESIGN §1 已注记）
+- `androidx.work:work-runtime-ktx 2.9.1`（Gradle）：WorkManager 本体，薄桥直接用官方 API
+
+**顺带修复**（E2E 实测揪出，均已复验）：
+- 🐛 **完成通知发出即消失**：前台服务通知与结果通知同用 ID 1001，Worker 结束时
+  系统按前台 ID 撤通知把刚发的结果通知连带撤掉（dumpsys 证据 posted=removed=10）
+  → 结果通知改 2001
+- 🐛 RELEASE 包缺 INTERNET 权限隐患：此前仅 debug/profile 清单声明，主清单补上
+
+
 ## 2026-09-01（下午）— M-A2 手动传输：App 上传/下载/传输中心（手机 App 里程碑第三步）
 
 传输核心纯 Dart（`mobile/lib/transfer/`），协议与网页 v3.6 全量对齐；

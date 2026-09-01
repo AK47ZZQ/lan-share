@@ -43,9 +43,11 @@ class SessionController extends StateNotifier<SessionState> {
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/auth/me',
           options: Options(headers: {'x-login-flow': '1'}));
+      final name = r.data['username'] as String?;
+      await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
       state = SessionState(
           loggedIn: true,
-          username: r.data['username'] as String?,
+          username: name,
           role: r.data['role'] as String?);
     } on DioException catch (e) {
       if (e.response?.statusCode != 401) {
@@ -123,9 +125,11 @@ class SessionController extends StateNotifier<SessionState> {
 
     final me = await dio.get('/api/auth/me',
         options: Options(headers: {'x-login-flow': '1'}));
+    final name = me.data['username'] as String?;
+    await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
     state = SessionState(
         loggedIn: true,
-        username: me.data['username'] as String?,
+        username: name,
         role: me.data['role'] as String?);
   }
 
@@ -152,6 +156,7 @@ class SessionController extends StateNotifier<SessionState> {
     _username = '';
     _password = '';
     await SecureStore.clearToken();
+    await Prefs.setUsername('');
     // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
     await AuthCacheManager.I.emptyCache();
     state = const SessionState();

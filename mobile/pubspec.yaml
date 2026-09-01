@@ -22,6 +22,8 @@ dependencies:
   path_provider: ^2.1.5          # 队列落盘/下载沙盒目录（M-A2 传输中心）
   file_picker: ^10.3.1           # 上传选文件/选照片（SAF，免存储权限）
   open_filex: ^4.7.0             # 已下载文件"用其他应用打开"（自带 FileProvider，免清单配置）
+  sqflite: ^2.4.1                # 备份账本 SQLite（M-A3；设计选 SQLite，ORM 层 drift→裸 SQL
+                                 #  省掉 build_runner 代码链，单表场景类型安全由模型类保证）
 
 dev_dependencies:
   flutter_test:

@@ -17,9 +17,8 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "app.lanshare.lanshare_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // 需求兼容线：Android 8.0+（APP-REQUIREMENTS §5；WorkManager/FGS 均无压力）
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
@@ -46,4 +45,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // M-A3 后台备份：WorkManager（自写 Kotlin 薄桥用，不引第三方后台插件）
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 }
