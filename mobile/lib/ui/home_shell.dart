@@ -1,9 +1,10 @@
-// 主壳：底部导航（照片/文件/我的），M-A1 信息架构的最小落地。
+// 主壳：底部导航（照片/文件/传输/我的），M-A2 加入传输中心。
 import 'package:flutter/material.dart';
 
 import 'files_page.dart';
 import 'me_page.dart';
 import 'photos_page.dart';
+import 'transfers_page.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -20,7 +21,8 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       body: IndexedStack(index: _tab, children: [
         PhotosPage(onGoFiles: () => setState(() => _tab = 1)),
-        const FilesPage(),
+        FilesPage(onGoTransfers: () => setState(() => _tab = 2)),
+        const TransfersPage(),
         MePage(onGoFiles: () => setState(() => _tab = 1)),
       ]),
       bottomNavigationBar: NavigationBar(
@@ -31,6 +33,8 @@ class _HomeShellState extends State<HomeShell> {
               selectedIcon: Icon(Icons.photo), label: '照片'),
           NavigationDestination(icon: Icon(Icons.folder_outlined),
               selectedIcon: Icon(Icons.folder), label: '文件'),
+          NavigationDestination(icon: Icon(Icons.swap_vert_circle_outlined),
+              selectedIcon: Icon(Icons.swap_vert_circle), label: '传输'),
           NavigationDestination(icon: Icon(Icons.person_outline),
               selectedIcon: Icon(Icons.person), label: '我的'),
         ],

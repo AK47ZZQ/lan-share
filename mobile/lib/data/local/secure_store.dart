@@ -1,8 +1,9 @@
 // 设备 Token 存储：优先 Keystore/Keychain 加密（flutter_secure_storage）；
-// 部分安卓机 EncryptedSharedPreferences 会抛 PlatformException，此时降级
-// SharedPreferences（家用取舍：仅存可吊销的设备 Token）。
-// 两路互斥：Keystore 写成功→清 fallback；写失败→清 Keystore 键再写 fallback。
-// 避免分裂双写（读旧写新的错位）。
+// 部分安卓机（含模拟器）进程被杀后冷启动可能解密失败（PlatformException/
+// AEADBadTag），此时降级读 SharedPreferences 副本。家用取舍：仅存可吊销的
+// 设备 Token（服务端 90 天滑动过期，可随时吊销）。
+// 双写双读：写入两路都写；读取 Keystore 优先、异常或为空时读副本。
+// （互斥方案的教训：Keystore 写成功即清副本，冷启动读失败时无路可退→掉登录）
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,29 +16,30 @@ class SecureStore {
   static Future<void> saveToken(String token) async {
     try {
       await _storage.write(key: _kToken, value: token);
-      final sp = await SharedPreferences.getInstance();
-      await sp.remove(_kTokenFallback);        // Keystore 为准，清掉降级副本
-    } catch (_) {
-      await _storage.delete(key: _kToken);      // 两路互斥：先清失败的 Keystore
-      final sp = await SharedPreferences.getInstance();
-      await sp.setString(_kTokenFallback, token);
-    }
+    } catch (_) {}
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kTokenFallback, token);
   }
 
   static Future<String?> token() async {
     try {
       final v = await _storage.read(key: _kToken);
-      if (v != null) return v;
+      if (v != null && v.isNotEmpty) return v;
     } catch (_) {}
     final sp = await SharedPreferences.getInstance();
     return sp.getString(_kTokenFallback);
   }
 
-  // 通用键值（证书信任指纹等）。永不抛错：Keystore 异常机型上 trust 预热
-  // 不能被一颗坏键卡死（否则所有 HTTPS 连接都会失败且无提示）。
+  // 通用键值（证书信任指纹等）。双写同 Token：冷启动 Keystore 解密失败时
+  // 信任记录不丢（丢了会反复弹"信任此服务器"）。永不抛错。
   static Future<String?> string(String key) async {
     try {
-      return await _storage.read(key: key);
+      final v = await _storage.read(key: key);
+      if (v != null && v.isNotEmpty) return v;
+    } catch (_) {}
+    try {
+      final sp = await SharedPreferences.getInstance();
+      return sp.getString('fb_$key');
     } catch (_) {
       return null;
     }
@@ -46,6 +48,10 @@ class SecureStore {
   static Future<void> setString(String key, String value) async {
     try {
       await _storage.write(key: key, value: value);
+    } catch (_) {}
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('fb_$key', value);
     } catch (_) {}
   }
 

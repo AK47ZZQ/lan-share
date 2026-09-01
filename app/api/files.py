@@ -143,7 +143,18 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             sample = Path(row["sample_path"])
             if sample.is_file():
                 try:
-                    if dest.exists():  # 覆盖秒传：旧版本进回收站
+                    if dest.exists():
+                        try:
+                            # 同目录重传同名文件：sample 即 dest 本身，挪进回收站
+                            # 会导致下面 os.link 找不到源（WinError 2）——已是同
+                            # 内容，直接判定秒传完成，不动旧文件
+                            if os.path.samestat(os.stat(dest), os.stat(sample)):
+                                audit("upload_instant", str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                                      human_size(body.size), client_ip(request))
+                                return {"instant": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                                        "size": body.size, "size_human": human_size(body.size)}
+                        except OSError:
+                            pass
                         move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     os.link(sample, dest)
@@ -151,8 +162,9 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                           human_size(body.size), client_ip(request))
                     return {"instant": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
                             "size": body.size, "size_human": human_size(body.size)}
-                except OSError:
-                    pass  # 硬链接失败则走正常分块上传
+                except OSError as e:
+                    import logging
+                    logging.warning("instant upload hardlink failed: %s", e)
 
     sid = secrets.token_urlsafe(16)
     _chunk_dir(sid).mkdir(parents=True, exist_ok=True)

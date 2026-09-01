@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'data/api/api_client.dart';
 import 'state/session.dart';
+import 'transfer/transfer_engine.dart';
 import 'ui/home_shell.dart';
 import 'ui/login_page.dart';
 
@@ -14,6 +15,17 @@ void main() {
       container.read(sessionProvider.notifier).logout();
     }
   };
+  // 登录态 ↔ 传输引擎联动：登录后恢复队列（含杀进程遗留的续传任务），登出全部挂起
+  container.listen<SessionState>(sessionProvider, (prev, next) {
+    final engine = TransferEngine.I;
+    if (next.loggedIn && prev?.loggedIn != true) {
+      // ignore: discarded_futures
+      engine.onLogin();
+    } else if (!next.loggedIn && prev?.loggedIn == true) {
+      // ignore: discarded_futures
+      engine.onLogout();
+    }
+  });
   runApp(UncontrolledProviderScope(
       container: container, child: const LanShareApp()));
 }

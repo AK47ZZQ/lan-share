@@ -118,7 +118,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 |--------|------|------|
 | M-A0 | ✅ | 设备 Token 三端点 + Bearer 中间件（90 天滑动/SHA256 存储/吊销审计/停用即失效/同名设备轮换）；84 项测试 |
 | M-A1 | ✅ | 照片墙（无限滚动 + 全屏查看 + 缩放）/ 文件浏览（面包屑栈导航）/ 我的（设备管理 + 登出）/ 自签证书 TOFU 信任流；模拟器端到端验证通过 |
-| M-A2 | ⏳ | 上传/下载/传输中心（暂停续传重试）；500MB 杀进程续传验收 |
+| M-A2 | ✅ | 上传（分片续传+秒传）/ 下载（Range 断点）/ 传输中心（进度/速度/暂停/续传/重试）；**500MB 杀进程续传验收通过**（模拟器 E2E：上传中途 force-stop → 重开自动登录 → state 探测断点 → 无重传 → 服务端 sha 校验通过） |
 | M-A3 | ⏳ | 自动备份引擎 + 设置页 + 账本 |
 | M-A4 | ⏳ | 系统分享接收 / 分享管理 / APK 自举分发 |
 
@@ -172,7 +172,7 @@ lan-share/
 │                           api/{auth,files,share,webdav,system,admin,notify}/
 ├── web/                    Vue3 前端工程（构建产物 web/dist 由 FastAPI 挂载，
 │                           node_modules + dist 已 gitignore）
-├── mobile/                 Flutter 原生 App（M-A0/A1 已上线：M-A2..4 待）
+├── mobile/                 Flutter 原生 App（M-A0/A1/A2 已上线：M-A3/A4 待）
 ├── Caddyfile               反代/TLS/forward_auth/:80跳转
 ├── certs/                  自签证书配置（san.cnf；*.pem 私钥不入库）
 ├── scripts/                工具（build-apk.bat 镜像构建；migrate_sqlite_to_pg.py 迁库）

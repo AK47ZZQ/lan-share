@@ -109,9 +109,28 @@ BGTaskScheduler ───────▶ 同上（后台窗口短：iOS 策略=�
 |--------|------|---------|------|
 | M-A0 契约冻结 | Token 三端点上线（含测试）、本设计评审通过 | 服务端测试含 Bearer 路径；App 骨架可登录 | ✅ 2026-09-01 |
 | M-A1 只读可用 | 登录(+TOTP) / 照片墙 / 文件浏览 | 小米真机日常浏览一周 | ✅ 已交付（模拟器端到端验证；真机验收进行中） |
-| M-A2 手动传输 | 上传/下载/传输中心（暂停续传重试） | 500MB 杀进程续传验收（需求 FR-5） | 待开工 |
+| M-A2 手动传输 | 上传/下载/传输中心（暂停续传重试） | 500MB 杀进程续传验收（需求 FR-5） | ✅ 2026-09-01（模拟器 E2E 全程验证） |
 | M-A3 自动备份 | 备份引擎 + 设置页 + 账本 | 需求 FR-2 全部验收点 + 72h 稳定 | 待开工 |
 | M-A4 分享与发布 | 系统分享接收 / 分享管理 / APK 分发 | APK 经自家分享链接装到全家手机 | 待开工（debug APK 已在用自家分享链接分发） |
+
+## 8.5 M-A2 传输引擎落地注记（2026-09-01）
+
+实现为 `mobile/lib/transfer/`（纯 Dart，ChangeNotifier 单例 + Riverpod provider）：
+
+- **断点真值在服务端**：恢复一律 `GET /api/upload/state/{sid}` 探测做并集，
+  本地 received 只是加速缓存；会话 404（3 天 TTL）自动作废重开
+- **下载**走 `/preview` + `Range`（206 续写 `.part`；416 视为已完整；200
+  自动从头）——服务端 FileResponse 原生支持，已补 pytest 契约测试锁定
+- **队列落盘** `documents/transfer_queue.json`：800ms debounce + 最长 5s
+  强制刷盘（纯 debounce 会被高频分片进度"饿死"，杀进程只剩旧快照）
+- **登录态联动**：登录 → 加载队列并自动续传；登出 → 全部挂起（不置
+  userPaused，重新登录即自动恢复）
+- **秒传阈值** App 端 200MB（package:crypto 纯 Dart 哈希慢于网页 JS 引擎场景
+  的实测取舍），超限不预计算，服务端 finish 仍自算校验
+- 实测顺带修复的服务端 bug：**同目录重传同名文件秒传失效**——秒传分支
+  `move_to_trash(dest)` 会把 sample（=dest 自身）一起挪走导致 os.link
+  WinError 2，现以 samestat 先判同文件直接判定完成（`files.py`）；静默
+  `except OSError` 改为 WARNING 日志，不再吞错
 
 ## 9. 风险清单
 

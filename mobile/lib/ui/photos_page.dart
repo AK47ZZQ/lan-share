@@ -1,8 +1,14 @@
 // 照片时间线：/api/photos 分页网格 + 点击全屏查看（左右滑动 + 双指缩放）。
+// M-A2：AppBar"上传照片"——手机相册多选 → incoming/<用户>/手机相册/（分片续传）；
+//       大图查看器可下载原图到 App 沙盒。
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
+import '../state/session.dart';
+import '../transfer/transfer_engine.dart';
 import 'widgets/auth_image.dart';
 
 class PhotoItem {
@@ -24,15 +30,15 @@ class PhotoItem {
 
 String _encPath(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
-class PhotosPage extends StatefulWidget {
+class PhotosPage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
   const PhotosPage({super.key, this.onGoFiles});
 
   @override
-  State<PhotosPage> createState() => _PhotosPageState();
+  ConsumerState<PhotosPage> createState() => _PhotosPageState();
 }
 
-class _PhotosPageState extends State<PhotosPage> {
+class _PhotosPageState extends ConsumerState<PhotosPage> {
   final _items = <PhotoItem>[];
   final _scroll = ScrollController();
   String? _base; // 服务器地址（异步取到后再刷网格）
@@ -98,10 +104,38 @@ class _PhotosPageState extends State<PhotosPage> {
     super.dispose();
   }
 
+  /// 手机相册多选上传（落 incoming/<用户名>/手机相册/，与服务端自动备份目标一致）
+  Future<void> _pickAndUpload() async {
+    final res = await FilePicker.platform
+        .pickFiles(type: FileType.image, allowMultiple: true);
+    if (res == null || res.files.isEmpty) return;
+    final username = ref.read(sessionProvider).username ?? '';
+    final dest = 'incoming/$username手机相册';
+    final engine = TransferEngine.I;
+    var n = 0;
+    for (final f in res.files) {
+      if (f.path == null) continue;
+      if (engine.enqueueUpload(
+              localPath: f.path!, destDir: dest, name: f.name) !=
+          null) {
+        n++;
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(n > 0 ? '已加入上传队列 $n 张' : '照片已在队列中'),
+        duration: const Duration(seconds: 2)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('照片')),
+      appBar: AppBar(title: const Text('照片'), actions: [
+        IconButton(
+            tooltip: '上传手机照片',
+            icon: const Icon(Icons.add_photo_alternate_outlined),
+            onPressed: _pickAndUpload),
+      ]),
       body: _base == null
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -173,6 +207,18 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(it.name, style: const TextStyle(fontSize: 14)),
+        actions: [
+          IconButton(
+              tooltip: '下载原图',
+              icon: const Icon(Icons.download_outlined),
+              onPressed: () {
+                TransferEngine.I.enqueueDownload(
+                    remotePath: it.path, name: it.name, size: 0);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('已加入下载队列'),
+                    duration: Duration(seconds: 2)));
+              }),
+        ],
       ),
       body: Column(children: [
         Expanded(

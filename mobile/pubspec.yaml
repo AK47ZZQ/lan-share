@@ -19,6 +19,9 @@ dependencies:
   http: ^1.2.0                    # flutter_cache_manager FileService 的 http 客户端载体
   flutter_cache_manager: ^3.4.2
   crypto: ^3.0.7
+  path_provider: ^2.1.5          # 队列落盘/下载沙盒目录（M-A2 传输中心）
+  file_picker: ^10.3.1           # 上传选文件/选照片（SAF，免存储权限）
+  open_filex: ^4.7.0             # 已下载文件"用其他应用打开"（自带 FileProvider，免清单配置）
 
 dev_dependencies:
   flutter_test:

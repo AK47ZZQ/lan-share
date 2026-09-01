@@ -307,3 +307,24 @@ def test_preview_photo_facets_as_member(client):
     va = admin.get("/api/photos/facets", headers={"X-As-User": uname_a}).json()
     names_a = [u["name"] for u in va["uploaders"]]
     assert uname_a in names_a and uname_b not in names_a
+
+
+# ── ⑨ /preview Range 断点下载契约（App M-A2 下载续传依赖 206）──────
+
+def test_preview_range_resume_contract(client, auth, workdir):
+    admin = _admin(client)
+    payload = b"0123456789" * 1000  # 10KB，内容可定位
+    assert admin.post("/api/upload", files={"file": ("rng.bin", payload)}).status_code == 200
+
+    # 无 Range：200 全量
+    r = admin.get("/preview/rng.bin")
+    assert r.status_code == 200 and len(r.content) == len(payload)
+
+    # 带 Range：206 + 精确切片（App 断点续传从 .part 偏移续写的前提）
+    r = admin.get("/preview/rng.bin", headers={"Range": "bytes=100-199"})
+    assert r.status_code == 206
+    assert r.content == payload[100:200]
+
+    # 起点即文件尾：按 RFC 9110 → 416（服务端正确行为；App 侧把 416 视为"已到尾"）
+    r = admin.get("/preview/rng.bin", headers={"Range": f"bytes={len(payload)}-"})
+    assert r.status_code == 416

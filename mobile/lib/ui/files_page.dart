@@ -1,26 +1,33 @@
-// 文件浏览：/api/files 目录列表 + 面包屑导航（M-A1 只读；上传/操作 M-A2 接入）。
-// 导航模型：栈里存每层 (path, items)——前进 fetch 入栈、面包屑回退直接出栈不重新请求。
+// 文件浏览：/api/files 目录列表 + 面包屑导航。
+// M-A2：FAB 上传到当前目录（file_picker，分片续传走传输中心）；
+//       点按文件 → 底部操作（下载到手机 / 用其他应用打开已下载的）。
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../data/api/api_client.dart';
+import '../transfer/transfer_engine.dart';
+import '../transfer/transfer_task.dart';
 
 class Entry {
   final String name;
   final String path;
   final bool isDir;
   final bool isPrivateRoot;
+  final int size;
   final String sizeHuman;
   final String modified;
   final String? ext;
   Entry({required this.name, required this.path, required this.isDir,
-      required this.isPrivateRoot, required this.sizeHuman,
-      required this.modified, this.ext});
+      required this.isPrivateRoot, required this.size,
+      required this.sizeHuman, required this.modified, this.ext});
 
   factory Entry.fromJson(Map<String, dynamic> j) => Entry(
       name: j['name'] as String,
       path: j['path'] as String,
       isDir: j['is_dir'] as bool,
       isPrivateRoot: j['is_private_root'] as bool? ?? false,
+      size: (j['size'] as num?)?.toInt() ?? 0,
       sizeHuman: j['size_human'] as String? ?? '',
       modified: j['modified'] as String? ?? '',
       ext: j['ext'] as String?);
@@ -50,7 +57,8 @@ IconData _iconOf(Entry e) {
 }
 
 class FilesPage extends StatefulWidget {
-  const FilesPage({super.key});
+  final VoidCallback? onGoTransfers;
+  const FilesPage({super.key, this.onGoTransfers});
 
   @override
   State<FilesPage> createState() => _FilesPageState();
@@ -58,8 +66,11 @@ class FilesPage extends StatefulWidget {
 
 class _FilesPageState extends State<FilesPage> {
   final _stack = <_Dir>[];
-  bool _loading = true;
+  // 初始必须为 false：initState 的首次 _push('') 受 _loading guard 保护，
+  // 初始 true 会把它拦死（M-A1 遗留：文件页永远转圈从未加载过）
+  bool _loading = false;
   String? _error;
+  bool _picking = false; // 选文件互斥（SAF 面板可能很慢）
 
   @override
   void initState() {
@@ -134,6 +145,86 @@ class _FilesPageState extends State<FilesPage> {
     });
   }
 
+  /// 上传到当前目录（M-A2 手动传输主入口）
+  Future<void> _pickAndUpload() async {
+    if (_picking) return;
+    _picking = true;
+    try {
+      final res = await FilePicker.platform
+          .pickFiles(type: FileType.any, allowMultiple: true);
+      if (res == null || res.files.isEmpty) return;
+      var n = 0;
+      for (final f in res.files) {
+        if (f.path == null) continue;
+        if (TransferEngine.I.enqueueUpload(
+            localPath: f.path!, destDir: _path, name: f.name) !=
+            null) {
+          n++;
+        }
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(n > 0 ? '已加入传输队列 $n 个文件' : '文件已在队列中'),
+          duration: const Duration(seconds: 2)));
+      widget.onGoTransfers?.call();
+    } finally {
+      _picking = false;
+    }
+  }
+
+  /// 文件点按：下载到手机 / 打开已下载的
+  Future<void> _fileSheet(Entry e) async {
+    final engine = TransferEngine.I;
+    final downloaded = engine.tasks
+        .where((t) =>
+            t.kind == TransferKind.download &&
+            t.remotePath == e.path &&
+            t.status == TransferStatus.done)
+        .toList();
+    await showModalBottomSheet(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(e.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Text('${e.sizeHuman} · ${e.modified.split('T').first}',
+                            style:
+                                const TextStyle(fontSize: 12, color: Colors.grey)),
+                      ])),
+              const Divider(height: 1),
+              ListTile(
+                  leading: const Icon(Icons.download),
+                  title: const Text('下载到手机'),
+                  subtitle: const Text('保存到 App 下载目录，支持断点续传'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    engine.enqueueDownload(
+                        remotePath: e.path, name: e.name, size: e.size);
+                    widget.onGoTransfers?.call();
+                  }),
+              if (downloaded.isNotEmpty)
+                ListTile(
+                    leading: const Icon(Icons.open_in_new),
+                    title: const Text('用其他应用打开'),
+                    subtitle: Text(
+                        downloaded.map((t) => t.localPath.split('/').last).join('、'),
+                        style: const TextStyle(fontSize: 11)),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      OpenFilex.open(downloaded.first.localPath);
+                    }),
+              const SizedBox(height: 8),
+            ])));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -143,6 +234,10 @@ class _FilesPageState extends State<FilesPage> {
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
         ],
       ),
+      floatingActionButton: FloatingActionButton.extended(
+          onPressed: _pickAndUpload,
+          icon: const Icon(Icons.upload_file),
+          label: const Text('上传到此处')),
       body: Column(children: [
         if (_stack.length > 1)
           SizedBox(
@@ -200,7 +295,11 @@ class _FilesPageState extends State<FilesPage> {
                                 trailing:
                                     e.isDir ? const Icon(Icons.chevron_right) : null,
                                 onTap: () {
-                                  if (e.isDir) _push(e.path);
+                                  if (e.isDir) {
+                                    _push(e.path);
+                                  } else {
+                                    _fileSheet(e);
+                                  }
                                 },
                               );
                             },
