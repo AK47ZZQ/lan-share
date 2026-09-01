@@ -148,9 +148,11 @@ Naive UI + VueUse、Pillow、qrcode、ffmpeg（可选）。
 
 - **阶段 0（已完成 2026-08-31）**：PWA——manifest + SW + 图标，浏览器"添加到
   主屏幕"即全屏独立应用；验证家人对 App 形态的真实需求
-- **阶段 1（Flutter 核心）**：登录(TOTP)/照片墙/文件浏览 → 手动传输（分片续传
-  全量对齐）→ **相册自动备份引擎**（默认仅照片、视频开关；仅 Wi-Fi/充电约束；
-  账本去重；Android WorkManager+MediaStore、iOS BGTaskScheduler）
+- **阶段 1（Flutter 核心）✅ 2026-09-01**：M-A1 登录(TOTP)/照片墙/文件浏览 ✅
+  → M-A2 手动传输（分片续传全量对齐；500MB 杀进程续传验收）✅
+  → M-A3 **相册自动备份引擎** ✅（默认仅照片、视频开关；仅 Wi-Fi/充电约束；
+  账本去重；Android WorkManager+MediaStore 自写薄桥；杀进程续传零重传/
+  重启恢复验收；iOS BGTaskScheduler 留远期）
 - **阶段 2**：推送通知（轮询起步，后期厂商通道）、离线缓存、系统分享接收、
   上架评估（软著/隐私政策/iOS 开发者账号）
 - 后端前置：~~`/api/auth/token` 长效设备 Token 三端点~~ ✅ **M-A0 已上线**

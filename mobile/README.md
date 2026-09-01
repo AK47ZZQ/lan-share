@@ -10,14 +10,21 @@
 | M-A0 | ✅ | 设备 Token 契约（登录换 Bearer，90 天滑动过期，可吊销） |
 | M-A1 | ✅ | 登录(+TOTP) / 照片墙 / 文件浏览 / 我的（设备管理） / 自签证书 TOFU |
 | M-A2 | ✅ | 手动传输：上传（分片续传+秒传）/ 下载（Range 断点）/ 传输中心（进度/速度/暂停/续传/重试/杀进程恢复） |
-| M-A3 | ⏳ | 相册自动备份（WorkManager + 账本 + 前台服务） |
+| M-A3 | ✅ | 相册自动备份：WorkManager 周期+MediaStore 即时感知（自写 Kotlin 薄桥）+ sqflite 账本去重 + 后台 isolate 引擎 + 前台服务通知；250MB 杀进程续传零重传（part-mtime 证据）、重启手机自动恢复 |
 | M-A4 | ⏳ | 系统分享接收 / 分享管理 / APK 自举分发（debug 签名先行） |
 
 ## 目录结构
 
 ```
 lib/
-├── main.dart               入口 + 登录态↔传输引擎联动
+├── main.dart               入口（main）+ 后台 isolate 入口（backupMain）
+│                           + 登录态↔传输引擎/备份调度联动
+├── backup/                 ★ M-A3 自动备份（纯 Dart 引擎，后台 isolate 跑）
+│   ├── backup_engine.dart  账本 diff → sha256 → init 秒传 → 分片 → finish
+│   ├── backup_ledger.dart  sqflite 单表账本（(id,mtime,size) 变更判定）
+│   ├── backup_config.dart  开关/约束配置（enabled 键被 Kotlin 直读）
+│   ├── backup_bridge.dart  主 isolate → 原生调度桥（挂/撤周期任务/权限/立即备份）
+│   └── media_source.dart   MediaStore 查询/临时文件通道封装
 ├── data/
 │   ├── api/                Dio 客户端（Bearer 注入/401 统一/TOFU 证书信任）
 │   └── local/              SecureStore（Token 双写兜底）/ Prefs
@@ -25,7 +32,13 @@ lib/
 ├── transfer/               ★ M-A2 传输核心（纯 Dart，可单测，双端共享）
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
-└── ui/                     照片 / 文件 / 传输中心 / 我的
+└── ui/                     照片 / 文件 / 传输中心 / 我的（+备份设置/账本页）
+
+android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3 原生薄桥
+├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）
+├── BackupScheduler.kt      WorkManager 周期任务（15min，仅 Wi-Fi+仅充电默认开）
+├── BackupWorker.kt         CoroutineWorker：前台保护 → 拉起后台 isolate → 结果处理
+└── MediaStoreBridge.kt     媒体查询/拷贝临时文件（Dart 通道实现）
 ```
 
 ## 传输协议（与网页 v3.6 全量对齐）
@@ -40,6 +53,27 @@ lib/
 - 恢复：队列 JSON 落盘（`documents/transfer_queue.json`，800ms debounce +
   5s 强制刷盘），杀进程重启后登录即自动续传；登出全部挂起
 
+## 自动备份（M-A3）
+
+职责拆分（APP-DESIGN §4）：**原生只管"何时醒"，传输协议 100% Dart**。
+
+- **触发**：WorkManager 周期任务（15 分钟起步，系统约束：仅 Wi-Fi→UNMETERED、
+  仅充电可选，默认均开）+ MediaStore 变更防抖 10s 即时触发 + 手动"立即备份"
+  （一次性任务不带约束，点了就跑）；JobScheduler 跨重启持久
+- **执行**：Worker 拉起独立 FlutterEngine（`backupMain` 入口，用完即毁）→
+  MediaStore 全量扫描 → 账本 diff（新文件/变更文件/未完成项）→ 逐张
+  sha256 → init（秒传）→ 分片 → finish；断点凭据 session_id 落账本，
+  恢复一律服务端 state 探测
+- **礼仪**：并发 1 顺序传；失败率 >30%（≥10 张）冷却 30 分钟；失败项
+  attempts>5 置 error，账本页可手动重试
+- **保护**：单批在 dataSync 前台服务通知下执行（Android 12+ 后台启动受限时
+  降级，靠账本断点分多轮跑完）；公网地址默认不备份（§6 流量保护，可开）
+- **语义**：单向备份——相册里删掉的照片不会从网盘删除；备份位置固定
+  `incoming/<用户名>/手机相册/`；视频默认不备份（开关可开）
+- **验收**（模拟器 API 35 E2E）：60 张全自动备份 sha 一致；账本去重重跑
+  mtime 零变化；250MB 杀进程续传**零重传**（服务端分片文件 mtime 前后一致
+  的物理证据）；重启手机周期任务自动恢复
+
 ## 构建
 
 ```bat
@@ -49,6 +83,9 @@ scripts\build-apk.bat debug
 仓库在中文路径下，NDK/CMake 构建会失败——脚本自动镜像源码到
 `C:\lan-share-mobile`（ASCII）构建后把 APK 拷回 `mobile\build\apk\`。
 依赖安装用国内镜像（脚本内已设 `PUB_HOSTED_URL`/`FLUTTER_STORAGE_BASE_URL`）。
+
+替代：仓库已建 ASCII 结点路径 `C:\lan-share` → 真实目录，在该路径下
+直接 `flutter build apk --debug` 也可（M-A2/M-A3 实测，避开中文路径同理）。
 
 ## 已知取舍
 
