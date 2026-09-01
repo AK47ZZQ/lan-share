@@ -1,5 +1,34 @@
 # 更新日志
 
+## 2026-09-01（晚）— M-A4 分享与发布：系统分享接收 + 分享管理 + 加固版 APK 分发
+
+手机 App 第五个里程碑（M-A0..A3 见下）。零服务端改动，全部复用现有契约；
+pytest 86 全绿、dart analyze 零问题、flutter test 3 通过、APK 构建+上传通过。
+
+- **FR-6 系统分享接收**：分享面板出现"LAN Share"（SEND/SEND_MULTIPLE，
+  `*/*`）→ Kotlin 把 content:// 先拷进 cache/share_inbox（授权方可随时回收
+  URI）→ `lanshare/share` 通道交 Dart（推送失败静默、登录后 takePending
+  兜底，双向容错不丢件）→ 复用传输引擎分片续传上传 `incoming/<用户>/分享
+  暂存/`；纯文本分享落 `分享文本_<ts>.txt`；**上传完成即删本地副本**（监听
+  引擎 + Kotlin 24h 扫残兜底）；SEND_MULTIPLE 只带单 Uri extra 的分享方
+  走兜底不静默丢
+- **传输引擎小修**：队列恢复只对"未完成"上传任务查本地文件存在性——已完成
+  任务的副本（分享接收的 cache 拷贝）被清后不再改判"本地文件不存在"假错误
+- **FR-7 分享管理**：我的分享列表（大小/剩余时效/下载次数/提取码/定向徽章）
+  + 撤销确认 + 复制链接（多服务器地址逐个给"局域网/公网"标签复制钮）；创建
+  面板：有效期 1/3/7/30 天、提取码、下载上限、定向成员（/api/members）；
+  入口=文件页操作单（guest 隐藏）+ 我的页
+- **E2E（模拟器 API 35）**：单文件/文本/SEND_MULTIPLE 兜底三条接收路径全部
+  落库字节数一致；传输中心"已上传"+ 副本清空；创建 3 天分享 → 列表可见 →
+  UI 撤销 → 服务端确认删除
+- **顺带修复 154201b 编译错误**：progress 刷新前台通知在 BackupDartRunner
+  作用域引用 applicationContext 且把 ForegroundInfo 直接 notify——上一次
+  提交的这 6 行从未编译过；拆出 `progressNotification()` 返回 Notification
+  并改用 run(ctx) 的 ctx。教训入库：**analyze/单测不编译 Kotlin，提交前必须
+  过真构建**
+- **分发**：加固+M-A4 APK（163,842,221B，sha256 7ce1f3ef…）经分片协议上传
+  `App安装包/lanshare-debug.apk`，家人取件链接不变直得新包
+
 ## 2026-09-01（深夜）— M-A3 七轮审查加固：5 轮代码审查 + 2 轮对抗性安全审查，86 测试全绿
 
 对 M-A3 全部 15 个代码文件跑 5 轮主题审查（正确性并发/边界完整性/泄漏性能/

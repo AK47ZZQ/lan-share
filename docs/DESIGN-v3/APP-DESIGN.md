@@ -111,7 +111,7 @@ BGTaskScheduler ───────▶ 同上（后台窗口短：iOS 策略=�
 | M-A1 只读可用 | 登录(+TOTP) / 照片墙 / 文件浏览 | 小米真机日常浏览一周 | ✅ 已交付（模拟器端到端验证；真机验收进行中） |
 | M-A2 手动传输 | 上传/下载/传输中心（暂停续传重试） | 500MB 杀进程续传验收（需求 FR-5） | ✅ 2026-09-01（模拟器 E2E 全程验证） |
 | M-A3 自动备份 | 备份引擎 + 设置页 + 账本 | 需求 FR-2 全部验收点 + 72h 稳定 | ✅ 2026-09-01（FR-2 验收点模拟器全通过；72h 挂机留真机阶段） |
-| M-A4 分享与发布 | 系统分享接收 / 分享管理 / APK 分发 | APK 经自家分享链接装到全家手机 | 待开工（debug APK 已在用自家分享链接分发） |
+| M-A4 分享与发布 | 系统分享接收 / 分享管理 / APK 分发 | APK 经自家分享链接装到全家手机 | ✅ 2026-09-01（模拟器 E2E 全通过；加固+M-A4 APK 已上传 App安装包，sha256 与本地构建一致） |
 
 ## 8.5 M-A2 传输引擎落地注记（2026-09-01）
 
@@ -169,6 +169,44 @@ BGTaskScheduler ───────▶ 同上（后台窗口短：iOS 策略=�
   触发；完成通知可见
 - **遗留**：72h 连续挂机验收留真机阶段（FR-2 验收总纲）；iOS BGTaskScheduler
   属 M-A4 后远期
+
+## 8.7 M-A4 分享与发布落地注记（2026-09-01）
+
+**FR-6 系统分享接收**——原生只管"接住并落地"，上传 100% 复用传输引擎：
+
+- **Kotlin 侧**（`ShareReceiver.kt` + MainActivity/Manifest）：MainActivity 增
+  SEND/SEND_MULTIPLE `*/*` intent-filter；收到即把 content:// 流拷进
+  `cacheDir/share_inbox/`（授权方可随时回收 URI，必须先落地），显示名/大小经
+  OpenableColumns 查询、文件名洗 `/ \`、同秒多件加 `(n)` 序号；纯文本分享落
+  `分享文本_<ts>.txt`。路径排队 `ShareInbox.pending`，`lanshare/share` 通道
+  Dart 侧 `takePending` 拉取 + Kotlin `incoming` 事件推送——与备份桥反向的
+  同款容错：Dart handler 未就绪时推送失败静默，登录后拉取兜底，不丢件
+- **Dart 侧**（`lib/share/share_bridge.dart`）：取走排队 → 复用
+  TransferEngine 分片续传上传到 `incoming/<用户>/分享暂存/`（展示名剥掉
+  `<13位时间戳>_` 壳）；监听引擎，**上传完成即删本地副本**（分享件是拷贝，
+  源在分享方 App）；传输引擎相应修正：`_load()` 只对"未完成"任务查本地文件
+  存在性，已完成任务副本被清不改判 error（否则重启满屏假错误）。24h 兜底
+  扫残在 Kotlin sweepStale。接入点在 HomeShell（登录壳就绪即消费，冷启动
+  分享进入与热分享统一）；未登录时留 Kotlin 队列，登录自动继续
+- **FR-7 分享管理**（`shares_page.dart` / `share_create_sheet.dart` /
+  `share_service.dart`）：列表（大小/剩余时效/下载次数/提取码/定向徽章）+
+  撤销（确认框）+ 复制链接（保存多地址时逐地址给"局域网/公网"标签复制钮，
+  RFC1918/localhost/.local 判局域网）；创建面板有效期 1/3/7/30 天 +
+  提取码 + 下载上限 + 定向成员（/api/members）；入口=文件页文件操作单
+  （guest 隐藏）+ 我的页。端点全复用现有契约（POST /api/share 等），零服务端改动
+
+**E2E（模拟器 API 35）**：单文件 SEND → 服务端字节数一致；文本分享落 txt；
+SEND_MULTIPLE 单 Uri extra（`am` 指令只能这样发）→ 兜底路径收下（真机
+ArrayList 路径同核心代码）；传输中心显示已上传且 share_inbox 清空；创建
+分享（3 天）→ /api/shares 可见 → 我的分享撤销 → 服务端确认删除
+
+**发布**：加固版+M-A4 APK（163,842,221B，sha256 7ce1f3ef…）已传
+`App安装包/lanshare-debug.apk`，家人经既有分享链接取新包
+
+**顺带修复**：154201b 的"progress 刷新前台通知"代码无法编译（在
+BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接
+notify）——该提交实未编译过；拆出 `progressNotification()` 返回 Notification
+并用 run(ctx) 的 ctx。教训：**提交前必须过一次真构建，analyze/单测不编译 Kotlin**
 
 ## 9. 风险清单
 

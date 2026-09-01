@@ -6,6 +6,7 @@ import 'backup_settings_page.dart';
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
+import 'shares_page.dart';
 
 class MePage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -108,6 +109,15 @@ class _MePageState extends ConsumerState<MePage> {
             onTap: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const BackupSettingsPage())),
           ),
+        // 分享管理（M-A4 FR-7）：访客无分享创建，入口一并隐藏
+        if (session.role != 'guest')
+          ListTile(
+            leading: const Icon(Icons.share_outlined),
+            title: const Text('我的分享'),
+            subtitle: const Text('管理分享链接：复制/撤销'),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const SharesPage())),
+          ),
         const Divider(),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -136,7 +146,7 @@ class _MePageState extends ConsumerState<MePage> {
           onTap: () => ref.read(sessionProvider.notifier).logout(),
         ),
         const SizedBox(height: 12),
-        const Center(child: Text('LAN Share App · M-A3',
+        const Center(child: Text('LAN Share App · M-A4',
             style: TextStyle(fontSize: 11, color: Colors.grey))),
         const SizedBox(height: 24),
       ]),

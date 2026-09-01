@@ -1,6 +1,7 @@
 package app.lanshare.lanshare_app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.ActivityCompat
@@ -17,6 +18,16 @@ class MainActivity : io.flutter.embedding.android.FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // 系统分享接收（M-A4）：Dart 主动 takePending；引擎活着时 Kotlin 推 incoming
+        val shareChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, "lanshare/share")
+        shareChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "takePending" -> result.success(ShareInbox.takeAll())
+                else -> result.notImplemented()
+            }
+        }
+        ShareInbox.channel = shareChannel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lanshare/backup_host")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -49,6 +60,19 @@ class MainActivity : io.flutter.embedding.android.FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        // 冷启动带分享 intent：此时 Dart handler 大概率未就绪，先落盘排队，
+        // configureFlutterEngine 末尾会推一次，登录后 takePending 再兜底
+        ShareReceiver.handleIntent(this, intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // 热接收（singleTop）：进程活着，Dart handler 通常已就绪
+        ShareReceiver.handleIntent(this, intent)
     }
 
     override fun onRequestPermissionsResult(

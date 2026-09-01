@@ -1,13 +1,16 @@
 // 文件浏览：/api/files 目录列表 + 面包屑导航。
 // M-A2：FAB 上传到当前目录（file_picker，分片续传走传输中心）；
-//       点按文件 → 底部操作（下载到手机 / 用其他应用打开已下载的）。
+//       点按文件 → 底部操作（下载到手机 / 分享 / 用其他应用打开已下载的）。
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
 
 import '../data/api/api_client.dart';
+import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'share_create_sheet.dart';
 
 class Entry {
   final String name;
@@ -56,15 +59,15 @@ IconData _iconOf(Entry e) {
   return Icons.insert_drive_file_outlined;
 }
 
-class FilesPage extends StatefulWidget {
+class FilesPage extends ConsumerStatefulWidget {
   final VoidCallback? onGoTransfers;
   const FilesPage({super.key, this.onGoTransfers});
 
   @override
-  State<FilesPage> createState() => _FilesPageState();
+  ConsumerState<FilesPage> createState() => _FilesPageState();
 }
 
-class _FilesPageState extends State<FilesPage> {
+class _FilesPageState extends ConsumerState<FilesPage> {
   final _stack = <_Dir>[];
   // 初始必须为 false：initState 的首次 _push('') 受 _loading guard 保护，
   // 初始 true 会把它拦死（M-A1 遗留：文件页永远转圈从未加载过）
@@ -172,9 +175,10 @@ class _FilesPageState extends State<FilesPage> {
     }
   }
 
-  /// 文件点按：下载到手机 / 打开已下载的
+  /// 文件点按：下载到手机 / 分享 / 打开已下载的
   Future<void> _fileSheet(Entry e) async {
     final engine = TransferEngine.I;
+    final canShare = ref.read(sessionProvider).role != 'guest'; // 访客只读
     final downloaded = engine.tasks
         .where((t) =>
             t.kind == TransferKind.download &&
@@ -210,6 +214,16 @@ class _FilesPageState extends State<FilesPage> {
                         remotePath: e.path, name: e.name, size: e.size);
                     widget.onGoTransfers?.call();
                   }),
+              if (canShare)
+                ListTile(
+                    leading: const Icon(Icons.share_outlined),
+                    title: const Text('创建分享链接'),
+                    subtitle: const Text('带提取码/有效期/定向成员的取件链接'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      showShareCreate(context, path: e.path, name: e.name);
+                    }),
               if (downloaded.isNotEmpty)
                 ListTile(
                     leading: const Icon(Icons.open_in_new),

@@ -551,7 +551,9 @@ class TransferEngine extends ChangeNotifier {
         if (t.kind == TransferKind.download) {
           final p = File('${t.localPath}.part');
           t.receivedBytes = p.existsSync() ? p.lengthSync() : 0;
-        } else if (!File(t.localPath).existsSync()) {
+        } else if (!t.finished && !File(t.localPath).existsSync()) {
+          // 只纠"未完成"的：已完成任务本地副本被清（如分享接收的 cache 拷贝）
+          // 不改判 error，免得重启后满屏假错误
           t.status = TransferStatus.error;
           t.error = '本地文件不存在';
         }

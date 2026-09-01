@@ -1,5 +1,6 @@
 package app.lanshare.lanshare_app
 
+import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -137,19 +138,21 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
         const val RESULT_NOTIF_ID = 2001
         const val TRUST_NOTIF_ID = 2002
 
-        fun fgInfo(ctx: Context, text: String): ForegroundInfo {
-            val n = NotificationCompat.Builder(ctx, Channels.PROGRESS)
+        fun progressNotification(ctx: Context, text: String): Notification =
+            NotificationCompat.Builder(ctx, Channels.PROGRESS)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentTitle("LAN Share 自动备份")
                 .setContentText(text)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .build()
-            return if (Build.VERSION.SDK_INT >= 29)
-                ForegroundInfo(FG_NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+
+        fun fgInfo(ctx: Context, text: String): ForegroundInfo =
+            if (Build.VERSION.SDK_INT >= 29)
+                ForegroundInfo(FG_NOTIF_ID, progressNotification(ctx, text),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             else
-                ForegroundInfo(FG_NOTIF_ID, n)
-        }
+                ForegroundInfo(FG_NOTIF_ID, progressNotification(ctx, text))
     }
 }
 
@@ -206,10 +209,13 @@ object BackupDartRunner {
                                     ((args?.get("done") as? Number)?.toInt() ?: 0)
                                         .coerceIn(0, total)
                                 try {
-                                    NotificationManagerCompat.from(applicationContext).notify(
+                                    // 注意作用域：这里在 BackupDartRunner（object）里，
+                                    // 没有 applicationContext——用 run(ctx) 传进来的 ctx；
+                                    // 进度刷新只要 Notification 本身，不要 ForegroundInfo
+                                    NotificationManagerCompat.from(ctx).notify(
                                         BackupWorker.FG_NOTIF_ID,
-                                        BackupWorker.fgInfo(
-                                            applicationContext, "已备份 $done/$total 张"))
+                                        BackupWorker.progressNotification(
+                                            ctx, "已备份 $done/$total 张"))
                                 } catch (_: Exception) {}
                                 result.success(null)
                             }
