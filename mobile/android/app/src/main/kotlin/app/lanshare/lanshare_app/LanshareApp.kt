@@ -9,7 +9,9 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -76,10 +78,21 @@ object MediaObserver {
 
     fun enqueueOnce(ctx: Context) {
         if (!enabled(ctx)) return
+        // 即时任务与周期任务同约束（读同一份 Flutter prefs）：否则拍照会绕过
+        // 仅 Wi-Fi/仅充电，在蜂窝/未充电时也开跑——约束收口（0.4.2）
+        val p = ctx.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(
+                if (p.getBoolean("flutter.backup_wifi_only", true)) NetworkType.UNMETERED
+                else NetworkType.CONNECTED)
+            .setRequiresCharging(p.getBoolean("flutter.backup_charging_only", true))
+            .setRequiresBatteryNotLow(true)
+            .build()
         WorkManager.getInstance(ctx).enqueueUniqueWork(
             "lanshare_backup_once",
             ExistingWorkPolicy.REPLACE,
             OneTimeWorkRequestBuilder<BackupWorker>()
+                .setConstraints(constraints)
                 .setInputData(workDataOf("trigger" to "media_change"))
                 .build())
     }

@@ -328,3 +328,17 @@ def test_preview_range_resume_contract(client, auth, workdir):
     # 起点即文件尾：按 RFC 9110 → 416（服务端正确行为；App 侧把 416 视为"已到尾"）
     r = admin.get("/preview/rng.bin", headers={"Range": f"bytes={len(payload)}-"})
     assert r.status_code == 416
+
+
+# ── ⑩ 手机相册落点的拍摄者归属（App 0.4.2 统一落 照片/手机相册/<u>/）────
+
+def test_photo_uploader_phone_album(client, auth, workdir):
+    from app.api.system import _photo_uploader
+    # 新统一落点：照片/手机相册/<u>/file → 归属 <u>
+    assert _photo_uploader("照片/手机相册/debug/IMG_1.jpg") == "debug"
+    # 共享相册目录不受影响：照片/<自定义相册>/file 仍是共享空间
+    assert _photo_uploader("照片/2026 春节/聚餐.jpg") == "共享空间"
+    # 旧路径语义保持：incoming/<u>/ 与 private/<u>/ 归属本人；照片根下文件算共享
+    assert _photo_uploader("incoming/debug/手机相册/IMG_0.jpg") == "debug"
+    assert _photo_uploader("private/admin/a.jpg") == "admin"
+    assert _photo_uploader("照片/直接放的.jpg") == "共享空间"

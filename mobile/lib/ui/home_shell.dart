@@ -1,9 +1,11 @@
-// 主壳：底部导航（照片/文件/传输/我的），M-A2 加入传输中心。
+// 主壳：底部导航（首页/照片/文件/传输/我的）。0.4.2 起首页为综合面板，
+// 打开 App 先看概览不再直落照片墙。
 // M-A4：接管系统分享接收——冷启动/热分享统一在壳层消费（只有登录后才有壳）。
 import 'package:flutter/material.dart';
 
 import '../share/share_bridge.dart';
 import 'files_page.dart';
+import 'home_page.dart';
 import 'me_page.dart';
 import 'photos_page.dart';
 import 'transfers_page.dart';
@@ -41,7 +43,7 @@ class _HomeShellState extends State<HomeShell> {
     try {
       final n = await ShareBridge.consumePending();
       if (!mounted || n == 0) return;
-      setState(() => _tab = 2);
+      setState(() => _tab = 3);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
               '已收到 $n 个分享文件，上传到「分享暂存」'),
@@ -55,15 +57,22 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(index: _tab, children: [
-        PhotosPage(onGoFiles: () => setState(() => _tab = 1)),
-        FilesPage(onGoTransfers: () => setState(() => _tab = 2)),
+        HomePage(
+            onGoPhotos: () => setState(() => _tab = 1),
+            onGoFiles: () => setState(() => _tab = 2),
+            onGoTransfers: () => setState(() => _tab = 3),
+            onGoMe: () => setState(() => _tab = 4)),
+        PhotosPage(onGoFiles: () => setState(() => _tab = 2)),
+        FilesPage(onGoTransfers: () => setState(() => _tab = 3)),
         const TransfersPage(),
-        MePage(onGoFiles: () => setState(() => _tab = 1)),
+        MePage(onGoFiles: () => setState(() => _tab = 2)),
       ]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
         destinations: const [
+          NavigationDestination(icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home), label: '首页'),
           NavigationDestination(icon: Icon(Icons.photo_outlined),
               selectedIcon: Icon(Icons.photo), label: '照片'),
           NavigationDestination(icon: Icon(Icons.folder_outlined),

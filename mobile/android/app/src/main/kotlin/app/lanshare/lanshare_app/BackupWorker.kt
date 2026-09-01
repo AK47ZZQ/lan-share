@@ -4,8 +4,12 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -54,7 +58,7 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
             android.util.Log.w("BackupWorker", "setForeground failed: ${e.message}")
         }
 
-        val json = BackupDartRunner.run(ctx, trigger)
+        val json = BackupDartRunner.run(ctx, trigger, isStopped = { isStopped })
         val obj = try {
             JSONObject(json)
         } catch (e: Exception) {
@@ -71,6 +75,9 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
                 }
                 Result.success()
             }
+            // 暂停（引擎逐张复查约束，Wi-Fi 断/拔充电/开关被关时优雅停）：
+            // 账本留断点，约束恢复后的下个周期自动续，不算错误不 retry
+            "paused" -> Result.success()
             // 服务器证书待确认（TOFU/换证书）：后台没有确认 UI，必须让用户
             // 打开 App 处理；6h 去重防周期任务反复骚扰
             "trust_required" -> {
@@ -174,7 +181,8 @@ object BackupDartRunner {
     // 首轮大批量（更长的靠账本断点分多轮，不丢数据）
     private const val RUN_TIMEOUT_MS = 30 * 60_000L
 
-    suspend fun run(ctx: Context, trigger: String): String {
+    suspend fun run(ctx: Context, trigger: String,
+                    isStopped: () -> Boolean = { false }): String {
         if (!engineLock.tryLock()) {
             return "{\"status\":\"skip\",\"reason\":\"busy\"}"
         }
@@ -197,6 +205,15 @@ object BackupDartRunner {
                             "ready" -> {
                                 ready.complete(Unit)
                                 result.success(null)
+                            }
+                            // 引擎逐张上传前查询实时约束（Dart 侧拿到后决定暂停）。
+                            // WorkManager 约束只在任务启动时把关；跑起来之后系统
+                            // 叫停、离开 Wi-Fi、拔充电器都得靠这里逐张复查
+                            "checkStop" -> {
+                                result.success(mapOf(
+                                    "stopped" to isStopped(),
+                                    "metered" to netMetered(ctx),
+                                    "charging" to isCharging(ctx)))
                             }
                             // 引擎逐张回报进度 → 刷新前台通知（30 分钟长任务
                             // 一直显示"运行中…"没法区分卡死还是正常）
@@ -256,5 +273,22 @@ object BackupDartRunner {
         } finally {
             engineLock.unlock()
         }
+    }
+
+    /** 当前活动网络是否按流量计费（蜂窝/热点）。取不到网络按不计费处理。 */
+    private fun netMetered(ctx: Context): Boolean {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val net = cm.activeNetwork ?: return false
+        val cap = cm.getNetworkCapabilities(net) ?: return true
+        return !cap.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
+
+    /** 是否在充电（含充满）。电池状态取不到视为未充电，宁停不偷跑。 */
+    private fun isCharging(ctx: Context): Boolean {
+        val status = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            ?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        return status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
     }
 }

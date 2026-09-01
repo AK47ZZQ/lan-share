@@ -23,6 +23,8 @@ object BackupScheduler {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
             .setRequiresCharging(chargingOnly)
+            // 电量低不启动（约束只管启动；跑起来之后由引擎逐张 checkStop 复查）
+            .setRequiresBatteryNotLow(true)
             .build()
         val req = PeriodicWorkRequestBuilder<BackupWorker>(15, TimeUnit.MINUTES)
             .setConstraints(constraints)

@@ -35,7 +35,8 @@ lib/
 ├── transfer/               ★ M-A2 传输核心（纯 Dart，可单测，双端共享）
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
-└── ui/                     照片 / 文件 / 传输中心 / 我的（+备份设置/账本/分享管理/创建分享页）
+└── ui/                     首页(综合面板) / 照片(日分组时间线) / 文件 / 传输中心 /
+                            我的（+备份设置/账本/分享管理/创建分享页）
 
 android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄桥
 ├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）
@@ -63,17 +64,24 @@ android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄
 
 - **触发**：WorkManager 周期任务（15 分钟起步，系统约束：仅 Wi-Fi→UNMETERED、
   仅充电可选，默认均开）+ MediaStore 变更防抖 10s 即时触发 + 手动"立即备份"
-  （一次性任务不带约束，点了就跑）；JobScheduler 跨重启持久
+  （一次性任务带与周期任务相同的约束，读同一份 prefs——0.4.2 前即时任务
+  不带约束，拍照会绕过仅 Wi-Fi/仅充电）；JobScheduler 跨重启持久
 - **执行**：Worker 拉起独立 FlutterEngine（`backupMain` 入口，用完即毁）→
   MediaStore 全量扫描 → 账本 diff（新文件/变更文件/未完成项）→ 逐张
   sha256 → init（秒传）→ 分片 → finish；断点凭据 session_id 落账本，
   恢复一律服务端 state 探测
+- **约束收口（0.4.2）**：WorkManager 约束只在任务启动时把关，跑起来后系统
+  叫停/离开 Wi-Fi/拔充电都管不住——引擎**逐张**经 `lanshare/backup` 通道
+  `checkStop`（isStopped/网络是否计费/是否充电）复查 + 重读开关，违反即
+  优雅暂停（status=paused，账本断点，约束恢复后下个周期自动续）
 - **礼仪**：并发 1 顺序传；失败率 >30%（≥10 张）冷却 30 分钟；失败项
   attempts>5 置 error，账本页可手动重试
 - **保护**：单批在 dataSync 前台服务通知下执行（Android 12+ 后台启动受限时
   降级，靠账本断点分多轮跑完）；公网地址默认不备份（§6 流量保护，可开）
 - **语义**：单向备份——相册里删掉的照片不会从网盘删除；备份位置固定
-  `incoming/<用户名>/手机相册/`；视频默认不备份（开关可开）
+  `照片/手机相册/<用户名>/`（0.4.2 起与手动上传统一落位，网页时间线按
+  此归属"拍摄者"并全员可见；此前在 `incoming/<用户名>/手机相册/` 的存量
+  已由服务端迁移）；视频默认不备份（开关可开）
 - **验收**（模拟器 API 35 E2E）：60 张全自动备份 sha 一致；账本去重重跑
   mtime 零变化；250MB 杀进程续传**零重传**（服务端分片文件 mtime 前后一致
   的物理证据）；重启手机周期任务自动恢复

@@ -42,6 +42,29 @@ class _DigestSink implements Sink<Digest> {
 class BackupEngine {
   static const _destAlbum = '手机相册';
 
+  /// 逐张上传前的实时暂停检查：返回 null=继续，否则为暂停原因。
+  /// WorkManager 约束只在任务启动时把关——跑起来之后系统叫停（isStopped）、
+  /// 离开 Wi-Fi（转计费网络）、拔充电器、App 里关开关都管不住，真机上
+  /// 表现为"备份无法自动暂停"。这里逐张复查，违反即优雅停：账本留断点，
+  /// 约束恢复后的下个周期自动续。
+  static Future<String?> _pauseReason() async {
+    final sp = await SharedPreferences.getInstance();
+    if (!(sp.getBool('backup_enabled') ?? false)) return 'disabled';
+    try {
+      final r = await const MethodChannel('lanshare/backup')
+          .invokeMethod<Map<Object?, Object?>>('checkStop');
+      if (r != null) {
+        if (r['stopped'] == true) return 'system_stop';
+        final cfg = await BackupConfig.load();
+        if (cfg.wifiOnly && r['metered'] == true) return 'wifi_lost';
+        if (cfg.chargingOnly && r['charging'] == false) return 'unplugged';
+      }
+    } catch (_) {
+      // 原生桥不可用（理论不发生）：宁缺毋滥地继续，别让检查本身卡死备份
+    }
+    return null;
+  }
+
   /// WorkManager Worker 的入口：返回结果 JSON（原生侧解析并决定 retry/通知）
   static Future<String> run() async {
     final res = <String, dynamic>{'status': 'done', 'uploaded': 0, 'failed': 0};
@@ -80,7 +103,7 @@ class BackupEngine {
         await BackupLedger.I.clearAll();
         await sp.setString('backup_ledger_user', username);
       }
-      final destDir = 'incoming/$username/$_destAlbum';
+      final destDir = '照片/$_destAlbum/$username';
 
       List<LedgerRow> scanned;
       List<LedgerRow> pending;
@@ -106,6 +129,12 @@ class BackupEngine {
       final ledger = BackupLedger.I;
       var attempted = 0, failed = 0;
       for (final row in pending) {
+        final pause = await _pauseReason();
+        if (pause != null) {
+          res['status'] = 'paused';
+          res['reason'] = pause;
+          break;
+        }
         attempted++;
         try {
           final ok = await _uploadOne(dio, ledger, row, destDir);
@@ -130,6 +159,11 @@ class BackupEngine {
       }
       res['uploaded'] = attempted - failed;
       res['failed'] = failed;
+      // 首页备份卡的"上次完成"；有实际成果才刷新
+      if ((attempted - failed) > 0) {
+        await sp.setInt('backup_last_done_at',
+            DateTime.now().millisecondsSinceEpoch);
+      }
       // 回写剩余待备数：Worker 周期触发时为 0 就不拉引擎（省电省内存）；
       // -1 表示未知/配置刚变强制跑。Observer 触发不走此捷径。
       await sp.setInt(

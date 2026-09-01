@@ -197,10 +197,13 @@ def _scan_photos():
 
 
 def _photo_uploader(rel: str) -> str:
-    """拍摄者维度：按路径归属推导（private/<u>/、incoming/<u>/ 归属本人，其余算共享）。"""
+    """拍摄者维度：按路径归属推导（private/<u>/、incoming/<u>/ 归属本人；
+    App 上传/备份统一落 照片/手机相册/<u>/，同样归属本人；其余算共享。"""
     parts = rel.split("/")
     if len(parts) > 1 and parts[0] in ("private", "incoming"):
         return parts[1]
+    if len(parts) > 3 and parts[0] == "照片" and parts[1] == "手机相册":
+        return parts[2]
     return "共享空间"
 
 

@@ -1,6 +1,6 @@
-// 照片时间线：/api/photos 分页网格 + 点击全屏查看（左右滑动 + 双指缩放）。
-// M-A2：AppBar"上传照片"——手机相册多选 → incoming/<用户>/手机相册/（分片续传）；
-//       大图查看器可下载原图到 App 沙盒。
+// 照片时间线：/api/photos 按拍摄日分组网格 + 点击全屏查看（左右滑动 + 双指缩放）。
+// AppBar"上传照片"——手机相册多选 → 照片/手机相册/<用户>/（分片续传，与自动
+// 备份同落点，网页时间线可按拍摄者归属）；大图查看器可下载原图到 App 沙盒。
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -104,13 +104,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     super.dispose();
   }
 
-  /// 手机相册多选上传（落 incoming/<用户名>/手机相册/，与服务端自动备份目标一致）
+  /// 手机相册多选上传（落 照片/手机相册/<用户名>/，与自动备份目标一致，
+  /// 网页端照片时间线按此路径归属"拍摄者"；0.4.2 前曾误落
+  /// incoming/<用户名>手机相册/——少个斜杠的路径拼接 bug）
   Future<void> _pickAndUpload() async {
     final res = await FilePicker.platform
         .pickFiles(type: FileType.image, allowMultiple: true);
     if (res == null || res.files.isEmpty) return;
     final username = ref.read(sessionProvider).username ?? '';
-    final dest = 'incoming/$username手机相册';
+    final dest = '照片/手机相册/$username';
     final engine = TransferEngine.I;
     var n = 0;
     for (final f in res.files) {
@@ -148,34 +150,72 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                       Center(child: FilledButton.tonal(
                           onPressed: _refresh, child: const Text('重新加载'))),
                     ])
-                  : GridView.builder(
-                      controller: _scroll,
-                      padding: const EdgeInsets.all(2),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              mainAxisSpacing: 2,
-                              crossAxisSpacing: 2),
-                      itemCount: _items.length + (_done ? 0 : 3),
-                      itemBuilder: (context, i) {
-                        if (i >= _items.length) {
-                          return const ColoredBox(
-                              color: Color(0x22888888),
-                              child: Center(
-                                  child: SizedBox(width: 16, height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2))));
-                        }
-                        final it = _items[i];
-                        return GestureDetector(
-                          onTap: _base == null ? null : () => _openViewer(i),
-                          child: AuthImage(
-                              url: '$_base/thumb/${_encPath(it.path)}'),
-                        );
-                      },
-                    ),
+                  : _buildTimeline(),
             ),
     );
+  }
+
+  /// 按拍摄日分组（0.4.2 起与网页时间线一致）：ListView 每组 = 日期头 + 3 列网格。
+  /// 全屏查看器仍用扁平 _items 索引，组内点击经前缀和换算全局下标。
+  Widget _buildTimeline() {
+    final groups = <(String, List<PhotoItem>)>[];
+    for (final it in _items) {
+      if (groups.isNotEmpty && groups.last.$1 == it.taken) {
+        groups.last.$2.add(it);
+      } else {
+        groups.add((it.taken, [it]));
+      }
+    }
+    return ListView.builder(
+        controller: _scroll,
+        padding: const EdgeInsets.only(bottom: 12),
+        itemCount: groups.length + (_done ? 0 : 1),
+        itemBuilder: (context, g) {
+          if (g >= groups.length) {
+            return const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(
+                    child: SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))));
+          }
+          final (day, photos) = groups[g];
+          var base = 0;
+          for (var k = 0; k < g; k++) {
+            base += groups[k].$2.length;
+          }
+          return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+                    child: Text(_dayLabel(day),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13))),
+                GridView.count(
+                    crossAxisCount: 3,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 2,
+                    crossAxisSpacing: 2,
+                    children: [
+                      for (var j = 0; j < photos.length; j++)
+                        GestureDetector(
+                          onTap: _base == null
+                              ? null
+                              : () => _openViewer(base + j),
+                          child: AuthImage(
+                              url: '$_base/thumb/${_encPath(photos[j].path)}'),
+                        ),
+                    ]),
+              ]);
+        });
+  }
+
+  static String _dayLabel(String iso) {
+    final d = DateTime.tryParse(iso);
+    if (d == null) return iso.isEmpty ? '未知日期' : iso;
+    const wk = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    return '${d.year}年${d.month}月${d.day}日 ${wk[d.weekday - 1]}';
   }
 
   void _openViewer(int index) {
