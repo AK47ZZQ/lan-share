@@ -122,9 +122,10 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 | M-A3 | ✅ | 自动备份：WorkManager 周期+媒体库即时感知（自写 Kotlin 薄桥）+ sqflite 账本去重 + 后台 isolate 传输引擎 + 前台服务通知；**250MB 杀进程续传（part-mtime 零重传证明）+ 重启手机自动恢复**验收通过（模拟器 E2E） |
 | M-A4 | ✅ | 系统分享接收（SEND/SEND_MULTIPLE → `incoming/<用户>/分享暂存`，文本落 txt，传完删副本）+ 分享管理（创建 1-30 天/提取码/下载上限/定向成员、列表/撤销/多地址复制链接）；零服务端改动；E2E 三接收路径字节一致 + 创建撤销闭环 |
 
-正式签名（v0.4.0+4）的 APK 通过自家分享链接在 `App安装包/lanshare.apk` 分发
-（30 天有效；当前包 = 七轮审查加固 + M-A4 + release 签名，sha256 与仓库构建
-一致；R8 已关——WorkManager/Room 在裁剪下启动即崩，详见 DEVELOPMENT.md）。
+正式签名（v0.4.1+5）的 APK 通过自家分享链接在 `App安装包/lanshare.apk` 分发
+（30 天有效；当前包 = 七轮审查加固 + M-A4 + release 签名 + 品牌启动图标
+（PWA 同款，自适应/主题图标两宜），sha256 与仓库构建一致；R8 已关——
+WorkManager/Room 在裁剪下启动即崩，详见 DEVELOPMENT.md）。
 完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与
 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
 
@@ -229,6 +230,7 @@ v2 个人网盘（P0–P3）✅ → v3 家庭团队版：M0 拆包 ✅ · M1 数
 **移动方向**：PWA 阶段 0 ✅（添加到主屏幕）；原生 App（Flutter 跨端）
 M-A0 契约 ✅ · M-A1 浏览 ✅ · M-A2 手动传输 ✅ · M-A3 相册自动备份 ✅
 （WorkManager+账本+前台服务，杀进程续传/重启恢复验收通过）· M-A4 分享与
-发布 ✅（系统分享接收/分享管理；经七轮审查加固；APK 经自家分享链接分发）。
+发布 ✅（系统分享接收/分享管理；经七轮审查加固）· 发布收尾 ✅（release
+签名 v0.4.1+5 + 品牌图标；正装包经自家分享链接分发）。
 规格与设计见 `docs/DESIGN-v3/APP-*.md`。
 详见 `docs/STATUS-v3.md`；规划见 `PLAN-v3.md`（§7 远景：CF Tunnel/域名试点）。

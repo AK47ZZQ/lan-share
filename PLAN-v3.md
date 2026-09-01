@@ -156,6 +156,8 @@ Naive UI + VueUse、Pillow、qrcode、ffmpeg（可选）。
   重启恢复验收；iOS BGTaskScheduler 留远期）
   → M-A4 分享与发布 ✅（系统分享接收 incoming/<用户>/分享暂存、分享管理
   创建/撤销/复制链接、七轮审查加固；零服务端改动；加固版 APK 经自家链接分发）
+  → 发布收尾 ✅（release 签名 0.4.1+5 + PWA 同款品牌图标；R8 已关——
+  WorkManager/Room 裁剪即崩；正装包 lanshare.apk 原地分发）
 - **阶段 2**：推送通知（轮询起步，后期厂商通道）、离线缓存、
   上架评估（软著/隐私政策/iOS 开发者账号）；真机 72h 挂机验收随小米真机阶段
 - 后端前置：~~`/api/auth/token` 长效设备 Token 三端点~~ ✅ **M-A0 已上线**

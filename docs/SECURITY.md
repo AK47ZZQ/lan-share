@@ -128,6 +128,7 @@
 6. 事件推送 Webhook：admin 凭据可配置任意 http(s) URL（含内网/外网），占位符经 URL 编码替换，无内联注入面；admin 失守面等同可改 Caddyfile，信任边界一致。
 7. **HEIC 解码**：上传体积受配额与 `MAX_UPLOAD_SIZE` 约束，但 PIL 解码后的内存不受直接限制。家庭自传为主，可接受；公网开放前应在 `filetools.ensure_heif_support()` 加 `Image.MAX_IMAGE_PIXELS` 显式上限。
 8. **成员视角预览**（admin 专用）：`X-As-User` 头仅 admin 生效，以目标成员身份做可见性解析；写操作仍按真实会话身份执行（前端顶栏横幅明示），成员传该头无效；管理端点（`/api/admin/*`）完全隔离不受波及。审计 `preview_as` 记录目标用户名与 IP。
+9. **客户端密钥材料**：自签 HTTPS 证书私钥 `certs/*.pem` 不入库（可按 san.cnf 重签）；App release 签名 keystore `mobile/android/keys/` 与 `key.properties` 不入库，异地备份在 `<仓库外的私有备份位置>\`——**签名丢失即无法覆盖安装更新**，按最高敏感级保管；release 包已关 R8（无混淆，自分发家庭 App 无逆向动机，换取 WorkManager/Room 稳定性）。
 
 ## 安全检查清单（改动后自查）
 

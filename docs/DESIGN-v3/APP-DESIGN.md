@@ -205,6 +205,14 @@ ArrayList 路径同核心代码）；传输中心显示已上传且 share_inbox 
 （09-01 深夜起换正装：release 签名 v0.4.0+4 → `App安装包/lanshare.apk`，
 见 DEVELOPMENT.md §手机 App）
 
+**发布收尾（09-01 深夜 II/III）**：release 签名（自建 keystore，
+`mobile/android/keys/` gitignored + 异地备份；gradle 缺 key.properties 回退
+debug 签名）+ 品牌启动图标（`scripts/make-app-icon.py`，PWA 同款
+紫渐变 + 白 L，自适应 anydpi-v26 含 monochrome 主题图标 + 遗留圆角，
+零新依赖）；当前 **v0.4.1+5**。R8 教训：Flutter 插件默认给 release 开
+裁剪/混淆，WorkManager 的 Room 库启动即崩且 debug 从不暴露——
+`gradle.properties → shrink=false` 关掉。换签设备须卸载重装
+
 **顺带修复**：154201b 的"progress 刷新前台通知"代码无法编译（在
 BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接
 notify）——该提交实未编译过；拆出 `progressNotification()` 返回 Notification
