@@ -19,24 +19,45 @@ class AuthImage extends StatefulWidget {
 }
 
 class _AuthImageState extends State<AuthImage> {
+  // 同步快路径：本会话已解析过的文件直接给 Image.file，重建零转圈；
+  // 否则走 FutureBuilder（磁盘缓存/下载），成功后进记忆表
+  File? _instant;
   late Future<File> _future;
 
   @override
   void initState() {
     super.initState();
-    _future = AuthCacheManager.I.getSingleFile(widget.url);
+    _resolve();
+  }
+
+  void _resolve() {
+    _instant = AuthCacheManager.I.peekResolved(widget.url);
+    if (_instant != null) {
+      _future = Future.value(_instant);
+    } else {
+      _future = AuthCacheManager.I
+          .getSingleFile(widget.url)
+          .then((f) {
+            AuthCacheManager.I.rememberResolved(widget.url, f);
+            return f;
+          });
+    }
   }
 
   @override
   void didUpdateWidget(covariant AuthImage old) {
     super.didUpdateWidget(old);
     if (old.url != widget.url) {
-      _future = AuthCacheManager.I.getSingleFile(widget.url);
+      _resolve();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final instant = _instant;
+    if (instant != null) {
+      return Image.file(instant, fit: widget.fit, gaplessPlayback: true);
+    }
     return FutureBuilder<File>(
       future: _future,
       builder: (context, snap) {

@@ -1,7 +1,9 @@
 // 照片时间线：/api/photos 按拍摄日分组的 3 列网格 + 点击全屏查看。
-// 0.4.3：① 组内网格改 builder 懒加载（此前 children 版一次性发起整页请求，
-// 缩略图风暴=转圈好久的主因）；② 长按进入多选（下载/删除/分享）；③ 备份
-// 完成后 10s 内自动带 refresh=1 重拉（服务端放宽扫描节流），照片墙准实时。
+// 0.4.4：整体改 CustomScrollView + SliverGrid 虚拟化（日期头滚动置顶）——
+//       此前"ListView + shrinkWrap 网格"快滑时整组销毁重建，已加载的图划走
+//       再回来全变转圈（真机复现）；Sliver 只构建视口内格子，照片量不设限。
+// 0.4.3：长按进入多选（下载/删除/分享）；备份完成后 10s 内自动带 refresh=1
+// 重拉（服务端放宽扫描节流），照片墙准实时。
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
@@ -286,7 +288,6 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       bottomNavigationBar: selecting ? _selectionBar() : null,
     );
   }
-
   Widget _selectionBar() {
     final multi = _selected.length > 1;
     // guest 只读：删除/分享必然失败（服务端会拒），不给出入口
@@ -321,9 +322,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                 Text(label, style: const TextStyle(fontSize: 12)),
               ]))));
 
-  /// 按拍摄日分组（与网页时间线一致）：ListView 每组 = 日期头 + 3 列网格。
-  /// ⚠️ 组内网格必须 builder（懒构建）：children 版会把整页 120 张一次性全部
-  /// 发起请求——缩略图风暴，"转圈好久"的主因。查看器仍用扁平索引（前缀和换算）。
+  /// 按拍摄日分组（与网页时间线一致）：**Sliver 虚拟化**时间线——每组一个
+  /// SliverMainAxisGroup（置顶日期头 + SliverGrid）。
+  /// 0.4.2 曾用"外层 ListView + 内层 shrinkWrap 网格"：shrinkWrap 会一次性
+  /// 布局整组所有照片，快滑时整组销毁、回来整组并发重建重拉——已加载的图
+  /// 划走再回来全变转圈（真机实测复现）。Sliver 版只构建视口内格子，滚出
+  /// 即廉价回收，回来只重建可见的十几个格且直接命中磁盘缓存；照片量不设限。
   Widget _buildTimeline(bool selecting) {
     final groups = <(String, List<int>)>[];
     for (var i = 0; i < _items.length; i++) {
@@ -334,38 +338,32 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         groups.add((day, [i]));
       }
     }
-    return ListView.builder(
+    return CustomScrollView(
         controller: _scroll,
-        padding: const EdgeInsets.only(bottom: 12),
-        itemCount: groups.length + (_done ? 0 : 1),
-        itemBuilder: (context, g) {
-          if (g >= groups.length) {
-            return const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(
-                    child: SizedBox(width: 18, height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))));
-          }
-          final (day, flatIdx) = groups[g];
-          return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          for (final (day, flatIdx) in groups) ...[
+            SliverAppBar(
+                pinned: true,
+                primary: false,
+                automaticallyImplyLeading: false,
+                toolbarHeight: 34,
+                backgroundColor: Theme.of(context).colorScheme.surface,
+                surfaceTintColor: Colors.transparent,
+                title: Align(
+                    alignment: Alignment.centerLeft,
                     child: Text(_dayLabel(day),
                         style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13))),
-                GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 3,
-                            mainAxisSpacing: 2,
-                            crossAxisSpacing: 2),
-                    itemCount: flatIdx.length,
-                    itemBuilder: (context, j) {
+                            fontWeight: FontWeight.w600, fontSize: 13)))),
+            SliverGrid(
+                gridDelegate:
+                    const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        mainAxisSpacing: 2,
+                        crossAxisSpacing: 2),
+                delegate: SliverChildBuilderDelegate(
+                    addRepaintBoundaries: true,
+                    (context, j) {
                       final flat = flatIdx[j];
                       final selected = _selected.contains(flat);
                       return GestureDetector(
@@ -396,9 +394,18 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                         : null)),
                         ]),
                       );
-                    }),
-              ]);
-        });
+                    },
+                    childCount: flatIdx.length)),
+          ],
+          if (!_done)
+            const SliverPadding(
+                padding: EdgeInsets.all(16),
+                sliver: SliverToBoxAdapter(
+                    child: Center(
+                        child: SizedBox(width: 18, height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2))))),
+        ]);
   }
 
   static String _dayLabel(String iso) {
