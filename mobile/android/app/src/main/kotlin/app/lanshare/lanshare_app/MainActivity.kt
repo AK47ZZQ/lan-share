@@ -66,4 +66,11 @@ class MainActivity : io.flutter.embedding.android.FlutterActivity() {
             grantResults[0] == PackageManager.PERMISSION_GRANTED
         r.success(mapOf("granted" to granted))
     }
+
+    override fun onDestroy() {
+        // 权限弹窗期间 Activity 被销毁：补一个结果，别让 Dart 侧 await 永久挂起
+        pendingPermission?.success(mapOf("granted" to false))
+        pendingPermission = null
+        super.onDestroy()
+    }
 }

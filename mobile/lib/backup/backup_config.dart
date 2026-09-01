@@ -41,6 +41,9 @@ class BackupConfig {
     await sp.setBool(_kVideos, includeVideos);
     await sp.setBool(_kNotify, notifyDone);
     await sp.setBool(_kPublic, allowPublicServer);
+    // 约束/范围变化会改变待备集合（如开启视频），pending 计数归 -1 让下个
+    // 周期强制跑一轮，别被 Worker 的"空跑跳过"捷径挡住
+    await sp.setInt('backup_pending_count', -1);
   }
 
   static const _kEnabled = 'backup_enabled';

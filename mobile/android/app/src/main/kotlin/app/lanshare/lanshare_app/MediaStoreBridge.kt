@@ -89,11 +89,23 @@ object MediaStoreBridge {
         val name = queryName(ctx.contentResolver, uri) ?: "photo.jpg"
         val dir = File(ctx.cacheDir, "backup_tmp")
         if (!dir.exists()) dir.mkdirs()
-        val dst = File(dir, "${id}_$name") // 带原名：扩展名/中文名服务端按 name 落盘
+        sweepStale(dir)
+        // DISPLAY_NAME 个别机型含路径分隔符，会落到子目录导致兜底清理失效
+        val safeName = name.replace('/', '_').replace('\\', '_')
+        val dst = File(dir, "${id}_$safeName") // 带原名：扩展名/中文名服务端按 name 落盘
         ctx.contentResolver.openInputStream(uri)?.use { input ->
             dst.outputStream().use { output -> input.copyTo(output, 1 shl 16) }
         } ?: throw IllegalStateException("openInputStream null: $id")
+        // 标记"刚由本引擎写过"，与 24h 残留清理的判定对齐
+        dst.setLastModified(System.currentTimeMillis())
         return dst.absolutePath
+    }
+
+    /// 24h 前的残留临时文件兜底清理：进程被杀/引擎硬销毁时 Dart 侧 finally
+    /// 跑不到，靠这里回收（正好在 cacheDir，被系统清理也无害）
+    private fun sweepStale(dir: File) {
+        val cutoff = System.currentTimeMillis() - 24 * 3_600_000L
+        dir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.delete() }
     }
 
     private fun queryName(resolver: ContentResolver, uri: Uri): String? {

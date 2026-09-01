@@ -78,6 +78,38 @@ def _own_private_rel(username: str, parts: list[str]) -> list[str]:
     return ["private", username] + parts
 
 
+def sample_readable(user, sample) -> bool:
+    """秒传越权防线（Dedup Oracle 封堵）：blobs 库是全局的，"服务端存有该
+    内容"≠"当前用户可读"。物理样例路径对当前用户可读才允许秒传硬链接。
+
+    不能用 resolve() 判——shared 空间里 "private/..." 段会被重定向到请求者
+    本人空间且不做存在性检查，形同虚设。这里按物理路径直判，语义与目录读
+    一致：private 仅本人（admin 也无跨用户寻址，PERMISSIONS.md E8）；incoming
+    admin 全见、member 仅本人子树、guest 凭 grant；其余 shared 语义。
+    """
+    username = user["username"]
+    role = user["role"] if "role" in user.keys() else "member"
+    from pathlib import Path as _Path
+    try:
+        rel = _Path(sample).resolve().relative_to(_Path(SHARE_ROOT).resolve())
+    except (ValueError, OSError):
+        return False
+    parts = [p for p in rel.parts if p not in ("", ".")]
+    if not parts or any(p == ".." or p.startswith(".") for p in parts):
+        return False
+    if _normcase_eq(parts[0], "private"):
+        return len(parts) >= 2 and _normcase_eq(parts[1], username)
+    if _normcase_eq(parts[0], "incoming"):
+        if role == "admin":
+            return True
+        if role == "member":
+            return len(parts) >= 2 and _normcase_eq(parts[1], username)
+        return _grant_hit(user["user_id"], "shared/" + "/".join(parts), "read")
+    if role == "guest":
+        return _grant_hit(user["user_id"], "shared/" + "/".join(parts), "read")
+    return True  # member/admin：shared 默认可读
+
+
 def resolve(user, path: str, need: str = "read"):
     """解析虚拟路径 → 物理路径；无权限一律 403（不区分 404 防探测）。
 

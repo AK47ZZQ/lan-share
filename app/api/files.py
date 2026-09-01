@@ -26,7 +26,7 @@ from app.db import _db, _db_lock
 from app.security import audit, client_ip, preview_user, require_user, require_admin
 from app.filetools import (_file_dict, clean_filename, dir_tree, ensure_heif_support,
                            human_size, move_to_trash, safe_path, save_upload)
-from app.spaces import enforce_quota, resolve, sync_grants_on_move, visible
+from app.spaces import enforce_quota, resolve, sample_readable, sync_grants_on_move, visible
 from app.main import app
 
 ensure_heif_support()   # HEIC/HEIF 解码注册（iPhone 默认照片格式）
@@ -141,7 +141,13 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
         row = _db().execute("SELECT sample_path FROM blobs WHERE sha256=?", (body.sha256,)).fetchone()
         if row:
             sample = Path(row["sample_path"])
-            if sample.is_file():
+            # 秒传越权防线（对抗审查 CRIT-1，Dedup Oracle）：blobs 是全局表，
+            # "服务端存有该内容"≠"当前用户可读"。样例不可读（他人 private/
+            # incoming 子树等）就降级走正常分片——攻击者只知道 sha+size，
+            # 没有真实字节，finish 时服务端重算 sha 不符必失败，不泄漏内容。
+            # 同内容早退分支在可读判定之后，语义不变。
+            readable = sample.is_file() and sample_readable(_user, sample)
+            if readable:
                 try:
                     if dest.exists():
                         try:

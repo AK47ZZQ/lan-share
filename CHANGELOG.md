@@ -1,5 +1,44 @@
 # 更新日志
 
+## 2026-09-01（深夜）— M-A3 七轮审查加固：5 轮代码审查 + 2 轮对抗性安全审查，86 测试全绿
+
+对 M-A3 全部 15 个代码文件跑 5 轮主题审查（正确性并发/边界完整性/泄漏性能/
+协议对齐/UI 生命周期）+ 2 轮红队视角安全审查，全部有效发现当场修复并回归。
+pytest 86（+1 新增）、dart analyze 零问题、flutter test 3、APK 构建通过。
+
+- **并发与状态机（R1/R2）**：BackupDartRunner 进程级协程 Mutex（周期任务与
+  Observer 即时任务两个 unique work 可并发入队，此前会双份 reconcile/双会话
+  传同一张图）+ run 30min 兜底超时；账本 fail() 累加 attempts（此前 4xx 判死/
+  IO 异常不计数），attempts>5 真暂停、reconcile 不再自动重入 error 暂停项
+  （此前"暂停"语义被架空，冷却空转）；chunkSize≤0 守卫、会话重开 >5 熔断
+  （防 init 正常但 chunk 恒 404 的死循环）、429 改走退避不判死
+- **性能与体验（R3）**：周期任务空跑跳过（引擎回写 backup_pending_count，
+  0 则不拉引擎，省电省内存；配置 save() 重置 -1 强制跑）；逐张进度回报刷新
+  前台通知（长任务不再永远"运行中…"，数值 Kotlin 侧钳制）；setReceived 按
+  1/10 节流落盘（长视频写放大）；账本 run 后 close；reconcile 两段查询控内存；
+  临时文件 24h 残留清理 + DISPLAY_NAME 分隔符清洗 + mtime 标记
+- **协议与 UI（R4/R5）**：`?sha` null-aware map entry 被误报为语法错误
+  （Dart 3.8+ 特性，analyzer 证伪）；finish path 兜底；账本按账号隔离（同机
+  换账号检测 backup_ledger_user 变化即清账本重对账——旧账号 done 记录此前会
+  永久跳过新账号照片；重对账靠秒传免网络重传）；权限申请 2min 超时 +
+  onDestroy 补结果（防 UI 永久等待）；立即备份/重试失败项防连点；先落盘再
+  setState
+- **对抗审查修复（S1/S2）**：
+  - 🔴 **秒传 Dedup Oracle（服务端）**：blobs 全局表 + 秒传硬链接无读权校验，
+    知道 sha+size 即可把他人上传内容实体化到自己目录。新增 `spaces.
+    sample_readable()`（物理路径直判：private 仅本人、incoming admin 全见/
+    member 本人子树/guest 凭 grant）——不可读即降级正常分片，无真实字节
+    finish 必因 sha 不符失败。不能用 resolve() 判：`private/...` 段会重定向
+    到请求者本人空间且不查存在性。新增跨用户秒传拒绝测试
+  - 证书被拒（换证书/MITM）在后台 isolate 无 UI 出口，此前静默瘫成普通失败：
+    引擎识别 HandshakeException/TrustRequiredError → `trust_required` →
+    Worker 发"服务器证书需要确认"通知（6h 去重）
+  - sid 白名单 `^[A-Za-z0-9_-]{8,64}$`（绝对 URL 覆盖 baseUrl 经复核不成立
+    ——拼接串以 / 开头，防御纵深）；username 含 `/ \ ..` 拒跑；manifest
+    `allowBackup="false"`；last_error 落库前清控制符
+- 🐛 Worker `"{}"` 空兜底会把引擎 null 响应吞成"无事发生"→ 改显式错误；
+  引擎返回非 JSON 同样按错误处理
+
 ## 2026-09-01（晚）— M-A3 自动备份引擎：WorkManager + 账本 + 前台服务（手机 App 里程碑第四步）
 
 原生只管"何时醒"，传输协议 100% Dart（APP-DESIGN §4 设计兑现）。模拟器 E2E

@@ -22,6 +22,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   BackupConfig? _cfg;
   LedgerStats? _stats;
   Timer? _poll;
+  bool _busy = false; // 立即备份防连点（引擎侧互斥兜底，这里管 UI 观感）
 
   @override
   void initState() {
@@ -69,8 +70,8 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
         includeVideos: cfg.includeVideos,
         notifyDone: cfg.notifyDone,
         allowPublicServer: cfg.allowPublicServer);
-    setState(() => _cfg = cfg);
     await cfg.save();
+    setState(() => _cfg = cfg);
     await BackupBridge.applySchedule(cfg);
     if (on) await BackupBridge.runOnce();
   }
@@ -94,8 +95,8 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
             allowPublicServer: cfg.allowPublicServer);
       }
     }
-    setState(() => _cfg = cfg);
     await cfg.save();
+    setState(() => _cfg = cfg);
     await BackupBridge.applySchedule(cfg);
     if (cfg.enabled) await BackupBridge.runOnce();
   }
@@ -207,15 +208,25 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 child: Row(children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                        onPressed: cfg.enabled
+                        onPressed: cfg.enabled && !_busy
                             ? () async {
-                                final messenger = ScaffoldMessenger.of(context);
-                                await BackupBridge.runOnce();
-                                messenger.showSnackBar(const SnackBar(
-                                    content: Text('已开始备份（见通知栏进度）')));
+                                setState(() => _busy = true);
+                                try {
+                                  final messenger = ScaffoldMessenger.of(context);
+                                  await BackupBridge.runOnce();
+                                  messenger.showSnackBar(const SnackBar(
+                                      content: Text('已开始备份（见通知栏进度）')));
+                                } finally {
+                                  if (mounted) setState(() => _busy = false);
+                                }
                               }
                             : null,
-                        icon: const Icon(Icons.sync),
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.sync),
                         label: const Text('立即备份')),
                   ),
                   const SizedBox(width: 12),
@@ -253,6 +264,7 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
   String _filter = 'all';
   List<LedgerRow> _rows = [];
   bool _loading = true;
+  bool _retrying = false;
 
   @override
   void initState() {
@@ -277,15 +289,24 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
         title: const Text('备份账本'),
         actions: [
           TextButton.icon(
-              onPressed: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                await BackupLedger.I.retryFailed();
-                await BackupBridge.runOnce();
-                messenger.showSnackBar(const SnackBar(content: Text('已重新排队失败项')));
-                _filter = 'all';
-                _loading = true;
-                _load();
-              },
+              onPressed: _retrying
+                  ? null
+                  : () async {
+                      setState(() => _retrying = true);
+                      try {
+                        final messenger = ScaffoldMessenger.of(context);
+                        await BackupLedger.I.retryFailed();
+                        await BackupBridge.runOnce();
+                        messenger.showSnackBar(
+                            const SnackBar(content: Text('已重新排队失败项')));
+                        if (!mounted) return;
+                        _filter = 'all';
+                        _loading = true;
+                        _load();
+                      } finally {
+                        if (mounted) setState(() => _retrying = false);
+                      }
+                    },
               icon: const Icon(Icons.refresh, size: 18),
               label: const Text('重试失败项')),
         ],

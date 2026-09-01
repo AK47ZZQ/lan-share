@@ -381,3 +381,44 @@ def test_private_subpaths_physical_form(auth, make_user, workdir):
     # 跨用户物理形态仍被隔离
     other = make_user("member")
     assert other.get(f"/api/files/{phys.rsplit('/', 1)[0]}").status_code in (403, 404)
+
+
+def test_instant_dedup_no_cross_user_leak(auth, make_user):
+    """对抗审查 CRIT-1（Dedup Oracle）回归：秒传 blobs 库是全局的，但样例
+    文件对当前用户不可读时必须降级走正常分片——只知道 sha+size 不能把他人
+    上传的内容实体化到自己的目录。"""
+    import hashlib
+
+    alice = make_user("member")
+    bob = make_user("member")
+    payload = b"alice-private-secret-content"
+    sha = hashlib.sha256(payload).hexdigest()
+
+    r = alice.post("/api/upload/private",
+                   files={"file": ("secret.bin", payload, "application/octet-stream")})
+    assert r.status_code == 200, r.text
+
+    # bob 拿着 sha+size 想"秒传"到自己 incoming → 必须拒绝秒传
+    r = bob.post("/api/upload/init", json={
+        "dest_dir": "incoming", "filename": "stolen.bin",
+        "size": len(payload), "sha256": sha})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["instant"] is False
+
+    # 假内容凑 finish 也过不了：分片长度严格校验，等长假字节过 finish 时
+    # 也会被服务端重算的 sha 拒掉
+    sid = body["session"]
+    r = bob.post(f"/api/upload/chunk/{sid}?index=0", content=b"x" * len(payload))
+    assert r.status_code == 200
+    assert bob.post(f"/api/upload/finish/{sid}").status_code == 400
+
+    # bob 的 incoming 里没有这个文件
+    r = bob.get("/api/files/incoming")
+    assert "stolen.bin" not in [e["name"] for e in r.json()["items"]]
+
+    # alice 自己重传同内容仍可秒传（本人可读自己的样例）
+    r = alice.post("/api/upload/init", json={
+        "dest_dir": "incoming", "filename": "again.bin",
+        "size": len(payload), "sha256": sha})
+    assert r.json()["instant"] is True

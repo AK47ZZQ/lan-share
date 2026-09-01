@@ -1,6 +1,8 @@
 // 备份账本（FR-2 去重 + APP-DESIGN §4 状态机）：单表 SQLite。
 // 身份 = MediaStore 媒体库 ID（跨重启稳定）；(id, mtime, size) 变了视为文件被
-// 编辑过 → 重新备份。状态机：pending → uploading → done | error(attempts≤5)。
+// 编辑过 → 重新备份。状态机：pending → uploading → done | error；
+// error 且 attempts≤5 下轮自动重试，attempts>5 = 暂停（账本页"重试失败项"
+// 手动复活），否则暂停态会被 reconcile 反复重入，attempts 永远压不住。
 // 单向备份语义：相册里删掉的照片账本原样保留（网盘不随相册删除）。
 import 'package:sqflite/sqflite.dart';
 
@@ -90,6 +92,13 @@ class BackupLedger {
         version: 1, onCreate: _create);
   }
 
+  /// 后台 isolate 引擎跑完一轮后释放句柄（isolate 随引擎销毁，这里是兜底）
+  Future<void> close() async {
+    final db = _db;
+    _db = null;
+    await db?.close();
+  }
+
   Future<void> _create(Database db, int v) async {
     await db.execute('''
       CREATE TABLE ledger(
@@ -115,7 +124,23 @@ class BackupLedger {
   Future<List<LedgerRow>> reconcile(List<LedgerRow> scanned) async {
     final db = await open();
     final known = <String, LedgerRow>{};
-    for (final r in await db.query('ledger')) {
+    // 两段查询控内存：done 行只取对账所需 4 列（大头），全行仅装未完成积压
+    // （正常是小集合），10 万张相册不至于全量 12 列进 Dart 堆
+    for (final r in await db.query('ledger',
+        columns: ['media_id', 'mtime', 'size', 'sha256'],
+        where: 'status = ?',
+        whereArgs: ['done'])) {
+      known[r['media_id'] as String] = LedgerRow(
+          mediaId: r['media_id'] as String,
+          kind: '',
+          name: '',
+          size: (r['size'] as num).toInt(),
+          mtime: (r['mtime'] as num).toInt(),
+          status: 'done',
+          sha256: r['sha256'] as String?);
+    }
+    for (final r in await db
+        .query('ledger', where: 'status != ?', whereArgs: ['done'])) {
       final row = LedgerRow.fromMap(r);
       known[row.mediaId] = row;
     }
@@ -124,7 +149,9 @@ class BackupLedger {
     for (final s in scanned) {
       final row = known[s.mediaId];
       if (row == null) {
-        batch.insert('ledger', s.toMap());
+        // replace：与主 isolate 的手动重试/统计写并发时主键冲突不该炸整轮
+        batch.insert('ledger', s.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
         pending.add(s);
       } else if (row.mtime != s.mtime || row.size != s.size) {
         // 文件被编辑：重置后重传（同目录同名覆盖，服务端旧版本进回收站）
@@ -138,8 +165,8 @@ class BackupLedger {
         batch.update('ledger', reset.toMap(),
             where: 'media_id = ?', whereArgs: [s.mediaId]);
         pending.add(reset);
-      } else if (row.status != 'done') {
-        pending.add(row); // pending/uploading/error 都纳入本轮（error 自动重试）
+      } else if (row.status != 'done' && row.attempts <= 5) {
+        pending.add(row); // pending/uploading/error 且未暂停 → 自动重试
       }
       known.remove(s.mediaId);
     }
@@ -214,10 +241,25 @@ class BackupLedger {
     return attempts > 5;
   }
 
+  /// 失败：累加 attempts（4xx 判死 / IO 异常 / 5xx 退避耗尽都算一次失败）。
+  /// attempts 超 5 → error 暂停（reconcile 不再自动纳入，等手动重试），
+  /// 否则留 error 下轮自动重试。message 源自服务端 detail/本地异常，落库前
+  /// 清控制符防折行伪装（UI 纯文本渲染，无注入面）
   Future<void> fail(String id, String message) async {
     final db = await open();
-    await db.update('ledger', {'status': 'error', 'last_error': message},
-        where: 'media_id = ?', whereArgs: [id]);
+    final rows = await db.query('ledger',
+        columns: ['attempts'], where: 'media_id = ?', whereArgs: [id]);
+    final attempts = ((rows.first['attempts'] as num?)?.toInt() ?? 0) + 1;
+    final msg = message.replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ');
+    await db.update(
+        'ledger',
+        {
+          'attempts': attempts,
+          'status': 'error',
+          'last_error': attempts > 5 ? '$msg（连续失败多次，已暂停）' : msg,
+        },
+        where: 'media_id = ?',
+        whereArgs: [id]);
   }
 
   /// 手动重试失败项：清 attempts 回 pending
@@ -225,6 +267,14 @@ class BackupLedger {
     final db = await open();
     await db.update('ledger', {'status': 'pending', 'attempts': 0},
         where: 'status = ?', whereArgs: ['error']);
+  }
+
+  /// 换账号登录时清空账本："已备份"语义按账号隔离（media_id 是设备本地
+  /// MediaStore id，跨账号无意义）。服务端已传文件不删，重对账后靠 sha256
+  /// 秒传免网络重传，只花一次本地哈希。
+  Future<void> clearAll() async {
+    final db = await open();
+    await db.delete('ledger');
   }
 
   Future<LedgerStats> stats() async {

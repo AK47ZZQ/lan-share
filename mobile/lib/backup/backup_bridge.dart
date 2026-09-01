@@ -22,11 +22,15 @@ class BackupBridge {
   }
 
   /// 媒体读权限（+通知，完成提醒用）。granted=false 时备份无法开启。
+  /// 兜底超时：权限弹窗期间 Activity 被系统回收时原生结果可能丢失，
+  /// 不能让设置页的开关永久停在等待态。
   static Future<bool> requestPermissions({required bool includeVideos}) async {
     try {
       final r = await _ch
           .invokeMethod<Map<Object?, Object?>>(
-              'requestPermissions', {'videos': includeVideos});
+              'requestPermissions', {'videos': includeVideos})
+          .timeout(const Duration(minutes: 2),
+              onTimeout: () => {'granted': false});
       return r?['granted'] == true;
     } catch (_) {
       return false;

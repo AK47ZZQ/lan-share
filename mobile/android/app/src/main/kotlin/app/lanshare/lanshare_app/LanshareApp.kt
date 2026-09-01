@@ -13,6 +13,9 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class LanshareApp : Application() {
     override fun onCreate() {
@@ -46,7 +49,10 @@ object MediaObserver {
     private var registered = false
     private lateinit var appCtx: Context
 
-    private val debounce = Runnable { enqueueOnce(appCtx) }
+    // 开关判定（SharedPreferences 首读有磁盘 IO）切到后台线程，主线程只做防抖
+    private val debounce = Runnable {
+        CoroutineScope(Dispatchers.Default).launch { enqueueOnce(appCtx) }
+    }
 
     fun register(ctx: Context) {
         if (registered) return
@@ -54,7 +60,6 @@ object MediaObserver {
         appCtx = ctx.applicationContext
         val observer = object : ContentObserver(handler) {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
-                if (!enabled(appCtx)) return
                 handler.removeCallbacks(debounce)
                 handler.postDelayed(debounce, 10_000)
             }
