@@ -202,6 +202,8 @@ ArrayList 路径同核心代码）；传输中心显示已上传且 share_inbox 
 
 **发布**：加固版+M-A4 APK（163,842,221B，sha256 7ce1f3ef…）已传
 `App安装包/lanshare-debug.apk`，家人经既有分享链接取新包
+（09-01 深夜起换正装：release 签名 v0.4.0+4 → `App安装包/lanshare.apk`，
+见 DEVELOPMENT.md §手机 App）
 
 **顺带修复**：154201b 的"progress 刷新前台通知"代码无法编译（在
 BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接

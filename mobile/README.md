@@ -105,7 +105,7 @@ android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄
 ## 构建
 
 ```bat
-scripts\build-apk.bat debug
+scripts\build-apk.bat debug|release
 ```
 
 仓库在中文路径下，NDK/CMake 构建会失败——脚本自动镜像源码到
@@ -114,6 +114,23 @@ scripts\build-apk.bat debug
 
 替代：仓库已建 ASCII 结点路径 `C:\lan-share` → 真实目录，在该路径下
 直接 `flutter build apk --debug` 也可（M-A2/M-A3 实测，避开中文路径同理）。
+
+## 签名与发布（v0.4.0+4 起 release 为正式签名）
+
+- 密钥库 `android/keys/lanshare-release.jks` + 凭据 `android/key.properties`
+  （均 gitignore；**异地备份** `<仓库外的私有备份位置>\`，
+  丢失即无法覆盖安装）。gradle 从 `key.properties` 读签名，缺文件时回退
+  debug 签名（保证无密钥环境 `flutter run --release` 可用）
+- `storeFile` 路径相对 **android/ 根**（rootProject）解析——写 `keys/xxx.jks`
+  而非 `app/keys/xxx.jks`，否则 `validateSigningRelease` 找不到文件
+- **R8 已关**（`android/gradle.properties` → `shrink=false`）：Flutter 插件
+  默认给 release 开裁剪/混淆，WorkManager 的 Room 库在 R8 下启动即崩
+  （`Failed to create an instance of WorkDatabase`，早于任何 Dart 代码），
+  debug 构建从不暴露；家庭 App 无混淆收益，关闭仅 +4MB
+- debug 与 release **签名不同不能覆盖安装**：已装 debug 包的设备换装
+  release 须先卸载（登录态/备份账本随之清除，账本丢失由服务端秒传兜底）
+- 分发：`App安装包/lanshare.apk` 经自家分享链接分发（30 天）；换包直接
+  覆盖同名文件并新建分享
 
 ## 已知取舍
 

@@ -1,5 +1,24 @@
 # 更新日志
 
+## 2026-09-01（深夜 II）— release 签名：正式签名 APK 替换分发件，版本 0.4.0+4
+
+- **签名**：自建 keystore（RSA 2048 / 10000 天 / alias `lanshare`，证书指纹
+  `CF:31:1C:B4:…:07:78`）；`mobile/android/keys/*.jks` 与 `key.properties`
+  gitignored，异地备份 `<仓库外的私有备份位置>\`；
+  gradle 缺 key.properties 时回退 debug 签名
+- **坑一**：`key.properties` 的 `storeFile` 相对 android/ 根（rootProject）
+  解析，按 app/ 相对写会 `validateSigningRelease` 找不到文件
+- **坑二（crash）**：Flutter 插件默认给 release 开 R8 裁剪/混淆，
+  WorkManager 的 Room 库被裁后 `androidx.startup` 反射实例化 `WorkDatabase`
+  失败——**启动即崩且早于任何 Dart 代码，debug 构建从不暴露**。关 R8
+  （`gradle.properties` → `shrink=false`，+4MB）：家庭 App 无混淆收益，
+  稳定优先；E2E 重跑通过
+- **E2E（release 包，模拟器）**：登录/TOFU 信任/照片墙渲染/文件列表/
+  file_picker 选件上传 → WebDAV 取回 sha256 与源文件一致
+- **分发切换**：`App安装包/lanshare.apk`（60,657,608B，sha256 92cab256…）
+  新分享 30 天；旧 debug 分享撤销、旧包删除。**debug/release 签名不同不能
+  覆盖安装**，已装 debug 包的设备须卸载重装（备份账本清空由服务端秒传兜底）
+
 ## 2026-09-01（晚）— M-A4 分享与发布：系统分享接收 + 分享管理 + 加固版 APK 分发
 
 手机 App 第五个里程碑（M-A0..A3 见下）。零服务端改动，全部复用现有契约；

@@ -58,6 +58,21 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
   （登录→信任框→照片/文件/我的/分享接收/分享管理）；模拟器经 NAT 可直连宿主机
   LAN 地址。⚠️ **改了 Kotlin 必须再跑一次真构建**——`dart analyze`/`flutter test`
   都不编译 Kotlin（154201b 曾带着编译错误提交，M-A4 构建时才暴露）
+- **release 签名（2026-09-01 起）**：`flutter build apk --release` 经
+  `scripts\build-apk.bat release` 出正式签名包。密钥库
+  `mobile/android/keys/lanshare-release.jks`（alias `lanshare`，10000 天，
+  证书指纹 `CF:31:1C:B4:…:07:78`），凭据在 `mobile/android/key.properties`——
+  两者均 gitignore，**异地备份在 `<仓库外的私有备份位置>\`，
+  丢了就无法覆盖安装**（全家都得卸载重装）。gradle 侧 `key.properties` 的
+  `storeFile` 相对 **android/ 根**（rootProject）解析，别按 `app/` 相对路径写。
+  ⚠️ **R8 已关（`android/gradle.properties` → `shrink=false`）**：Flutter 插件
+  默认给 release 开裁剪/混淆，WorkManager 的 Room 库在 R8 下启动即崩
+  （`Failed to create an instance of WorkDatabase`，任何 Dart 代码之前）；
+  家庭 App 无混淆收益，只涨 ~4MB，稳定优先。debug 构建不受影响
+- **签名切换注意**：debug 包与 release 包签名不同，**不能覆盖安装**——
+  已装旧 debug 包的设备须先卸载（数据如登录态/备份账本随之清除；账本丢失
+  后重传由服务端秒传兜底，不产生重复流量）。分发件现为
+  `App安装包/lanshare.apk`（v0.4.0+4）
 - 新增 pub 依赖按 §6 原则记 CHANGELOG
 
 ## 部署/测试约定
