@@ -9,7 +9,7 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
 
 - `tests/conftest.py` 在导入 `server` 前把 `SHARE_ROOT` 指向临时目录，
   全套测试不碰真实数据；`client` 夹具恒为匿名态，`auth` 夹具是独立实例的登录态。
-- `tests/test_baseline.py`（25 项）是**行为回归网**；`tests/test_multiuser.py`（18 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
+- `tests/test_baseline.py`（28 项）是**行为回归网**；`tests/test_multiuser.py`（21 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
   认证/防爆破、文件增删改移、分块上传与秒传、回收站、分享全链路、
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
@@ -55,7 +55,9 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 - pub 拉包慢/挂死时切国内镜像：`PUB_HOSTED_URL=https://pub.flutter-io.cn`
   与 `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn`
 - **交付前必过**：`dart analyze` 零问题 + `flutter test` + 安卓模拟器全流程
-  （登录→信任框→照片/文件/我的）；模拟器经 NAT 可直连宿主机 LAN 地址
+  （登录→信任框→照片/文件/我的/分享接收/分享管理）；模拟器经 NAT 可直连宿主机
+  LAN 地址。⚠️ **改了 Kotlin 必须再跑一次真构建**——`dart analyze`/`flutter test`
+  都不编译 Kotlin（154201b 曾带着编译错误提交，M-A4 构建时才暴露）
 - 新增 pub 依赖按 §6 原则记 CHANGELOG
 
 ## 部署/测试约定

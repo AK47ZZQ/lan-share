@@ -8,7 +8,7 @@
 |------|--------------------------|
 | server.py / Caddyfile / docs/ / *.bat / web/src/ / mobile/lib/ | `data/`（用户文件 + .meta.db）、`logs/`、`__pycache__/` |
 | README / PLAN-v3 / CHANGELOG | `caddy.exe`（49MB）、`certs/*.pem`（私钥严禁）、`web/node_modules/`、`web/dist/`、`mobile/build/`、`.mimosa/`、`.pytest_cache/` |
-| `mobile/android/.gradle/`、`mobile/.dart_tool/`、`mobile/ios/Pods/` 与 build 缓存同理 | `C:\lan-share-mobile\`（镜像构建工作区，脚本自动管理） |
+| mobile/android/、mobile/ios/ 源码与工程配置（Kotlin 薄桥、清单、pubspec 等） | 构建缓存同理不入库：`mobile/android/.gradle/`、`mobile/.dart_tool/`、`mobile/ios/Pods/`；`C:\lan-share-mobile\`（镜像构建工作区，脚本自动管理） |
 | `certs/san.cnf`（证书生成配置） | `caddy.exe`（49MB，官网下载）、`certs/*.pem`（私钥严禁入库） |
 
 ## 日常流程

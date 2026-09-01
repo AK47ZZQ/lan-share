@@ -11,7 +11,7 @@
 | M-A1 | ✅ | 登录(+TOTP) / 照片墙 / 文件浏览 / 我的（设备管理） / 自签证书 TOFU |
 | M-A2 | ✅ | 手动传输：上传（分片续传+秒传）/ 下载（Range 断点）/ 传输中心（进度/速度/暂停/续传/重试/杀进程恢复） |
 | M-A3 | ✅ | 相册自动备份：WorkManager 周期+MediaStore 即时感知（自写 Kotlin 薄桥）+ sqflite 账本去重 + 后台 isolate 引擎 + 前台服务通知；250MB 杀进程续传零重传（part-mtime 证据）、重启手机自动恢复 |
-| M-A4 | ⏳ | 系统分享接收 / 分享管理 / APK 自举分发（debug 签名先行） |
+| M-A4 | ✅ | 系统分享接收（SEND/SEND_MULTIPLE → 分享暂存，文本落 txt，传完删副本）+ 分享管理（列表/创建/撤销/多地址复制链接）+ APK 分发（加固版经自家链接）；零服务端改动 |
 
 ## 目录结构
 
@@ -28,16 +28,20 @@ lib/
 ├── data/
 │   ├── api/                Dio 客户端（Bearer 注入/401 统一/TOFU 证书信任）
 │   └── local/              SecureStore（Token 双写兜底）/ Prefs
+├── share/                  ★ M-A4 系统分享接收桥 + 分享 API 封装
+│   ├── share_bridge.dart   takePending 拉取/ incoming 推送 → 入上传队列 → 传完删副本
+│   └── share_service.dart  创建/列表/撤销/成员/链接（复用服务端分享契约）
 ├── state/session.dart      登录(+TOTP) → Cookie 换设备 Token
 ├── transfer/               ★ M-A2 传输核心（纯 Dart，可单测，双端共享）
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
-└── ui/                     照片 / 文件 / 传输中心 / 我的（+备份设置/账本页）
+└── ui/                     照片 / 文件 / 传输中心 / 我的（+备份设置/账本/分享管理/创建分享页）
 
-android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3 原生薄桥
+android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄桥
 ├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）
 ├── BackupScheduler.kt      WorkManager 周期任务（15min，仅 Wi-Fi+仅充电默认开）
-├── BackupWorker.kt         CoroutineWorker：前台保护 → 拉起后台 isolate → 结果处理
+├── BackupWorker.kt         CoroutineWorker：前台保护 → 拉起后台 isolate → 结果/进度处理
+├── ShareReceiver.kt        ★ M-A4 系统分享接收：content:// 先拷落地 → ShareInbox 排队
 └── MediaStoreBridge.kt     媒体查询/拷贝临时文件（Dart 通道实现）
 ```
 
@@ -74,6 +78,30 @@ android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3 原生薄桥
   mtime 零变化；250MB 杀进程续传**零重传**（服务端分片文件 mtime 前后一致
   的物理证据）；重启手机周期任务自动恢复
 
+## 分享（M-A4）
+
+**接收（FR-6）**——原生只管"接住并落地"，上传复用传输引擎：
+
+- **触发**：系统分享面板选"LAN Share"（SEND/SEND_MULTIPLE，任意类型）；
+  纯文本分享落 `分享文本_<时间戳>.txt`
+- **落地**：Kotlin 收到即把 content:// 拷进 `cache/share_inbox/`（授权方可
+  随时回收 URI，必须先落地），显示名经 OpenableColumns 查询、文件名洗 `/ \`
+- **交接**：`lanshare/share` 通道——Dart `takePending` 拉取 + Kotlin
+  `incoming` 事件推送；Dart handler 未就绪时推送失败静默留队列，登录后
+  （HomeShell 就绪）拉取兜底，冷启动分享进入与热分享统一处理，不丢件
+- **上传**：复用传输引擎分片续传到 `incoming/<用户名>/分享暂存/`，展示名
+  剥掉时间戳壳；**上传完成即删本地副本**（分享件是拷贝，源在分享方 App）；
+  Kotlin 24h 扫残兜底；未登录时留在 Kotlin 队列，登录自动继续
+
+**管理（FR-7）**：我的分享列表（大小/剩余时效/下载次数/提取码/定向徽章）+
+撤销确认 + 复制链接（多服务器地址逐个给"局域网/公网"标签复制钮）；创建面板
+有效期 1/3/7/30 天、提取码、下载上限、定向成员（`/api/members`）；入口 =
+文件页文件操作单（guest 隐藏）+ 我的页。端点全复用服务端契约，零后端改动。
+
+**验收**（模拟器 API 35 E2E）：单文件/文本/SEND_MULTIPLE 兜底三路径落库
+字节数一致；传输中心显示已上传且 share_inbox 清空；创建 3 天分享 →
+`/api/shares` 可见 → UI 撤销 → 服务端确认删除。
+
 ## 构建
 
 ```bat
@@ -94,3 +122,5 @@ scripts\build-apk.bat debug
   方案会掉登录；副本在应用沙盒内，且 Token 服务端可吊销
 - >200MB 文件不预计算 sha256（纯 Dart 哈希慢），秒传对大文件不生效，
   服务端 finish 仍会自算校验
+- 分享接收的缓存副本**上传完成即删**：传输引擎队列恢复只对"未完成"任务查
+  本地文件存在性，已完成任务副本被清不改判错误（否则重启满屏假错误）
