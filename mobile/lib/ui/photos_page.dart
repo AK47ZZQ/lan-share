@@ -343,18 +343,18 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           for (final (day, flatIdx) in groups) ...[
-            SliverAppBar(
-                pinned: true,
-                primary: false,
-                automaticallyImplyLeading: false,
-                toolbarHeight: 34,
-                backgroundColor: Theme.of(context).colorScheme.surface,
-                surfaceTintColor: Colors.transparent,
-                title: Align(
-                    alignment: Alignment.centerLeft,
+            // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
+            // 很难看，真机反馈 0.4.5）
+            SliverToBoxAdapter(
+                child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 4),
                     child: Text(_dayLabel(day),
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13)))),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)))),
             SliverGrid(
                 gridDelegate:
                     const SliverGridDelegateWithFixedCrossAxisCount(
