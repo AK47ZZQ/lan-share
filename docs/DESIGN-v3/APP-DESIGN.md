@@ -598,6 +598,35 @@ conftest 白盒重置清单（`_last_force_scan = 0.0`）。
 顺带验证（墙面自动跟随其删除）。pytest 122（+3：force 不被普通命中
 顶掉/60s 节流仍在/新文件夹+非用户名目录+任意顶层目录媒体必进时间线）。
 
+### 8.17 备份触发根修与全链路可观测（2026-09-03 上午，v0.7.3+21）
+
+**审计根因**：手动"立即备份"沿用了自动任务约束 `setRequiresCharging(仅
+充电时，默认开)`——未插电时任务进 WorkManager 队列永远等充电器：不跑、
+不通知、不报错，且每次再点只是 REPLACE 掉旧的排队任务。自动备份仅在
+夜间充电时运行，白天新照片"一直显示待备份"。模拟器恒为充电中，历次
+E2E 从未暴露。**教训入册：约束类 bug 必须显式模拟约束缺失才能测到**
+（`adb shell cmd battery unplug`；注意模拟器电池 mock 约 30s 会被系统
+重置，持续等待状态无法在模拟器保持）。
+
+**修复**：
+1. 手动路径：`MediaObserver.enqueueManual` 专用入队（unique 名
+   `lanshare_backup_manual`、REPLACE、无充电/电量/网络约束），
+   trigger="manual" 经 `backupMain` 贯穿 `BackupEngine.run(trigger)`；
+   引擎对 manual 跳过"未充电"暂停（`_pauseReason`）并豁免失败冷却，
+   保留 Wi-Fi 流量保护与系统叫停检查。自动/周期任务约束语义不变。
+2. 可观测：`BackupState.record` 把 Worker/队列每个出口写入 prefs
+   （queued/queued_wait(充电|wifi)/running/skip_disabled/skip_idle/busy/
+   done/paused/error/dart_not_ready/run_timeout）；入队即落状态——排队
+   期间原本一行代码都不执行；引擎每轮结束写 `backup_last_round` JSON。
+3. UI：首页备份卡"最近一轮/排队"状态行（琥珀=需注意）；设置页备份
+   诊断卡（网络/电源/通知/最近调度/最近一轮，`diag` 通道一次取齐，
+   通知被关可跳系统设置）。状态→文案映射抽纯函数
+   `backup_round.dart`（roundView/queueView/workerView，11 项单测）。
+
+**遗留候选**（头脑风暴未实施）：WorkManager getWorkInfos 实时查询入
+诊断卡；手动轮 setExpedited 进一步压启动延迟；MIUI 自启动/省电白名单
+引导页（检测 MIUI ROM 给出图文指引）；单轮条数上限与"大迁移分夜跑"。
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

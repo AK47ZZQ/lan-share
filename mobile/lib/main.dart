@@ -55,7 +55,11 @@ void backupMain() {
   WidgetsFlutterBinding.ensureInitialized();
   const ch = MethodChannel('lanshare/backup');
   ch.setMethodCallHandler((call) async {
-    if (call.method == 'run') return await BackupEngine.run();
+    // 触发来源（periodic/media_change/manual）贯穿进引擎：manual 需绕过
+    // "仅充电"暂停——0.7.3 前手动轮被充电约束静默吞掉
+    if (call.method == 'run') {
+      return await BackupEngine.run((call.arguments as String?) ?? 'periodic');
+    }
     return null;
   });
   // 就绪握手：引擎拉起到 handler 就绪有窗口期，Kotlin 等 ready 再下发 run

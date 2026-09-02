@@ -4,10 +4,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_bridge.dart';
 import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
+import '../backup/backup_round.dart';
 import '../backup/media_source.dart';
 import '../state/session.dart';
 import '../transfer/transfer_task.dart' show humanSize;
@@ -25,6 +27,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   Timer? _poll;
   bool _busy = false; // 立即备份防连点（引擎侧互斥兜底，这里管 UI 观感）
   bool _batteryIgnoring = true; // 电池优化白名单；取不到按已豁免，别空报警
+  Map<String, Object?>? _diag; // 备份诊断快照（充电/网络/通知，0.7.3）
+  String? _lastRound;   // 引擎最近一轮 JSON
+  String? _workerState; // Worker/队列状态 JSON
 
   @override
   void initState() {
@@ -43,13 +48,33 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   Future<void> _reload() async {
     final cfg = await BackupConfig.load();
     final ign = await BackupBridge.batteryIgnoring();
+    final diag = await BackupBridge.diag();
+    final sp = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
       _cfg = cfg;
       _batteryIgnoring = ign;
+      _diag = diag;
+      _lastRound = sp.getString('backup_last_round');
+      _workerState = sp.getString('backup_worker_state');
     });
     await _loadStats();
   }
+
+  Widget _diagRow(String label, String value, {bool warn = false}) =>
+      Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+                width: 72,
+                child: Text(label,
+                    style: const TextStyle(fontSize: 12, color: Colors.grey))),
+            Expanded(
+                child: Text(value,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: warn ? Colors.orange : null))),
+          ]));
 
   Future<void> _loadStats() async {
     try {
@@ -166,6 +191,56 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 ),
               ),
               const Divider(height: 24),
+              // 备份诊断卡（0.7.3）：环境快照 + 最近调度/轮次状态。
+              // "点了立即备份没反应"不再靠猜——卡在哪一环这里一眼可见
+              if (cfg.enabled) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Card(
+                    elevation: 0,
+                    color: cs.surfaceContainerHighest,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('备份诊断',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 6),
+                            _diagRow('网络', _diag == null
+                                ? '未知'
+                                : ((_diag!['metered'] as bool?) == true
+                                    ? '流量/计费网络'
+                                    : 'Wi-Fi/不计费')),
+                            _diagRow('电源', _diag == null
+                                ? '未知'
+                                : ((_diag!['charging'] as bool?) == true
+                                    ? '充电中'
+                                    : '未充电')),
+                            // 通知被关 = 状态栏什么都看不到（API 33+ 权限独立）
+                            InkWell(
+                                onTap: ((_diag?['notifications'] as bool?) ==
+                                        false)
+                                    ? () => BackupBridge
+                                        .openNotificationSettings()
+                                    : null,
+                                child: _diagRow(
+                                    '通知',
+                                    ((_diag?['notifications'] as bool?) ??
+                                            false)
+                                        ? '已开启'
+                                        : '已关闭，点此去开启')),
+                            if (workerView(_workerState) case final w?)
+                              _diagRow('最近调度', w.text, warn: w.warn),
+                            if (roundView(_lastRound) case final r?)
+                              _diagRow('最近一轮', r.text, warn: r.warn),
+                          ]),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               // 电池优化白名单引导（0.6.2）：小米/华为等激进省电把 WorkManager
               // 周期任务压到几小时一次甚至不跑，是"备份不自动跑"投诉的常见根因
               if (cfg.enabled && !_batteryIgnoring)

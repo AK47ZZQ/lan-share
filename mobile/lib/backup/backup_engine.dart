@@ -46,7 +46,9 @@ class BackupEngine {
   /// 离开 Wi-Fi（转计费网络）、拔充电器、App 里关开关都管不住，真机上
   /// 表现为"备份无法自动暂停"。这里逐张复查，违反即优雅停：账本留断点，
   /// 约束恢复后的下个周期自动续。
-  static Future<String?> _pauseReason() async {
+  /// manual 触发（用户点"立即备份"）只尊重系统叫停与开关——0.7.3 前手动
+  /// 轮被"仅充电"约束静默吞掉是头号投诉；流量保护保留（wifiLost 仍暂停）。
+  static Future<String?> _pauseReason(String trigger) async {
     final sp = await SharedPreferences.getInstance();
     if (!(sp.getBool('backup_enabled') ?? false)) return 'disabled';
     try {
@@ -54,9 +56,11 @@ class BackupEngine {
           .invokeMethod<Map<Object?, Object?>>('checkStop');
       if (r != null) {
         if (r['stopped'] == true) return 'system_stop';
-        final cfg = await BackupConfig.load();
-        if (cfg.wifiOnly && r['metered'] == true) return 'wifi_lost';
-        if (cfg.chargingOnly && r['charging'] == false) return 'unplugged';
+        if (trigger != 'manual') {
+          final cfg = await BackupConfig.load();
+          if (cfg.wifiOnly && r['metered'] == true) return 'wifi_lost';
+          if (cfg.chargingOnly && r['charging'] == false) return 'unplugged';
+        }
       }
     } catch (_) {
       // 原生桥不可用（理论不发生）：宁缺毋滥地继续，别让检查本身卡死备份
@@ -65,29 +69,51 @@ class BackupEngine {
   }
 
   /// WorkManager Worker 的入口：返回结果 JSON（原生侧解析并决定 retry/通知）
-  static Future<String> run() async {
+  static Future<String> run([String trigger = 'periodic']) async {
     final res = <String, dynamic>{'status': 'done', 'uploaded': 0, 'failed': 0};
-    try {      final cfg = await BackupConfig.load();
+    final sp = await SharedPreferences.getInstance();
+    // 每个出口都把本轮结果落盘（0.7.3 可观测性）：此前十来个静默 return
+    // 让"点了没反应"完全无法排障
+    Future<String> finish([Map<String, dynamic>? override]) async {
+      final m = override ?? res;
+      try {
+        await sp.setString('backup_last_round', jsonEncode({
+          'status': m['status'],
+          'reason': m['reason'],
+          'uploaded': m['uploaded'] ?? 0,
+          'failed': m['failed'] ?? 0,
+          'pending': m['pending'] ?? 0,
+          'trigger': trigger,
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        }));
+      } catch (_) {}
+      return jsonEncode(m);
+    }
+
+    try {
+      final cfg = await BackupConfig.load();
       if (!cfg.enabled) {
-        return jsonEncode({'status': 'skip', 'reason': 'disabled'});
+        return await finish({'status': 'skip', 'reason': 'disabled'});
       }
       final token = await SecureStore.token();
       if (token == null || token.isEmpty) {
-        return jsonEncode({'status': 'skip', 'reason': 'not_logged_in'});
+        return await finish({'status': 'skip', 'reason': 'not_logged_in'});
       }
       final addr = await Prefs.lastAddress();
       final host = Uri.tryParse(addr)?.host ?? '';
       if (_isPublicHost(host) && !cfg.allowPublicServer) {
-        return jsonEncode({'status': 'skip', 'reason': 'public_server'});
+        return await finish({'status': 'skip', 'reason': 'public_server'});
       }
-      final sp = await SharedPreferences.getInstance();
       final cooldownUntil = sp.getInt('backup_cooldown_until') ?? 0;
-      if (DateTime.now().millisecondsSinceEpoch < cooldownUntil) {
-        return jsonEncode({'status': 'cooldown', 'reason': 'failure_rate'});
+      // 手动触发豁免失败冷却：用户看到失败点了"立即备份"，应该立刻再试
+      // 而不是被上一轮的 30 分钟冷却挡住（冷却本身照常刷新）
+      if (trigger != 'manual' &&
+          DateTime.now().millisecondsSinceEpoch < cooldownUntil) {
+        return await finish({'status': 'skip', 'reason': 'cooldown'});
       }
       final username = sp.getString('username') ?? '';
       if (username.isEmpty) {
-        return jsonEncode({'status': 'skip', 'reason': 'no_username'});
+        return await finish({'status': 'skip', 'reason': 'no_username'});
       }
       // prefs 属明文本地存储（root/adb 可改）：路径相关字符一律拒跑，
       // 防被改成穿越形态后去清账本/拼 destDir
@@ -127,8 +153,7 @@ class BackupEngine {
       } catch (_) {
         // 媒体库/账本暂不可用（DB 锁、磁盘满、权限被回收）：本轮跳过，
         // 等下个周期再试——不算引擎错误，避免 Worker 无限 retry
-        return jsonEncode(
-            {'status': 'skip', 'reason': 'scan_or_ledger_unavailable'});
+        return await finish({'status': 'skip', 'reason': 'scan_or_ledger_unavailable'});
       }
       res['pending'] = pending.length;
       final pendingBytes = pending.fold<int>(0, (s, r) => s + r.size);
@@ -137,7 +162,7 @@ class BackupEngine {
       final ledger = BackupLedger.I;
       var attempted = 0, failed = 0, doneBytes = 0;
       for (final row in pending) {
-        final pause = await _pauseReason();
+        final pause = await _pauseReason(trigger);
         if (pause != null) {
           res['status'] = 'paused';
           res['reason'] = pause;
@@ -200,7 +225,7 @@ class BackupEngine {
           (pendingBytes - doneBytes).clamp(0, 1 << 62));
     } catch (e) {
       final s = e.toString();
-      return jsonEncode({
+      return finish({
         'status': 'error',
         'reason': s.length > 200 ? s.substring(0, 200) : s,
       });
@@ -209,12 +234,11 @@ class BackupEngine {
       // 注意这里绝不 close() 账本——sqflite 连接进程级共享，关掉会把主 isolate
       // 的统计卡/账本页一起打死（database_closed，0.7.1 实测复现后移除）。
       try {
-        final sp2 = await SharedPreferences.getInstance();
-        await sp2.setInt('backup_progress_done', 0);
-        await sp2.setInt('backup_progress_total', 0);
+        await sp.setInt('backup_progress_done', 0);
+        await sp.setInt('backup_progress_total', 0);
       } catch (_) {}
     }
-    return jsonEncode(res);
+    return finish();
   }
 
   /// 逐张进度 → Kotlin 刷新前台通知（发完即忘，失败不影响备份）

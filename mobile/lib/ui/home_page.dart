@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_bridge.dart';
+import '../backup/backup_round.dart';
 import '../data/activity.dart';
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
@@ -41,6 +42,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   int? _lastDoneAt;
   int _failed = 0; // 账本失败数（引擎每轮回写）
   int _progressDone = 0, _progressTotal = 0; // 本轮实时进度（引擎逐张回写）
+  String? _lastRound;    // 引擎最近一轮结果 JSON（0.7.3 可观测性）
+  String? _workerState;  // Worker/队列状态 JSON（排队等待充电/Wi-Fi 也可见）
   int _diskUsed = 0, _diskTotal = 0, _diskFree = 0;
   String _shareSize = '';
   List<_RecentUpload>? _recent;
@@ -98,6 +101,8 @@ class _HomePageState extends ConsumerState<HomePage> {
       _failed = sp.getInt('backup_failed_count') ?? 0;
       _progressDone = sp.getInt('backup_progress_done') ?? 0;
       _progressTotal = sp.getInt('backup_progress_total') ?? 0;
+      _lastRound = sp.getString('backup_last_round');
+      _workerState = sp.getString('backup_worker_state');
     });
   }
 
@@ -275,6 +280,22 @@ class _HomePageState extends ConsumerState<HomePage> {
                       const SizedBox(height: 4),
                       Text('备份中 $_progressDone/$_progressTotal 项…',
                           style: TextStyle(fontSize: 12, color: cs.primary)),
+                    ] else ...[
+                      // 最近一轮/排队状态（0.7.3）：排队等充电/Wi-Fi、失败原因
+                      // 不再是黑盒。排队提示优先（它说明"为什么没在跑"）
+                      Builder(builder: (_) {
+                        final v = queueView(_workerState) ??
+                            roundView(_lastRound);
+                        if (v == null) return const SizedBox.shrink();
+                        return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(v.text,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: v.warn
+                                        ? Colors.orange
+                                        : cs.outline)));
+                      }),
                     ],
                     // 失败提示（0.6.2）：此前失败只能进账本页才知道
                     if (_failed > 0) ...[

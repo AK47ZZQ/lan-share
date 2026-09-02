@@ -61,4 +61,22 @@ class BackupBridge {
       await _ch.invokeMethod('batteryRequest');
     } catch (_) {}
   }
+
+  /// 备份诊断快照（0.7.3）：充电中/是否计费网络/电池白名单/通知权限。
+  /// 取不到返回 null，诊断卡对应行显示"未知"而不是猜。
+  static Future<Map<String, Object?>?> diag() async {
+    try {
+      final r = await _ch.invokeMethod<Map<Object?, Object?>>('diag');
+      return r?.map((k, v) => MapEntry(k.toString(), v));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 打开系统 App 通知设置页（诊断卡发现通知被关时一键前往）
+  static Future<void> openNotificationSettings() async {
+    try {
+      await _ch.invokeMethod('openNotifSettings');
+    } catch (_) {}
+  }
 }

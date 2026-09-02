@@ -39,7 +39,11 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
 
     override suspend fun doWork(): Result {
         val prefs = ctx.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("flutter.backup_enabled", false)) return Result.success()
+        if (!prefs.getBoolean("flutter.backup_enabled", false)) {
+            // 可观测性（0.7.3）：静默 return 是排障黑洞，每个出口都落状态
+            BackupState.record(ctx, "skip_disabled")
+            return Result.success()
+        }
         val trigger = inputData.getString("trigger") ?: "periodic"
         // 周期任务空跑跳过：账本无未完成项就不值得拉一次 FlutterEngine（数十 MB
         // 内存 + 秒级冷启动）。计数由引擎每轮结束时回写；-1 = 未知/配置刚变，
@@ -47,7 +51,10 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
         // 注意 flutter shared_preferences 把 Dart int 存成 Long，必须 getLong。
         if (trigger == "periodic" &&
             prefs.getLong("flutter.backup_pending_count", -1L) == 0L
-        ) return Result.success()
+        ) {
+            BackupState.record(ctx, "skip_idle")
+            return Result.success()
+        }
 
         // 前台保护（设计 §4"整批在通知保护下执行"）。Android 12+ 对后台启动
         // FGS 有限制：失败就静默降级——周期任务 10 分钟窗口内小批量可跑完，
@@ -57,6 +64,7 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
         } catch (e: Exception) {
             android.util.Log.w("BackupWorker", "setForeground failed: ${e.message}")
         }
+        BackupState.record(ctx, "running", trigger)
 
         val json = BackupDartRunner.run(ctx, trigger, isStopped = { isStopped })
         val obj = try {
@@ -66,6 +74,8 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
             // 下面 else 分支当"无事发生"吞掉
             JSONObject().put("status", "error").put("reason", "bad_json")
         }
+        // 引擎轮次结果落盘（done/paused/skip/error/...），UI 诊断卡直接可读
+        BackupState.record(ctx, obj.optString("status"), obj.optString("reason", ""))
         return when (obj.optString("status")) {
             "done" -> {
                 val uploaded = obj.optInt("uploaded", 0)
@@ -184,6 +194,7 @@ object BackupDartRunner {
     suspend fun run(ctx: Context, trigger: String,
                     isStopped: () -> Boolean = { false }): String {
         if (!engineLock.tryLock()) {
+            BackupState.record(ctx, "busy")
             return "{\"status\":\"skip\",\"reason\":\"busy\"}"
         }
         try {
@@ -240,7 +251,10 @@ object BackupDartRunner {
                         }
                     }
                     withTimeoutOrNull(60_000) { ready.await() }
-                        ?: return@withContext "{\"status\":\"error\",\"reason\":\"dart_not_ready\"}"
+                        ?: run {
+                            BackupState.record(ctx, "error", "dart_not_ready")
+                            return@withContext "{\"status\":\"error\",\"reason\":\"dart_not_ready\"}"
+                        }
 
                     withTimeoutOrNull(RUN_TIMEOUT_MS) {
                         suspendCancellableCoroutine { cont ->
@@ -265,7 +279,10 @@ object BackupDartRunner {
                                 }
                             })
                         }
-                    } ?: "{\"status\":\"error\",\"reason\":\"run_timeout\"}"
+                    } ?: run {
+                        BackupState.record(ctx, "error", "run_timeout")
+                        "{\"status\":\"error\",\"reason\":\"run_timeout\"}"
+                    }
                 } finally {
                     engine.destroy()
                 }
@@ -276,8 +293,9 @@ object BackupDartRunner {
     }
 
     /** 当前活动网络是否按流量计费（蜂窝/热点）。无活动网络/取不到能力一律按
-     *  计费处理——仅 Wi-Fi 语义下"没网"同样该停，别让引擎空转撞失败冷却。 */
-    private fun netMetered(ctx: Context): Boolean {
+     *  计费处理——仅 Wi-Fi 语义下"没网"同样该停，别让引擎空转撞失败冷却。
+     *  MediaObserver 入队时也用它判定"排队等待 Wi-Fi"状态（internal 可见性）。 */
+    fun netMetered(ctx: Context): Boolean {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return true
         val net = cm.activeNetwork ?: return true
@@ -286,7 +304,7 @@ object BackupDartRunner {
     }
 
     /** 是否在充电（含充满）。电池状态取不到视为未充电，宁停不偷跑。 */
-    private fun isCharging(ctx: Context): Boolean {
+    fun isCharging(ctx: Context): Boolean {
         val status = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             ?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         return status == BatteryManager.BATTERY_STATUS_CHARGING ||

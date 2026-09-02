@@ -48,8 +48,22 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
                         result.success(null)
                     }
                     "runOnce" -> {
-                        MediaObserver.enqueueOnce(this)
+                        // 手动"立即备份"走专用入队（0.7.3）：不带充电/电量约束。
+                        // 此前沿用自动约束，未插电时任务永远在等充电器——
+                        // "点了没反应、不弹通知"的根因
+                        MediaObserver.enqueueManual(this)
                         result.success(null)
+                    }
+                    // 备份诊断（0.7.3）：设置页诊断卡的实时环境快照
+                    "diag" -> {
+                        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                        val nm = getSystemService(android.app.NotificationManager::class.java)
+                        result.success(mapOf(
+                            "charging" to BackupDartRunner.isCharging(this),
+                            "metered" to BackupDartRunner.netMetered(this),
+                            "battery" to pm.isIgnoringBatteryOptimizations(packageName),
+                            "notifications" to
+                                (Build.VERSION.SDK_INT < 33 || nm.areNotificationsEnabled())))
                     }
                     // 电池优化豁免：小米/华为等激进省电会把 WorkManager 周期任务
                     // 压到几小时一次甚至不跑，设置页引导用户一键申请白名单
@@ -63,6 +77,14 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
                             val i = Intent(
                                 android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                                 Uri.parse("package:$packageName"))
+                            startActivity(i)
+                        } catch (_: Exception) {}
+                        result.success(null)
+                    }
+                    "openNotifSettings" -> {
+                        try {
+                            val i = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
                             startActivity(i)
                         } catch (_: Exception) {}
                         result.success(null)
