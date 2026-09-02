@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
 from typing import Optional
 
@@ -378,8 +379,19 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
     if not name or len(name) > 64 or re.search(r"[\u0000-\u001f\u007f]", name):
         raise HTTPException(status_code=400,
                             detail="设备名不能为空，且不能含控制字符，不超过 64 字符")
+    token, device_id = _issue_device_token(user["user_id"], name)
+    audit("device_token_create", name, ip=client_ip(request))
+    return JSONResponse({"token": token, "device_id": device_id, "name": name,
+                         "created_at": time.time()},
+                        headers={"Cache-Control": "no-store"})
+
+
+def _issue_device_token(user_id: int, name: str) -> tuple[str, int]:
+    """签发设备 Token 内核：同名轮换（重装/重复登录不产生僵尸设备）+ 上限
+    校验 + 入库。/api/auth/token 与 /api/pair/claim 共用；明文仅在调用方
+    响应中出现一次，库内只存 SHA256。"""
     n = _db().execute("SELECT COUNT(*) AS c FROM device_tokens WHERE user_id=?",
-                      (user["user_id"],)).fetchone()["c"]
+                      (user_id,)).fetchone()["c"]
     if n >= DEVICE_TOKEN_MAX:
         raise HTTPException(status_code=400,
                             detail=f"设备数已达上限（{DEVICE_TOKEN_MAX}），请先吊销不用的设备")
@@ -387,10 +399,9 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
     now = time.time()
     # 轮换判定 + UPDATE/INSERT 必须整体在 _db_lock 内（SELECT-then-write 竞态面）
     with _db_lock:
-        # 同名设备轮换（App 重装/重复登录不产生僵尸设备）：直接换新凭据
         existing = _db().execute(
             "SELECT id FROM device_tokens WHERE user_id=? AND name=?",
-            (user["user_id"], name)).fetchone()
+            (user_id, name)).fetchone()
         if existing:
             _db().execute(
                 "UPDATE device_tokens SET token_hash=?, created_at=?, last_seen=?, expires_at=? WHERE id=?",
@@ -401,7 +412,7 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
                 cur = _db().execute(
                     "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
                     "VALUES(?,?,?,?,?,?) RETURNING id",
-                    (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
+                    (user_id, name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
                 device_id = cur.fetchone()["id"]
             except sqlite3.IntegrityError:
                 # token_hash UNIQUE 极端碰撞：换一枚重试一次
@@ -409,12 +420,10 @@ async def create_device_token(request: Request, body: DeviceTokenBody,
                 cur = _db().execute(
                     "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
                     "VALUES(?,?,?,?,?,?) RETURNING id",
-                    (user["user_id"], name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
+                    (user_id, name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
                 device_id = cur.fetchone()["id"]
         _db().commit()
-    audit("device_token_create", name, ip=client_ip(request))
-    return JSONResponse({"token": token, "device_id": device_id, "name": name,
-                         "created_at": now}, headers={"Cache-Control": "no-store"})
+    return token, device_id
 
 
 @app.get("/api/auth/devices")
@@ -444,6 +453,74 @@ def revoke_device(device_id: int, request: Request, user=Depends(require_user)):
         _db().commit()
     audit("device_revoke", row["name"], ip=client_ip(request))
     return {"ok": True}
+
+
+# ─── 配对码登录（手机 App 免密配对）────────────────────────
+# 场景：家里长辈的手机不输长密码——已登录的 Web 端生成一次性 6 位码，
+# 手机在登录页选"配对码登录"输码即换设备 Token。安全三重保险：
+# 60 秒时效 + 一码一用（取走即删）+ 按 IP 限速防爆破。
+
+class PairClaimBody(BaseModel):
+    code: str
+    name: str = "我的手机"
+
+
+_PAIR_TTL = 60.0
+# 进程内存态即可：本项目 NSSM 单 worker 部署；重启即全失效（重生成即可）
+_pair_codes: dict[str, tuple[int, float]] = {}
+_pair_lock = threading.Lock()
+
+
+@app.post("/api/pair/code")
+async def pair_code_create(request: Request, user=Depends(require_user)):
+    """已登录方（Web 会话或 Bearer）生成一次性配对码；同一账号只保留最新一枚。"""
+    if not allow_rate(f"paircode:{user['user_id']}", 10, 60):
+        raise HTTPException(status_code=429, detail="生成过于频繁，请稍后再试")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    now = time.time()
+    with _pair_lock:
+        for k in [k for k, v in _pair_codes.items()
+                  if v[1] < now or v[0] == user["user_id"]]:
+            _pair_codes.pop(k)
+        _pair_codes[code] = (user["user_id"], now + _PAIR_TTL)
+    audit("pair_code_create", user["username"], ip=client_ip(request))
+    return {"code": code, "expires_in": int(_PAIR_TTL)}
+
+
+@app.post("/api/pair/claim")
+async def pair_claim(request: Request, body: PairClaimBody):
+    """手机提交配对码换设备 Token（免账号密码）。凭据规则与 /api/auth/token
+    完全一致（同名轮换、上限、TTL），签出的 Token 也能随时在 Web 端吊销。"""
+    code = body.code.strip().replace(" ", "")
+    ip = client_ip(request)
+    if not (code.isdigit() and len(code) == 6):
+        raise HTTPException(status_code=400, detail="配对码格式错误")
+    if not allow_rate(f"pairclaim:{ip}", 5, 60):
+        raise HTTPException(status_code=429, detail="尝试过于频繁，请稍后再试")
+    now = time.time()
+    with _pair_lock:
+        # 懒清理：claim 路径也顺带清过期项——只靠生成端清理时，
+        # 生成后无人认领的过期码会一直残留（同账号顶掉才消失）
+        for k in [k for k, v in _pair_codes.items() if v[1] < now]:
+            _pair_codes.pop(k)
+        hit = _pair_codes.pop(code, None)
+    if not hit or hit[1] < now:
+        audit("pair_claim_fail", ip=ip)
+        raise HTTPException(status_code=401, detail="配对码无效或已过期")
+    user_id, _ = hit
+    row = _db().execute("SELECT id, username FROM users WHERE id=?",
+                        (user_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="配对码无效或已过期")
+    name = body.name.strip()
+    if not name or len(name) > 64 or re.search(r"[\u0000-\u001f\u007f]", name):
+        raise HTTPException(status_code=400,
+                            detail="设备名不能为空，且不能含控制字符，不超过 64 字符")
+    token, device_id = _issue_device_token(user_id, name)
+    audit("pair_claim", row["username"], name, ip=ip)
+    return JSONResponse({"token": token, "device_id": device_id, "name": name,
+                         "created_at": now},
+                        headers={"Cache-Control": "no-store"})
 
 
 # ─── 文件 API（需登录）─────────────────────────────────────

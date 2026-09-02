@@ -74,6 +74,9 @@ export const api = {
   adminSetWebdavPwd: (uid: number, value: string) =>
     jpost(`/api/admin/users/${uid}/webdav-password`, { value }).then(r => handle<{ ok: boolean; set: boolean }>(r)),
 
+  // 手机 App 免密配对：生成一次性 6 位码（60 秒有效）
+  pairCode: () => jpost('/api/pair/code', {}).then(r => handle<{ code: string; expires_in: number }>(r)),
+
   getWebhook: () => fetch('/api/admin/webhook').then(r => handle<{ url: string }>(r)),
   setWebhook: (url: string) => jpost('/api/admin/webhook', { url }).then(r => handle<{ ok: boolean; url: string }>(r)),
   testWebhook: () => jpost('/api/admin/webhook/test', {}).then(r => handle<{ ok: boolean }>(r)),

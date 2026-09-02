@@ -7,6 +7,18 @@ class Prefs {
   static const _kLast = 'server_last';
   static const _kDeviceName = 'device_name';
   static const _kUsername = 'username';
+  static const _kLastLoginUser = 'last_login_user';
+
+  /// 上次在本机登录过的用户名（登录页预填用，非敏感）
+  static Future<String?> lastLoginUser() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString(_kLastLoginUser);
+  }
+
+  static Future<void> setLastLoginUser(String v) async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString(_kLastLoginUser, v);
+  }
 
   /// 当前账号（备份目标目录 incoming/<用户名>/手机相册 要在后台 isolate
   /// 里独立拼出，不依赖登录后的 Riverpod 会话状态）

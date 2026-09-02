@@ -55,6 +55,19 @@ class SecureStore {
     } catch (_) {}
   }
 
+  /// 只写 Keystore（EncryptedSharedPreferences），不落 SharedPreferences
+  /// 明文副本。用于比"可吊销 Token"更敏感的数据（如登录密码存档）：
+  /// SP 副本在 root 设备上是明文 XML，Token 可服务端吊销所以可容忍，
+  /// 密码不行。读回时走 string()（Keystore 优先）。
+  static Future<bool> setStringKeystoreOnly(String key, String value) async {
+    try {
+      await _storage.write(key: key, value: value);
+      return true;
+    } catch (_) {
+      return false; // Keystore 不可用（罕见）：调用方决定降级策略
+    }
+  }
+
   /// 退出登录：只清 Token（两种存储都清），保留证书信任等
   static Future<void> clearToken() async {
     try {

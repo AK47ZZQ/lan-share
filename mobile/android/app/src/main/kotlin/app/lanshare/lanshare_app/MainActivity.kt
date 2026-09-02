@@ -12,7 +12,7 @@ import io.flutter.plugin.common.MethodChannel
  * 主引擎通道（M-A3）：备份调度/立即备份/权限申请。
  * 备份执行本身不在主引擎——Worker 每次拉起独立后台 isolate（BackupDartRunner）。
  */
-class MainActivity : io.flutter.embedding.android.FlutterActivity() {
+class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
 
     private var pendingPermission: MethodChannel.Result? = null
 

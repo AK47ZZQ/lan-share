@@ -1,11 +1,26 @@
-// 登录页：服务器地址 + 账号密码（+TOTP 动态码，按需出现）。
+// 登录页 v2（方向 A：品牌区 + 浮层卡片）。
+// 功能：服务器条（历史/扫码/手动输入 + 连接预检）、账号密码 + TOTP 六格、
+// 配对码免密登录、生物识别一键登录（凭据存档 + local_auth 门禁）。
+// 服务端契约沿用 APP-DESIGN §3：/api/login →(totp_required)→ /api/login/totp
+// → /api/auth/token 换长效设备 Token；配对码走 /api/pair/claim 直接换 Token。
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
 import '../data/api/trust.dart';
+import '../data/local/biometric.dart';
 import '../data/local/prefs.dart';
+import '../data/local/saved_credential.dart';
 import '../state/session.dart';
+import 'scan_page.dart';
+
+enum _Probe { idle, probing, ok, fail }
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -14,21 +29,24 @@ class LoginPage extends ConsumerStatefulWidget {
   ConsumerState<LoginPage> createState() => _LoginPageState();
 }
 
-class _LoginPageState extends ConsumerState<LoginPage> {
+class _LoginPageState extends ConsumerState<LoginPage>
+    with SingleTickerProviderStateMixin {
   final _server = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
-  final _totp = TextEditingController();
   List<String> _addresses = const [];
 
-  @override
-  void dispose() {
-    _server.dispose();
-    _username.dispose();
-    _password.dispose();
-    _totp.dispose();
-    super.dispose();
-  }
+  bool _pairMode = false;        // 配对码免密登录
+  bool _bioAvailable = false;
+  SavedCredential? _saved;
+
+  _Probe _probe = _Probe.idle;
+  bool _obscured = true;
+  String _lastCode = ''; // 六格验证码/配对码（填满时更新，按钮兜底提交用）
+  final _codeKey = GlobalKey<_CodeFieldState>();
+
+  late final AnimationController _shake = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 420));
 
   @override
   void initState() {
@@ -36,98 +54,487 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     () async {
       _addresses = await Prefs.addresses();
       _server.text = await Prefs.lastAddress();
-      if (mounted) setState(() {});
+      _username.text = await Prefs.lastLoginUser() ?? '';
+      _saved = await SavedCredentialStore.load();
+      _bioAvailable = await Biometric.available();
+      if (mounted) {
+        setState(() {});
+        _runProbe(); // 初始地址也做一次连通性预检
+      }
     }();
+  }
+
+  @override
+  void dispose() {
+    _server.dispose();
+    _username.dispose();
+    _password.dispose();
+    _shake.dispose();
+    super.dispose();
+  }
+
+  /// 从 URL 提取短显示名（host[:非默认端口]），解析失败截断原文
+  static String _shortHost(String raw) {
+    try {
+      final u = Uri.parse(raw);
+      if (u.host.isEmpty) return raw;
+      final p = u.port;
+      final hasPort = p > 0 &&
+          !((u.scheme == 'https' && p == 443) || (u.scheme == 'http' && p == 80));
+      return hasPort ? '${u.host}:$p' : u.host;
+    } catch (_) {
+      return raw.length > 24 ? '${raw.substring(0, 24)}…' : raw;
+    }
+  }
+
+  /// 连接预检：任何 HTTP 状态码（含 401/404）都证明服务器在线，
+  /// 只有连接超时/失败才算不可达——无需服务端专门健康检查端点。
+  /// 自签证书放行（badCertificateCallback）：预检只回答"在不在线"，
+  /// 证书信不信任由正式登录的 TOFU 信任流（TrustStore）裁决。
+  /// 独立 Dio 实例：不带本机凭据、不影响 ApiClient 的服务器切换状态。
+  Future<void> _runProbe() async {
+    final addr = _server.text.trim();
+    if (!addr.startsWith('http')) {
+      if (mounted) setState(() => _probe = _Probe.idle);
+      return;
+    }
+    if (mounted) setState(() => _probe = _Probe.probing);
+    bool ok;
+    final dio = Dio(BaseOptions(
+        receiveTimeout: const Duration(milliseconds: 2500),
+        validateStatus: (_) => true))
+      ..httpClientAdapter = IOHttpClientAdapter(createHttpClient: () {
+        final hc = HttpClient()
+          ..connectionTimeout = const Duration(milliseconds: 2500)
+          ..badCertificateCallback = ((cert, host, port) => true);
+        return hc;
+      });
+    try {
+      await dio.get('$addr/api/auth/me');
+      ok = true;
+    } catch (_) {
+      ok = false;
+    } finally {
+      dio.close(force: true); // 释放 HttpClient/Socket 池，频繁改地址不积压
+    }
+    if (!mounted || _server.text.trim() != addr) return; // 地址已被改，丢弃过期结果
+    setState(() => _probe = ok ? _Probe.ok : _Probe.fail);
+  }
+
+  Future<void> _pickServer() async {
+    final controller = TextEditingController(text: _server.text.trim());
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            20, 20, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
+            CrossAxisAlignment.start, children: [
+          Text('连接服务器', style: Theme.of(ctx).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text('手机与电脑需在同一网络下可直连；出门在外用公网地址。',
+              style: Theme.of(ctx).textTheme.bodySmall),
+          const SizedBox(height: 12),
+          ..._addresses.map((a) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: a == _server.text.trim()
+                    ? _probeDot(context)
+                    : const Icon(Icons.dns_outlined, size: 22),
+                title: Text(_shortHost(a), style: const TextStyle(fontSize: 14)),
+                subtitle: a == _server.text.trim()
+                    ? Text(_probeLabel(), style: const TextStyle(fontSize: 11.5))
+                    : Text(a, style: const TextStyle(fontSize: 11.5)),
+                trailing: a == _server.text.trim()
+                    ? Icon(Icons.check_circle,
+                        size: 18, color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _applyAddress(a);
+                },
+              )),
+          const Divider(),
+          ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.qr_code_scanner, size: 22),
+              title: const Text('扫码添加', style: TextStyle(fontSize: 14)),
+              subtitle: const Text('扫电脑端「账号设置 → 手机 App 连接」的二维码',
+                  style: TextStyle(fontSize: 11.5)),
+              onTap: () async {
+                final url = await Navigator.of(ctx).push<String>(
+                    MaterialPageRoute(builder: (_) => const ScanPage()));
+                if (!ctx.mounted) return;
+                Navigator.pop(ctx);
+                if (url != null) _applyAddress(url);
+              }),
+          const SizedBox(height: 8),
+          TextField(
+            controller: controller,
+            decoration: InputDecoration(
+                labelText: '手动输入地址',
+                hintText: 'https://192.168.1.100:8765',
+                isDense: true),
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.tonal(
+              onPressed: () {
+                final v = controller.text.trim();
+                Navigator.pop(ctx);
+                if (v.isNotEmpty) _applyAddress(v);
+              },
+              child: const Text('使用此地址'),
+            ),
+          ),
+        ]),
+      ),
+    );
+    // sheet 已关闭，builder 闭包不再使用；不释放会每次开面板泄漏一个
+    controller.dispose();
+  }
+
+  Future<void> _applyAddress(String url) async {
+    _server.text = url;
+    await Prefs.rememberAddress(url);
+    _addresses = await Prefs.addresses();
+    if (mounted) setState(() {});
+    _runProbe();
+  }
+
+  Widget _probeDot(BuildContext context) {
+    switch (_probe) {
+      case _Probe.probing:
+        return const SizedBox(
+            width: 14, height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2));
+      case _Probe.ok:
+        return Container(width: 10, height: 10,
+            decoration: const BoxDecoration(
+                color: Color(0xFF34A853), shape: BoxShape.circle));
+      case _Probe.fail:
+        return Container(width: 10, height: 10,
+            decoration: const BoxDecoration(
+                color: Color(0xFFEA4335), shape: BoxShape.circle));
+      case _Probe.idle:
+        return Container(width: 10, height: 10,
+            decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.outline, width: 1.5)));
+    }
+  }
+
+  String _probeLabel() {
+    switch (_probe) {
+      case _Probe.probing:
+        return '正在检测连接…';
+      case _Probe.ok:
+        return '已连接';
+      case _Probe.fail:
+        return '无法连接（检查地址/网络）';
+      case _Probe.idle:
+        return '未检测';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
+    final cs = Theme.of(context).colorScheme;
     ref.listen(sessionProvider, (prev, next) {
-      if (next.loggedIn) {
+      // 登录成功：记住用户名 + 存凭据档（配对码登录没有密码，不存）
+      if (next.loggedIn && (prev?.loggedIn != true)) {
+        final user = _username.text.trim();
+        if (user.isNotEmpty) Prefs.setLastLoginUser(user);
+        if (!_pairMode && _password.text.isNotEmpty) {
+          SavedCredentialStore.save(SavedCredential(
+              server: _server.text.trim(),
+              username: _username.text.trim(),
+              password: _password.text));
+        }
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('欢迎，${next.username ?? ''}')));
       }
+      // 登录失败（新错误）：抖动卡片提示；验证码/配对码输错自动清空重输
+      if (next.error != null && next.error != '__totp_required__' &&
+          prev?.error != next.error) {
+        _shake.forward(from: 0);
+        if (next.needTotp || _pairMode) {
+          _lastCode = '';
+          _codeKey.currentState?.clear();
+        }
+      }
       // 自签证书首次连接：弹"信任此服务器"确认框（APP-DESIGN §5）
-      if (next.trustIssue != null && (prev?.trustIssue == null ||
-          prev!.trustIssue?.fingerprint != next.trustIssue!.fingerprint)) {
+      if (next.trustIssue != null &&
+          (prev?.trustIssue == null ||
+              prev!.trustIssue?.fingerprint != next.trustIssue!.fingerprint)) {
         _askTrust(next.trustIssue!);
       }
     });
 
     return Scaffold(
+      // SingleChildScrollView 的子项高度无界：不可用 Spacer/minHeight 布局技巧
+      // （unbounded 主轴上 flex child 直接布局异常→整页白屏）。
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            const SizedBox(height: 32),
-            Text('LAN Share', style: Theme.of(context).textTheme.headlineMedium),
-            const SizedBox(height: 4),
-            Text('家庭网盘', style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 32),
-            TextField(
-              controller: _server,
-              decoration: const InputDecoration(
-                  labelText: '服务器地址', hintText: 'https://192.168.1.100:8765'),
-              keyboardType: TextInputType.url,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _username,
-              decoration: const InputDecoration(labelText: '用户名'),
-              autocorrect: false,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _password,
-              decoration: const InputDecoration(labelText: '密码'),
-              obscureText: true,
-              onSubmitted: (_) => _submit(),
-            ),
-            if (session.needTotp) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _totp,
-                decoration: const InputDecoration(
-                    labelText: '两步验证动态码（6 位）'),
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                onSubmitted: (_) => _submit(),
-              ),
-            ],
+        child: SingleChildScrollView(
+          child: Column(children: [
+            _brandHeader(context, cs),
+            const SizedBox(height: 28),
+            AnimatedBuilder(
+                animation: _shake,
+                builder: (context, child) => Transform.translate(
+                    offset: Offset(
+                        math.sin(_shake.value * 3 * math.pi) *
+                            10 *
+                            (1 - _shake.value),
+                        0),
+                    child: child),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: _card(context, session),
+                )),
             const SizedBox(height: 24),
-            FilledButton(
-              onPressed: session.checking ? null : _submit,
-              child: Text(session.checking
-                  ? '登录中…'
-                  : session.needTotp ? '验证并登录' : '登录'),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text('登录后本机保存凭据用于指纹快速登录，退出登录时自动清除',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(fontSize: 10.5)),
             ),
-            if (session.error != null && session.error != '__totp_required__') ...[
-              const SizedBox(height: 12),
-              Text(session.error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
-            ],
-            const SizedBox(height: 24),
-            if (_addresses.length > 1)
-              Wrap(
-                spacing: 8,
-                children: _addresses
-                    .map((a) => ActionChip(
-                        label: Text(a, style: const TextStyle(fontSize: 12)),
-                        onPressed: () => _server.text = a))
-                    .toList(),
-              ),
-          ],
+          ]),
         ),
       ),
     );
   }
 
+  /// 上半屏品牌区：渐变背景 + Logo + 产品名 + slogan
+  Widget _brandHeader(BuildContext context, ColorScheme cs) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(24, 44, 24, 56),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [cs.primary, cs.tertiary]),
+        borderRadius: const BorderRadius.only(
+            bottomLeft: Radius.circular(32),
+            bottomRight: Radius.circular(32)),
+      ),
+      child: Column(children: [
+        Container(
+          width: 72, height: 72,
+          decoration: BoxDecoration(
+              color: Colors.white24, borderRadius: BorderRadius.circular(20)),
+          child: const Icon(Icons.cloud_outlined,
+              color: Colors.white, size: 40),
+        ),
+        const SizedBox(height: 16),
+        const Text('LAN Share',
+            style: TextStyle(
+                color: Colors.white, fontSize: 26,
+                fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Text('家庭照片与文件，始终在手边',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 13)),
+      ]),
+    );
+  }
+
+  /// 浮层卡片：服务器条 + 登录方式切换 + 表单/按钮/错误
+  Widget _card(BuildContext context, SessionState session) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 24, offset: const Offset(0, 8)),
+          ]),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // 服务器条
+        InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _pickServer,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+            child: Row(children: [
+              _probeDot(context),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(_shortHost(_server.text.trim()),
+                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600))),
+              Text(_probeLabel(),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(fontSize: 11)),
+              const SizedBox(width: 6),
+              Icon(Icons.expand_more,
+                  size: 18, color: cs.onSurfaceVariant),
+            ]),
+          ),
+        ),
+        const Divider(height: 1),
+        const SizedBox(height: 16),
+        // 生物识别一键登录（有存档且设备支持时显示在最顺手的顶部）
+        if (_saved != null && _bioAvailable && !_pairMode) ...[
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              icon: const Icon(Icons.fingerprint, size: 22),
+              label: Text('使用已保存的 ${_saved!.username} 登录',
+                  overflow: TextOverflow.ellipsis),
+              onPressed: session.checking ? null : _bioLogin,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(children: [
+            const Expanded(child: Divider()),
+            Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Text('或',
+                    style: Theme.of(context).textTheme.bodySmall)),
+            const Expanded(child: Divider()),
+          ]),
+          const SizedBox(height: 6),
+        ],
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 240),
+          child: _pairMode
+              ? _pairBody(context, session)
+              : _passwordBody(context, session),
+        ),
+        const SizedBox(height: 24),
+        FilledButton(
+          style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(48)),
+          onPressed: session.checking ? null : _submit,
+          child: Text(session.checking
+              ? '登录中…'
+              : _pairMode
+                  ? '配对登录'
+                  : session.needTotp ? '验证并登录' : '登录'),
+        ),
+        if (session.error != null && session.error != '__totp_required__') ...[
+          const SizedBox(height: 10),
+          Text(session.error!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.error, fontSize: 12.5)),
+        ],
+        const SizedBox(height: 10),
+        TextButton(
+          onPressed: session.checking
+              ? null
+              : () {
+                  setState(() {
+                    _pairMode = !_pairMode;
+                    if (!_pairMode && session.needTotp) {
+                      // 从配对码切回密码模式：重新走密码登录拿新的 TOTP 挑战
+                      ref.read(sessionProvider.notifier).resetTotp();
+                    }
+                  });
+                },
+          child: Text(_pairMode ? '使用账号密码登录' : '无法输密码？使用配对码登录',
+              style: const TextStyle(fontSize: 12.5)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _passwordBody(BuildContext context, SessionState session) {
+    return Column(key: const ValueKey('pw'), children: [
+      if (!session.needTotp) ...[
+        TextField(
+          controller: _username,
+          decoration: const InputDecoration(
+              labelText: '用户名', prefixIcon: Icon(Icons.person_outline)),
+          autocorrect: false,
+          textInputAction: TextInputAction.next,
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _password,
+          decoration: InputDecoration(
+              labelText: '密码',
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                  icon: Icon(_obscured
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined),
+                  onPressed: () => setState(() => _obscured = !_obscured))),
+          obscureText: _obscured,
+          onSubmitted: (_) => _submit(),
+        ),
+      ] else ...[
+        Text('输入认证器动态码',
+            style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Text(_username.text.trim(),
+            style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 12),
+        _CodeField(key: _codeKey, onCompleted: _onCodeDone),
+      ],
+    ]);
+  }
+
+  Widget _pairBody(BuildContext context, SessionState session) {
+    return Column(key: const ValueKey('pair'), children: [
+      Text('输入电脑端生成的 6 位配对码',
+          style: Theme.of(context).textTheme.titleSmall),
+      const SizedBox(height: 4),
+      Text('60 秒有效 · 在「账号设置 → 手机 App 连接」生成',
+          style: Theme.of(context).textTheme.bodySmall),
+      const SizedBox(height: 12),
+      _CodeField(key: _codeKey, onCompleted: _onCodeDone),
+    ]);
+  }
+
+  void _onCodeDone(String code) {
+    _lastCode = code;
+    _submit(); // 填满即自动提交
+  }
+
+  Future<void> _bioLogin() async {
+    final saved = _saved;
+    if (saved == null) return;
+    final ok = await Biometric.authenticate('验证身份以登录 LAN Share');
+    if (!ok || !mounted) return;
+    await _applyAddress(saved.server);
+    _username.text = saved.username;
+    _password.text = saved.password;
+    ref.read(sessionProvider.notifier).login(
+        server: saved.server,
+        username: saved.username,
+        password: saved.password);
+  }
+
   void _submit() {
     final s = ref.read(sessionProvider);
+    if (_pairMode) {
+      if (_lastCode.length == 6) {
+        ref.read(sessionProvider.notifier)
+            .loginByPair(_lastCode, server: _server.text.trim());
+      }
+      return;
+    }
     if (s.needTotp) {
-      ref.read(sessionProvider.notifier)
-          .loginTotp(_totp.text.trim(), server: _server.text.trim());
+      if (_lastCode.length == 6) {
+        ref.read(sessionProvider.notifier)
+            .loginTotp(_lastCode, server: _server.text.trim());
+      }
     } else {
       ref.read(sessionProvider.notifier).login(
           server: _server.text.trim(),
@@ -136,7 +543,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
   }
 
-  /// 证书信任确认：展示指纹，用户显式勾选后重试登录
+  /// 证书信任确认：展示指纹，用户显式确认后重试登录
   Future<void> _askTrust(TrustRequiredError issue) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -165,5 +572,103 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       await TrustStore.I.trust(issue.host, issue.port, issue.fingerprint);
       _submit(); // 信任后自动重试
     }
+  }
+}
+
+/// 6 位分离式验证码（TOTP 动态码 / 配对码共用）：自动跳格、退格回移、
+/// 首格粘贴自动分发；填满即回调（自动提交，无需再按按钮）。
+class _CodeField extends StatefulWidget {
+  final ValueChanged<String> onCompleted;
+  const _CodeField({super.key, required this.onCompleted});
+
+  @override
+  State<_CodeField> createState() => _CodeFieldState();
+}
+
+class _CodeFieldState extends State<_CodeField> {
+  static const _len = 6;
+  final _nodes = List.generate(_len, (_) => FocusNode());
+  final _values = List.filled(_len, '');
+  late final _controllers =
+      List.generate(_len, (_) => TextEditingController());
+
+  @override
+  void dispose() {
+    for (final n in _nodes) {
+      n.dispose();
+    }
+    for (final c in _controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// 输错清空重输（登录失败时由外层调用）
+  void clear() {
+    for (var i = 0; i < _len; i++) {
+      _values[i] = '';
+      _controllers[i].clear();
+    }
+    setState(() {});
+    _nodes[0].requestFocus();
+  }
+
+  void _emit() {
+    if (_values.every((v) => v.isNotEmpty)) {
+      widget.onCompleted(_values.join());
+    }
+  }
+
+  void _onChanged(int i, String v) {
+    v = v.replaceAll(RegExp(r'\D'), ''); // 只收数字
+    if (v.length > 1) {
+      // 粘贴/快速输入：从当前格开始依次分发
+      for (var k = 0; k < v.length && i + k < _len; k++) {
+        _values[i + k] = v[k];
+      }
+      setState(() {});
+      final next = math.min(i + v.length, _len - 1);
+      _nodes[next].requestFocus();
+      _emit();
+      return;
+    }
+    _values[i] = v;
+    setState(() {});
+    if (v.isNotEmpty && i < _len - 1) _nodes[i + 1].requestFocus();
+    _emit();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: List.generate(_len, (i) {
+          return SizedBox(
+            width: 46,
+            child: TextField(
+              controller: _controllers[i],
+              focusNode: _nodes[i],
+              textAlign: TextAlign.center,
+              keyboardType: TextInputType.number,
+              maxLength: 1,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                counterText: '',
+                contentPadding:
+                    const EdgeInsets.symmetric(vertical: 12),
+                filled: _values[i].isNotEmpty,
+                fillColor: cs.primary.withValues(alpha: 0.06),
+                enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: cs.outlineVariant)),
+                focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: cs.primary, width: 1.6)),
+              ),
+              onChanged: (v) => _onChanged(i, v),
+            ),
+          );
+        }));
   }
 }

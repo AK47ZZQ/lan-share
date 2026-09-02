@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, type Me } from '../api'
 import { refreshAuth } from '../auth'
 import { toast } from '../ui'
@@ -68,6 +68,42 @@ async function copySecret() {
   try { await navigator.clipboard.writeText(totpSecret.value); toast('密钥已复制', 'ok') }
   catch { toast('复制失败，请手动记录密钥', 'err') }
 }
+
+// 手机 App 连接（扫码填地址 + 配对码免密登录）
+const pairCode = ref('')
+const pairLeft = ref(0)          // 剩余秒数
+const pairBusy = ref(false)
+const pairErr = ref('')
+let pairTimer: ReturnType<typeof setInterval> | null = null
+
+const serverUrl = window.location.origin
+
+function stopPairTimer() {
+  if (pairTimer) { clearInterval(pairTimer); pairTimer = null }
+  pairLeft.value = 0
+}
+
+async function genPairCode() {
+  pairErr.value = ''
+  pairBusy.value = true
+  try {
+    const r = await api.pairCode()
+    pairCode.value = r.code
+    pairLeft.value = r.expires_in
+    stopPairTimer()
+    pairTimer = setInterval(() => {
+      pairLeft.value--
+      if (pairLeft.value <= 0) { pairCode.value = ''; stopPairTimer() }
+    }, 1000)
+  } catch (e) { pairErr.value = (e as Error).message } finally { pairBusy.value = false }
+}
+
+function copyPairUrl() {
+  try { navigator.clipboard.writeText(serverUrl); toast('地址已复制', 'ok') }
+  catch { toast('复制失败', 'err') }
+}
+
+onBeforeUnmount(stopPairTimer)
 
 // WebDAV 独立密码
 const davSet = ref(false)
@@ -181,6 +217,36 @@ async function doPwd() {
             <button class="btn sm" :disabled="totpBusy" @click="totpSetup">启用两步验证</button>
           </template>
           <p v-if="totpErr" class="err" style="margin:0">{{ totpErr }}</p>
+        </div>
+
+        <div style="height:1px;background:var(--line);margin:16px 0" />
+
+        <!-- 手机 App 连接 -->
+        <div style="display:grid;gap:9px">
+          <div style="font-size:13.5px;font-weight:600">📱 手机 App 连接</div>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <img :src="`/api/qr?text=${encodeURIComponent(serverUrl)}`"
+                 style="width:120px;height:120px;background:#fff;padding:5px;border-radius:10px" alt="服务器地址二维码" />
+            <div style="display:grid;gap:6px;font-size:12.5px;max-width:300px">
+              <span style="color:var(--text-2)">手机 App 登录页点「扫码」图标，扫这里免手输地址：</span>
+              <code style="user-select:all;background:var(--glass);padding:5px 8px;border-radius:8px;border:1px solid var(--line);font-size:11.5px">{{ serverUrl }}</code>
+              <button class="btn ghost sm" @click="copyPairUrl" style="justify-self:start">📋 复制地址</button>
+            </div>
+          </div>
+          <div style="font-size:12.5px;color:var(--text-2)">
+            长辈的手机不想输密码？在 App 登录页选「配对码登录」，输入这里生成的 6 位码即可（60 秒有效，一码一用）。
+            配对出的设备可随时在「设备管理」吊销。
+          </div>
+          <template v-if="pairCode">
+            <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
+              <span style="font-size:34px;font-weight:700;letter-spacing:8px;font-variant-numeric:tabular-nums">{{ pairCode }}</span>
+              <span style="font-size:12px;color:var(--text-3)">{{ pairLeft > 0 ? `${pairLeft}s 后过期` : '已过期' }}</span>
+            </div>
+          </template>
+          <button class="btn sm" :disabled="pairBusy" @click="genPairCode" style="justify-self:start">
+            {{ pairBusy ? '生成中…' : pairCode ? '重新生成' : '生成配对码' }}
+          </button>
+          <p v-if="pairErr" class="err" style="margin:0">{{ pairErr }}</p>
         </div>
 
         <div style="height:1px;background:var(--line);margin:16px 0" />

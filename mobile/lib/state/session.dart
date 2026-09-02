@@ -9,6 +9,7 @@ import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/cookies.dart';
 import '../data/local/prefs.dart';
+import '../data/local/saved_credential.dart';
 import '../data/local/secure_store.dart';
 
 class SessionState {
@@ -114,6 +115,41 @@ class SessionController extends StateNotifier<SessionState> {
     }
   }
 
+  /// 从配对码等模式切回密码输入：清掉"等待动态码"状态重新开始
+  void resetTotp() {
+    if (!_busy) state = const SessionState();
+  }
+
+  /// 配对码登录（免账号密码）：Web 端已登录会话生成一次性 6 位码，
+  /// 此处 /api/pair/claim 直接换长效设备 Token。凭据规则与密码登录一致。
+  Future<void> loginByPair(String code, {required String server}) async {
+    if (_busy) return;
+    _busy = true;
+    state = const SessionState(checking: true);
+    try {
+      await ApiClient.I.switchServer(server);
+      final dio = await ApiClient.I.dio();
+      final r = await dio.post('/api/pair/claim',
+          options: Options(headers: {'x-login-flow': '1'}),
+          data: {'code': code.trim(), 'name': await Prefs.deviceName()});
+      await SecureStore.saveToken(r.data['token'] as String);
+      final me = await dio.get('/api/auth/me',
+          options: Options(headers: {'x-login-flow': '1'}));
+      final name = me.data['username'] as String?;
+      await Prefs.setUsername(name ?? '');
+      state = SessionState(
+          loggedIn: true,
+          username: name,
+          role: me.data['role'] as String?);
+    } on DioException catch (e) {
+      state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
+    } catch (e) {
+      state = SessionState(error: _brief(e));
+    } finally {
+      _busy = false;
+    }
+  }
+
   /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）
   Future<void> _exchangeToken(Dio dio, Response r) async {
     final cookie = cookieHeaderFrom(r.headers['set-cookie']);
@@ -157,6 +193,9 @@ class SessionController extends StateNotifier<SessionState> {
     _password = '';
     await SecureStore.clearToken();
     await Prefs.setUsername('');
+    // 主动退出 = 要求彻底退出：生物识别一键登录的凭据存档一并清除
+    // （Token 自然失效的掉线场景不清，那种情况正需要一键重登）
+    await SavedCredentialStore.clear();
     // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
     await AuthCacheManager.I.emptyCache();
     state = const SessionState();
