@@ -9,7 +9,7 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
 
 - `tests/conftest.py` 在导入 `server` 前把 `SHARE_ROOT` 指向临时目录，
   全套测试不碰真实数据；`client` 夹具恒为匿名态，`auth` 夹具是独立实例的登录态。
-- `tests/test_baseline.py`（28 项）是**行为回归网**；`tests/test_multiuser.py`（21 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
+- `tests/test_baseline.py`（28 项）是**行为回归网**；`tests/test_multiuser.py`（22 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
   认证/防爆破、文件增删改移、分块上传与秒传、回收站、分享全链路、
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
@@ -54,6 +54,14 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
   执行，且 Dart 分析器对中文路径敏感
 - pub 拉包慢/挂死时切国内镜像：`PUB_HOSTED_URL=https://pub.flutter-io.cn`
   与 `FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn`
+- **core library desugaring**（v0.6.0 起）：flutter_local_notifications 硬性
+  要求，build.gradle.kts 已开 `isCoreLibraryDesugaringEnabled` +
+  `desugar_jdk_libs:2.1.4`——新加插件报 "requires core library desugaring"
+  时查这里，不要关
+- **App 内检查更新发版约定**（v0.6.0 起）：把新 APK + `version.json`
+  （{"version","build","filename","sha256","notes"}）放进共享空间
+  `App安装包/` 即完成发版（/api/app/latest|download）；App 对比 build 号
+  自动提示，无需再手动发分享链接换包
 - **交付前必过**：`dart analyze` 零问题 + `flutter test` + 安卓模拟器全流程
   （登录→信任框→照片/文件/我的/分享接收/分享管理）；模拟器经 NAT 可直连宿主机
   LAN 地址。⚠️ **改了 Kotlin 必须再跑一次真构建**——`dart analyze`/`flutter test`
@@ -102,20 +110,21 @@ app/
 │                      /require_user/require_admin/preview_user
 ├── filetools.py       safe_path/clean_filename/dir_tree/save_upload/ensure_heif_support
 ├── spaces.py          v3 空间解析 resolve()/授权判定/配额/可见性过滤（安全核心）
-├── api/auth.py        认证 API（setup/login/logout/改密/改用户名/TOTP/设备 Token/账号管理）
-├── api/files.py       文件 API（列表/上传/移动/回收站/预览/zip/缩略图/搜索/磁盘）
-├── api/share.py       分享 API（外链/票据/QR/取件记录；按 owner 隔离；定向分享触发通知）
+├── api/auth.py        认证 API（setup/login/logout/改密/改用户名/TOTP/设备 Token/配对码/账号管理）
+├── api/files.py       文件 API（列表/上传/移动/复制/回收站/预览/zip/缩略图/搜索/磁盘）
+├── api/share.py       分享 API（外链/票据/QR/取件记录/编辑；按 owner 隔离；定向分享触发通知）
 ├── api/webdav.py      WebDAV（与网页同一 resolve 权限源；独立密码支持）
-├── api/system.py      定时清理/照片时间线/通用 QR/healthz/通知 bot
-├── api/admin.py       成员/邀请/授权/动态流/公网地址/相册
+├── api/system.py      定时清理/照片时间线/相册/通用 QR/healthz
+├── api/admin.py       成员/邀请/授权/动态流/公网地址/通知 bot
 ├── api/notify.py      站内通知 + 事件推送 Webhook（push_webhook + 端点）
+├── api/appver.py      App 版本分发（读共享空间 App安装包/version.json；App 内检查更新）
 server.py             兼容 shim（NSSM 入口 server:app 不变；测试 import server）
-web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/views/ 七个页面；
+web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/views/ 九个页面；
                       构建产物 dist/ 由 main.py 直供（gitignore node_modules + dist）
 mobile/               Flutter App（mobile/lib/ 源码 + android/ ios/；build/ 与 .dart_tool/ 已 gitignore）
 certs/                自签证书配置（san.cnf；*.pem 私钥不入库）
 data/                 运行时数据根（不入库：用户文件/.meta.db/.trash/...）
-docs/            API.md / SECURITY.md / DEVELOPMENT.md / GIT.md / DEBUG-ACCOUNT.md(不入库)
+docs/            API.md / SECURITY.md / DEVELOPMENT.md / STATUS-v3.md / GIT.md / DEBUG-ACCOUNT.md(不入库)
                        DESIGN-v3/ {OVERVIEW,FRONTEND,DATABASE,PERMISSIONS,APP-*}
 ```
 
