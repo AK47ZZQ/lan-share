@@ -1,10 +1,15 @@
-// 扫码填入服务器地址：Web 端「账号设置 → 手机 App 连接」展示地址二维码，
-// 此处识别后原样回传给登录页（只接受 http(s) 链接，其他内容忽略继续扫）。
+// 扫码：Web 端「账号设置 → 手机 App 连接」的地址二维码（默认模式），
+// 或「我的 → 验证器」绑定两步验证的 otpauth:// 二维码（otpauth 模式）。
+// 识别后原样回传（pop 值），不匹配的内容忽略继续扫。
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+enum ScanMode { server, otpauth }
+
 class ScanPage extends StatefulWidget {
-  const ScanPage({super.key});
+  const ScanPage({super.key, this.mode = ScanMode.server});
+
+  final ScanMode mode;
 
   @override
   State<ScanPage> createState() => _ScanPageState();
@@ -14,6 +19,15 @@ class _ScanPageState extends State<ScanPage> {
   final _controller = MobileScannerController(
       formats: const [BarcodeFormat.qrCode], autoStart: true);
   bool _done = false;
+
+  bool _accept(String v) {
+    if (widget.mode == ScanMode.otpauth) return v.startsWith('otpauth://totp/');
+    return v.startsWith('https://') || v.startsWith('http://');
+  }
+
+  String get _hint => widget.mode == ScanMode.otpauth
+      ? '对准电脑端「账号设置 → 两步验证 → 启用」里的二维码，自动绑定本机验证器'
+      : '对准电脑端「账号设置 → 手机 App 连接」里的二维码，识别后自动填入地址';
 
   @override
   void dispose() {
@@ -25,7 +39,7 @@ class _ScanPageState extends State<ScanPage> {
     if (_done) return;
     for (final bar in capture.barcodes) {
       final v = bar.rawValue;
-      if (v != null && (v.startsWith('https://') || v.startsWith('http://'))) {
+      if (v != null && _accept(v.trim())) {
         _done = true; // 连续帧会反复回调，只取第一枚有效码
         if (!mounted) return; // 页面可能已被返回手势关闭
         Navigator.of(context).pop(v.trim());
@@ -37,7 +51,8 @@ class _ScanPageState extends State<ScanPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('扫描服务器二维码')),
+      appBar: AppBar(title: Text(widget.mode == ScanMode.otpauth
+          ? '扫描两步验证二维码' : '扫描服务器二维码')),
       body: Stack(
         children: [
           MobileScanner(
@@ -59,10 +74,9 @@ class _ScanPageState extends State<ScanPage> {
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                   color: Colors.black54, borderRadius: BorderRadius.circular(12)),
-              child: const Text(
-                '对准电脑端「账号设置 → 手机 App 连接」里的二维码，识别后自动填入地址',
+              child: Text(_hint,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontSize: 13),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
               ),
             ),
           ),

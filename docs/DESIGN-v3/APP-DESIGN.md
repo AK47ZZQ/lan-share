@@ -238,6 +238,26 @@ BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接
 notify）——该提交实未编译过；拆出 `progressNotification()` 返回 Notification
 并用 run(ctx) 的 ctx。教训：**提交前必须过一次真构建，analyze/单测不编译 Kotlin**
 
+### 8.10 App 内置验证器（2026-09-02 傍晚，v0.5.2+13）
+
+- **动机**：两步验证补全后用户指出"手机上没有认证器 App"——把验证职责
+  推给第三方 App 违背家庭自包含定位；且 App 已有扫码（mobile_scanner）与
+  安全存储（SecureStore），内置成本很低
+- **引擎**：RFC 6238 自实现 ~90 行——HMAC-SHA1 走已有 `crypto` 包、
+  Base32（RFC 4648）手写；`otpauth://totp/` 解析兼容 pyotp provisioning
+  （issuer 前缀路径 + digits/period 参数）。**RFC 附录 B 官方向量单测
+  全过**——加密算法类改动必须有标准向量背书，不靠"看起来对"
+- **验证器页**：扫码绑定（`ScanPage` 参数化 `ScanMode.otpauth`，只收
+  otpauth://totp/，与服务器地址模式互不误收）+ 手输密钥兜底；条目卡片 =
+  30 秒倒计时圆环（末 5 秒红）+ 3+3 分组大字码；解除只删本机条目
+- **登录闭环**：needTotp 六格步骤检测同账号绑定 → 「本机验证器」卡片
+  显示当前码，点按 `fill()` 进六格自动提交——**两步验证在 App 内从
+  "要切出去看码"变成一次点按**
+- **取舍**：TOTP secret 走 SecureStore **双写**（与密码档同通道）而非
+  Keystore-only——secret 读不出=无法生成码=一步都登不进，可靠性优先；
+  验证器页不加生物识别门禁（与装第三方验证器等价：手机解锁即可看码），
+  长辈易用优先
+
 ## 8.8 登录页 v2 + 连接体验落地注记（2026-09-02，v0.5.0+11）
 
 - **布局方向 A**：上半屏渐变品牌区（云朵 Logo + slogan）+ 下半屏圆角

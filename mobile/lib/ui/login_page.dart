@@ -17,6 +17,8 @@ import '../data/api/trust.dart';
 import '../data/local/biometric.dart';
 import '../data/local/prefs.dart';
 import '../data/local/saved_credential.dart';
+import '../data/local/verifier_store.dart';
+import '../data/totp.dart';
 import '../state/session.dart';
 import 'scan_page.dart';
 
@@ -46,6 +48,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
   String _lastCode = ''; // 六格验证码/配对码（填满时更新，按钮兜底提交用）
   final _codeKey = GlobalKey<_CodeFieldState>();
   final _rcCtrl = TextEditingController(); // 恢复码文本框
+  List<TotpEntry> _verifierEntries = const []; // 本机验证器（needTotp 一键回填）
 
   late final AnimationController _shake = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 420));
@@ -59,6 +62,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
       _username.text = await Prefs.lastLoginUser() ?? '';
       _saved = await SavedCredentialStore.load();
       _bioAvailable = await Biometric.available();
+      _verifierEntries = await VerifierStore.load();
       if (mounted) {
         setState(() {});
         _runProbe(); // 初始地址也做一次连通性预检
@@ -74,6 +78,15 @@ class _LoginPageState extends ConsumerState<LoginPage>
     _rcCtrl.dispose();
     _shake.dispose();
     super.dispose();
+  }
+
+  /// 本机验证器中与当前登录用户名匹配的条目（needTotp 一键回填）
+  TotpEntry? get _verifierMatch {
+    final u = _username.text.trim();
+    for (final e in _verifierEntries) {
+      if (e.label == u) return e;
+    }
+    return null;
   }
 
   /// 从 URL 提取短显示名（host[:非默认端口]），解析失败截断原文
@@ -493,6 +506,16 @@ class _LoginPageState extends ConsumerState<LoginPage>
         Text(_username.text.trim(),
             style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 12),
+        // 本机验证器已绑定该账号：直接显示当前动态码，点按自动填入（v0.5.2）
+        if (!_rcMode && _verifierMatch != null) ...[
+          _VerifierFillCard(
+              entry: _verifierMatch!,
+              onFill: (code) {
+                _lastCode = code;
+                _codeKey.currentState?.fill(code); // 填满触发自动提交
+              }),
+          const SizedBox(height: 10),
+        ],
         if (_rcMode)
           TextField(
               controller: _rcCtrl,
@@ -651,6 +674,19 @@ class _CodeFieldState extends State<_CodeField> {
     _nodes[0].requestFocus();
   }
 
+  /// 自动填入（本机验证器一键回填 v0.5.2）：分发进各格并触发 onCompleted
+  void fill(String code) {
+    final digits = code.replaceAll(RegExp(r'\D'), '');
+    if (digits.length < _len) return;
+    for (var i = 0; i < _len; i++) {
+      _values[i] = digits[i];
+      _controllers[i].text = digits[i];
+    }
+    setState(() {});
+    _nodes[_len - 1].requestFocus();
+    _emit();
+  }
+
   void _emit() {
     if (_values.every((v) => v.isNotEmpty)) {
       widget.onCompleted(_values.join());
@@ -708,5 +744,86 @@ class _CodeFieldState extends State<_CodeField> {
             ),
           );
         }));
+  }
+}
+
+/// 本机验证器动态码卡片（needTotp 时显示）：自走秒针刷新码与倒计时圈，
+/// 点按整卡即把当前码填进六格并自动提交。
+class _VerifierFillCard extends StatefulWidget {
+  const _VerifierFillCard({required this.entry, required this.onFill});
+
+  final TotpEntry entry;
+  final ValueChanged<String> onFill;
+
+  @override
+  State<_VerifierFillCard> createState() => _VerifierFillCardState();
+}
+
+class _VerifierFillCardState extends State<_VerifierFillCard> {
+  late Timer _ticker;
+  int _now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() => _now = DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final e = widget.entry;
+    final remain = e.period - (_now % e.period);
+    final code = e.code(epoch: _now);
+    final shown =
+        '${code.substring(0, e.digits ~/ 2)} ${code.substring(e.digits ~/ 2)}';
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => widget.onFill(code),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(children: [
+            SizedBox(
+              width: 38,
+              height: 38,
+              child: Stack(alignment: Alignment.center, children: [
+                CircularProgressIndicator(
+                  value: remain / e.period,
+                  strokeWidth: 3,
+                  color: remain <= 5 ? Colors.redAccent : null,
+                ),
+                Text('$remain', style: const TextStyle(fontSize: 12)),
+              ]),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text('本机验证器',
+                    style: TextStyle(fontSize: 11, color: cs.outline)),
+                Text(shown,
+                    style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 5)),
+              ]),
+            ),
+            Icon(Icons.touch_app_outlined, size: 20, color: cs.outline),
+          ]),
+        ),
+      ),
+    );
   }
 }

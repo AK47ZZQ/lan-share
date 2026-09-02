@@ -7,6 +7,7 @@ import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import 'shares_page.dart';
+import 'verifier_page.dart';
 
 class MePage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -118,6 +119,14 @@ class _MePageState extends ConsumerState<MePage> {
             onTap: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const SharesPage())),
           ),
+        // App 内置验证器（v0.5.2）：两步验证动态码本机生成，免装第三方验证器
+        ListTile(
+          leading: const Icon(Icons.phonelink_lock_outlined),
+          title: const Text('验证器'),
+          subtitle: const Text('两步验证动态码，扫码绑定后本机直接显示'),
+          onTap: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const VerifierPage())),
+        ),
         const Divider(),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),

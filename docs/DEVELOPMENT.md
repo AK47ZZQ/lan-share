@@ -75,7 +75,7 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 - **签名切换注意**：debug 包与 release 包签名不同，**不能覆盖安装**——
   已装旧 debug 包的设备须先卸载（数据如登录态/备份账本随之清除；账本丢失
   后重传由服务端秒传兜底，不产生重复流量）。分发件现为
-  `App安装包/lanshare.apk`（v0.5.1+12，品牌图标见 `scripts/make-app-icon.py`）
+  `App安装包/lanshare.apk`（v0.5.2+13，品牌图标见 `scripts/make-app-icon.py`）
 - 新增 pub 依赖按 §6 原则记 CHANGELOG
 
 ## 部署/测试约定

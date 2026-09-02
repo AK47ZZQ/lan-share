@@ -239,7 +239,7 @@ async function doPwd() {
             </button>
           </template>
           <template v-else-if="totpUri">
-            <p style="font-size:12.5px;color:var(--text-2);margin:0">1️⃣ 用认证器扫描二维码，或手动输入密钥：</p>
+            <p style="font-size:12.5px;color:var(--text-2);margin:0">1️⃣ 用认证器 App（Microsoft/Google 验证器）扫二维码，或直接用 <b>LAN Share 手机 App「我的 → 验证器」</b>扫码绑定，也可手动输入密钥：</p>
             <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
               <img :src="`/api/qr?text=${encodeURIComponent(totpUri)}`"
                    style="width:150px;height:150px;background:#fff;padding:6px;border-radius:10px" alt="二维码" />
@@ -256,7 +256,7 @@ async function doPwd() {
             </div>
           </template>
           <template v-else>
-            <p style="font-size:12.5px;color:var(--text-3);margin:0">为账号增加一层保护：登录除密码外还需手机认证器的动态码。管理员重置密码会同步解除。</p>
+            <p style="font-size:12.5px;color:var(--text-3);margin:0">为账号增加一层保护：登录除密码外还需手机认证器的动态码。管理员重置密码会同步解除。没有认证器 App？装了 LAN Share App 的手机可直接用「我的 → 验证器」代替。</p>
             <button class="btn sm" :disabled="totpBusy" @click="totpSetup">启用两步验证</button>
           </template>
           <p v-if="totpErr" class="err" style="margin:0">{{ totpErr }}</p>
