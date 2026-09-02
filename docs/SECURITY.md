@@ -180,6 +180,9 @@
   物理路径再过 `safe_path` 双保险。全部文件入口（Web API / WebDAV / 分享 /
   zip / 缩略图 / 直传）必须经过它，`SHARE_ROOT` 只允许在 storage 层拼接。
 - **授权表 grants**：目录级，路径段前缀命中；过期失效；撤销立即生效
+  （2026-09-03 修复：Windows `os.path.normcase` 会把 `/` 归一成 `\`，
+  前缀命中与移动/改名同步的段拼接曾全盘失效——现以正斜杠规范化比较，子目录
+  授权语义恢复；回归测试锁定）
   （进行中的下载不追溯，新请求即 403）。目录改名/移动在同一事务内同步
   grants/shares/file_refs/photos 的路径。
 - **账号治理**：邀请码一次性原子认领；停用账号 Cookie 会话与 WebDAV Basic

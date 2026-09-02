@@ -33,7 +33,11 @@ RESERVED_USERNAMES = {"shared", "private", "incoming", "tmp",
 
 
 def _normcase(s: str) -> str:
-    return os.path.normcase(s)
+    # Windows 的 os.path.normcase 会把 "/" 归一成 "\\"——授权前缀命中与
+    # 移动同步都靠 `gp + "/"` 拼接段边界，混入反斜杠后 startswith 永不命中，
+    # 子目录授权形同虚设（review 2026-09-03 P1：存量测试只覆盖精确路径，
+    # 前缀方向常年未暴露）。这里统一回正斜杠做规范化比较键。
+    return os.path.normcase(s).replace("\\", "/")
 
 
 def _normcase_eq(a: str, b: str) -> bool:
@@ -237,6 +241,8 @@ def visible(user, rel_parts) -> bool:
     parts = [p for p in rel_parts]
     if any(p.startswith(".") for p in parts):
         return False
+    if not parts:
+        return False   # 空段无归属语义，宁可不可见（防 IndexError）
     role = user["role"] if "role" in user.keys() else "member"
     username = user["username"]
     if _normcase_eq(parts[0], "private"):

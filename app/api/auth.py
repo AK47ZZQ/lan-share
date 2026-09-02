@@ -5,7 +5,6 @@ import json
 import os
 import re
 import secrets
-import sqlite3
 import threading
 import time
 from typing import Optional
@@ -513,8 +512,10 @@ def _issue_device_token(user_id: int, name: str) -> tuple[str, int]:
                     "VALUES(?,?,?,?,?,?) RETURNING id",
                     (user_id, name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
                 device_id = cur.fetchone()["id"]
-            except sqlite3.IntegrityError:
+            except Exception:
                 # token_hash UNIQUE 极端碰撞：换一枚重试一次
+                # （裸 Exception：PG 生产库抛的是 psycopg 的唯一约束异常，
+                #   只捕 sqlite3.IntegrityError 在 PG 下会 500）
                 token = secrets.token_urlsafe(32)
                 cur = _db().execute(
                     "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "

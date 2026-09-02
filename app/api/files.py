@@ -310,7 +310,9 @@ async def upload_file(request: Request, path: str = "", file: UploadFile = File(
                       _user=Depends(require_user)):
     clean_name = clean_filename(file.filename)
     dest = resolve(_user, path, "write") / clean_name
-    enforce_quota(_user, dest, file.size or 0)
+    # multipart 声明的 size 由客户端控制，谎报 0 即绕过配额——缺声明时按
+    # 直传上限悲观计价（review 2026-09-03：实际写入字节流仍受 MAX_UPLOAD_SIZE 硬约束）
+    enforce_quota(_user, dest, file.size or MAX_UPLOAD_SIZE)
     result = await save_upload(file, dest)
     deduped = register_blob(dest, result["sha256"], result["size"])
     audit("upload", result["path"], result["size_human"], client_ip(request))
@@ -365,6 +367,14 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             # 无 _unique_dest 预检 + os.replace 的并发竞态窗口）
             # 重名序号与资源管理器一致：首个冲突即 "name (1)"（0.6.0 起修正，
             # 此前从 (2) 起跳）
+            # 目录判定必须在 rename 之前——rename 之后旧路径已不存在，
+            # is_dir() 恒 False，授权同步会变成永不执行的死代码
+            #（review 2026-09-03 P1：移动目录后 grants.path 全部失联）
+            was_dir = target.is_dir()
+            try:
+                old_rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
+            except ValueError:
+                old_rel = ""
             placed = None
             final = dest_dir / target.name
             for cand in [final] + [
@@ -379,9 +389,8 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             if placed is None:
                 raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
             final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
-            if target.is_dir():
-                sync_grants_on_move(
-                    str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), final_rel)
+            if was_dir:
+                sync_grants_on_move(old_rel, final_rel)
             results.append({"src": src, "ok": True, "dest": final_rel})
             audit("move", src, f"→ {final_rel}", client_ip(request))
         except HTTPException as e:
@@ -424,9 +433,11 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
     incoming = 0
     for src in body.sources:
         try:
-            incoming += _tree_size(Path(src))
-        except OSError:
-            pass   # 源缺失由下方逐项检查报 404
+            # 定价走 resolve 后路径：裸 src 可写 ".." 等越界形态，
+            # 直接 rglob 会拿用户输入当文件系统路径遍历（IO 放大 + 配额虚高）
+            incoming += _tree_size(resolve(_user, src, "read"))
+        except (HTTPException, OSError):
+            pass   # 源缺失/无权由下方逐项检查报错
     enforce_quota(_user, dest_dir, incoming)
     results = []
     for src in body.sources:

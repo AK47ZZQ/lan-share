@@ -192,9 +192,17 @@ async def dav_handler(request: Request, path: str = ""):
                     raise HTTPException(status_code=413)
                 await f.write(chunk)
         if exists:
-            # 覆盖的旧版本进回收站，而不是直接丢失
+            # 覆盖的旧版本进回收站，而不是直接丢失（.trash 在 private 树外，
+            # 不计入配额扫描；先移走旧文件，下一步的配额扫描即为最终占用）
             _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
-        enforce_quota(user, target, size)
+        # 配额计价：此刻 private 树里已有 tmp（=即将落位的最终内容），旧版已
+        # 移出——扫描值即落位后的占用，incoming 传 0 才是精确校验。传 size 会
+        # 把 tmp 双计、误报配额不足。失败必须清掉 tmp 再抛，别留半截残留。
+        try:
+            enforce_quota(user, target, 0)
+        except HTTPException:
+            tmp.unlink(missing_ok=True)
+            raise
         os.replace(tmp, target)
         audit("dav_put", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
               human_size(size), client_ip(request))

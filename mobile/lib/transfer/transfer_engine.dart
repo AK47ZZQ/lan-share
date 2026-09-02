@@ -519,10 +519,13 @@ class TransferEngine extends ChangeNotifier {
     } catch (_) {}
   }
 
-  /// 非 cancel 错误：4xx 直接判死（重试无意义）；5xx/网络错误退避重试至多 5 次
+  /// 非 cancel 错误：4xx 直接判死（重试无意义）；5xx/网络错误退避重试至多 5 次。
+  /// 429 例外：限速语义是"稍后再来"，走退避（与备份引擎 _backoff 同语义——
+  /// 家庭共享公网出口时多端容易撞 120 req/min 的全局配额，判死会把暂时
+  /// 失败变永久失败）
   Future<int> _retryOrThrow(TransferTask t, DioException e, int backoff) async {
     final status = e.response?.statusCode;
-    if (status != null && status >= 400 && status < 500) {
+    if (status != null && status >= 400 && status < 500 && status != 429) {
       final d = e.response?.data;
       final detail = d is Map && d['detail'] != null ? d['detail'] : 'HTTP $status';
       throw Exception(detail.toString());

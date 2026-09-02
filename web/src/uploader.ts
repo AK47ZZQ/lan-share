@@ -281,9 +281,8 @@ export function cancelAll() {
 }
 
 export function clearFinished() {
-  for (const i of upl.items) {
-    if (i.status === 'paused') dropSidEntry(i)   // 被丢弃的暂停项不留续传记录
-  }
+  // 只清 done/fail/cancel：paused 项会保留在队列里，误删它的 sid 会把
+  // "继续"变成从头重传（review 2026-09-03：原循环注释与过滤条件自相矛盾）
   upl.items = upl.items.filter(i => i.status === 'up' || i.status === 'queue' || i.status === 'paused')
 }
 

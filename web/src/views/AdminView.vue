@@ -88,14 +88,26 @@ async function toggleActive(u: AdminUser) {
 }
 const quotaModal = ref<{ user: AdminUser; value: string } | null>(null)
 const credModal = ref<AdminUser | null>(null)
+// <10GB 一位小数：避免 512MB 显示成 "0"（0 现在是"清除"语义，会被误触发）
+function gbText(b: number): string {
+  const gb = b / 2 ** 30
+  return gb < 10 ? gb.toFixed(1) : String(Math.round(gb))
+}
 function openQuota(u: AdminUser) {
-  quotaModal.value = { user: u, value: u.quota_bytes ? String(Math.round(u.quota_bytes / 2**30)) : '' }
+  quotaModal.value = { user: u, value: u.quota_bytes == null ? '' : gbText(u.quota_bytes) }
 }
 async function saveQuota() {
   const m = quotaModal.value
   if (!m) return
-  const gb = parseFloat(m.value)
-  const q = gb > 0 ? Math.round(gb * 2**30) : null
+  const t = m.value.trim()
+  if (t) {
+    const gb = parseFloat(t)
+    if (!isFinite(gb) || gb < 0) { toast('请输入非负数字，或留空提交表示不限', 'err'); return }
+  }
+  const gb = parseFloat(t)
+  // 契约（与 App 0.8.2 同修）：服务端 UserPatchBody 的 null = "未提供"会被跳过，
+  // 清除配额必须显式发 0（服务端 0 → NULL = 不限）
+  const q = t && gb > 0 ? Math.round(gb * 2 ** 30) : 0
   try {
     await api.adminPatchUser(m.user.id, { quota_bytes: q })
     toast(`「${m.user.username}」配额已更新`, 'ok')
@@ -111,8 +123,6 @@ async function changeRole(u: AdminUser, ev: Event) {
 async function delUser(u: AdminUser) {
   if (!(await confirmDlg(`删除成员「${u.username}」？其私人目录将移入 .orphaned/ 保留。`, { danger: true, okText: '删除' }))) return
   try { await api.adminDeleteUser(u.id); await loadAll(); toast('已删除', 'ok') } catch (e) { toast((e as Error).message, 'err') }
-}
-async function addGrant() {
 }
 function copyInvite(code: string) {
   navigator.clipboard?.writeText(code).then(() => toast('已复制', 'ok')).catch(() => toast(code, 'info'))

@@ -38,13 +38,24 @@ async def start_cleanup():
         _cleanup_db()
 
     async def cleanup_loop():
+        import logging
         while True:
             # 清理任务含全树 rglob（同步 IO），必须放线程池——直接 await 会周期性
             # 冻住整个事件循环（review 2026-09-02 P2-4）
-            await run_in_threadpool(_run_all)
+            # 单轮异常必须吞掉记日志：清理内部对竞态（文件在 iterdir 与 stat/unlink
+            # 之间被并发删掉）不设防，一次 OSError 逸出就会杀死 while 循环——
+            # 此后到重启为止所有定时清理（回收站过期/上传会话/zip/DB）全部停摆
+            try:
+                await run_in_threadpool(_run_all)
+            except Exception:
+                logging.exception("cleanup round failed")
             await asyncio.sleep(CLEANUP_INTERVAL)
 
-    await run_in_threadpool(_run_all)
+    try:
+        await run_in_threadpool(_run_all)
+    except Exception:
+        import logging
+        logging.exception("first cleanup round failed")
     asyncio.create_task(cleanup_loop())
 
 
@@ -54,10 +65,14 @@ def _cleanup_tmp():
         return
     cutoff = time.time() - TMP_MAX_AGE_DAYS * 86400
     for f in tmp.rglob("*"):
-        if f.is_file() and f.stat().st_mtime < cutoff:
-            f.unlink()
+        try:
+            if not f.is_file() or f.stat().st_mtime >= cutoff:
+                continue
+            f.unlink(missing_ok=True)
             if f.parent != tmp and not any(f.parent.iterdir()):
                 f.parent.rmdir()
+        except OSError:
+            continue   # 竞态（并发删/占用）跳过，下轮再收
     # 孤儿上传临时文件（崩溃残留）：超过 1 天的 .uploading/.dav-uploading/.dedup/.tmp-* 一律回收
     orphan_cutoff = time.time() - 86400
     for f in SHARE_ROOT.rglob("*"):
@@ -83,11 +98,15 @@ def _cleanup_trash():
         return
     cutoff = time.time() - TRASH_DAYS * 86400
     for f in trash_root.iterdir():
-        if f.stat().st_mtime < cutoff:
-            if f.is_dir():
-                shutil.rmtree(f, ignore_errors=True)
-            else:
-                f.unlink(missing_ok=True)
+        try:
+            if f.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue   # 与用户"清空回收站"并发：条目已消失，下轮自然收敛
+        if f.is_dir():
+            shutil.rmtree(f, ignore_errors=True)
+        else:
+            f.unlink(missing_ok=True)
     with _db_lock:
         _db().execute("DELETE FROM trash WHERE deleted_at < ?", (cutoff,))
         _db().commit()

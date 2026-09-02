@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { api, type PhotoItem, type PhotoFacets, type Album, type Me } from '../api'
 import { promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
@@ -108,6 +108,7 @@ function onScroll() {
 }
 
 onMounted(() => { void loadMore(); void loadFacets(); window.addEventListener('scroll', onScroll) })
+onUnmounted(() => window.removeEventListener('scroll', onScroll))   // 不移除会跨路由泄漏：残监听带着旧 refs 持续触发加载
 </script>
 
 <template>

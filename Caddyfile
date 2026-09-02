@@ -53,6 +53,10 @@
 	}
 
 	request_body {
-		max_size 2GB
+		# 25GB：覆盖 WebDAV PUT 的 20GB 上限（MAX_WEBDAV_SIZE，PC 互传挂盘）。
+		# 此前 2GB 会把 >2GB 的 DAV 大文件在代理层掐成 413——服务端 20GB
+		# 特性从未真正可达；分块上传单块 ≤64MB、直传 ≤2GB 均不受影响
+		# （review 2026-09-03 契约一致性）
+		max_size 25GB
 	}
 }

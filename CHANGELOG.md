@@ -1,5 +1,50 @@
 # 更新日志
 
+## 2026-09-03（深夜）— 全仓十轮 review + 五轮对抗审查 v0.8.3+25：13 项修复（含授权前缀 Windows 失效 P1）
+
+用户要求"亲自 10 轮完整代码 review + 5 轮对抗性审查，覆盖代码的所有模块与
+功能"。本轮本人逐文件审查后端全 16 文件（≈4.6K 行）、Web 全 30 文件
+（≈4.7K 行）、Mobile 全 43 Dart + 6 Kotlin 文件（≈13K 行）与 Caddyfile，
+各轮不同视角（API 契约 → 认证安全 → 服务层 → Web 数据层 → Web 页面 →
+Mobile 数据层/备份引擎 → Mobile 页面 → 原生桥 → 契约交叉 → 并发边界 →
+对抗五视角：认证/穿越/注入/竞态/泄露），修复 13 项后全面回归：
+
+- **[P1] 授权前缀命中在 Windows 全盘失效（潜伏核心缺陷）**：`os.path.normcase`
+  在 Windows 把 `/` 归一成 `\`，`_grant_hit` 与 `sync_grants_on_move` 的
+  `gp + "/"` 段拼接永不命中——访客/成员只能访问被授权目录**本身**，子目录
+  读写授权与移动/改名后的授权跟随全部形同虚设（存量测试只覆盖精确路径）。
+  修复：`_normcase` 统一回正斜杠做规范化比较键；补 guest 子目录读 / member
+  子目录写 / move / rename 四条回归测试。
+- **[P1] `/api/move` 授权同步死代码**：`target.is_dir()` 在 `os.rename` 之后
+  才判定（旧路径已不存在恒 False）→ 移动目录后 grants.path 全部失联。
+  判定提前到 rename 之前。
+- **[P2] `/api/upload` 直传配额可被绕过**：`enforce_quota` 信任 multipart
+  声明 size，谎报 0 即逃逸 → 缺声明时按直传上限 2GB 悲观计价。
+- **[P2] 定时清理任务会永久停摆**：`cleanup_loop` 无异常兜底，任一瞬时
+  OSError（回收站条目并发删除等）逸出即杀死 while 循环 → 单轮异常吞掉
+  记日志，`_cleanup_tmp/_cleanup_trash` 逐项 try 跳过。
+- **[P3] copy 配额定价遍历裸越界路径**：`_tree_size(Path(src))` 拿客户端
+  输入当本地路径 rglob → 改走 `resolve(read)` 之后计价。
+- **[P3] WebDAV PUT 配额双计 + 失败残留**：tmp 已在 private 树内被扫描，
+  incoming 传 size 双计误报；配额失败时 tmp 残留 → trash 后再按入=0 精确
+  校验，失败先清 tmp。
+- **[P3] 设备 Token 唯一约束异常只捕 sqlite3.IntegrityError**：PG 生产库
+  抛 psycopg 异常会 500 → 改捕 Exception 重试一次。
+- **[P1] Web 管理面板"留空=不限"配额无效**（与 App 0.8.1 同类契约错误）：
+  清空发 null 被 `UserPatchBody` 当"未提供"跳过 → 显式发 0；输入校验 +
+  现有配额 <10GB 一位小数展示（防误清）。
+- **[P2] PhotosView 滚动监听跨路由泄漏**：onMounted 挂 scroll 无 unmount
+  移除 → 补 onUnmounted。
+- **[P3] uploader clearFinished 误清暂停项续传会话**：注释与过滤自相矛盾，
+  暂停项留在队列却被删 sid → 保留。
+- **[P3] App 传输引擎 429 判死**：改 5 次退避重试（与备份引擎语义对齐）。
+- **[P2] Caddy `request_body 2GB` 掐断 WebDAV 20GB**：服务端 MAX_WEBDAV_SIZE
+  20GB 从未真正可达 → 代理上限升 25GB（分块/直传不受影响）。
+- **验证链**：pytest 129 全绿（+5 回归）、`npm run build` 通过、flutter
+  analyze 零问题 + 71 Dart 单测全绿、NSSM 服务重启探活
+  （healthz ok / debug 登录 / /api/app/latest 200）。
+
+
 ## 2026-09-03（晚）— App v0.8.2+24：二次亲审（5 轮逐行）补 3 项加固
 
 0.8.1 发版后用户要求"亲自再进行 5 轮完整代码 review"（不再派专员，本人
