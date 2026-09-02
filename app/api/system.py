@@ -186,10 +186,14 @@ def _probe_video_durations(cap: int = 20):
             updates.append((dur, taken, rel))
     if updates:
         with _db_lock:
-            _db().executemany(
-                "UPDATE photos SET duration=?, "
-                "taken_at=CASE WHEN ? IS NOT NULL THEN ? ELSE taken_at END "
-                "WHERE path=?", [(d, t, t, p) for (d, t, p) in updates])
+            # 两段式更新，PG 友好：CASE 里悬空 NULL 参数会让 psycopg 报
+            # IndeterminateDatatype；taken_at 仅在有值时单独刷
+            _db().executemany("UPDATE photos SET duration=? WHERE path=?",
+                              [(d, p) for (d, t, p) in updates])
+            taken_updates = [(t, p) for (d, t, p) in updates if t]
+            if taken_updates:
+                _db().executemany("UPDATE photos SET taken_at=? WHERE path=?",
+                                  taken_updates)
             _db().commit()
 
 
