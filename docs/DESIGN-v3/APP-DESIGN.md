@@ -366,6 +366,44 @@ prefs 值已变 + 录屏确认列表刷新）。
   密码登录/退出清档/记住用户名/配对码免密全程）；生物识别弹窗与扫码
   取景为真机特性，待真机验收
 
+### 8.11 全板块功能补齐大批次（2026-09-02 深夜 X，v0.6.0+14）
+
+头脑风暴定稿"每板块必须+实用清单"后一次实施 35 项。架构决策与踩坑：
+
+- **视频播放 vs 自签 HTTPS**：video_player 在 Android 走 ExoPlayer 自有
+  网络栈，**插件不暴露证书回调**——TOFU（§5）对它无效。方案：MediaProxy
+  （`lib/data/api/media_proxy.dart`）在 127.0.0.1 起 HTTP 服务，用
+  TrustStore 信任的 HttpClient 带 Bearer 回源 `/preview/` 流式转发，
+  Range/Content-Range/206 原样透传（拖进度依赖）；路径带随机秘钥防同机
+  其它 App 枚举拉流；`networkSecurityConfig` 仅对 loopback 放行明文，
+  不为自签开任何明文口子。E2E：2 秒彩条 mp4 播放到完 + 控制条拖动
+- **视频进时间线是服务端工程**：`/api/photos` 扫描 PHOTO_EXTS 不含视频，
+  备份的视频在照片墙**从未出现过**。VIDEO_EXTS 进扫描 + `media_type`
+  响应/筛选参数；photos 表加 duration 列（PG `ADD COLUMN IF NOT EXISTS` +
+  SQLite PRAGMA 增量，双引擎幂等）；ffprobe 补时长与容器 creation_time
+  （手机视频 mtime 常是拷入时间，比图片更需要这层）；每轮探针至多 20 条
+  收敛。**坑**：`CASE WHEN ? IS NOT NULL` 悬空参数让 psycopg 报
+  IndeterminateDatatype → 两段式 executemany（引擎中立写法优先）
+- **MediaProxy 每请求读 prefs/token 而非缓存**：服务器地址可切换（§2
+  switchServer），缓存 base 会打旧地址；完成事件低频，读开销可忽略
+- **检查更新发版约定**：管理员把 APK + `version.json`（version/build/
+  filename/sha256/notes）放共享空间 `App安装包/`；`/api/app/latest`
+  读 json、filename 取 basename + resolve 前缀校验双防穿越；App 对比
+  **build 号**（单调发布号，比 version 字符串可靠）→ 下载 → OpenFilex
+  拉起安装器（REQUEST_INSTALL_PACKAGES；用户仍需确认"未知来源"）。
+  本次发版即用此通道写入 0.6.0(14)
+- **排除相册不动账本**：Kotlin 桥 query 加 BUCKET_DISPLAY_NAME（第 6
+  元素，缺列机型退空串）+ 新 buckets 统计方法；引擎在**扫描阶段过滤**，
+  账本零改动——取消排除后同 media_id 自动重回待备集合，语义可回退
+- **应用锁放壳层**：HomeShell 持 WidgetsBindingObserver，resume 即锁；
+  锁屏即隐私遮罩（内容完全不上屏）；逃生口 = 登出（凭据清空密码重登），
+  不做 PIN 备份（生物识别硬件故障属极端场景，登录页无凭据本就进不来）
+- **闭包空值提升**：bottom sheet builder 闭包里读可空局部变量无法提升，
+  先物化 `final entries = ...toList()` 再进闭包——analyze 两轮才揪出
+- **依赖纪律**：新增 5 项均在 pubspec 附理由；flutter_local_notifications
+  强制 core library desugaring（build.gradle.kts isCoreLibraryDesugaringEnabled
+  + desugar_jdk_libs 2.1.4），否则 release 出包直接失败
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

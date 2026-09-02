@@ -1,5 +1,53 @@
 # 更新日志
 
+## 2026-09-02（深夜 X）— 全板块功能补齐大批次：7 板块 35 项，v0.6.0+14
+
+头脑风暴定稿后一次做完：照片墙/文件/传输/备份/分享/我的/首页 7 个板块的
+"必须 + 实用"全量落地（35 项），服务端配套 4 个新端点。pytest 97→**106 项**
+全绿；Dart 测试 16→**25 项**；`dart analyze` 零问题；模拟器 E2E 冒烟
+（登录 → 视频播放到完 → 新建文件夹 → 深色模式 → 检查更新闭环）全通过。
+
+**照片墙 / 查看器**：视频进时间线（服务端扫描纳入 VIDEO_EXTS，`media_type`
+筛选与响应字段，photos 表加 duration 列——PG/SQLite 双引擎迁移；ffprobe
+补时长与容器 creation_time 拍摄日期，存量 8 个视频自动回填）；网格 ▶+时长
+角标；查看器内嵌播放——**MediaProxy 本地代理流**（video_player/ExoPlayer
+不吃证书回调，127.0.0.1 起 HTTP 服务用 TrustStore 信任的 HttpClient 带
+Bearer 回源，Range 原样转发可拖进度；networkSecurityConfig 仅对 loopback
+放行明文）；类型筛选 chips；按月快跳（facets）；幻灯片 3s/张；查看器内
+信息/分享/删除操作栏。
+
+**文件页基本功**（此前只能浏览）：新建文件夹 / 重命名 / 删除（进回收站）/
+长按多选批量（下载/删除/移动/复制/单文件分享）/ 排序三键×升降 / 常用目录
+钉住 / 文件详情 / 最近文件+搜索页（/api/recent、/api/search）/ 回收站页
+（恢复/彻底删除）。移动走既有 /api/move；复制走新增 **POST /api/copy**
+（源只读权；重名序号连同 move 一并修正为资源管理器习惯的 (1) 起）。
+
+**传输**：失败原因点按看全量 / 状态筛选 chips / 全部暂停·继续 / 重试全部
+失败 / 单任务完成系统通知（flutter_local_notifications，设置可关）。
+
+**分享**：二维码本机渲染（qr_flutter）/ 系统分享面板外发（share_plus，
+带提取码文案）/ 编辑有效期与下载上限（新增 **PATCH /api/shares/{token}**，
+有效期从现在重计）。
+
+**我的/设置**：主题三档（跟随系统/浅/深，MaterialApp themeMode 接线）/
+修改密码（/api/auth/password）/ 应用锁（生物识别，壳层锁屏 + resume 触发
++ 登出逃生）/ 缓存管理（占用统计+清理）/ 通知开关 / 关于页 + **检查更新**
+闭环（新增 GET /api/app/latest|download：读共享空间 `App安装包/version.json`，
+文件名 basename 白名单防穿越；App 对比 build 号 → 下载 → 拉起安装器，
+REQUEST_INSTALL_PACKAGES；本次发版已写入 version.json 0.6.0(14)）。
+
+**备份**：排除相册（Kotlin 桥 query 加 BUCKET_DISPLAY_NAME 第 6 元素 +
+新 buckets 统计方法；排除只影响扫描阶段，账本不动可回退）/ 待备字节落
+prefs（首页空间预警：待备 > 服务端剩余即提示）/ 账本统计加已备总量。
+
+**首页**：最近上传横滑条（/api/recent 媒体过滤）/ 快捷行加回收站。
+
+依赖新增 5 项（video_player/qr_flutter/share_plus/package_info_plus/
+flutter_local_notifications，pubspec 内逐项附理由）；flutter_local_notifications
+要求 core library desugaring（build.gradle.kts 开启 + desugar_jdk_libs）。
+发版即用新通道：APK + version.json 上传 `App安装包/`，App 内即可收到
+下一版更新提示。
+
 ## 2026-09-02（深夜 IX）— 全功能实测修复批：模拟器九模块真连 + 4 bug 根修，v0.4.6+10
 
 v0.5.2 之前在模拟器上没做过**端到端全模块真连**——把 App 跑成"日常使用"
