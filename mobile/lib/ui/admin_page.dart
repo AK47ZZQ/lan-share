@@ -210,6 +210,12 @@ class _AdminPageState extends ConsumerState<AdminPage>
     return v;
   }
 
+  /// 配额展示：<10GB 保留一位小数（防 500MB 显示成 0 被误存为清空）
+  String _gbText(int bytes) {
+    final gb = bytes / (1 << 30);
+    return gb < 10 ? gb.toStringAsFixed(1) : gb.round().toString();
+  }
+
   String _memberName(int uid) =>
       _users?.firstWhere((u) => u.id == uid,
           orElse: () => _AdminUser.fromJson({
@@ -267,21 +273,23 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   onTap: () async {
                     Navigator.pop(ctx);
                     final gb = await _prompt('私人空间配额',
-                        'GB（留空提交=不限）',
+                        'GB（留空或 0 提交=不限）',
                         initial: u.quotaBytes == null
                             ? ''
-                            : (u.quotaBytes! / (1 << 30)).round().toString(),
+                            : _gbText(u.quotaBytes!),
                         hint: '不限',
                         allowEmpty: true);
                     if (gb == null) return;
-                    // 留空=清成不限（服务端 0 → NULL）；输错不发请求（0.8.1 审查修复）
+                    // 留空或 0=清成不限（服务端 0 → NULL）；非数字/负数不发
+                    // 请求（0.8.1 审查修复；二次审查补 0 语义与小数展示）
                     final n = double.tryParse(gb);
-                    if (gb.isNotEmpty && (n == null || n <= 0)) {
+                    if (gb.isNotEmpty && (n == null || n < 0)) {
                       _toast('请输入正数 GB，或留空提交表示不限');
                       return;
                     }
                     await _patchUser(u.id, {
-                      'quota_bytes': gb.isEmpty ? 0 : (n! * (1 << 30)).round()
+                      'quota_bytes':
+                          gb.isEmpty || n == 0 ? 0 : (n! * (1 << 30)).round()
                     });
                   }),
               ListTile(
@@ -682,11 +690,14 @@ class _AdminPageState extends ConsumerState<AdminPage>
               FilledButton.tonal(
                   onPressed: _busy ? null : _saveHook, child: const Text('保存')),
               const SizedBox(width: 8),
-              OutlinedButton(
-                  onPressed: (_busy || _hookUrl.text.isEmpty)
-                      ? null
-                      : _testHook,
-                  child: const Text('发送测试')),
+              // controller 输入不触发整页重建：ValueListenableBuilder 跟随
+              // 文本实时启用"发送测试"（二次审查修复）
+              ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _hookUrl,
+                  builder: (_, v, _) => OutlinedButton(
+                      onPressed:
+                          (_busy || v.text.isEmpty) ? null : _testHook,
+                      child: const Text('发送测试'))),
             ]),
           ])),
       const SizedBox(height: 24),

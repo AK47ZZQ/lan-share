@@ -147,19 +147,24 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   /// 家里动态（0.6.2）：/api/activity 与 Web 同源，隐私过滤/聚合在服务端
   Future<void> _loadActivity() async {
-    final dio = await ApiClient.I.dio();
+    // dio() 内部有 await（prefs/secure store）且本方法被 fire-and-forget
+    // 调用：包进 try 防未捕获异步异常（二次审查修复）
     try {
-      final r = await dio.get('/api/activity', queryParameters: {'limit': 30});
-      final items = ActivityItem.listFrom(r.data);
-      if (!mounted) return;
-      setState(() => _activity = items);
-    } catch (_) {}
-    // 通知未读数顺带刷新（0.8.0）：铃铛徽标用（复用同一 dio，0.8.1 审查修复）
-    try {
-      final r2 = await dio.get('/api/notifications');
-      if (!mounted) return;
-      setState(() =>
-          _notifUnread = (r2.data['unread'] as num?)?.toInt() ?? 0);
+      final dio = await ApiClient.I.dio();
+      try {
+        final r =
+            await dio.get('/api/activity', queryParameters: {'limit': 30});
+        final items = ActivityItem.listFrom(r.data);
+        if (!mounted) return;
+        setState(() => _activity = items);
+      } catch (_) {}
+      // 通知未读数顺带刷新（0.8.0）：铃铛徽标用（复用同一 dio，0.8.1 审查修复）
+      try {
+        final r2 = await dio.get('/api/notifications');
+        if (!mounted) return;
+        setState(() =>
+            _notifUnread = (r2.data['unread'] as num?)?.toInt() ?? 0);
+      } catch (_) {}
     } catch (_) {}
   }
 
