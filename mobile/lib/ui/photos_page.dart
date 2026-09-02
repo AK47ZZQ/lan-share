@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../backup/backup_dest.dart';
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
@@ -189,15 +190,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     super.dispose();
   }
 
-  /// 手机相册多选上传（落 照片/手机相册/<用户名>/，与自动备份目标一致，
-  /// 网页端照片时间线按此路径归属"拍摄者"；0.4.2 前曾误落
-  /// incoming/<用户名>手机相册/——少个斜杠的路径拼接 bug）
+  /// 手机相册多选上传（0.7.0 起落 照片/<用户名>/手机上传/：选择器不返回
+  /// 来源相册，给不了 <相册名> 那一层，与自动备份的相册子目录分开；
+  /// 0.4.2~0.6.x 曾落 照片/手机相册/<用户名>/ 与自动备份同夹）
   Future<void> _pickAndUpload() async {
     final res = await FilePicker.platform
         .pickFiles(type: FileType.image, allowMultiple: true);
     if (res == null || res.files.isEmpty) return;
     final username = ref.read(sessionProvider).username ?? '';
-    final dest = '照片/手机相册/$username';
+    final dest = '照片/$username/$kManualUploadAlbum';
     final engine = TransferEngine.I;
     var n = 0;
     final enqueued = <TransferTask>[];

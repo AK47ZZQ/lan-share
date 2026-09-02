@@ -273,14 +273,24 @@ def _scan_photos(force: bool = False):
     _probe_video_durations()
 
 
-def _photo_uploader(rel: str) -> str:
+def _known_users() -> set[str]:
+    return {r["username"] for r in _db().execute("SELECT username FROM users")}
+
+
+def _photo_uploader(rel: str, users: set[str] | None = None) -> str:
     """拍摄者维度：按路径归属推导（private/<u>/、incoming/<u>/ 归属本人；
-    App 上传/备份统一落 照片/手机相册/<u>/，同样归属本人；其余算共享。"""
+    照片/手机相册/<u>/ 为旧版 App 备份落点（0.7.0 前），归属 <u>；
+    照片|视频/<u>/<相册>/… 为 0.7.0 新落点——第二段必须命中真实用户名
+    才判归属，否则手工整理的二级目录（照片/同学&生活&学校/…）会被误判
+    成用户；其余算共享。"""
     parts = rel.split("/")
     if len(parts) > 1 and parts[0].lower() in ("private", "incoming"):
         return parts[1]
     if len(parts) > 3 and parts[0] == "照片" and parts[1] == "手机相册":
         return parts[2]
+    if (users and len(parts) > 3 and parts[0] in ("照片", "视频")
+            and parts[1] in users):
+        return parts[1]
     return "共享空间"
 
 
@@ -297,13 +307,14 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
     refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos(force=refresh)
+    users = _known_users()
     all_rows = _db().execute(
         "SELECT path, taken_at, duration FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
     if uploader:
-        rows = [r for r in rows if _photo_uploader(r["path"]) == uploader]
+        rows = [r for r in rows if _photo_uploader(r["path"], users) == uploader]
     if media_type in ("photo", "video"):
         rows = [r for r in rows if _media_type(r["path"]) == media_type]
     total = len(rows)
@@ -315,7 +326,7 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
             "name": r["path"].split("/")[-1],
             "taken": r["taken_at"],
             "month": (r["taken_at"] or "")[:7],
-            "uploader": _photo_uploader(r["path"]),
+            "uploader": _photo_uploader(r["path"], users),
             "media_type": _media_type(r["path"]),
             "duration": r["duration"],
             "thumb": f"/thumb/{r['path']}",
@@ -328,6 +339,7 @@ def photo_facets(request: Request, _user=Depends(require_user)):
     """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos()
+    users = _known_users()
     rows = _db().execute("SELECT path, taken_at FROM photos ORDER BY taken_at DESC").fetchall()
     months: dict[str, int] = {}
     uploaders: dict[str, int] = {}
@@ -337,7 +349,7 @@ def photo_facets(request: Request, _user=Depends(require_user)):
         m = (r["taken_at"] or "")[:7]
         if len(m) == 7:
             months[m] = months.get(m, 0) + 1
-        u = _photo_uploader(r["path"])
+        u = _photo_uploader(r["path"], users)
         uploaders[u] = uploaders.get(u, 0) + 1
     return {
         "months": [{"month": m, "count": c} for m, c in sorted(months.items(), reverse=True)],

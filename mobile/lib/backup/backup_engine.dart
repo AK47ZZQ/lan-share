@@ -16,6 +16,7 @@ import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../data/local/secure_store.dart';
 import 'backup_config.dart';
+import 'backup_dest.dart';
 import 'backup_ledger.dart';
 import 'media_source.dart';
 
@@ -40,8 +41,6 @@ class _DigestSink implements Sink<Digest> {
 }
 
 class BackupEngine {
-  static const _destAlbum = '手机相册';
-
   /// 逐张上传前的实时暂停检查：返回 null=继续，否则为暂停原因。
   /// WorkManager 约束只在任务启动时把关——跑起来之后系统叫停（isStopped）、
   /// 离开 Wi-Fi（转计费网络）、拔充电器、App 里关开关都管不住，真机上
@@ -102,9 +101,9 @@ class BackupEngine {
       if ((sp.getString('backup_ledger_user') ?? '') != username) {
         await BackupLedger.I.clearAll();
         await sp.setString('backup_ledger_user', username);
+        // 换账号（含服务端改名）：账本清空 + 新落位 <类型>/<新用户名>/…，
+        // 重对账全量重备；sha 秒传零流量，旧用户名目录管理员手动清
       }
-      final destDir = '照片/$_destAlbum/$username';
-
       List<LedgerRow> scanned;
       List<LedgerRow> pending;
       try {
@@ -121,7 +120,8 @@ class BackupEngine {
                 kind: m.kind,
                 name: m.name,
                 size: m.size,
-                mtime: m.mtime))
+                mtime: m.mtime,
+                bucket: m.bucket))
             .toList();
         pending = await BackupLedger.I.reconcile(scanned);
       } catch (_) {
@@ -145,7 +145,7 @@ class BackupEngine {
         }
         attempted++;
         try {
-          final ok = await _uploadOne(dio, ledger, row, destDir);
+          final ok = await _uploadOne(dio, ledger, row, username);
           if (!ok) {
             failed++;
           } else {
@@ -221,9 +221,12 @@ class BackupEngine {
   }
 
   static Future<bool> _uploadOne(
-      Dio dio, BackupLedger ledger, LedgerRow row, String destDir) async {
+      Dio dio, BackupLedger ledger, LedgerRow row, String username) async {
     String? tmp;
     try {
+      // 0.7.0 落位：照片/<u>/<相册>/、视频/<u>/<相册>/，逐行按类型+相册算
+      final destDir = backupDestDir(
+          username: username, kind: row.kind, bucket: row.bucket);
       await ledger.setStatus(row.mediaId, 'uploading');
       tmp = await MediaSource.openTemp(row.mediaId, row.kind);
       final f = File(tmp);

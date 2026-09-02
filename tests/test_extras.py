@@ -342,3 +342,24 @@ def test_photo_uploader_phone_album(client, auth, workdir):
     assert _photo_uploader("incoming/debug/手机相册/IMG_0.jpg") == "debug"
     assert _photo_uploader("private/admin/a.jpg") == "admin"
     assert _photo_uploader("照片/直接放的.jpg") == "共享空间"
+
+
+# ── ⑩-b 0.7.0 相册子目录落点的拍摄者归属（照片|视频/<u>/<相册>/…）────
+
+def test_photo_uploader_album_layout(client, auth, workdir):
+    from app.api.system import _photo_uploader
+    users = {"debug", "user@example.com"}
+    # 新落点：照片/<u>/<相册>/file、视频/<u>/<相册>/file → 归属 <u>
+    assert _photo_uploader("照片/debug/LSTest1/a.jpg", users) == "debug"
+    assert _photo_uploader("视频/debug/Camera/v.mp4", users) == "debug"
+    assert _photo_uploader("照片/user@example.com/未分类/b.jpg", users) \
+        == "user@example.com"
+    # 第二段不是真实用户名 → 不误判（手工整理的二级目录保持共享）
+    assert _photo_uploader("照片/同学&生活&学校/子目录/a.jpg", users) \
+        == "共享空间"
+    assert _photo_uploader("视频/notauser/Camera/v.mp4", users) == "共享空间"
+    # 未知用户（改名后被删的账号残留目录）不归属
+    assert _photo_uploader("照片/gone_user/Camera/a.jpg", users) == "共享空间"
+    # 旧版落点在带 users 参数时语义不变
+    assert _photo_uploader("照片/手机相册/debug/IMG_1.jpg", users) == "debug"
+

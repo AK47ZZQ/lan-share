@@ -130,7 +130,8 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                           ' · 失败 ${stats?.error ?? 0} 张',
                           style: const TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 4),
-                      Text('备份位置：照片/手机相册/$username/',
+                      // 0.7.0 起按手机相册分子目录：照片/<u>/<相册>/、视频/<u>/<相册>/
+                      Text('备份位置：照片、视频/$username/<手机相册名>/',
                           style: const TextStyle(fontSize: 12)),
                       if (stats?.lastUploadedAt != null) ...[
                         const SizedBox(height: 2),

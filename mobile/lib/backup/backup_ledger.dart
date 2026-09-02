@@ -12,6 +12,7 @@ class LedgerRow {
   final String name;
   final int size;
   final int mtime; // MediaStore DATE_MODIFIED（秒）
+  final String bucket; // 相册名（0.7.0：落位按相册分目录，变更触发重备）
   String status; // pending/uploading/done/error
   int attempts;
   String? lastError;
@@ -27,6 +28,7 @@ class LedgerRow {
     required this.name,
     required this.size,
     required this.mtime,
+    this.bucket = '',
     this.status = 'pending',
     this.attempts = 0,
     this.lastError,
@@ -45,6 +47,7 @@ class LedgerRow {
         'name': name,
         'size': size,
         'mtime': mtime,
+        'bucket': bucket,
         'status': status,
         'attempts': attempts,
         'last_error': lastError,
@@ -61,6 +64,7 @@ class LedgerRow {
         name: m['name'] as String,
         size: (m['size'] as num).toInt(),
         mtime: (m['mtime'] as num).toInt(),
+        bucket: m['bucket'] as String? ?? '',
         status: m['status'] as String? ?? 'pending',
         attempts: (m['attempts'] as num?)?.toInt() ?? 0,
         lastError: m['last_error'] as String?,
@@ -90,7 +94,17 @@ class BackupLedger {
     final db = _db;
     if (db != null) return db;
     return _db = await openDatabase('backup_ledger.db',
-        version: 1, onCreate: _create);
+        version: 2,
+        onCreate: _create,
+        onUpgrade: (db, oldV, newV) async {
+      // v1→v2：加 bucket 列（0.7.0 按相册分目录）。存量行 bucket=''
+      // 与扫描值必不相等 → 对账视为变更全部重备一次；sha256 已在账本，
+      // init 秒传零流量，只在新落位建引用。
+      if (oldV < 2) {
+        await db.execute(
+            "ALTER TABLE ledger ADD COLUMN bucket TEXT NOT NULL DEFAULT ''");
+      }
+    });
   }
 
   /// 后台 isolate 引擎跑完一轮后释放句柄（isolate 随引擎销毁，这里是兜底）
@@ -108,6 +122,7 @@ class BackupLedger {
         name TEXT NOT NULL,
         size INTEGER NOT NULL,
         mtime INTEGER NOT NULL,
+        bucket TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT 'pending',
         attempts INTEGER NOT NULL DEFAULT 0,
         last_error TEXT,
@@ -128,7 +143,7 @@ class BackupLedger {
     // 两段查询控内存：done 行只取对账所需 4 列（大头），全行仅装未完成积压
     // （正常是小集合），10 万张相册不至于全量 12 列进 Dart 堆
     for (final r in await db.query('ledger',
-        columns: ['media_id', 'mtime', 'size', 'sha256'],
+        columns: ['media_id', 'mtime', 'size', 'sha256', 'bucket'],
         where: 'status = ?',
         whereArgs: ['done'])) {
       known[r['media_id'] as String] = LedgerRow(
@@ -137,6 +152,7 @@ class BackupLedger {
           name: '',
           size: (r['size'] as num).toInt(),
           mtime: (r['mtime'] as num).toInt(),
+          bucket: r['bucket'] as String? ?? '',
           status: 'done',
           sha256: r['sha256'] as String?);
     }
@@ -154,14 +170,19 @@ class BackupLedger {
         batch.insert('ledger', s.toMap(),
             conflictAlgorithm: ConflictAlgorithm.replace);
         pending.add(s);
-      } else if (row.mtime != s.mtime || row.size != s.size) {
-        // 文件被编辑：重置后重传（同目录同名覆盖，服务端旧版本进回收站）
+      } else if (row.mtime != s.mtime ||
+          row.size != s.size ||
+          row.bucket != s.bucket) {
+        // 文件被编辑（mtime/size）或被移动到别的相册（bucket，0.7.0 起
+        // 落位跟随相册）→ 重置后重传；服务端旧副本保留（单向备份语义），
+        // sha256 沿用 → 秒传免流量，只在目标目录建引用
         final reset = LedgerRow(
             mediaId: s.mediaId,
             kind: s.kind,
             name: s.name,
             size: s.size,
             mtime: s.mtime,
+            bucket: s.bucket,
             sha256: row.sha256);
         batch.update('ledger', reset.toMap(),
             where: 'media_id = ?', whereArgs: [s.mediaId]);
