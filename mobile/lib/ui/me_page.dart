@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'about_page.dart';
@@ -32,6 +33,7 @@ class _MePageState extends ConsumerState<MePage> {
   bool _loadingDevices = true;
   String? _server;
   String _cacheSize = '';
+  String _version = '';
 
   @override
   void initState() {
@@ -42,6 +44,10 @@ class _MePageState extends ConsumerState<MePage> {
   Future<void> _load() async {
     _server = await Prefs.lastAddress();
     if (mounted) setState(() {});
+    try {
+      final pi = await PackageInfo.fromPlatform();
+      if (mounted) setState(() => _version = pi.version);
+    } catch (_) {}
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/auth/devices');
@@ -202,21 +208,33 @@ class _MePageState extends ConsumerState<MePage> {
   }
 
   Future<void> _toggleAppLock(bool v) async {
-    if (v) {
-      final la = LocalAuthentication();
-      final can = await la.canCheckBiometrics;
-      if (!can) {
-        if (!mounted) return;
+    if (!v) {
+      await ref.read(settingsProvider.notifier).setAppLock(false);
+      return;
+    }
+    final la = LocalAuthentication();
+    try {
+      if (!await la.canCheckBiometrics) {
         _toast('本机未录入指纹/面部，无法开启应用锁');
         return;
       }
+      // 开启验证本身记为"本进程已解锁"：开关验证弹窗关闭的 resumed 竞态
+      // 不能把刚打开的锁立刻拉上（v0.6.0 锁死第 1 环）
+      ref.read(sessionUnlockedProvider.notifier).state = true;
+      ref.read(biometricBusyProvider.notifier).state = true;
       // 开启前先验证一次：防止他人借机开启
       final passed = await la.authenticate(
           localizedReason: '验证以开启应用锁',
-          options: const AuthenticationOptions(biometricOnly: true));
+          options: const AuthenticationOptions(
+              biometricOnly: true, stickyAuth: true));
       if (!passed) return;
+      await ref.read(settingsProvider.notifier).setAppLock(true);
+    } catch (_) {
+      _toast('生物识别不可用，无法开启应用锁');
+      ref.read(sessionUnlockedProvider.notifier).state = false;
+    } finally {
+      ref.read(biometricBusyProvider.notifier).state = false;
     }
-    await ref.read(settingsProvider.notifier).setAppLock(v);
   }
 
   Future<void> _clearCache() async {
@@ -378,8 +396,8 @@ class _MePageState extends ConsumerState<MePage> {
           onTap: () => ref.read(sessionProvider.notifier).logout(),
         ),
         const SizedBox(height: 12),
-        const Center(child: Text('LAN Share App · v0.6.0',
-            style: TextStyle(fontSize: 11, color: Colors.grey))),
+        Center(child: Text('LAN Share App · v$_version',
+            style: const TextStyle(fontSize: 11, color: Colors.grey))),
         const SizedBox(height: 24),
       ]),
     );

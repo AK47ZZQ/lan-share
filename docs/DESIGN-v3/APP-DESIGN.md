@@ -404,6 +404,39 @@ prefs 值已变 + 录屏确认列表刷新）。
   强制 core library desugaring（build.gradle.kts isCoreLibraryDesugaringEnabled
   + desugar_jdk_libs 2.1.4），否则 release 出包直接失败
 
+### 8.12 热修应用锁恶性锁死（2026-09-02 深夜 XI，v0.6.1+15）
+
+真机报恶性 bug：开启应用锁立即上锁、指纹解锁后被弹回锁屏、退出登录重登
+照样锁——三连环彻底锁死。§8.11"应用锁放壳层"的设计是错的方向性根源：
+**"resume 即锁"里 resume 不等于"从后台回来"**。三个投影一个根因：
+
+- **指纹弹窗自带生命周期**：BiometricPrompt 弹出→Activity inactive
+  （部分机型到 paused），关闭→resumed。任意 resumed 即锁 = 弹窗自己关
+  闭就把刚解开的锁打回去；开启前的"验证以开启应用锁"弹窗同理把刚打开的
+  开关立刻拉闸。事件落盘顺序与 setState 竞态，哪边赢看机型看时机
+- **initState 无条件置锁**：`_locked = appLock` 让每次 HomeShell 挂载
+  都锁——登出重登也锁，"退出登录"逃生口形同虚设，恶性程度倍增
+- **修法（三层）**：① 落锁判定收进纯逻辑 `LockGate`（state/settings.dart，
+  单测 6 场景）：paused/hidden 才算真后台，resumed 消费标记一次性；②
+  `biometricBusyProvider` 忙标记——锁屏解锁与开启验证两处 authenticate
+  共用，弹窗在屏期间 resumed 一律不判定；③ `sessionUnlockedProvider`
+  进程级解锁标记：冷启动默认 false（appLock 开启即锁屏，且不受 settings
+  异步加载时序影响），解锁成功/开启验证/登出逃生置 true——重登不再锁。
+  判定整体从 widget 状态搬进 provider 后，"锁不锁"是纯函数
+  `appLock && !unlocked`，行为可单测、时序无竞态
+- **锁屏可用性**：加"指纹解不开？可退出登录后用密码重新进入"常驻提示；
+  解锁异常 toast 给明路。**不做 PIN 备份**的决策维持（登录页本就无凭据
+  进不来，登出逃生已足够），前提是逃生口必须真的能用
+- **最大教训——生物识别必须录入后真跑**：本 bug 在"九模块真连冒烟"
+  时因"生物识别弹窗是真机特性，待真机验收"被跳过，而跳过的恰是唯一会
+  崩的路径。模拟器完全能录指纹（Settings 录入流程 + `adb emu finger
+  touch 1` 喂触摸），半小时就能拿到真解锁链路。**新规矩：凡 local_auth
+  相关改动，出包前模拟器实录指纹走一遍开→锁→解→逃 → 收紧进发版
+  checklist**
+- 另：BiometricPrompt/ChooseLockPassword 均设 FLAG_SECURE——screencap
+  全黑、uiautomator dump 拿不到节点，自动化只能盲输（`input text` +
+  `keyevent 66`）；锁屏 UI 验证靠截锁屏本身（非 secure）
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

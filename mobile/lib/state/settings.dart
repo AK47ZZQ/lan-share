@@ -88,3 +88,36 @@ class SettingsController extends StateNotifier<AppSettings> {
 
 final settingsProvider =
     StateNotifierProvider<SettingsController, AppSettings>((_) => SettingsController());
+
+/// 应用锁的进程级解锁标记（不持久化）。false=冷启动待解锁；解锁成功、
+/// 开启应用锁时的本人验证、锁屏"退出登录"逃生均置 true——同进程内
+/// 登出重登不再立刻上锁（否则逃生口形同虚设，v0.6.0 恶性锁死教训）。
+final sessionUnlockedProvider = StateProvider<bool>((ref) => false);
+
+/// 生物识别弹窗在屏期间为 true。指纹弹窗在部分机型会把 Activity 打到
+/// paused 再恢复，若无此标记会被误判成"从后台回来"而立刻重锁——
+/// 0.6.0"开启即锁/解锁完又被锁回去"的根因。判定与开关验证共用一份。
+final biometricBusyProvider = StateProvider<bool>((ref) => false);
+
+/// 应用锁落锁判定（纯逻辑，单测覆盖）：把生命周期事件归类成"是否真的
+/// 从后台回来"。只有 paused/hidden 算进过后台；inactive→resumed（指纹
+/// 弹窗、权限框、下拉通知栏）不算——0.6.0 把任何 resumed 都当切后台，
+/// 弹窗自己关闭就把刚解开的锁打回去，是恶性锁死的直接根因。
+class LockGate {
+  bool wasBackgrounded = false;
+
+  /// 记录生命周期事件（resumed 由 shouldLockOnResume 消费并清标记）
+  void onState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      wasBackgrounded = true;
+    }
+  }
+
+  /// resumed 事件到达时调用：返回是否应落锁，并消费掉后台标记（不重复落锁）
+  bool shouldLockOnResume({required bool biometricBusy}) {
+    final fromBg = wasBackgrounded;
+    wasBackgrounded = false;
+    return fromBg && !biometricBusy;
+  }
+}
