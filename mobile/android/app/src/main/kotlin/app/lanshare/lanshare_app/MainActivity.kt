@@ -3,6 +3,7 @@ package app.lanshare.lanshare_app
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,6 +29,13 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
             }
         }
         ShareInbox.channel = shareChannel
+        // 媒体库通道（0.6.2 修复）：排除相册页在主 isolate 调 buckets()/query()，
+        // 此前只有 Worker 后台 isolate 注册过该通道——主引擎侧永远
+        // MissingPluginException，页面一直显示"无法读取相册列表"
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lanshare/media")
+            .setMethodCallHandler { call, result ->
+                MediaStoreBridge.handle(this, call, result)
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lanshare/backup_host")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -41,6 +49,22 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
                     }
                     "runOnce" -> {
                         MediaObserver.enqueueOnce(this)
+                        result.success(null)
+                    }
+                    // 电池优化豁免：小米/华为等激进省电会把 WorkManager 周期任务
+                    // 压到几小时一次甚至不跑，设置页引导用户一键申请白名单
+                    "battery" -> {
+                        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                        result.success(mapOf("ignoring" to
+                            pm.isIgnoringBatteryOptimizations(packageName)))
+                    }
+                    "batteryRequest" -> {
+                        try {
+                            val i = Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:$packageName"))
+                            startActivity(i)
+                        } catch (_: Exception) {}
                         result.success(null)
                     }
                     "requestPermissions" -> {

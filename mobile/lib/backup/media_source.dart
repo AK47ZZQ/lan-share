@@ -21,10 +21,28 @@ class MediaItem {
 class MediaSource {
   static const _ch = MethodChannel('lanshare/media');
 
+  /// 原生桥约定"永不抛 PlatformException"：出错也回 success，正文是
+  /// {"error": ...} JSON。这里统一识别并转成真异常——此前 buckets() 拿到
+  /// 错误 JSON 会按数据解出古怪的 TypeError，open() 更会把错误串当路径用。
+  /// 公开为纯函数便于单测（0.6.2）。
+  static String mediaPayload(String? raw, String method) {
+    if (raw == null || raw.isEmpty) {
+      throw PlatformException(code: 'media_channel', message: '$method：原生无返回');
+    }
+    if (raw.startsWith('{')) {
+      final obj = jsonDecode(raw);
+      if (obj is Map && obj['error'] != null) {
+        throw PlatformException(
+            code: 'media_channel', message: '$method 失败：${obj['error']}');
+      }
+    }
+    return raw;
+  }
+
   /// 全量媒体清单（0 字节的脏记录由原生侧过滤）
   static Future<List<MediaItem>> query({required bool includeVideos}) async {
-    final raw = await _ch.invokeMethod<String>('query', {'videos': includeVideos});
-    if (raw == null || raw.isEmpty) return const [];
+    final raw =
+        mediaPayload(await _ch.invokeMethod<String>('query', {'videos': includeVideos}), '扫描媒体库');
     final arr = jsonDecode(raw) as List;
     return [
       for (final e in arr)
@@ -34,19 +52,20 @@ class MediaSource {
     ];
   }
 
-  /// 相册名 → 媒体数（排除设置页候选；0.6.0 新增原生 buckets 方法，
-  /// 旧包升级后通道缺方法会抛 PlatformException，调用方需兜底）
+  /// 相册名 → 媒体数（排除设置页候选；0.6.0 新增原生 buckets 方法）
   static Future<Map<String, int>> buckets() async {
-    final raw = await _ch.invokeMethod<String>('buckets');
-    if (raw == null || raw.isEmpty) return const {};
+    final raw = mediaPayload(await _ch.invokeMethod<String>('buckets'), '读取相册列表');
+    if (raw.isEmpty) return const {};
     final obj = jsonDecode(raw) as Map<String, dynamic>;
     return obj.map((k, v) => MapEntry(k, (v as num).toInt()));
   }
 
   /// 拷贝到缓存临时文件，返回路径（用完由引擎删除）
   static Future<String> openTemp(String mediaId, String kind) async {
-    return (await _ch.invokeMethod<String>(
-        'open', {'id': mediaId, 'kind': kind}))!;
+    final raw = mediaPayload(
+        await _ch.invokeMethod<String>('open', {'id': mediaId, 'kind': kind}),
+        '读取媒体文件');
+    return raw;
   }
 
   /// 删除临时文件（失败忽略）

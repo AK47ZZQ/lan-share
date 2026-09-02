@@ -43,4 +43,22 @@ class BackupBridge {
       await _ch.invokeMethod('runOnce');
     } catch (_) {}
   }
+
+  /// 是否已在电池优化白名单（0.6.2）。取不到按"已豁免"处理——
+  /// 引导提示宁缺毋滥，别在通道异常的机型上空报警。
+  static Future<bool> batteryIgnoring() async {
+    try {
+      final r = await _ch.invokeMethod<Map<Object?, Object?>>('battery');
+      return r?['ignoring'] == true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// 拉起系统"忽略电池优化"确认弹窗（小米/华为等靠它保住周期备份）
+  static Future<void> batteryRequest() async {
+    try {
+      await _ch.invokeMethod('batteryRequest');
+    } catch (_) {}
+  }
 }

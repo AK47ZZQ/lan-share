@@ -1,5 +1,90 @@
 # 更新日志
 
+## 2026-09-02（夜）— App v0.6.2+16：排除相册恶性 bug 根修 + 首页家里动态 + 备份完善三件
+
+用户报"排除相册功能无法使用"，根因一旦看清极其简单：**主引擎从未注册
+`lanshare/media` 通道**——Kotlin 桥注释声称"主引擎与 Worker 引擎都注册"，
+实际只有 Worker 后台 isolate 注册过，排除相册页在主 isolate 调 `buckets()`
+必吃 `MissingPluginException`，页面永远显示"无法读取相册列表"。与昨夜
+应用锁同款教训：**发版前没在模拟器上真跑过那条路径**。连带发现原生桥
+"出错也回 success+`{"error":...}` JSON"的约定 Dart 侧无人识别（`buckets()`
+把错误串当数据解、`open()` 更会把错误串当路径用）。
+
+- **排除相册根修**：MainActivity 补注册 `lanshare/media`（一行式修复，
+  但在模拟器上完整走通了 排除→上传跳过→取消排除→自动回补 的闭环）；
+  `MediaSource.mediaPayload()` 统一识别原生错误 JSON 并转真异常（公开
+  纯函数，单测覆盖）；排除保存后立即 `runOnce()`（不再等最长 15 分钟
+  周期窗口），文案改"已保存，正在应用…"。
+- **首页新增「家里动态」栏目**：复用服务端既有 `/api/activity`（隐私
+  过滤/10 分钟聚合全在服务端），新增 `data/activity.dart`（模型+文案纯
+  函数，与 Web activity.ts 同语义）+ 首页动态卡（前 5 条，30s 刷新）+
+  全量动态页（`ui/activity_page.dart`，limit 100 + 下拉刷新）。自动备份
+  的上传同样进动态流。
+- **备份完善（头脑风暴后本批落地的"必须"项）**：① 首页备份卡失败红字
+  （引擎每轮回写账本失败数，点击直达账本页）；② 首页实时"备份中 X/Y"
+  （引擎逐张落 prefs，2s 轮询可见——通知栏之外的第二只眼）；③ 电池优化
+  豁免引导（新权限 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS + `battery`/
+  `batteryRequest` 桥方法 + 设置页引导行：小米/华为激进省电掐周期任务
+  是"备份不自动跑"投诉的常见根因）。
+- 版本脚注 v0.6.2；`mobile/test/batch062_test.dart` 新增 11 项单测
+  （mediaPayload 错误 JSON 防线 + 动态文案/聚合/相对时间）。
+
+**验证链**：`dart analyze` 零问题 → **Dart 44 项单测全绿**（33+11）→
+release 出包 → 模拟器 E2E：排除相册页列出 LSTest1/LSTest2（修复前永远
+报错）→ 勾选排除 LSTest1 保存→引擎立即跑一轮→服务端
+`照片/手机相册/debug/` 恰好只落 LSTest2 两张 → 取消排除→LSTest1 自动
+回补，4/4 齐身；首页动态"debug 上传了 4 项·刚刚"（服务端聚合生效）；
+动态页全量列表正常；3G 计费网络下"仅 Wi-Fi"约束拦截引擎的既有语义
+保持。发版 `App安装包/` + version.json，线上 `/api/app/latest` 实测
+0.6.2/build 16/available:true。**教训入册：通道注册注释与事实不符
+（说注册了其实没有）——"文档说有"不等于"真有"，E2E 是唯一真相。**
+
+## 2026-09-02（晚）— 全量安全修复批：对抗性审查 P0×2 + P1×2 + P2×5 + P3 落地，pytest 118 项全绿
+
+上午完成了首次**全量人工代码审查 + 五轮对抗性安全审查**（报告：
+`每日巡查日志/review对抗性审查日志/review-2026-09-02.md`），随后全量修复。
+两个 P0 都是"设计期防线在某个入口缺位"：
+
+- **P0-1 Caddy `/files/*` 静态直连绕过整个权限模型**：`forward_auth` 只验
+  "是否登录"，通过后 `file_server browse` 直接挂 SHARE_ROOT——任何登录用户
+  （含 guest）都能读所有人 `private/`、`.trash/`、`.chunks/`、`.zips/` 和
+  `.meta.db`。修：Caddyfile 改为反代后端，新增 `/files/{path}` 鉴权下载端点
+  （走 `resolve()` 判权 + attachment 下发），URL 空间不变、前端零改动。
+- **P0-2 特殊段大小写精确比较 → `Private/` 变体越权读取**：NTFS 大小写
+  不敏感，`resolve()`/`visible()`/`enforce_quota()`/grants 同步里的
+  `parts[0] == "private"` 精确比较让 `Private/<他人>/` 落入 shared 默认可读
+  分支。修：全部换 normcase 比较；连带 `_photo_uploader`、admin 授权路径
+  校验、files.py 物理路径守卫同步。
+- **P1-1 回收站越权恢复**：`restore_trash` 缺 `visible()` 校验（对比删除
+  入口有），成员可枚举 trash id 把他人回收站条目"恢复"进自己空间。修：
+  列表/彻底删除/恢复三入口统一归属判定；顺带根修 `delete_file` 存原始
+  vpath 导致归属不可判的问题（改存物理路径；存量 vpath 形态条目仅 admin
+  可操作）。
+- **P1-2 改密不吊销设备 Token**：自助改密/admin 重置密码/admin 停用三条
+  路径现在都删除该账号全部 device_tokens（Bearer 90 天滑动不再是"改密踢
+  端"旁路；停用再启用旧 Token 不复活）。
+- **P2×5**：分块接收超发即断（不再整块落盘后比对）；单请求直传改
+  `.uploading`+`os.replace` 原子写（并发同名不再交错写坏，顺带修了超限
+  413 在 Windows 上 unlink 打开中文件必炸的老 bug）；`list_files`/
+  `search`/`recent` 改同步 def 走线程池；每小时清理任务进线程池（不再周期
+  性冻住事件循环）；v2 遗留无主分享仅 admin 可见可管理。
+- **P3 全量**：TOTP 动态码防重放（`totp_last_step`，双引擎加列）；`/api/setup`
+  检查+插入同锁；rename 竞态转 400；move/copy 错误信息不再外泄物理路径；
+  过期 device_tokens 进清理任务；复制计配额（API+WebDAV COPY）；WebDAV
+  DELETE/MOVE 补私人根与 E9 跨空间守卫；定向分享 `_target_guard` 认 Bearer
+  （App 可取定向分享）；视频时长补扫 SQL 精准化（图片行写 duration=0 收编）
+  并移出扫描锁；改名同步 `incoming/<旧名>`（自助+管理端）；grants 同步弃用
+  LIKE 改 normcase 段匹配；`list_shares` N+1 消除；`invite_redeem` 并发同名
+  转 409；FastAPI 版本号 2.0.0→3.8.0。
+- **文档同步**：SECURITY.md 五处（normcase 声明、/files 收编、Token 吊销
+  语义、TOTP 防重放、回收站归属与遗留分享收紧）。
+
+新增 `tests/test_review_fixes.py` **12 项回归**（大小写变体、/files 判权、
+回收站越权、Token 吊销、超发拒绝、遗留分享、TOTP 重放）。全量
+**pytest 118 项全绿**。修复过程自身被测试逮出 3 个问题并当场修正
+（list_shares 取值残留、copy 配额预计算源缺失、测试 Cookie 掩盖 401）。
+**教训入册：Caddyfile 属于攻击面，配置变更必须与代码同级纳入审查触发器。**
+
 ## 2026-09-02（深夜 XI）— 热修：应用锁恶性锁死（开启即锁/解锁被弹回/登出逃不掉），v0.6.1+15
 
 用户真机报恶性 bug：点开应用锁**立刻上锁**；指纹**解锁后仍被弹回锁屏**；

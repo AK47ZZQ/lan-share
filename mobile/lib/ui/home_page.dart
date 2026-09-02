@@ -8,11 +8,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_bridge.dart';
+import '../data/activity.dart';
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'activity_page.dart';
 import 'backup_settings_page.dart';
 import 'recent_page.dart';
 import 'trash_page.dart';
@@ -36,9 +38,12 @@ class _HomePageState extends ConsumerState<HomePage> {
   int _pending = -1; // -1=待统计（与引擎约定一致）
   int _pendingBytes = 0;
   int? _lastDoneAt;
+  int _failed = 0; // 账本失败数（引擎每轮回写）
+  int _progressDone = 0, _progressTotal = 0; // 本轮实时进度（引擎逐张回写）
   int _diskUsed = 0, _diskTotal = 0, _diskFree = 0;
   String _shareSize = '';
   List<_RecentUpload>? _recent;
+  List<ActivityItem>? _activity;
   Timer? _tick, _diskTick;
 
   @override
@@ -51,6 +56,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _loadLocal();
     _loadDisk();
     _loadRecent();
+    _loadActivity();
     // 本地状态（备份开关/待备数/传输动态）轻，2s 一刷保证跨页回来也是新的；
     // 磁盘要服务端 rglob 统计，30s 一刷 + 下拉手动刷
     _tick = Timer.periodic(const Duration(seconds: 2), (_) => _loadLocal());
@@ -58,6 +64,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _diskTick = Timer.periodic(const Duration(seconds: 30), (_) {
       _loadDisk();
       _loadRecent();
+      _loadActivity();
     });
   }
 
@@ -65,6 +72,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     await _loadDisk();
     await _loadLocal();
     await _loadRecent();
+    await _loadActivity();
   }
 
   @override
@@ -84,6 +92,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       _pending = sp.getInt('backup_pending_count') ?? -1;
       _pendingBytes = sp.getInt('backup_pending_bytes') ?? 0;
       _lastDoneAt = sp.getInt('backup_last_done_at');
+      _failed = sp.getInt('backup_failed_count') ?? 0;
+      _progressDone = sp.getInt('backup_progress_done') ?? 0;
+      _progressTotal = sp.getInt('backup_progress_total') ?? 0;
     });
   }
 
@@ -121,6 +132,17 @@ class _HomePageState extends ConsumerState<HomePage> {
           .toList();
       if (!mounted) return;
       setState(() => _recent = items);
+    } catch (_) {}
+  }
+
+  /// 家里动态（0.6.2）：/api/activity 与 Web 同源，隐私过滤/聚合在服务端
+  Future<void> _loadActivity() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/activity', queryParameters: {'limit': 30});
+      final items = ActivityItem.listFrom(r.data);
+      if (!mounted) return;
+      setState(() => _activity = items);
     } catch (_) {}
   }
 
@@ -200,6 +222,41 @@ class _HomePageState extends ConsumerState<HomePage> {
                                       ]))),
                           ])),
                 ])),
+          // 家里动态（0.6.2）：家庭可见的上传/分享/新成员事件流
+          if (_activity != null && _activity!.isNotEmpty)
+            _card(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _cardTitle('家里动态',
+                      icon: Icons.newspaper_outlined,
+                      trailing: TextButton(
+                          style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 4)),
+                          onPressed: () => Navigator.push(context,
+                              MaterialPageRoute(
+                                  builder: (_) => const ActivityPage())),
+                          child: const Text('全部 ›',
+                              style: TextStyle(fontSize: 12)))),
+                  const SizedBox(height: 2),
+                  for (final n in _activity!.take(5))
+                    Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(children: [
+                          Icon(_activityIcon(n.action),
+                              size: 15, color: cs.outline),
+                          const SizedBox(width: 8),
+                          Expanded(
+                              child: Text(activityText(n),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13))),
+                          const SizedBox(width: 6),
+                          Text(activityRelTime(n.ts),
+                              style: TextStyle(
+                                  fontSize: 11, color: cs.outline)),
+                        ])),
+                ])),
           _card(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -210,6 +267,24 @@ class _HomePageState extends ConsumerState<HomePage> {
                     const SizedBox(height: 6),
                     Text(_backupText(),
                         style: const TextStyle(fontSize: 13)),
+                    // 本轮实时进度（0.6.2）：引擎逐张回写，2s 轮询可见
+                    if (_progressTotal > 0) ...[
+                      const SizedBox(height: 4),
+                      Text('备份中 $_progressDone/$_progressTotal 张…',
+                          style: TextStyle(fontSize: 12, color: cs.primary)),
+                    ],
+                    // 失败提示（0.6.2）：此前失败只能进账本页才知道
+                    if (_failed > 0) ...[
+                      const SizedBox(height: 4),
+                      InkWell(
+                          onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const BackupLedgerPage())),
+                          child: Text(
+                              '⚠️ 有 $_failed 张备份失败，点此查看账本',
+                              style: TextStyle(fontSize: 12, color: cs.error))),
+                    ],
                     // 空间预警（0.6.0）：待备份量超过服务端剩余空间时提前提示
                     if (_pendingBytes > 0 && _diskFree > 0 && _pendingBytes > _diskFree) ...[
                       const SizedBox(height: 6),
@@ -344,6 +419,21 @@ class _HomePageState extends ConsumerState<HomePage> {
         : ' · 上次 ${_ago(_lastDoneAt!)}完成';
     return p + last;
   }
+
+  /// 动态动作 → 图标（与动态页 _iconFor 同表；首页横排用小号 outline）
+  IconData _activityIcon(String action) => switch (action) {
+        'upload' || 'upload_instant' => Icons.upload_outlined,
+        'mkdir' => Icons.create_new_folder_outlined,
+        'share' => Icons.link,
+        'share_target' => Icons.alternate_email,
+        'share_download' => Icons.download_outlined,
+        'invite_redeemed' => Icons.waving_hand_outlined,
+        'trash' => Icons.delete_outline,
+        'restore' => Icons.restore_from_trash_outlined,
+        'move' => Icons.drive_file_move_outlined,
+        'rename' => Icons.edit_outlined,
+        _ => Icons.circle_outlined,
+      };
 
   String _ago(int atMs) {
     final d = DateTime.now().millisecondsSinceEpoch - atMs;

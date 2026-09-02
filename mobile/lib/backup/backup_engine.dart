@@ -157,6 +157,9 @@ class BackupEngine {
           break;
         }
         _reportProgress(attempted - failed, pending.length);
+        // 进度落盘：首页备份卡 2s 轮询直接显示"备份中 X/Y"（通知栏之外的第二只眼）
+        await sp.setInt('backup_progress_done', attempted - failed);
+        await sp.setInt('backup_progress_total', pending.length);
         // 防风暴雨：批量失败超阈值 → 冷却 30 分钟（设计 §4 限流）
         if (attempted >= 10 && failed / attempted > 0.3) {
           await sp.setInt(
@@ -176,6 +179,13 @@ class BackupEngine {
         await sp.setInt('backup_last_done_at',
             DateTime.now().millisecondsSinceEpoch);
       }
+      // 本轮结束清进度；失败数按账本现状回写（首页红字提示"有 N 张失败"，
+      // 下一轮对账/手动重试后自然归零）
+      await sp.setInt('backup_progress_done', 0);
+      await sp.setInt('backup_progress_total', 0);
+      try {
+        await sp.setInt('backup_failed_count', (await ledger.stats()).error);
+      } catch (_) {}
       // 回写剩余待备数：Worker 周期触发时为 0 就不拉引擎（省电省内存）；
       // -1 表示未知/配置刚变强制跑。Observer 触发不走此捷径。
       await sp.setInt(
@@ -192,6 +202,12 @@ class BackupEngine {
       });
     } finally {
       await BackupLedger.I.close();
+      // 兜底清进度：循环中途抛异常走不到正常收尾时，别让"备份中 X/Y"卡死在首页
+      try {
+        final sp2 = await SharedPreferences.getInstance();
+        await sp2.setInt('backup_progress_done', 0);
+        await sp2.setInt('backup_progress_total', 0);
+      } catch (_) {}
     }
     return jsonEncode(res);
   }

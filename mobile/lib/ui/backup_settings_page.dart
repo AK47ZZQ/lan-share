@@ -24,6 +24,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   LedgerStats? _stats;
   Timer? _poll;
   bool _busy = false; // 立即备份防连点（引擎侧互斥兜底，这里管 UI 观感）
+  bool _batteryIgnoring = true; // 电池优化白名单；取不到按已豁免，别空报警
 
   @override
   void initState() {
@@ -41,8 +42,12 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
 
   Future<void> _reload() async {
     final cfg = await BackupConfig.load();
+    final ign = await BackupBridge.batteryIgnoring();
     if (!mounted) return;
-    setState(() => _cfg = cfg);
+    setState(() {
+      _cfg = cfg;
+      _batteryIgnoring = ign;
+    });
     await _loadStats();
   }
 
@@ -140,6 +145,20 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 ),
               ),
               const Divider(height: 24),
+              // 电池优化白名单引导（0.6.2）：小米/华为等激进省电把 WorkManager
+              // 周期任务压到几小时一次甚至不跑，是"备份不自动跑"投诉的常见根因
+              if (cfg.enabled && !_batteryIgnoring)
+                ListTile(
+                    leading: const Icon(Icons.battery_alert,
+                        color: Colors.orange),
+                    title: const Text('允许后台备份不受省电限制'),
+                    subtitle: const Text('部分手机会拦截后台备份，点此申请电池优化豁免',
+                        style: TextStyle(fontSize: 12)),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await BackupBridge.batteryRequest();
+                      await _reload();
+                    }),
               SwitchListTile(
                   title: const Text('仅 Wi-Fi'),
                   subtitle: const Text('流量下不备份（推荐）'),
@@ -382,6 +401,9 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
   Future<void> _save() async {
     final cfg = widget.cfg.copyWith(excludedBuckets: _excluded.toList());
     await cfg.save();
+    // 排除即刻生效：save() 已把 pending 置 -1 强制下轮，这里再拉一轮，
+    // 别让用户等最长 15 分钟的周期窗口才看到待备数变化（0.6.2）
+    if (cfg.enabled) BackupBridge.runOnce();
   }
 
   @override
@@ -409,7 +431,7 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
                           setState(() => _dirty = false);
                           messenger.showSnackBar(
                               const SnackBar(
-                                  content: Text('已保存，下轮备份生效'),
+                                  content: Text('已保存，正在应用…'),
                                   duration: Duration(seconds: 2)));
                         },
                         child: const Text('保存')),
