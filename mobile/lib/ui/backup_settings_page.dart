@@ -52,8 +52,16 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   }
 
   Future<void> _loadStats() async {
-    final s = await BackupLedger.I.stats();
-    if (mounted) setState(() => _stats = s);
+    try {
+      final s = await BackupLedger.I
+          .stats(excluded: _cfg?.excludedBuckets ?? const []);
+      if (mounted) setState(() => _stats = s);
+    } catch (_) {
+      // 与后台引擎 isolate 并发开库时可能短暂失败（迁移竞态/库锁）。
+      // 必须吞掉：异常飞进 Timer.periodic 会中断本次 setState，统计卡
+      // 从此停在旧数字假死（0.7.1 修的"状态卡不更新/无法实时显示"）；
+      // 下个 2s tick 自然重试。
+    }
   }
 
   Future<void> _toggle(bool on) async {
@@ -124,11 +132,23 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                     padding: const EdgeInsets.all(14),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                      Text('已备份 ${stats?.done ?? 0} 张'
-                          '（${humanSize(stats?.doneBytes ?? 0)}）'
-                          ' · 待备份 ${stats?.pending ?? 0} 张'
-                          ' · 失败 ${stats?.error ?? 0} 张',
+                      // 0.7.1 起照片/视频分开计数；待备/失败不包含已排除相册
+                      // 里的项（它们永远不会被备份，单列一行免得数字对不上）
+                      Text('已备份 照片 ${stats?.donePhotos ?? 0} · 视频 ${stats?.doneVideos ?? 0}'
+                          '（${humanSize(stats?.doneBytes ?? 0)}）',
                           style: const TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      Text('待备份 照片 ${stats?.pendingPhotos ?? 0} · 视频 ${stats?.pendingVideos ?? 0}'
+                          ' · 失败 ${stats?.error ?? 0} 项',
+                          style: const TextStyle(fontSize: 13)),
+                      if ((stats?.excludedPending ?? 0) > 0) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                            '已排除相册中还有 ${stats!.excludedPending} 项不参与备份',
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey)),
+                      ],
                       const SizedBox(height: 4),
                       // 0.7.0 起按手机相册分子目录：照片/<u>/<相册>/、视频/<u>/<相册>/
                       Text('备份位置：照片、视频/$username/<手机相册名>/',
@@ -260,9 +280,11 @@ class BackupLedgerPage extends StatefulWidget {
 
 class _BackupLedgerPageState extends State<BackupLedgerPage> {
   String _filter = 'all';
+  String _kind = 'all'; // 类型筛选（0.7.1：照片/视频分开看）
   List<LedgerRow> _rows = [];
   bool _loading = true;
   bool _retrying = false;
+  String? _error;
 
   @override
   void initState() {
@@ -271,13 +293,26 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
   }
 
   Future<void> _load() async {
-    final rows = await BackupLedger.I.recent(
-        status: _filter == 'all' ? null : _filter);
-    if (!mounted) return;
-    setState(() {
-      _rows = rows;
-      _loading = false;
-    });
+    try {
+      final rows = await BackupLedger.I.recent(
+          status: _filter == 'all' ? null : _filter,
+          kind: _kind == 'all' ? null : _kind);
+      if (!mounted) return;
+      setState(() {
+        _rows = rows;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      // 后台引擎正拿着同一个库跑备份时偶发锁冲突；不能让异常把页面
+      // 永远卡在转圈（0.7.1 修的"备份账本打不开"）——给出错误和重试
+      if (!mounted) return;
+      final s = e.toString();
+      setState(() {
+        _error = s.length > 160 ? s.substring(0, 160) : s;
+        _loading = false;
+      });
+    }
   }
 
   @override
@@ -311,7 +346,28 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : Column(children: [
+          : _error != null
+              ? ListView(children: [
+                  const SizedBox(height: 100),
+                  const Center(child: Text('账本暂时打不开')),
+                  const SizedBox(height: 8),
+                  Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Center(
+                          child: Text(_error!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.grey)))),
+                  const SizedBox(height: 8),
+                  Center(
+                      child: TextButton(
+                          onPressed: () {
+                            setState(() => _loading = true);
+                            _load();
+                          },
+                          child: const Text('重试'))),
+                ])
+              : Column(children: [
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Wrap(spacing: 8, children: [
@@ -325,8 +381,24 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
                         label: Text(e.value),
                         selected: _filter == e.key,
                         onSelected: (_) {
-                          _filter = e.key;
-                          _loading = true;
+                          setState(() => _filter = e.key);
+                          _load();
+                        }),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Wrap(spacing: 8, children: [
+                  for (final e in {
+                    'all': '全部类型',
+                    'image': '照片',
+                    'video': '视频',
+                  }.entries)
+                    ChoiceChip(
+                        label: Text(e.value),
+                        selected: _kind == e.key,
+                        onSelected: (_) {
+                          setState(() => _kind = e.key);
                           _load();
                         }),
                 ]),
@@ -344,16 +416,34 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
                             'uploading' => (Icons.sync, Colors.blue),
                             _ => (Icons.schedule, Colors.orange),
                           };
+                          final isVideo = r.kind == 'video';
                           final time = r.uploadedAt != null
                               ? DateTime.fromMillisecondsSinceEpoch(
                                   r.uploadedAt! * 1000)
                                   .toString().split('.').first
                               : null;
+                          // 0.7.1：类型图标 + 相册名入列，账本一眼分清照片/视频
+                          final subtitle = [
+                            if (r.bucket.isNotEmpty) r.bucket,
+                            time ?? r.lastError ?? r.status,
+                          ].join(' · ');
                           return ListTile(
                             leading: Icon(icon, color: color),
-                            title: Text(r.name,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
-                            subtitle: Text(time ?? r.lastError ?? r.status,
+                            title: Row(children: [
+                              Icon(
+                                  isVideo
+                                      ? Icons.movie_outlined
+                                      : Icons.photo_outlined,
+                                  size: 15,
+                                  color:
+                                      Theme.of(context).colorScheme.outline),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                  child: Text(r.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis)),
+                            ]),
+                            subtitle: Text(subtitle,
                                 maxLines: 1, overflow: TextOverflow.ellipsis),
                             trailing: Text(humanSize(r.size),
                                 style: const TextStyle(fontSize: 12)),

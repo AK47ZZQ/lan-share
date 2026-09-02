@@ -77,11 +77,59 @@ class LedgerRow {
 }
 
 class LedgerStats {
-  int done = 0;
-  int pending = 0; // pending/uploading
-  int error = 0;
+  int donePhotos = 0;
+  int doneVideos = 0;
+  int pendingPhotos = 0; // pending/uploading
+  int pendingVideos = 0;
+  int errorPhotos = 0;
+  int errorVideos = 0;
+  int excludedPending = 0; // 已排除相册中的未完成项（不参与备份，单列免得数字对不上）
   int doneBytes = 0; // 已备份内容的逻辑字节和（0.6.0 统计聚合展示）
   int? lastUploadedAt; // 秒
+
+  int get done => donePhotos + doneVideos;
+  int get pending => pendingPhotos + pendingVideos;
+  int get error => errorPhotos + errorVideos;
+}
+
+/// 纯聚合：GROUP BY status,kind 的行 + 排除相册的未完成行 → 统计。
+/// 抽出来是为了单测不用拉真 SQLite（sqflite 单测要 ffi 依赖）。
+LedgerStats statsFromGroups(
+    List<Map<Object?, Object?>> groups, List<Map<Object?, Object?>> excluded) {
+  final s = LedgerStats();
+  int? last;
+  void add(int kindIsVideo, String status, int c,
+      {int? bytes, int? uploadedAt}) {
+    if (uploadedAt != null) {
+      final l = last;
+      if (l == null || uploadedAt > l) last = uploadedAt;
+    }
+    if (status == 'done') {
+      kindIsVideo == 1 ? s.doneVideos += c : s.donePhotos += c;
+      if (bytes != null) s.doneBytes += bytes;
+    } else if (status == 'error') {
+      kindIsVideo == 1 ? s.errorVideos += c : s.errorPhotos += c;
+    } else {
+      // pending/uploading 都算待备
+      kindIsVideo == 1 ? s.pendingVideos += c : s.pendingPhotos += c;
+    }
+  }
+
+  for (final r in groups) {
+    add((r['kind'] as String?) == 'video' ? 1 : 0, r['status'] as String,
+        (r['c'] as num).toInt(),
+        bytes: (r['bytes'] as num?)?.toInt(),
+        uploadedAt: (r['last'] as num?)?.toInt());
+  }
+  for (final r in excluded) {
+    final c = (r['c'] as num).toInt();
+    s.excludedPending += c;
+    // 被排除相册的未完成项从待备/失败里扣掉：它们永远不会被备份，
+    // 留在数字里用户永远等不到（失败红字也永远消不掉）
+    add((r['kind'] as String?) == 'video' ? 1 : 0, r['status'] as String, -c);
+  }
+  s.lastUploadedAt = last;
+  return s;
 }
 
 class BackupLedger {
@@ -91,7 +139,15 @@ class BackupLedger {
   Database? _db;
 
   Future<Database> open() async {
-    final db = _db;
+    var db = _db;
+    // 后台引擎 isolate 与主 isolate 共享 sqflite 的进程级连接；引擎侧一旦
+    // 关闭（历史版本的 finally close()/引擎销毁牵连），主 isolate 缓存的
+    // 句柄就变成死句柄，之后所有查询都抛 database_closed——统计卡冻结、
+    // 账本页永远转圈（0.7.1 实测复现）。发现死句柄立即弃掉重开。
+    if (db != null && !db.isOpen) {
+      _db = null;
+      db = null;
+    }
     if (db != null) return db;
     return _db = await openDatabase('backup_ledger.db',
         version: 2,
@@ -101,18 +157,25 @@ class BackupLedger {
       // 与扫描值必不相等 → 对账视为变更全部重备一次；sha256 已在账本，
       // init 秒传零流量，只在新落位建引用。
       if (oldV < 2) {
-        await db.execute(
-            "ALTER TABLE ledger ADD COLUMN bucket TEXT NOT NULL DEFAULT ''");
+        // 主 isolate（设置页 2s 统计轮询）与后台引擎 isolate 会并发打开
+        // 同一个库，两边都看到 v1 时后到的 ALTER 撞 duplicate column，
+        // 异常把 open() 打挂 → 统计卡假死/账本页永远转圈。幂等化：
+        // 先查列再补，真撞上了也只吞 duplicate column 这一种错。
+        final cols = await db.rawQuery('PRAGMA table_info(ledger)');
+        if (cols.any((c) => c['name'] == 'bucket')) return;
+        try {
+          await db.execute(
+              "ALTER TABLE ledger ADD COLUMN bucket TEXT NOT NULL DEFAULT ''");
+        } on Exception catch (e) {
+          if (!e.toString().contains('duplicate column')) rethrow;
+        }
       }
     });
   }
 
-  /// 后台 isolate 引擎跑完一轮后释放句柄（isolate 随引擎销毁，这里是兜底）
-  Future<void> close() async {
-    final db = _db;
-    _db = null;
-    await db?.close();
-  }
+  /// 注意：不要在后台 isolate 引擎结束时调用 close()——sqflite 的连接是
+  /// 进程级共享的，关掉会把主 isolate（统计卡/账本页）一起打死；引擎侧
+  /// 资源回收交给 BackupDartRunner 的 engine.destroy()。
 
   Future<void> _create(Database db, int v) async {
     await db.execute('''
@@ -299,35 +362,43 @@ class BackupLedger {
     await db.delete('ledger');
   }
 
-  Future<LedgerStats> stats() async {
+  /// 统计（0.7.1 起分照片/视频，且感知排除相册）：排除只影响扫描阶段、
+  /// 账本行不动，所以被排除相册的 pending/error 行会永远留在库里——
+  /// 不从统计里扣掉，"待备份/失败"就永远等不到归零，状态卡看起来像坏了。
+  Future<LedgerStats> stats({List<String> excluded = const []}) async {
     final db = await open();
-    final r = <String, int>{};
-    int? last;
-    int doneBytes = 0;
-    for (final row in await db.rawQuery(
-        'SELECT status, COUNT(*) AS c, SUM(size) AS bytes, '
+    final groups = await db.rawQuery(
+        'SELECT status, kind, COUNT(*) AS c, SUM(size) AS bytes, '
         'MAX(uploaded_at) AS last '
-        'FROM ledger GROUP BY status')) {
-      r[row['status'] as String] = (row['c'] as num).toInt();
-      final l = (row['last'] as num?)?.toInt();
-      if (l != null && (last == null || l > last)) last = l;
-      if (row['status'] == 'done') {
-        doneBytes = (row['bytes'] as num?)?.toInt() ?? 0;
-      }
+        'FROM ledger GROUP BY status, kind');
+    List<Map<Object?, Object?>> excludedGroups = const [];
+    final names = excluded.where((e) => e.isNotEmpty).take(500).toList();
+    if (names.isNotEmpty) {
+      final marks = List.filled(names.length, '?').join(',');
+      excludedGroups = await db.rawQuery(
+          'SELECT status, kind, COUNT(*) AS c FROM ledger '
+          "WHERE status != 'done' AND bucket IN ($marks) GROUP BY status, kind",
+          names);
     }
-    return LedgerStats()
-      ..done = r['done'] ?? 0
-      ..pending = (r['pending'] ?? 0) + (r['uploading'] ?? 0)
-      ..error = r['error'] ?? 0
-      ..doneBytes = doneBytes
-      ..lastUploadedAt = last;
+    return statsFromGroups(groups, excludedGroups);
   }
 
-  Future<List<LedgerRow>> recent({String? status, int limit = 300}) async {
+  Future<List<LedgerRow>> recent(
+      {String? status, String? kind, int limit = 300}) async {
     final db = await open();
+    final conds = <String>[];
+    final args = <Object?>[];
+    if (status != null) {
+      conds.add('status = ?');
+      args.add(status);
+    }
+    if (kind != null) {
+      conds.add('kind = ?');
+      args.add(kind);
+    }
     final rows = await db.query('ledger',
-        where: status != null ? 'status = ?' : null,
-        whereArgs: status != null ? [status] : null,
+        where: conds.isEmpty ? null : conds.join(' AND '),
+        whereArgs: args.isEmpty ? null : args,
         orderBy: 'rowid DESC',
         limit: limit);
     return rows.map(LedgerRow.fromMap).toList();

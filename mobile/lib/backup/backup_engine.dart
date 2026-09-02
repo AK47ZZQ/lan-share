@@ -179,12 +179,16 @@ class BackupEngine {
         await sp.setInt('backup_last_done_at',
             DateTime.now().millisecondsSinceEpoch);
       }
-      // 本轮结束清进度；失败数按账本现状回写（首页红字提示"有 N 张失败"，
-      // 下一轮对账/手动重试后自然归零）
+      // 本轮结束清进度；失败数/待备数按账本现状回写，且感知排除相册：
+      // 被排除项永远不会再传，留在"失败/待备"里红字永远消不掉（0.7.1）。
+      // 分照片/视频回写供首页分类显示。
       await sp.setInt('backup_progress_done', 0);
       await sp.setInt('backup_progress_total', 0);
       try {
-        await sp.setInt('backup_failed_count', (await ledger.stats()).error);
+        final st = await ledger.stats(excluded: cfg.excludedBuckets);
+        await sp.setInt('backup_failed_count', st.error);
+        await sp.setInt('backup_pending_photos', st.pendingPhotos);
+        await sp.setInt('backup_pending_videos', st.pendingVideos);
       } catch (_) {}
       // 回写剩余待备数：Worker 周期触发时为 0 就不拉引擎（省电省内存）；
       // -1 表示未知/配置刚变强制跑。Observer 触发不走此捷径。
@@ -201,8 +205,9 @@ class BackupEngine {
         'reason': s.length > 200 ? s.substring(0, 200) : s,
       });
     } finally {
-      await BackupLedger.I.close();
-      // 兜底清进度：循环中途抛异常走不到正常收尾时，别让"备份中 X/Y"卡死在首页
+      // 兜底清进度：循环中途抛异常走不到正常收尾时，别让"备份中 X/Y"卡死在首页。
+      // 注意这里绝不 close() 账本——sqflite 连接进程级共享，关掉会把主 isolate
+      // 的统计卡/账本页一起打死（database_closed，0.7.1 实测复现后移除）。
       try {
         final sp2 = await SharedPreferences.getInstance();
         await sp2.setInt('backup_progress_done', 0);

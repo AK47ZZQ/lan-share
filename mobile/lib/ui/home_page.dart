@@ -36,6 +36,7 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   bool _backupOn = false;
   int _pending = -1; // -1=待统计（与引擎约定一致）
+  int? _pendingPhotos, _pendingVideos; // 分类型待备数（0.7.1，引擎每轮回写）
   int _pendingBytes = 0;
   int? _lastDoneAt;
   int _failed = 0; // 账本失败数（引擎每轮回写）
@@ -90,6 +91,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     setState(() {
       _backupOn = sp.getBool('backup_enabled') ?? false;
       _pending = sp.getInt('backup_pending_count') ?? -1;
+      _pendingPhotos = sp.getInt('backup_pending_photos');
+      _pendingVideos = sp.getInt('backup_pending_videos');
       _pendingBytes = sp.getInt('backup_pending_bytes') ?? 0;
       _lastDoneAt = sp.getInt('backup_last_done_at');
       _failed = sp.getInt('backup_failed_count') ?? 0;
@@ -270,7 +273,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     // 本轮实时进度（0.6.2）：引擎逐张回写，2s 轮询可见
                     if (_progressTotal > 0) ...[
                       const SizedBox(height: 4),
-                      Text('备份中 $_progressDone/$_progressTotal 张…',
+                      Text('备份中 $_progressDone/$_progressTotal 项…',
                           style: TextStyle(fontSize: 12, color: cs.primary)),
                     ],
                     // 失败提示（0.6.2）：此前失败只能进账本页才知道
@@ -282,7 +285,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                               MaterialPageRoute(
                                   builder: (_) => const BackupLedgerPage())),
                           child: Text(
-                              '⚠️ 有 $_failed 张备份失败，点此查看账本',
+                              '⚠️ 有 $_failed 项备份失败，点此查看账本',
                               style: TextStyle(fontSize: 12, color: cs.error))),
                     ],
                     // 空间预警（0.6.0）：待备份量超过服务端剩余空间时提前提示
@@ -413,7 +416,17 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   String _backupText() {
     if (!_backupOn) return '自动备份未开启，去设置页打开后新照片会自动进服务器';
-    final p = _pending < 0 ? '待统计' : '$_pending 张待备';
+    // 0.7.1 起分照片/视频显示待备数（引擎按账本现状回写，感知排除相册）
+    final String p;
+    if (_pending < 0) {
+      p = '待统计';
+    } else if (_pendingPhotos == null) {
+      p = '$_pending 项待备'; // 升级前旧引擎没回写过分类型，退回总数
+    } else if (_pending == 0) {
+      p = '暂无待备份项';
+    } else {
+      p = '待备 照片 $_pendingPhotos · 视频 $_pendingVideos';
+    }
     final last = _lastDoneAt == null
         ? ''
         : ' · 上次 ${_ago(_lastDoneAt!)}完成';
