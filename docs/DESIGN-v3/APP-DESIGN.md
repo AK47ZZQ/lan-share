@@ -238,6 +238,40 @@ BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接
 notify）——该提交实未编译过；拆出 `progressNotification()` 返回 Notification
 并用 run(ctx) 的 ctx。教训：**提交前必须过一次真构建，analyze/单测不编译 Kotlin**
 
+## 8.8 登录页 v2 + 连接体验落地注记（2026-09-02，v0.5.0+11）
+
+- **布局方向 A**：上半屏渐变品牌区（云朵 Logo + slogan）+ 下半屏圆角
+  阴影浮层卡片；**服务器地址从表单首位降级为状态条**（短主机名 + 预检
+  状态点），点击弹 bottom sheet（历史地址/扫码添加/手动输入）——地址是
+  "设置项"不是"登录项"，绝大多数登录只输账号密码
+- **连接预检**：对 `$addr/api/auth/me` 发 GET，**任意 HTTP 状态码（含
+  401）=在线**，仅连接超时/失败=不可达（无需服务端健康检查端点）；
+  `badCertificateCallback` 放行自签（预检只答可达性，信任归 TOFU）；
+  独立 Dio 不带凭据、`dio.close(force: true)` 用完即关
+- **生物识别一键登录**：密码登录成功后凭据存档 `SavedCredentialStore`
+  **仅写 Keystore**（`setStringKeystoreOnly`，不落 SharedPreferences
+  明文副本——密码比可吊销 Token 敏感）；`local_auth` 门禁
+  （`biometricOnly:false` 兼容锁屏 PIN；`getAvailableBiometrics` 判
+  已录入，有硬件未录入不显入口）；**主动退出清档、Token 自然失效不清**
+  （掉线正需一键重登）；MainActivity 换 `FlutterFragmentActivity`
+  （local_auth 硬性要求，MethodChannel 钩子不变）
+- **配对码免密登录**：`/api/pair/code` + `/api/pair/claim`（服务端契约
+  见 API.md 认证扩展）；登录页"无法输密码？使用配对码登录"模式切换；
+  与 TOTP 共用 `_CodeField` 六格组件（跳格/粘贴分发/填满自动提交/
+  登录失败自动清空重输）；场景 = 长辈手机不碰密码
+- **扫码填地址**：`scan_page.dart`（mobile_scanner，新依赖 #11）；
+  只收 http(s) 链接；相机权限拒绝走 `errorBuilder` 友好提示
+- **细节包**：记住最后登录用户名预填、密码可见性切换、错误 shake、
+  深浅色自适应
+- **踩坑两枚**：① SingleChildScrollView 子项用 `Spacer()`（unbounded
+  主轴 flex）→ 布局期异常**整页白屏且无红屏无日志**（曾误判
+  FlutterFragmentActivity，对照构建排除）；滚动容器内禁用 flex 撑满
+  技巧。② 验证码输入格用 TextEditingController 必须 State 持有，
+  build 里现建会丢光标且泄漏
+- **验证**：pytest 92 全绿（+5 配对码）；模拟器端到端真连（预检红→绿/
+  密码登录/退出清档/记住用户名/配对码免密全程）；生物识别弹窗与扫码
+  取景为真机特性，待真机验收
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

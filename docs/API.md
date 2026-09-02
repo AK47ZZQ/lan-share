@@ -133,12 +133,18 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 |------|------|------|------|
 | POST | `/api/invites/redeem` | 🔓 | `{code, username, password}` 邀请码建号；原子认领；保留词/分隔符/重名 400 |
 | POST | `/api/login/totp` | 🔓 | `{username, password, code}` 两步登录第二步（动态码错误计入防爆破） |
+| POST | `/api/pair/code` | 🔑 | 已登录方生成一次性 6 位配对码 `{code, expires_in:60}`；同账号单码（重新生成即作废旧码） |
+| POST | `/api/pair/claim` | 🔓 | `{code, name}` 手机免密换设备 Token（响应同 `/api/auth/token`）；60 秒一次性，IP 限速 5 次/分 |
 | POST | `/api/auth/totp/setup` | 🔑 | 生成 TOTP 密钥，`{secret, otpauth}`（未验证前不生效） |
 | POST | `/api/auth/totp/enable` | 🔑 | `{code}` 验证动态码后开通两步验证 |
 | POST | `/api/auth/totp/disable` | 🔑 | `{old_password}` 关闭两步验证（需原密码） |
 
 `POST /api/login`：已启用 TOTP 的账号密码正确时返回 `{"totp_required": true}`
 且**不发会话**；`/api/auth/me` 增加 `totp_enabled` 字段。
+
+**配对码**：Web 端「账号设置 → 手机 App 连接」生成，手机 App 免账号密码
+配对（场景：长辈手机不输长密码）；签出的设备 Token 与密码登录完全同规则
+（同名轮换/上限/90 天滑动/可吊销），安全取舍见 SECURITY.md 已知边界 #11。
 
 ### 管理（require_admin，非 admin 403）
 

@@ -31,6 +31,11 @@
 - **验证**：pytest 92 全绿；dart analyze 0 问题；vue-tsc 通过；模拟器端到端
   （预检红→绿、密码登录、退出清档、记住用户名、配对码免密登录全程真连）；
   生物识别弹窗与扫码摄像头为真机特性，模拟器未覆盖。
+- **审查修复**（提交前 review 采纳 5 项）：凭据存档改仅写 Keystore
+  （`setStringKeystoreOnly`，不落 SharedPreferences 明文副本）；配对码
+  claim 路径懒清理过期项；预检 Dio 用完即关；服务器面板 controller 释放；
+  扫码页 mounted 检查 + 相机权限 errorBuilder；生物识别可用性改判
+  "已录入列表"（有硬件未录入不显入口）。
 
 ## 2026-09-01（深夜 VIII）— 时间线日期头去悬浮，v0.4.5+9
 
