@@ -2,7 +2,7 @@ name: lanshare_app
 description: "LAN Share 家庭网盘 · 手机 App（Flutter，APP-DESIGN v0.1）"
 publish_to: 'none'
 
-version: 0.5.2+13
+version: 0.6.0+14
 
 environment:
   sdk: ^3.13.1
@@ -26,6 +26,14 @@ dependencies:
                                  #  省掉 build_runner 代码链，单表场景类型安全由模型类保证）
   local_auth: ^2.3.0             # 登录页生物识别一键登录（指纹/面部门禁已存凭据）
   mobile_scanner: ^5.2.3         # 登录页扫码填服务器地址（Web 端账号设置出地址二维码）
+  # ── v0.6.0 全功能大批次（每项理由）─────────────────────────
+  video_player: ^2.9.2           # 照片墙视频播放（ExoPlayer；自签 HTTPS 经本地媒体代理
+                                 #  media_proxy 绕开——插件不暴露证书回调）
+  qr_flutter: ^4.1.0             # 分享二维码本机渲染（qr 纯 Dart 绘制，免拉服务端 SVG）
+  share_plus: ^10.1.2            # 分享链接经系统分享面板直发微信/QQ（official flutter.dev）
+  package_info_plus: ^8.1.1      # 关于页/检查更新读取自身 version+build（official）
+  flutter_local_notifications: ^18.0.1  # 传输完成系统通知（备份通知走 Kotlin 自有通道，
+                                 #  App 内传输完成复用系统能力需本插件）
 
 dev_dependencies:
   flutter_test:

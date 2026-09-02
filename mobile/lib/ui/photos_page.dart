@@ -4,6 +4,8 @@
 //       再回来全变转圈（真机复现）；Sliver 只构建视口内格子，照片量不设限。
 // 0.4.3：长按进入多选（下载/删除/分享）；备份完成后 10s 内自动带 refresh=1
 // 重拉（服务端放宽扫描节流），照片墙准实时。
+// 0.6.0：视频纳入（角标+时长/内嵌播放）、类型筛选（全部/照片/视频）、
+//        按月快跳（/api/photos/facets 月份维度，服务端 month= 过滤）。
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
@@ -16,27 +18,10 @@ import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'photo_models.dart';
+import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
 import 'widgets/auth_image.dart';
-
-class PhotoItem {
-  final String path;
-  final String name;
-  final String taken;
-  final String month;
-  final String uploader;
-  PhotoItem({required this.path, required this.name, required this.taken,
-      required this.month, required this.uploader});
-
-  factory PhotoItem.fromJson(Map<String, dynamic> j) => PhotoItem(
-      path: j['path'] as String,
-      name: j['name'] as String,
-      taken: j['taken'] as String? ?? '',
-      month: j['month'] as String? ?? '',
-      uploader: j['uploader'] as String? ?? '共享空间');
-}
-
-String _encPath(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
 class PhotosPage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -59,6 +44,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   int _gen = 0;                 // 加载代际：刷新后丢弃过期响应，防重复/漂移
   int? _lastBackupDone;         // 备份完成时间戳快照：变了才触发整页刷新
   Timer? _backupWatch;
+  String _mediaFilter = 'all';  // all | photo | video
+  String? _month;               // YYYY-MM 按月快跳（null=全部）
+  Map<String, int>? _months;    // facets 缓存（月份选择页用）
   static const _limit = 120;
 
   @override
@@ -100,6 +88,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         'limit': _limit,
         'offset': _offset,
         if (force) 'refresh': true,
+        if (_mediaFilter != 'all') 'media_type': _mediaFilter,
+        if (_month != null) 'month': _month,
       });
       final list = (r.data['items'] as List)
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
@@ -130,6 +120,66 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       _failed = false;
     });
     await _loadMore(force: true);
+  }
+
+  void _setFilter(String v) {
+    if (v == _mediaFilter) return;
+    setState(() => _mediaFilter = v);
+    _refresh();
+  }
+
+  /// 按月快跳：facets 月份分布 → 选择后走服务端 month= 过滤
+  Future<void> _pickMonth() async {
+    var months = _months;
+    if (months == null) {
+      try {
+        final dio = await ApiClient.I.dio();
+        final r = await dio.get('/api/photos/facets');
+        months = {
+          for (final m in (r.data['months'] as List))
+            (m as Map)['month'] as String: (m['count'] as num).toInt(),
+        };
+        _months = months;
+      } catch (_) {
+        months = {};
+      }
+    }
+    if (!mounted) return;
+    // 闭包内无法提升可空局部变量：先物化成 final 列表再用
+    final monthEntries = months.entries.toList();
+    final sel = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+            child: monthEntries.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: Text('还没有照片')))
+                : ListView(shrinkWrap: true, children: [
+                    ListTile(
+                        leading: const Icon(Icons.calendar_today_outlined),
+                        title: const Text('全部月份'),
+                        selected: _month == null,
+                        onTap: () => Navigator.pop(ctx, '')),
+                    for (final e in monthEntries)
+                      ListTile(
+                          leading: const Icon(Icons.calendar_view_month),
+                          title: Text(_monthLabel(e.key)),
+                          trailing: Text('${e.value} 张',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(ctx).colorScheme.outline)),
+                          selected: _month == e.key,
+                          onTap: () => Navigator.pop(ctx, e.key)),
+                  ])));
+    if (sel == null || !mounted) return;
+    setState(() => _month = sel.isEmpty ? null : sel);
+    _refresh();
+  }
+
+  static String _monthLabel(String ym) {
+    final p = ym.split('-');
+    if (p.length != 2) return ym;
+    return '${p[0]} 年 ${int.parse(p[1])} 月';
   }
 
   @override
@@ -226,7 +276,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final dio = await ApiClient.I.dio();
       for (final it in paths) {
         try {
-          final r = await dio.delete('/api/files/${_encPath(it.path)}');
+          final r = await dio.delete('/api/files/${encPath(it.path)}');
           if (r.statusCode == 200) {
             ok++;
           } else {
@@ -281,6 +331,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               ]
             : [
                 IconButton(
+                    tooltip: _month == null
+                        ? '按月跳转'
+                        : '当前：${_monthLabel(_month!)}',
+                    icon: const Icon(Icons.calendar_month_outlined),
+                    onPressed: _pickMonth),
+                IconButton(
                     tooltip: '上传手机照片',
                     icon: const Icon(Icons.add_photo_alternate_outlined),
                     onPressed: _pickAndUpload),
@@ -292,19 +348,60 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
                   onRefresh: _refresh,
-                  child: _items.isEmpty && !_loading
-                      ? ListView(children: [
-                          const SizedBox(height: 140),
-                          Center(child: Text(_failed ? '加载失败' : '相册还是空的')),
-                          const SizedBox(height: 8),
-                          Center(child: FilledButton.tonal(
-                              onPressed: _refresh, child: const Text('重新加载'))),
-                        ])
-                      : _buildTimeline(selecting),
-                ),
+                  child: Column(children: [
+                    // 类型筛选 + 月份 chip 行
+                    SizedBox(
+                        height: 44,
+                        child: ListView(scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            children: [
+                              for (final (v, label) in const [
+                                ('all', '全部'),
+                                ('photo', '照片'),
+                                ('video', '视频'),
+                              ])
+                                Padding(
+                                    padding: const EdgeInsets.only(right: 6),
+                                    child: ChoiceChip(
+                                        label: Text(label),
+                                        selected: _mediaFilter == v,
+                                        visualDensity: VisualDensity.compact,
+                                        onSelected: (_) => _setFilter(v))),
+                              if (_month != null)
+                                Padding(
+                                    padding: const EdgeInsets.only(left: 2),
+                                    child: InputChip(
+                                        visualDensity: VisualDensity.compact,
+                                        avatar:
+                                            const Icon(Icons.calendar_month,
+                                                size: 16),
+                                        label:
+                                            Text(_monthLabel(_month!)),
+                                        onDeleted: () {
+                                          setState(() => _month = null);
+                                          _refresh();
+                                        },
+                                        onPressed: _pickMonth)),
+                            ])),
+                    Expanded(child: _gridOrEmpty(selecting)),
+                  ])),
       bottomNavigationBar: selecting ? _selectionBar() : null,
     );
   }
+
+  Widget _gridOrEmpty(bool selecting) {
+    if (_items.isEmpty && !_loading) {
+      return ListView(children: [
+        const SizedBox(height: 100),
+        Center(child: Text(_failed ? '加载失败' : '这里还是空的')),
+        const SizedBox(height: 8),
+        Center(child: FilledButton.tonal(
+            onPressed: _refresh, child: const Text('重新加载'))),
+      ]);
+    }
+    return _buildTimeline(selecting);
+  }
+
   Widget _selectionBar() {
     final multi = _selected.length > 1;
     // guest 只读：删除/分享必然失败（服务端会拒），不给出入口
@@ -383,6 +480,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                     (context, j) {
                       final flat = flatIdx[j];
                       final selected = _selected.contains(flat);
+                      final item = _items[flat];
                       return GestureDetector(
                         onTap: selecting
                             ? () => _toggleSelect(flat)
@@ -390,7 +488,29 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                         onLongPress: () => _toggleSelect(flat),
                         child: Stack(fit: StackFit.expand, children: [
                           AuthImage(
-                              url: '$_base/thumb/${_encPath(_items[flat].path)}'),
+                              url: '$_base/thumb/${encPath(item.path)}'),
+                          // 视频角标：▶ + 时长（0.6.0）
+                          if (item.isVideo)
+                            Positioned(
+                                left: 4,
+                                bottom: 4,
+                                child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 1),
+                                    decoration: BoxDecoration(
+                                        color: Colors.black54,
+                                        borderRadius:
+                                            BorderRadius.circular(4)),
+                                    child: Row(mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Icon(Icons.play_arrow,
+                                              size: 12, color: Colors.white),
+                                          if (item.durationLabel.isNotEmpty)
+                                            Text(item.durationLabel,
+                                                style: const TextStyle(
+                                                    fontSize: 10,
+                                                    color: Colors.white)),
+                                        ]))),
                           if (selecting)
                             Positioned(
                                 top: 6,
@@ -433,96 +553,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   void _openViewer(int index) {
-    Navigator.push(context, MaterialPageRoute(
-        builder: (_) => PhotoViewerPage(base: _base!, items: _items, initial: index)));
-  }
-}
-
-class PhotoViewerPage extends StatefulWidget {
-  final String base;
-  final List<PhotoItem> items;
-  final int initial;
-  const PhotoViewerPage(
-      {super.key, required this.base, required this.items, required this.initial});
-
-  @override
-  State<PhotoViewerPage> createState() => _PhotoViewerPageState();
-}
-
-class _PhotoViewerPageState extends State<PhotoViewerPage> {
-  late int _index = widget.initial;
-  // 控制器必须持有并销毁：此前在 build 里每次 new PageController，
-  // 翻页后任何重建都会把位置重置回 initial 且泄漏旧控制器
-  late final PageController _pageController =
-      PageController(initialPage: widget.initial);
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final it = widget.items[_index];
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: Text(it.name, style: const TextStyle(fontSize: 14)),
-        actions: [
-          IconButton(
-              tooltip: '下载原图',
-              icon: const Icon(Icons.download_outlined),
-              onPressed: () {
-                TransferEngine.I.enqueueDownload(
-                    remotePath: it.path, name: it.name, size: 0);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('已加入下载队列'),
-                    duration: Duration(seconds: 2)));
-              }),
-        ],
-      ),
-      body: Column(children: [
-        Expanded(
-          child: PageView.builder(
-            itemCount: widget.items.length,
-            controller: _pageController,
-            onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) {
-              final p = widget.items[i];
-              return InteractiveViewer(
-                maxScale: 5,
-                child: Center(
-                  child: AuthImage(
-                    url:
-                        '${widget.base}/preview/${_encPath(p.path)}?w=1280',
-                    fit: BoxFit.contain,
-                    placeholder: (ctx) => const Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(),
-                          SizedBox(height: 12),
-                          Text('加载中…', style: TextStyle(color: Colors.white70)),
-                        ]),
-                    errorBuilder: (ctx, _) => const Icon(
-                        Icons.broken_image_outlined,
-                        size: 48, color: Colors.white38),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Text('${it.taken}  ·  ${it.uploader}',
-                style: const TextStyle(color: Colors.white60, fontSize: 12)),
-          ),
-        ),
-      ]),
-    );
+    // ignore: discarded_futures
+    Navigator.push<bool>(context, MaterialPageRoute(
+        builder: (_) => PhotoViewerPage(base: _base!, items: _items, initial: index),
+        fullscreenDialog: true)).then((deleted) {
+      if (deleted == true) _refresh();
+    });
   }
 }

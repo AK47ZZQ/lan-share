@@ -7,6 +7,7 @@ import 'backup/backup_config.dart';
 import 'backup/backup_engine.dart';
 import 'data/api/api_client.dart';
 import 'state/session.dart';
+import 'state/settings.dart';
 import 'transfer/transfer_engine.dart';
 import 'ui/home_shell.dart';
 import 'ui/login_page.dart';
@@ -68,8 +69,10 @@ class LanShareApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
+    final settings = ref.watch(settingsProvider);
     return MaterialApp(
       title: 'LAN Share',
+      themeMode: settings.themeMode,
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5B6CFF)),

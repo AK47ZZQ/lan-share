@@ -1,53 +1,133 @@
 // 传输中心：上传/下载队列统一展示（进度/速度/剩余时间/暂停/续传/取消/重试）。
 // FR-5：应用被杀后重启，未完成队列自动恢复续传（恢复动作在引擎 onLogin）。
+// 0.6.0：状态筛选（全部/进行中/已完成/失败）、失败原因点按看全量、
+//        全部暂停/全部继续/重试全部失败（AppBar 菜单）。
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 
-class TransfersPage extends ConsumerWidget {
+enum _Filter { all, active, done, failed }
+
+class TransfersPage extends ConsumerStatefulWidget {
   const TransfersPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TransfersPage> createState() => _TransfersPageState();
+}
+
+class _TransfersPageState extends ConsumerState<TransfersPage> {
+  _Filter _filter = _Filter.all;
+
+  @override
+  Widget build(BuildContext context) {
     final engine = ref.watch(transfersProvider);
     final tasks = engine.tasks;
-    final doneCount = tasks
-        .where((t) => t.status == TransferStatus.done)
-        .length;
+    final doneCount =
+        tasks.where((t) => t.status == TransferStatus.done).length;
+    final visible = tasks.where((t) {
+      switch (_filter) {
+        case _Filter.all:
+          return true;
+        case _Filter.active:
+          return t.isActive;
+        case _Filter.done:
+          return t.status == TransferStatus.done;
+        case _Filter.failed:
+          return t.status == TransferStatus.error;
+      }
+    }).toList();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('传输'),
         actions: [
+          if (engine.pausedCount > 0)
+            TextButton(
+                onPressed: engine.resumeAll, child: Text('继续(${engine.pausedCount})')),
+          PopupMenuButton<String>(
+              onSelected: (v) {
+                if (v == 'pauseAll') engine.pauseAll();
+                if (v == 'resumeAll') engine.resumeAll();
+                if (v == 'retryFailed') engine.retryAllFailed();
+              },
+              itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'pauseAll', child: Text('全部暂停')),
+                    const PopupMenuItem(value: 'resumeAll', child: Text('全部继续')),
+                    PopupMenuItem(
+                        value: 'retryFailed',
+                        enabled: engine.failedCount > 0,
+                        child: Text('重试全部失败(${engine.failedCount})')),
+                  ]),
           if (doneCount > 0)
             TextButton(
                 onPressed: engine.clearFinished,
                 child: Text('清空已完成($doneCount)')),
         ],
       ),
-      body: tasks.isEmpty
-          ? Center(
-              child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                Icon(Icons.swap_vert_circle_outlined,
-                    size: 56, color: Theme.of(context).colorScheme.outline),
-                const SizedBox(height: 12),
-                const Text('暂无传输任务'),
-                const SizedBox(height: 4),
-                Text('在"文件"页可上传，点按文件可下载',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.outline)),
-              ]))
-          : ListView.builder(
-              itemCount: tasks.length,
-              itemBuilder: (context, i) =>
-                  _Tile(task: tasks[i], engine: engine),
-            ),
+      body: Column(children: [
+        // 状态筛选：一行 chips，紧凑不挤列表
+        SizedBox(
+          height: 44,
+          child: ListView(scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              children: [
+                for (final f in _Filter.values)
+                  Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                          label: Text(_filterLabel(f, engine)),
+                          selected: _filter == f,
+                          visualDensity: VisualDensity.compact,
+                          onSelected: (_) => setState(() => _filter = f))),
+              ]),
+        ),
+        Expanded(
+          child: tasks.isEmpty
+              ? Center(
+                  child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                      Icon(Icons.swap_vert_circle_outlined,
+                          size: 56, color: Theme.of(context).colorScheme.outline),
+                      const SizedBox(height: 12),
+                      const Text('暂无传输任务'),
+                      const SizedBox(height: 4),
+                      Text('在"文件"页可上传，点按文件可下载',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.outline)),
+                    ]))
+              : visible.isEmpty
+                  ? ListView(children: [
+                      const SizedBox(height: 80),
+                      Center(
+                          child: Text('该状态下没有任务',
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.outline))),
+                    ])
+                  : ListView.builder(
+                      itemCount: visible.length,
+                      itemBuilder: (context, i) =>
+                          _Tile(task: visible[i], engine: engine),
+                    ),
+        ),
+      ]),
     );
+  }
+
+  String _filterLabel(_Filter f, TransferEngine e) {
+    switch (f) {
+      case _Filter.all:
+        return '全部';
+      case _Filter.active:
+        return '进行中';
+      case _Filter.done:
+        return '已完成';
+      case _Filter.failed:
+        return '失败(${e.failedCount})';
+    }
   }
 }
 
@@ -92,9 +172,7 @@ class _Tile extends ConsumerWidget {
       TransferStatus.merging => '服务端合并中…',
       TransferStatus.paused =>
         task.userPaused ? '已暂停' : '等待恢复…',
-      TransferStatus.done => task.kind == TransferKind.upload
-          ? '已上传${task.remotePath != null ? '' : ''}'
-          : '已下载',
+      TransferStatus.done => task.kind == TransferKind.upload ? '已上传' : '已下载',
       TransferStatus.error => task.error ?? '失败',
     };
 
@@ -130,9 +208,31 @@ class _Tile extends ConsumerWidget {
                 style: const TextStyle(fontSize: 12),
               ),
             ]),
+        // 失败任务点按看全量错误（单行截断排障不够用）
+        onTap: task.status == TransferStatus.error ? () => _showError(context) : null,
         trailing: _actions(context),
       ),
     );
+  }
+
+  void _showError(BuildContext context) {
+    showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+            title: Text('「${task.name}」失败', style: const TextStyle(fontSize: 16)),
+            content: SingleChildScrollView(
+                child: Text(task.error ?? '未知错误',
+                    style: const TextStyle(fontSize: 13))),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+              FilledButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    engine.retryAllFailed();
+                  },
+                  child: const Text('重试全部失败')),
+            ]));
   }
 
   Widget? _actions(BuildContext context) {

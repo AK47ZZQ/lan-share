@@ -13,7 +13,9 @@ class MediaItem {
   final String name;
   final int size;
   final int mtime;
-  const MediaItem(this.mediaId, this.kind, this.name, this.size, this.mtime);
+  final String bucket; // 相册目录名（BUCKET_DISPLAY_NAME，0.6.0 排除相册用）
+  const MediaItem(this.mediaId, this.kind, this.name, this.size, this.mtime,
+      {this.bucket = ''});
 }
 
 class MediaSource {
@@ -27,8 +29,18 @@ class MediaSource {
     return [
       for (final e in arr)
         MediaItem(e[0] as String, e[1] as String, e[2] as String,
-            (e[3] as num).toInt(), (e[4] as num).toInt()),
+            (e[3] as num).toInt(), (e[4] as num).toInt(),
+            bucket: e.length > 5 ? (e[5] as String? ?? '') : ''),
     ];
+  }
+
+  /// 相册名 → 媒体数（排除设置页候选；0.6.0 新增原生 buckets 方法，
+  /// 旧包升级后通道缺方法会抛 PlatformException，调用方需兜底）
+  static Future<Map<String, int>> buckets() async {
+    final raw = await _ch.invokeMethod<String>('buckets');
+    if (raw == null || raw.isEmpty) return const {};
+    final obj = jsonDecode(raw) as Map<String, dynamic>;
+    return obj.map((k, v) => MapEntry(k, (v as num).toInt()));
   }
 
   /// 拷贝到缓存临时文件，返回路径（用完由引擎删除）

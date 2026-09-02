@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../backup/backup_bridge.dart';
 import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
+import '../backup/media_source.dart';
 import '../state/session.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 
@@ -63,13 +64,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
         return; // 保持关闭
       }
     }
-    cfg = BackupConfig(
-        enabled: on,
-        wifiOnly: cfg.wifiOnly,
-        chargingOnly: cfg.chargingOnly,
-        includeVideos: cfg.includeVideos,
-        notifyDone: cfg.notifyDone,
-        allowPublicServer: cfg.allowPublicServer);
+    cfg = cfg.copyWith(enabled: on);
     await cfg.save();
     setState(() => _cfg = cfg);
     await BackupBridge.applySchedule(cfg);
@@ -86,13 +81,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
           ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('未授予视频权限，本次不包含视频')));
         }
-        cfg = BackupConfig(
-            enabled: cfg.enabled,
-            wifiOnly: cfg.wifiOnly,
-            chargingOnly: cfg.chargingOnly,
-            includeVideos: false,
-            notifyDone: cfg.notifyDone,
-            allowPublicServer: cfg.allowPublicServer);
+        cfg = cfg.copyWith(includeVideos: false);
       }
     }
     await cfg.save();
@@ -131,6 +120,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                       Text('已备份 ${stats?.done ?? 0} 张'
+                          '（${humanSize(stats?.doneBytes ?? 0)}）'
                           ' · 待备份 ${stats?.pending ?? 0} 张'
                           ' · 失败 ${stats?.error ?? 0} 张',
                           style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -155,53 +145,41 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   subtitle: const Text('流量下不备份（推荐）'),
                   value: cfg.wifiOnly,
                   onChanged: cfg.enabled
-                      ? (v) => _set(BackupConfig(
-                          enabled: cfg.enabled, wifiOnly: v,
-                          chargingOnly: cfg.chargingOnly,
-                          includeVideos: cfg.includeVideos,
-                          notifyDone: cfg.notifyDone,
-                          allowPublicServer: cfg.allowPublicServer))
+                      ? (v) => _set(cfg.copyWith(wifiOnly: v))
                       : null),
               SwitchListTile(
                   title: const Text('仅充电时'),
                   value: cfg.chargingOnly,
                   onChanged: cfg.enabled
-                      ? (v) => _set(BackupConfig(
-                          enabled: cfg.enabled, wifiOnly: cfg.wifiOnly,
-                          chargingOnly: v,
-                          includeVideos: cfg.includeVideos,
-                          notifyDone: cfg.notifyDone,
-                          allowPublicServer: cfg.allowPublicServer))
+                      ? (v) => _set(cfg.copyWith(chargingOnly: v))
                       : null),
               SwitchListTile(
                   title: const Text('包含视频'),
                   subtitle: const Text('默认关闭：视频大、耗流量'),
                   value: cfg.includeVideos,
-                  onChanged: (v) => _set(BackupConfig(
-                      enabled: cfg.enabled, wifiOnly: cfg.wifiOnly,
-                      chargingOnly: cfg.chargingOnly,
-                      includeVideos: v,
-                      notifyDone: cfg.notifyDone,
-                      allowPublicServer: cfg.allowPublicServer))),
+                  onChanged: (v) => _set(cfg.copyWith(includeVideos: v))),
+              ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('排除相册'),
+                  subtitle: Text(cfg.excludedBuckets.isEmpty
+                      ? '全部相册都备份'
+                      : '已排除 ${cfg.excludedBuckets.length} 个'
+                          '：${cfg.excludedBuckets.take(3).join("、")}'
+                          '${cfg.excludedBuckets.length > 3 ? "…" : ""}'),
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(
+                        builder: (_) => BackupExclusionsPage(cfg: cfg)));
+                    await _reload();
+                  }),
               SwitchListTile(
                   title: const Text('备份完成提醒'),
                   value: cfg.notifyDone,
-                  onChanged: (v) => _set(BackupConfig(
-                      enabled: cfg.enabled, wifiOnly: cfg.wifiOnly,
-                      chargingOnly: cfg.chargingOnly,
-                      includeVideos: cfg.includeVideos,
-                      notifyDone: v,
-                      allowPublicServer: cfg.allowPublicServer))),
+                  onChanged: (v) => _set(cfg.copyWith(notifyDone: v))),
               SwitchListTile(
                   title: const Text('公网地址也备份'),
                   subtitle: const Text('默认关闭：走公网流量，注意资费'),
                   value: cfg.allowPublicServer,
-                  onChanged: (v) => _set(BackupConfig(
-                      enabled: cfg.enabled, wifiOnly: cfg.wifiOnly,
-                      chargingOnly: cfg.chargingOnly,
-                      includeVideos: cfg.includeVideos,
-                      notifyDone: cfg.notifyDone,
-                      allowPublicServer: v))),
+                  onChanged: (v) => _set(cfg.copyWith(allowPublicServer: v))),
               const Divider(height: 24),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -365,5 +343,108 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
               ),
             ]),
     );
+  }
+}
+
+/// 排除相册管理页（0.6.0）：勾选不参与自动备份的相册（截图/聊天图等）。
+/// 排除只影响扫描阶段，账本不动：取消勾选后同 id 媒体自动重回待备集合。
+class BackupExclusionsPage extends StatefulWidget {
+  final BackupConfig cfg;
+  const BackupExclusionsPage({super.key, required this.cfg});
+
+  @override
+  State<BackupExclusionsPage> createState() => _BackupExclusionsPageState();
+}
+
+class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
+  Map<String, int>? _buckets;
+  String? _error;
+  late final Set<String> _excluded = Set.of(widget.cfg.excludedBuckets);
+  bool _dirty = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final b = await MediaSource.buckets();
+      if (!mounted) return;
+      setState(() => _buckets = b);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = '无法读取相册列表（需要媒体权限）');
+    }
+  }
+
+  Future<void> _save() async {
+    final cfg = widget.cfg.copyWith(excludedBuckets: _excluded.toList());
+    await cfg.save();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final buckets = _buckets;
+    final names = (buckets?.keys.toList() ?? const <String>[])..sort();
+    return PopScope(
+        canPop: !_dirty,
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop || !_dirty) return;
+          final nav = Navigator.of(context);
+          await _save();
+          nav.pop();
+        },
+        child: Scaffold(
+            appBar: AppBar(
+                title: const Text('排除相册'),
+                actions: [
+                  if (_dirty)
+                    TextButton(
+                        onPressed: () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          await _save();
+                          if (!mounted) return;
+                          setState(() => _dirty = false);
+                          messenger.showSnackBar(
+                              const SnackBar(
+                                  content: Text('已保存，下轮备份生效'),
+                                  duration: Duration(seconds: 2)));
+                        },
+                        child: const Text('保存')),
+                ]),
+            body: buckets == null
+                ? _error != null
+                    ? ListView(children: [
+                        const SizedBox(height: 100),
+                        Center(child: Text(_error!)),
+                      ])
+                    : const Center(child: CircularProgressIndicator())
+                : ListView(children: [
+                    Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                            '勾选的相册不参与自动备份（截图、聊天图等建议排除）。'
+                            '取消勾选会重新纳入备份。',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).colorScheme.outline))),
+                    for (final n in names)
+                      CheckboxListTile(
+                          value: _excluded.contains(n),
+                          title: Text(n.isEmpty ? '（未分类）' : n,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text('${buckets[n]} 项',
+                              style: const TextStyle(fontSize: 12)),
+                          onChanged: (v) {
+                            setState(() {
+                              v == true
+                                  ? _excluded.add(n)
+                                  : _excluded.remove(n);
+                              _dirty = true;
+                            });
+                          }),
+                  ])));
   }
 }

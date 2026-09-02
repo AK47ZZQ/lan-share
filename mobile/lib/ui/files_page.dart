@@ -1,6 +1,8 @@
-// 文件浏览：/api/files 目录列表 + 面包屑导航。
+// 文件浏览：/api/files 目录列表 + 面包屑导航 + 文件管理基本功（0.6.0 大批次）。
 // M-A2：FAB 上传到当前目录（file_picker，分片续传走传输中心）；
-//       点按文件 → 底部操作（下载到手机 / 分享 / 用其他应用打开已下载的）。
+// 0.6.0：长按多选（下载/删除/移动/复制/单文件分享）、新建文件夹、重命名、
+//        删除（进服务端回收站）、排序切换、常用目录钉住、文件详情；
+//        移动/复制走 /api/move 与 0.6.0 新增的 /api/copy（目的地选 DirPickerPage）。
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,9 +10,13 @@ import 'package:open_filex/open_filex.dart';
 
 import '../data/api/api_client.dart';
 import '../state/session.dart';
+import '../state/settings.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'dir_picker_page.dart';
+import 'recent_page.dart';
 import 'share_create_sheet.dart';
+import 'trash_page.dart';
 
 class Entry {
   final String name;
@@ -74,6 +80,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   bool _loading = false;
   String? _error;
   bool _picking = false; // 选文件互斥（SAF 面板可能很慢）
+  bool _deleting = false;
+  final _selected = <String>{}; // 多选模式：当前目录内条目 path
 
   @override
   void initState() {
@@ -83,25 +91,36 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   String get _path => _stack.isEmpty ? '' : _stack.last.path;
   List<Entry> get _current => _stack.isEmpty ? const [] : _stack.last.items;
+  bool get _selecting => _selected.isNotEmpty;
 
-  /// 进入一层目录（push）。加载中忽略新请求（防连点导致栈错乱）
+  /// 排序（设置页持久化）：目录恒在前；modified 为 ISO 字符串可直接字典序比较
+  List<Entry> get _sorted {
+    final settings = ref.read(settingsProvider);
+    final s = settings.filesSort;
+    final asc = settings.filesAsc;
+    final list = List<Entry>.of(_current)..sort((a, b) {
+      if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
+      var r = switch (s) {
+        'modified' => a.modified.compareTo(b.modified),
+        'size' => a.size.compareTo(b.size),
+        _ => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      };
+      return asc ? r : -r;
+    });
+    return list;
+  }
+
+  // ── 导航 ──────────────────────────────────────────────────
+
   Future<void> _push(String path) async {
     if (_loading) return;
     setState(() {
       _loading = true;
       _error = null;
+      _selected.clear();
     });
     try {
-      final dio = await ApiClient.I.dio();
-      final enc = path.split('/').map(Uri.encodeComponent).join('/');
-      final r = await dio.get(path.isEmpty ? '/api/files' : '/api/files/$enc');
-      final items = (r.data['items'] as List)
-          .map((e) => Entry.fromJson(e as Map<String, dynamic>))
-          .toList()
-        ..sort((a, b) {
-          if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-        });
+      final items = await _fetchDir(path);
       if (!mounted) return;
       setState(() {
         _stack.add(_Dir(path, items));
@@ -116,24 +135,25 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
+  Future<List<Entry>> _fetchDir(String path) async {
+    final dio = await ApiClient.I.dio();
+    final enc = path.split('/').map(Uri.encodeComponent).join('/');
+    final r = await dio.get(path.isEmpty ? '/api/files' : '/api/files/$enc');
+    return (r.data['items'] as List)
+        .map((e) => Entry.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   /// 刷新当前层（替换栈顶）
   Future<void> _refresh() async {
     if (_loading) return;
     final target = _path;
     try {
-      final dio = await ApiClient.I.dio();
-      final enc = target.split('/').map(Uri.encodeComponent).join('/');
-      final r = await dio.get(target.isEmpty ? '/api/files' : '/api/files/$enc');
-      final items = (r.data['items'] as List)
-          .map((e) => Entry.fromJson(e as Map<String, dynamic>))
-          .toList()
-        ..sort((a, b) {
-          if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-          return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-        });
+      final items = await _fetchDir(target);
       if (!mounted) return;
       setState(() {
         if (_stack.isNotEmpty) _stack.last = _Dir(target, items);
+        _selected.clear();
       });
     } catch (_) {}
   }
@@ -145,10 +165,210 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       while (_stack.length > depth + 1) {
         _stack.removeLast();
       }
+      _selected.clear();
     });
   }
 
-  /// 上传到当前目录（M-A2 手动传输主入口）
+  // ── 服务端操作（0.6.0 文件管理）───────────────────────────
+
+  Future<void> _mkdir() async {
+    final name = await _promptText('新建文件夹', '文件夹名称', '新建文件夹');
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      final base = _path.isEmpty ? '' : '$_path/';
+      await dio.post('/api/mkdir/$base${Uri.encodeComponent(name.trim())}');
+      await _refresh();
+    } catch (e) {
+      _toast('创建失败：${_detail(e)}');
+    }
+  }
+
+  Future<void> _rename(Entry e) async {
+    final name = await _promptText('重命名', '新名称', e.name, initial: e.name);
+    if (name == null || name.trim().isEmpty || name.trim() == e.name || !mounted) {
+      return;
+    }
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/rename',
+          data: {'path': e.path, 'new_name': name.trim()});
+      await _refresh();
+    } catch (e2) {
+      _toast('重命名失败：${_detail(e2)}');
+    }
+  }
+
+  Future<void> _delete(List<Entry> items) async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+                title: Text('删除 ${items.length} 项？'),
+                content: const Text('将进入服务端回收站，30 天内可随时恢复。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(dctx, true),
+                      child: const Text('删除')),
+                ]));
+    if (ok != true || !mounted) return;
+    setState(() => _deleting = true);
+    var done = 0, failed = 0;
+    final dio = await ApiClient.I.dio();
+    for (final it in items) {
+      try {
+        final enc = it.path.split('/').map(Uri.encodeComponent).join('/');
+        await dio.delete('/api/files/$enc');
+        done++;
+      } catch (_) {
+        failed++;
+      }
+    }
+    if (!mounted) return;
+    setState(() => _deleting = false);
+    _toast(failed > 0 ? '已删 $done 项，$failed 项失败' : '已删除 $done 项');
+    await _refresh();
+  }
+
+  /// 移动/复制到所选目录
+  Future<void> _transferTo(List<Entry> items, {required bool copy}) async {
+    final dest = await Navigator.push<String>(context, MaterialPageRoute(
+        builder: (_) => DirPickerPage(title: copy ? '复制到…' : '移动到…')));
+    if (dest == null || !mounted) return;
+    final dio = await ApiClient.I.dio();
+    final r = await (copy
+        ? dio.post('/api/copy', data: {
+            'sources': items.map((e) => e.path).toList(),
+            'dest_dir': dest,
+          })
+        : dio.post('/api/move', data: {
+            'sources': items.map((e) => e.path).toList(),
+            'dest_dir': dest,
+          }));
+    if (!mounted) return;
+    final results = (r.data['results'] as List? ?? const [])
+        .whereType<Map>()
+        .map((m) => m['ok'] == true)
+        .toList();
+    final okCount = results.where((v) => v).length;
+    _toast(results.isEmpty
+        ? (copy ? '复制完成' : '移动完成')
+        : okCount == results.length
+            ? '已${copy ? "复制" : "移动"} $okCount 项到「${dest.split('/').last}」'
+            : '$okCount 项成功，${results.length - okCount} 项失败');
+    await _refresh();
+  }
+
+  // ── 菜单 / 弹窗 ───────────────────────────────────────────
+
+  Future<String?> _promptText(String title, String label, String hint,
+      {String? initial}) async {
+    final ctrl = TextEditingController(text: initial ?? '');
+    final value = await showDialog<String>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+                title: Text(title),
+                content: TextField(
+                    controller: ctrl,
+                    autofocus: true,
+                    decoration: InputDecoration(labelText: label, hintText: hint)),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(dctx, ctrl.text),
+                      child: const Text('确定')),
+                ]));
+    ctrl.dispose();
+    return value;
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
+  static String _detail(Object e) {
+    final s = e.toString();
+    return s.length > 80 ? s.substring(0, 80) : s;
+  }
+
+  void _showDetails(Entry e) {
+    showDialog<void>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+                title: Text(e.name, style: const TextStyle(fontSize: 16)),
+                content: Column(mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _detailRow('类型', e.isDir ? '文件夹' : '文件${e.ext ?? ''}'),
+                  _detailRow('大小', e.isDir ? '-' : e.sizeHuman),
+                  _detailRow('修改时间', e.modified.split('T').first),
+                  const SizedBox(height: 6),
+                  SelectableText(e.path,
+                      style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx),
+                      child: const Text('关闭')),
+                ]));
+  }
+
+  Widget _detailRow(String k, String v) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(width: 64, child: Text(k,
+            style: const TextStyle(fontSize: 13, color: Colors.grey))),
+        Expanded(child: Text(v, style: const TextStyle(fontSize: 13))),
+      ]));
+
+  void _sortMenu() {
+    final settings = ref.read(settingsProvider);
+    showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text('排序方式', style: TextStyle(fontWeight: FontWeight.bold))),
+              for (final (key, label) in [
+                ('name', '名称'),
+                ('modified', '修改时间'),
+                ('size', '大小'),
+              ])
+                ListTile(
+                    leading: Icon(settings.filesSort == key
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off),
+                    title: Text(label),
+                    trailing: settings.filesSort == key
+                        ? IconButton(
+                            tooltip: settings.filesAsc ? '当前升序，点改降序' : '当前降序，点改升序',
+                            icon: Icon(settings.filesAsc
+                                ? Icons.arrow_upward
+                                : Icons.arrow_downward),
+                            onPressed: () {
+                              ref
+                                  .read(settingsProvider.notifier)
+                                  .setFilesSort(key, asc: !settings.filesAsc);
+                              Navigator.pop(ctx);
+                            })
+                        : null,
+                    onTap: () {
+                      ref.read(settingsProvider.notifier).setFilesSort(key);
+                      Navigator.pop(ctx);
+                    }),
+              const SizedBox(height: 8),
+            ])));
+  }
+
+  // ── 上传（M-A2 手动传输主入口）───────────────────────────
+
   Future<void> _pickAndUpload() async {
     if (_picking) return;
     _picking = true;
@@ -189,10 +409,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
-  /// 文件点按：下载到手机 / 分享 / 打开已下载的
+  // ── 文件 / 目录操作菜单 ───────────────────────────────────
+
   Future<void> _fileSheet(Entry e) async {
     final engine = TransferEngine.I;
     final canShare = ref.read(sessionProvider).role != 'guest'; // 访客只读
+    final canManage = ref.read(sessionProvider).role != 'guest';
     final downloaded = engine.tasks
         .where((t) =>
             t.kind == TransferKind.download &&
@@ -249,92 +471,381 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       Navigator.pop(ctx);
                       OpenFilex.open(downloaded.first.localPath);
                     }),
+              if (canManage) ...[
+                ListTile(
+                    leading: const Icon(Icons.drive_file_rename_outline),
+                    title: const Text('重命名'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _rename(e);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.drive_file_move_outlined),
+                    title: const Text('移动到…'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _transferTo([e], copy: false);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.copy_all_outlined),
+                    title: const Text('复制到…'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _transferTo([e], copy: true);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('删除'),
+                    iconColor: Theme.of(context).colorScheme.error,
+                    textColor: Theme.of(context).colorScheme.error,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _delete([e]);
+                    }),
+              ],
+              ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('详情'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showDetails(e);
+                  }),
               const SizedBox(height: 8),
             ])));
   }
 
+  Future<void> _dirSheet(Entry e) async {
+    final pinned = ref.read(settingsProvider).pinnedDirs.contains(e.path);
+    final canManage = ref.read(sessionProvider).role != 'guest';
+    await showModalBottomSheet(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(e.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.bold)))),
+              const Divider(height: 1),
+              ListTile(
+                  leading: Icon(pinned ? Icons.star : Icons.star_border),
+                  title: Text(pinned ? '从常用目录移除' : '钉为常用目录'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    // ignore: discarded_futures
+                    ref.read(settingsProvider.notifier).togglePinnedDir(e.path);
+                  }),
+              if (canManage) ...[
+                ListTile(
+                    leading: const Icon(Icons.drive_file_rename_outline),
+                    title: const Text('重命名'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _rename(e);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.drive_file_move_outlined),
+                    title: const Text('移动到…'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _transferTo([e], copy: false);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.copy_all_outlined),
+                    title: const Text('复制到…'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _transferTo([e], copy: true);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('删除'),
+                    iconColor: Theme.of(context).colorScheme.error,
+                    textColor: Theme.of(context).colorScheme.error,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _delete([e]);
+                    }),
+              ],
+              ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('详情'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showDetails(e);
+                  }),
+              const SizedBox(height: 8),
+            ])));
+  }
+
+  // ── 多选批量操作 ──────────────────────────────────────────
+
+  void _toggleSelect(Entry e) {
+    setState(() => _selected.contains(e.path)
+        ? _selected.remove(e.path)
+        : _selected.add(e.path));
+  }
+
+  List<Entry> get _selectedEntries =>
+      _current.where((e) => _selected.contains(e.path)).toList();
+
+  Future<void> _downloadSelected() async {
+    final files = _selectedEntries.where((e) => !e.isDir).toList();
+    final engine = TransferEngine.I;
+    var n = 0;
+    for (final e in files) {
+      final t = await engine.enqueueDownload(
+          remotePath: e.path, name: e.name, size: e.size);
+      if (t != null) n++;
+    }
+    setState(() => _selected.clear());
+    widget.onGoTransfers?.call();
+    _toast(n > 0 ? '已加入下载队列 $n 个文件' : '任务已在队列中');
+  }
+
+  void _shareSingle() {
+    final only = _selectedEntries.single;
+    setState(() => _selected.clear());
+    // ignore: discarded_futures
+    showShareCreate(context, path: only.path, name: only.name);
+  }
+
+  // ── 构建 ─────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(settingsProvider);
+    final canManage = ref.read(sessionProvider).role != 'guest';
     return Scaffold(
       appBar: AppBar(
-        title: Text(_path.isEmpty ? '文件' : _path.split('/').last),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-          onPressed: _pickAndUpload,
-          icon: const Icon(Icons.upload_file),
-          label: const Text('上传到此处')),
-      body: Column(children: [
-        if (_stack.length > 1)
-          SizedBox(
-            height: 40,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              children: [
-                for (var i = 0; i < _stack.length; i++)
-                  TextButton(
-                      onPressed: () => _popTo(i),
-                      child: Text(
-                          i == 0 ? '根目录' : _stack[i].path.split('/').last,
-                          style: TextStyle(
-                              fontWeight: i == _stack.length - 1
-                                  ? FontWeight.bold
-                                  : null))),
+        leading: _selecting
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() => _selected.clear()))
+            : null,
+        title: Text(_selecting
+            ? '已选 ${_selected.length} 项'
+            : _path.isEmpty
+                ? '文件'
+                : _path.split('/').last),
+        actions: _selecting
+            ? [
+                TextButton(
+                    onPressed: () => setState(() {
+                          if (_selected.length == _current.length) {
+                            _selected.clear();
+                          } else {
+                            _selected
+                              ..clear()
+                              ..addAll(_current.map((e) => e.path));
+                          }
+                        }),
+                    child: Text(_selected.length == _current.length
+                        ? '全不选'
+                        : '全选')),
+              ]
+            : [
+                IconButton(
+                    tooltip: '新建文件夹',
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    onPressed: canManage ? _mkdir : null),
+                IconButton(
+                    tooltip: '排序', icon: const Icon(Icons.sort), onPressed: _sortMenu),
+                PopupMenuButton<String>(
+                    onSelected: (v) {
+                      if (v == 'recent') {
+                        Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => const RecentPage()));
+                      }
+                      if (v == 'trash') {
+                        Navigator.push(context,
+                            MaterialPageRoute(builder: (_) => const TrashPage()));
+                      }
+                      if (v == 'refresh') _refresh();
+                    },
+                    itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'recent', child: Text('最近文件')),
+                          PopupMenuItem(value: 'trash', child: Text('回收站')),
+                          PopupMenuItem(value: 'refresh', child: Text('刷新')),
+                        ]),
               ],
-            ),
-          ),
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-                  ? ListView(children: [
-                      const SizedBox(height: 120),
-                      Center(child: Text(_error!)),
-                      Center(child: TextButton(
-                          onPressed: () => _push(_path),
-                          child: const Text('重试'))),
-                    ])
-                  : _current.isEmpty
-                      ? ListView(children: const [
-                          SizedBox(height: 140),
-                          Center(child: Text('此目录为空')),
-                        ])
-                      : RefreshIndicator(
-                          onRefresh: _refresh,
-                          child: ListView.builder(
-                            itemCount: _current.length,
-                            itemBuilder: (context, i) {
-                              final e = _current[i];
-                              return ListTile(
-                                leading: Icon(_iconOf(e),
-                                    color: e.isPrivateRoot
-                                        ? Theme.of(context).colorScheme.primary
-                                        : null),
-                                title: Text(e.name,
-                                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                                subtitle: e.isDir
-                                    ? null
-                                    : Text(
-                                        '${e.sizeHuman} · ${e.modified.split('T').first}',
-                                        style: const TextStyle(fontSize: 12)),
-                                trailing:
-                                    e.isDir ? const Icon(Icons.chevron_right) : null,
-                                onTap: () {
-                                  if (e.isDir) {
-                                    _push(e.path);
-                                  } else {
-                                    _fileSheet(e);
-                                  }
-                                },
-                              );
-                            },
+      ),
+      floatingActionButton: _selecting || _deleting
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _pickAndUpload,
+              icon: const Icon(Icons.upload_file),
+              label: const Text('上传到此处')),
+      body: _deleting
+          ? const Center(child: CircularProgressIndicator())
+          : Column(children: [
+              if (_stack.length > 1 && !_selecting)
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    children: [
+                      for (var i = 0; i < _stack.length; i++)
+                        TextButton(
+                            onPressed: () => _popTo(i),
+                            child: Text(
+                                i == 0 ? '根目录' : _stack[i].path.split('/').last,
+                                style: TextStyle(
+                                    fontWeight: i == _stack.length - 1
+                                        ? FontWeight.bold
+                                        : null))),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _error != null
+                        ? ListView(children: [
+                            const SizedBox(height: 120),
+                            Center(child: Text(_error!)),
+                            Center(child: TextButton(
+                                onPressed: () => _push(_path),
+                                child: const Text('重试'))),
+                          ])
+                        : RefreshIndicator(
+                            onRefresh: _refresh,
+                            child: _current.isEmpty
+                                ? ListView(children: const [
+                                    SizedBox(height: 140),
+                                    Center(child: Text('此目录为空')),
+                                  ])
+                                : _buildList(settings),
                           ),
-                        ),
-        ),
-      ]),
+              ),
+            ]),
+      bottomNavigationBar: _selecting ? _selectionBar(canManage) : null,
     );
   }
+
+  Widget _buildList(AppSettings settings) {
+    final items = _sorted;
+    final pinned = _path.isEmpty
+        ? settings.pinnedDirs.where((p) => p.isNotEmpty).toList()
+        : const <String>[];
+    return ListView(children: [
+      if (pinned.isNotEmpty) ...[
+        const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text('常用目录',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
+        for (final p in pinned)
+          ListTile(
+              dense: true,
+              leading: const Icon(Icons.star, size: 20),
+              title: Text(p.split('/').last,
+                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              trailing: IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  tooltip: '移除常用',
+                  onPressed: () => ref
+                      .read(settingsProvider.notifier)
+                      .togglePinnedDir(p)),
+              onTap: () => _push(p)),
+        const Divider(height: 1),
+      ],
+      for (var i = 0; i < items.length; i++) _row(items[i]),
+      const SizedBox(height: 88), // FAB 底部留白
+    ]);
+  }
+
+  Widget _row(Entry e) {
+    final selected = _selected.contains(e.path);
+    return ListTile(
+      leading: selected
+          ? Icon(Icons.check_circle,
+              color: Theme.of(context).colorScheme.primary)
+          : Icon(_iconOf(e),
+              color: e.isPrivateRoot ? Theme.of(context).colorScheme.primary : null),
+      title: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: e.isDir
+          ? null
+          : Text('${e.sizeHuman} · ${e.modified.split('T').first}',
+              style: const TextStyle(fontSize: 12)),
+      trailing: _selecting
+          ? null
+          : e.isDir
+              ? const Icon(Icons.chevron_right)
+              : null,
+      selected: selected,
+      onTap: () {
+        if (_selecting) {
+          _toggleSelect(e);
+        } else if (e.isDir) {
+          _push(e.path);
+        } else {
+          // ignore: discarded_futures
+          _fileSheet(e);
+        }
+      },
+      onLongPress: () {
+        if (_selecting) return;
+        if (e.isDir) {
+          // ignore: discarded_futures
+          _dirSheet(e);
+        } else {
+          _toggleSelect(e); // 文件长按直接进入多选（与照片墙一致）
+        }
+      },
+    );
+  }
+
+  Widget _selectionBar(bool canManage) {
+    final entries = _selectedEntries;
+    final multi = entries.length > 1;
+    final hasFile = entries.any((e) => !e.isDir);
+    return SafeArea(
+        child: Container(
+            decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                border: Border(
+                    top: BorderSide(
+                        color: Theme.of(context).dividerColor, width: 0.5))),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  if (hasFile)
+                    _op(Icons.download_outlined, '下载', _downloadSelected),
+                  if (!multi && hasFile && canManage)
+                    _op(Icons.link_outlined, '分享', _shareSingle),
+                  if (canManage)
+                    _op(Icons.drive_file_move_outlined, '移动',
+                        () => _transferTo(entries, copy: false)),
+                  if (canManage)
+                    _op(Icons.copy_all_outlined, '复制',
+                        () => _transferTo(entries, copy: true)),
+                  if (canManage)
+                    _op(Icons.delete_outline, '删除',
+                        () => _delete(entries)),
+                ])));
+  }
+
+  Widget _op(IconData icon, String label, VoidCallback onTap) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(icon, size: 22),
+                const SizedBox(height: 2),
+                Text(label, style: const TextStyle(fontSize: 12)),
+              ]))));
 }

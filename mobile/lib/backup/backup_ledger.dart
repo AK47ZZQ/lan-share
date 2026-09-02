@@ -76,6 +76,7 @@ class LedgerStats {
   int done = 0;
   int pending = 0; // pending/uploading
   int error = 0;
+  int doneBytes = 0; // 已备份内容的逻辑字节和（0.6.0 统计聚合展示）
   int? lastUploadedAt; // 秒
 }
 
@@ -281,17 +282,23 @@ class BackupLedger {
     final db = await open();
     final r = <String, int>{};
     int? last;
+    int doneBytes = 0;
     for (final row in await db.rawQuery(
-        'SELECT status, COUNT(*) AS c, MAX(uploaded_at) AS last '
+        'SELECT status, COUNT(*) AS c, SUM(size) AS bytes, '
+        'MAX(uploaded_at) AS last '
         'FROM ledger GROUP BY status')) {
       r[row['status'] as String] = (row['c'] as num).toInt();
       final l = (row['last'] as num?)?.toInt();
       if (l != null && (last == null || l > last)) last = l;
+      if (row['status'] == 'done') {
+        doneBytes = (row['bytes'] as num?)?.toInt() ?? 0;
+      }
     }
     return LedgerStats()
       ..done = r['done'] ?? 0
       ..pending = (r['pending'] ?? 0) + (r['uploading'] ?? 0)
       ..error = r['error'] ?? 0
+      ..doneBytes = doneBytes
       ..lastUploadedAt = last;
   }
 

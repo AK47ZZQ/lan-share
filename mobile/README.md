@@ -12,6 +12,7 @@
 | M-A2 | ✅ | 手动传输：上传（分片续传+秒传）/ 下载（Range 断点）/ 传输中心（进度/速度/暂停/续传/重试/杀进程恢复） |
 | M-A3 | ✅ | 相册自动备份：WorkManager 周期+MediaStore 即时感知（自写 Kotlin 薄桥）+ sqflite 账本去重 + 后台 isolate 引擎 + 前台服务通知；250MB 杀进程续传零重传（part-mtime 证据）、重启手机自动恢复 |
 | M-A4 | ✅ | 系统分享接收（SEND/SEND_MULTIPLE → 分享暂存，文本落 txt，传完删副本）+ 分享管理（列表/创建/撤销/多地址复制链接）+ APK 分发（加固版经自家链接）；零服务端改动 |
+| M-A5 | ✅ | 登录页 v2 全家桶（v0.5.0~0.5.2+13）：方向 A 布局（品牌区+浮层卡片+地址状态条）/ 连接预检 / 生物识别一键登录（凭据仅 Keystore）/ 配对码免密登录（/api/pair/*，Web 端出码）/ 扫码填地址（mobile_scanner）；两步验证补全：一次性恢复码 + admin 精准解除 + 登录六格 + **App 内置验证器**（RFC 6238 自实现，零第三方）；模拟器端到端真连全通过 |
 
 ## 目录结构
 
@@ -27,7 +28,9 @@ lib/
 │   └── media_source.dart   MediaStore 查询/临时文件通道封装
 ├── data/
 │   ├── api/                Dio 客户端（Bearer 注入/401 统一/TOFU 证书信任）
-│   └── local/              SecureStore（Token 双写兜底）/ Prefs
+│   ├── local/              SecureStore（Token 双写兜底）/ Prefs
+│   └── totp.dart           ★ M-A5 内置验证器 RFC 6238 引擎 + otpauth:// 解析
+│                           （HMAC-SHA1+Base32 自实现，零新依赖）
 ├── share/                  ★ M-A4 系统分享接收桥 + 分享 API 封装
 │   ├── share_bridge.dart   takePending 拉取/ incoming 推送 → 入上传队列 → 传完删副本
 │   └── share_service.dart  创建/列表/撤销/成员/链接（复用服务端分享契约）
@@ -36,7 +39,8 @@ lib/
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
 └── ui/                     首页(综合面板) / 照片(日分组时间线) / 文件 / 传输中心 /
-                            我的（+备份设置/账本/分享管理/创建分享页）
+                            我的（+备份设置/账本/分享管理/创建分享页）/
+                            登录页 v2（方向 A+预检/生物识别/配对码）/ 扫码 / 内置验证器
 
 android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄桥
 ├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）

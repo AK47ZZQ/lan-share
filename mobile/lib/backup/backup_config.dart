@@ -11,6 +11,7 @@ class BackupConfig {
   final bool includeVideos;
   final bool notifyDone;
   final bool allowPublicServer; // §6：公网地址默认不备份（流量保护），可开
+  final List<String> excludedBuckets; // 排除的相册（0.6.0：截图/聊天图等）
 
   const BackupConfig({
     this.enabled = false,
@@ -19,6 +20,7 @@ class BackupConfig {
     this.includeVideos = false,
     this.notifyDone = true,
     this.allowPublicServer = false,
+    this.excludedBuckets = const [],
   });
 
   static Future<BackupConfig> load() async {
@@ -30,8 +32,28 @@ class BackupConfig {
       includeVideos: sp.getBool(_kVideos) ?? false,
       notifyDone: sp.getBool(_kNotify) ?? true,
       allowPublicServer: sp.getBool(_kPublic) ?? false,
+      excludedBuckets: sp.getStringList(_kExcluded) ?? const [],
     );
   }
+
+  BackupConfig copyWith({
+    bool? enabled,
+    bool? wifiOnly,
+    bool? chargingOnly,
+    bool? includeVideos,
+    bool? notifyDone,
+    bool? allowPublicServer,
+    List<String>? excludedBuckets,
+  }) =>
+      BackupConfig(
+        enabled: enabled ?? this.enabled,
+        wifiOnly: wifiOnly ?? this.wifiOnly,
+        chargingOnly: chargingOnly ?? this.chargingOnly,
+        includeVideos: includeVideos ?? this.includeVideos,
+        notifyDone: notifyDone ?? this.notifyDone,
+        allowPublicServer: allowPublicServer ?? this.allowPublicServer,
+        excludedBuckets: excludedBuckets ?? this.excludedBuckets,
+      );
 
   Future<void> save() async {
     final sp = await SharedPreferences.getInstance();
@@ -41,6 +63,7 @@ class BackupConfig {
     await sp.setBool(_kVideos, includeVideos);
     await sp.setBool(_kNotify, notifyDone);
     await sp.setBool(_kPublic, allowPublicServer);
+    await sp.setStringList(_kExcluded, excludedBuckets);
     // 约束/范围变化会改变待备集合（如开启视频），pending 计数归 -1 让下个
     // 周期强制跑一轮，别被 Worker 的"空跑跳过"捷径挡住
     await sp.setInt('backup_pending_count', -1);
@@ -52,4 +75,5 @@ class BackupConfig {
   static const _kVideos = 'backup_include_videos';
   static const _kNotify = 'backup_notify_done';
   static const _kPublic = 'backup_allow_public';
+  static const _kExcluded = 'backup_excluded_buckets';
 }

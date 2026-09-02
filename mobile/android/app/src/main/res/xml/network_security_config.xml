@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅对本机回环放行明文：video_player(ExoPlayer) 不支持自定义证书回调，
+     自签 HTTPS 经 MediaProxy(127.0.0.1) 中转播放，见 lib/data/api/media_proxy.dart。
+     对其余一切地址明文仍然全禁——不为自签服务器开任何明文口子。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

@@ -17,8 +17,10 @@ import java.io.File
 
 /**
  * MediaStore 扫描薄通道（APP-DESIGN §4"媒体扫描器（平台通道）"）：
- * query → 全量 [id,kind,name,size,mtime] 紧凑数组（账本 diff 用）；
- * open  → 单张媒体拷到缓存 backup_tmp/（引擎哈希/分片走真实文件路径）。
+ * query → 全量 [id,kind,name,size,mtime,bucket] 紧凑数组（账本 diff 用；
+ *   0.6.0 追加 bucket=相册目录名，App 侧按相册做备份排除）；
+ * buckets → {相册名: 数量} 统计（排除设置页用，免拉全量清单）；
+ * open → 单张媒体拷到缓存 backup_tmp/（引擎哈希/分片走真实文件路径）。
  * 主引擎（权限申请用不到 query，但保留对称）与 Worker 引擎都注册。
  */
 object MediaStoreBridge {
@@ -28,6 +30,7 @@ object MediaStoreBridge {
             val reply: String = try {
                 when (call.method) {
                     "query" -> query(ctx, call.arguments as? Map<*, *>)
+                    "buckets" -> buckets(ctx)
                     "open" -> open(ctx, call.arguments as? Map<*, *>)
                     else -> err("unknown_method")
                 }
@@ -53,13 +56,16 @@ object MediaStoreBridge {
             MediaStore.MediaColumns._ID,
             MediaStore.MediaColumns.DISPLAY_NAME,
             MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.DATE_MODIFIED)
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
         ctx.contentResolver.query(uri, proj, null, null,
             "${MediaStore.MediaColumns.DATE_MODIFIED} ASC")?.use { c ->
             val iId = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val iName = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val iSize = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
             val iMtime = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+            // BUCKET_DISPLAY_NAME 个别厂商/旧库可能缺列：按名找不到就退 -1，置空串
+            val iBucket = c.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             while (c.moveToNext()) {
                 val size = c.getLong(iSize)
                 if (size <= 0) continue // 0 字节脏记录（下载中/损坏项）跳过
@@ -71,9 +77,30 @@ object MediaStoreBridge {
                 arr.put(c.getString(iName) ?: "unnamed")
                 arr.put(size)
                 arr.put(mtime)
+                arr.put(if (iBucket >= 0) c.getString(iBucket) ?: "" else "")
                 out.put(arr)
             }
         }
+    }
+
+    /** 相册名 → 媒体数（图片+视频合并，0 字节脏记录不计）。排除设置页候选用。 */
+    private fun buckets(ctx: Context): String {
+        val counts = LinkedHashMap<String, Int>()
+        for (uri in listOf(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI)) {
+            val proj = arrayOf(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+            ctx.contentResolver.query(uri, proj, null, null, null)?.use { c ->
+                val iBucket = c.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                if (iBucket < 0) return@use
+                while (c.moveToNext()) {
+                    val b = c.getString(iBucket) ?: ""
+                    counts[b] = (counts[b] ?: 0) + 1
+                }
+            }
+        }
+        val obj = JSONObject()
+        for ((k, v) in counts) obj.put(k, v)
+        return obj.toString()
     }
 
     private fun open(ctx: Context, args: Map<*, *>?): String {

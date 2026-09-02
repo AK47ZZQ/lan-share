@@ -14,8 +14,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
+import '../data/local/notify.dart';
 import 'transfer_task.dart';
 
 /// 上传前预计算 sha256 的大小上限（秒传探测用；超限不预计算，
@@ -192,6 +194,33 @@ class TransferEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── 批量操作（App v0.6.0 传输页）──────────────────────────
+  // 全部暂停：在途任务经 cancelToken 优雅停（进度留断点），未启动的直接置暂停
+  void pauseAll() {
+    for (final t in List.of(tasks)) {
+      if (t.finished) continue;
+      pauseTask(t);
+    }
+  }
+
+  /// 全部继续：只唤醒"用户主动暂停"的——断网/登出造成的等待恢复
+  /// 本就由 _kick 自动调度，混进来反而抢跑计费网络
+  void resumeAll() {
+    for (final t in List.of(tasks)) {
+      if (t.status == TransferStatus.paused && t.userPaused) resumeTask(t);
+    }
+  }
+
+  void retryAllFailed() {
+    for (final t in List.of(tasks)) {
+      if (t.status == TransferStatus.error) resumeTask(t);
+    }
+  }
+
+  int get pausedCount =>
+      tasks.where((t) => t.status == TransferStatus.paused && t.userPaused).length;
+  int get failedCount => tasks.where((t) => t.status == TransferStatus.error).length;
+
   int speedOf(TransferTask t) => _speed[t.id] ?? 0;
 
   // ── 调度 ──────────────────────────────────────────────────
@@ -305,6 +334,9 @@ class TransferEngine extends ChangeNotifier {
             t.remotePath = r.data['path'] as String;
             t.received.clear();
             _setStatus(t, TransferStatus.done);
+            _speed[t.id] = 0;
+            // ignore: discarded_futures
+            _notifyDone(t);
             return;
           }
           t.sid = r.data['session'] as String;
@@ -380,6 +412,8 @@ class TransferEngine extends ChangeNotifier {
         t.remotePath = r.data['path'] as String;
         _setStatus(t, TransferStatus.done);
         _speed[t.id] = 0;
+        // ignore: discarded_futures
+        _notifyDone(t);
         return;
       } on DioException catch (e) {
         if (token.isCancelled) throw _Paused();
@@ -465,12 +499,24 @@ class TransferEngine extends ChangeNotifier {
     _speed[t.id] = 0;
     _schedulePersist();
     notifyListeners();
+    // ignore: discarded_futures
+    _notifyDone(t);
   }
 
   // ── 公共小件 ──────────────────────────────────────────────
   void _setStatus(TransferTask t, TransferStatus s) {
     t.status = s;
     notifyListeners();
+  }
+
+  /// 单任务完成 → 系统通知（设置可关；读 sp 而非持有 provider，完成是低频事件）
+  Future<void> _notifyDone(TransferTask t) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      if (!(sp.getBool('notify_transfer_done') ?? true)) return;
+      await TransferNotifier.I.transferDone(
+          upload: t.kind == TransferKind.upload, name: t.name);
+    } catch (_) {}
   }
 
   /// 非 cancel 错误：4xx 直接判死（重试无意义）；5xx/网络错误退避重试至多 5 次

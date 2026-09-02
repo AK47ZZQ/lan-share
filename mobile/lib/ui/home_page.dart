@@ -9,10 +9,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_bridge.dart';
 import '../data/api/api_client.dart';
+import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'backup_settings_page.dart';
+import 'recent_page.dart';
+import 'trash_page.dart';
+import 'widgets/auth_image.dart';
+
 class HomePage extends ConsumerStatefulWidget {
   final VoidCallback onGoPhotos, onGoFiles, onGoTransfers, onGoMe;
   const HomePage(
@@ -29,21 +34,37 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   bool _backupOn = false;
   int _pending = -1; // -1=待统计（与引擎约定一致）
+  int _pendingBytes = 0;
   int? _lastDoneAt;
-  int _diskUsed = 0, _diskTotal = 0;
+  int _diskUsed = 0, _diskTotal = 0, _diskFree = 0;
   String _shareSize = '';
+  List<_RecentUpload>? _recent;
   Timer? _tick, _diskTick;
 
   @override
   void initState() {
     super.initState();
+    () async {
+      final b = await Prefs.lastAddress();
+      if (mounted) setState(() => _base = b);
+    }();
     _loadLocal();
     _loadDisk();
+    _loadRecent();
     // 本地状态（备份开关/待备数/传输动态）轻，2s 一刷保证跨页回来也是新的；
     // 磁盘要服务端 rglob 统计，30s 一刷 + 下拉手动刷
     _tick = Timer.periodic(const Duration(seconds: 2), (_) => _loadLocal());
     // ⚠️ 必须持有并在 dispose 取消：匿名 Timer 会登出后继续空转（泄漏）
-    _diskTick = Timer.periodic(const Duration(seconds: 30), (_) => _loadDisk());
+    _diskTick = Timer.periodic(const Duration(seconds: 30), (_) {
+      _loadDisk();
+      _loadRecent();
+    });
+  }
+
+  Future<void> _refreshAll() async {
+    await _loadDisk();
+    await _loadLocal();
+    await _loadRecent();
   }
 
   @override
@@ -61,6 +82,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     setState(() {
       _backupOn = sp.getBool('backup_enabled') ?? false;
       _pending = sp.getInt('backup_pending_count') ?? -1;
+      _pendingBytes = sp.getInt('backup_pending_bytes') ?? 0;
       _lastDoneAt = sp.getInt('backup_last_done_at');
     });
   }
@@ -73,14 +95,33 @@ class _HomePageState extends ConsumerState<HomePage> {
       setState(() {
         _diskUsed = (r.data['used_bytes'] as num?)?.toInt() ?? 0;
         _diskTotal = (r.data['total_bytes'] as num?)?.toInt() ?? 0;
+        _diskFree = (r.data['free_bytes'] as num?)?.toInt() ?? 0;
         _shareSize = r.data['share_size'] as String? ?? '';
       });
     } catch (_) {}
   }
 
-  Future<void> _refreshAll() async {
-    await _loadDisk();
-    await _loadLocal();
+  /// 最近上传横滑条：全库最近修改的媒体文件（跨上传入口，30s 一刷）
+  Future<void> _loadRecent() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/recent', queryParameters: {'limit': 100});
+      const mediaExts = {
+        '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.heic', '.heif',
+        '.mp4', '.mov', '.m4v', '.3gp', '.webm', '.avi', '.mkv',
+      };
+      final items = (r.data as List)
+          .whereType<Map>()
+          .map((e) => _RecentUpload(
+              path: (e['path'] as String?) ?? '',
+              name: (e['name'] as String?) ?? '',
+              ext: ((e['ext'] as String?) ?? '').toLowerCase()))
+          .where((e) => mediaExts.contains(e.ext))
+          .take(12)
+          .toList();
+      if (!mounted) return;
+      setState(() => _recent = items);
+    } catch (_) {}
   }
 
   @override
@@ -113,6 +154,52 @@ class _HomePageState extends ConsumerState<HomePage> {
                         style: TextStyle(
                             fontSize: 12, color: cs.outline)),
                   ])),
+          // 最近上传横滑条（0.6.0）：跨入口的媒体文件按修改时间倒排
+          if (_recent != null && _recent!.isNotEmpty)
+            _card(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _cardTitle('最近上传',
+                      icon: Icons.history,
+                      trailing: TextButton(
+                          style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 4)),
+                          onPressed: () => Navigator.push(context,
+                              MaterialPageRoute(
+                                  builder: (_) => const RecentPage())),
+                          child: const Text('全部 ›',
+                              style: TextStyle(fontSize: 12)))),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                      height: 92,
+                      child: ListView(scrollDirection: Axis.horizontal,
+                          children: [
+                            for (final it in _recent!)
+                              GestureDetector(
+                                  onTap: widget.onGoPhotos,
+                                  child: Padding(
+                                      padding: const EdgeInsets.only(right: 6),
+                                      child: Stack(children: [
+                                        ClipRRect(
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                            child: SizedBox(
+                                                width: 92,
+                                                height: 92,
+                                                child: AuthImage(
+                                                    url: '$_base/thumb/'
+                                                        '${it.path.split("/").map(Uri.encodeComponent).join("/")}'))),
+                                        if (it.isVideo)
+                                          const Positioned(
+                                              right: 4,
+                                              bottom: 4,
+                                              child: Icon(Icons.play_circle_fill,
+                                                  size: 18,
+                                                  color: Colors.white70)),
+                                      ]))),
+                          ])),
+                ])),
           _card(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -123,6 +210,15 @@ class _HomePageState extends ConsumerState<HomePage> {
                     const SizedBox(height: 6),
                     Text(_backupText(),
                         style: const TextStyle(fontSize: 13)),
+                    // 空间预警（0.6.0）：待备份量超过服务端剩余空间时提前提示
+                    if (_pendingBytes > 0 && _diskFree > 0 && _pendingBytes > _diskFree) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                          '⚠️ 待备份 ${humanSize(_pendingBytes)}，'
+                          '服务端仅剩 ${humanSize(_diskFree)}，请先清理空间',
+                          style: TextStyle(
+                              fontSize: 12, color: cs.error)),
+                    ],
                     const SizedBox(height: 10),
                     Row(children: [
                       FilledButton.tonalIcon(
@@ -215,10 +311,16 @@ class _HomePageState extends ConsumerState<HomePage> {
                   children: [
                     _quick(Icons.photo_outlined, '照片', widget.onGoPhotos),
                     _quick(Icons.folder_outlined, '文件', widget.onGoFiles),
+                    _quick(Icons.delete_outline, '回收站', () {
+                      Navigator.push(context,
+                          MaterialPageRoute(builder: (_) => const TrashPage()));
+                    }),
                     _quick(Icons.link_outlined, '我的分享', widget.onGoMe),
                   ])),
         ]));
   }
+
+  String _base = '';
 
   String _greeting(String username) {
     final h = DateTime.now().hour;
@@ -291,4 +393,16 @@ class _HomePageState extends ConsumerState<HomePage> {
             const SizedBox(height: 4),
             Text(label, style: const TextStyle(fontSize: 12)),
           ])));
+}
+
+
+class _RecentUpload {
+  final String path;
+  final String name;
+  final String ext;
+  _RecentUpload({required this.path, required this.name, required this.ext});
+
+  bool get isVideo => const {
+        '.mp4', '.mov', '.m4v', '.3gp', '.webm', '.avi', '.mkv'
+      }.contains(ext);
 }

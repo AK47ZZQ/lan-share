@@ -108,7 +108,14 @@ class BackupEngine {
       List<LedgerRow> scanned;
       List<LedgerRow> pending;
       try {
-        scanned = (await MediaSource.query(includeVideos: cfg.includeVideos))
+        var media = await MediaSource.query(includeVideos: cfg.includeVideos);
+        // 排除相册（0.6.0）：截图/聊天图这类目录不备份。只影响扫描阶段，
+        // 账本不动——之后取消排除，同 id 的照片自动重新进入待备集合
+        if (cfg.excludedBuckets.isNotEmpty) {
+          final excl = cfg.excludedBuckets.toSet();
+          media = media.where((m) => !excl.contains(m.bucket)).toList();
+        }
+        scanned = media
             .map((m) => LedgerRow(
                 mediaId: m.mediaId,
                 kind: m.kind,
@@ -124,10 +131,11 @@ class BackupEngine {
             {'status': 'skip', 'reason': 'scan_or_ledger_unavailable'});
       }
       res['pending'] = pending.length;
+      final pendingBytes = pending.fold<int>(0, (s, r) => s + r.size);
 
       final dio = await ApiClient.I.dio();
       final ledger = BackupLedger.I;
-      var attempted = 0, failed = 0;
+      var attempted = 0, failed = 0, doneBytes = 0;
       for (final row in pending) {
         final pause = await _pauseReason();
         if (pause != null) {
@@ -138,7 +146,11 @@ class BackupEngine {
         attempted++;
         try {
           final ok = await _uploadOne(dio, ledger, row, destDir);
-          if (!ok) failed++;
+          if (!ok) {
+            failed++;
+          } else {
+            doneBytes += row.size;
+          }
         } on _TrustAbort {
           res['status'] = 'trust_required';
           res['reason'] = 'certificate';
@@ -169,6 +181,9 @@ class BackupEngine {
       await sp.setInt(
           'backup_pending_count', (pending.length - (attempted - failed))
               .clamp(0, 1 << 31));
+      // 待备字节（首页空间预警用）：本轮成功部分实时扣减
+      await sp.setInt('backup_pending_bytes',
+          (pendingBytes - doneBytes).clamp(0, 1 << 62));
     } catch (e) {
       final s = e.toString();
       return jsonEncode({

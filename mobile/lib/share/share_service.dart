@@ -88,6 +88,17 @@ class ShareService {
     await dio.delete('/api/shares/$token');
   }
 
+  /// 编辑分享（0.6.0 / PATCH /api/shares/{token}）：有效期从现在重计，
+  /// 下载上限可改。传 null 的字段不动。
+  static Future<void> edit(String token,
+      {int? expiresHours, int? maxDownloads}) async {
+    final dio = await ApiClient.I.dio();
+    await dio.patch('/api/shares/$token', data: {
+      'expires_hours': ?expiresHours,
+      'max_downloads': ?maxDownloads,
+    });
+  }
+
   /// 在用成员名单（定向分享收件人候选，GET /api/members）
   static Future<List<String>> members() async {
     final dio = await ApiClient.I.dio();
