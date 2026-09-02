@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AppSettings {
   final ThemeMode themeMode;
+  final bool amoledDark; // 暗色增强：AMOLED 纯黑底（0.8.4 起，独立于三档）
   final bool appLock;
   final bool notifyTransferDone;
   final String filesSort; // name | modified | size
@@ -15,6 +16,7 @@ class AppSettings {
 
   const AppSettings({
     this.themeMode = ThemeMode.system,
+    this.amoledDark = false,
     this.appLock = false,
     this.notifyTransferDone = true,
     this.filesSort = 'name',
@@ -34,6 +36,7 @@ class SettingsController extends StateNotifier<AppSettings> {
       themeMode: ThemeMode.values.firstWhere(
           (m) => m.name == (sp.getString('ui_theme_mode') ?? 'system'),
           orElse: () => ThemeMode.system),
+      amoledDark: sp.getBool('ui_amoled_dark') ?? false,
       appLock: sp.getBool('ui_app_lock') ?? false,
       notifyTransferDone: sp.getBool('notify_transfer_done') ?? true,
       filesSort: sp.getString('files_sort') ?? 'name',
@@ -46,6 +49,12 @@ class SettingsController extends StateNotifier<AppSettings> {
     state = _copy(themeMode: m);
     final sp = await SharedPreferences.getInstance();
     await sp.setString('ui_theme_mode', m.name);
+  }
+
+  Future<void> setAmoledDark(bool v) async {
+    state = _copy(amoledDark: v);
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool('ui_amoled_dark', v);
   }
 
   Future<void> setAppLock(bool v) async {
@@ -75,10 +84,12 @@ class SettingsController extends StateNotifier<AppSettings> {
     await sp.setStringList('files_pinned_dirs', cur);
   }
 
-  AppSettings _copy({ThemeMode? themeMode, bool? appLock, bool? notifyTransferDone,
-      String? filesSort, bool? filesAsc, List<String>? pinnedDirs}) =>
+  AppSettings _copy({ThemeMode? themeMode, bool? amoledDark, bool? appLock,
+      bool? notifyTransferDone, String? filesSort, bool? filesAsc,
+      List<String>? pinnedDirs}) =>
       AppSettings(
           themeMode: themeMode ?? state.themeMode,
+          amoledDark: amoledDark ?? state.amoledDark,
           appLock: appLock ?? state.appLock,
           notifyTransferDone: notifyTransferDone ?? state.notifyTransferDone,
           filesSort: filesSort ?? state.filesSort,

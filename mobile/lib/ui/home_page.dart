@@ -21,6 +21,7 @@ import 'notifications_page.dart';
 import 'recent_page.dart';
 import 'trash_page.dart';
 import 'widgets/auth_image.dart';
+import 'widgets/brand.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   final VoidCallback onGoPhotos, onGoFiles, onGoTransfers, onGoMe;
@@ -187,17 +188,25 @@ class _HomePageState extends ConsumerState<HomePage> {
         onRefresh: _refreshAll,
         child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
             children: [
-          Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 4, 12),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_greeting(username),
-                        style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 2),
-                    Text('家庭网盘概览 · 下拉刷新',
-                        style: TextStyle(
-                            fontSize: 12, color: cs.outline)),
-                  ])),
+          // 0.8.4 品牌头：渐变底 + 云朵 + 问候（与登录页同一套语言）
+          BrandHeader(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const BrandCloud(size: 44),
+                  const SizedBox(height: 12),
+                  Text(_greeting(username),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text('家庭网盘概览 · 下拉刷新',
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 12)),
+                ]),
+          ),
+          const SizedBox(height: 12),
           // 最近上传横滑条（0.6.0）：跨入口的媒体文件按修改时间倒排
           if (_recent != null && _recent!.isNotEmpty)
             _card(
@@ -539,31 +548,39 @@ class _HomePageState extends ConsumerState<HomePage> {
   Widget _cardTitle(String title, {IconData? icon, Widget? trailing}) => Row(
       children: [
         if (icon != null) ...[
-          Icon(icon, size: 16),
+          Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 6),
         ],
         Text(title,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
         const Spacer(),
         ?trailing,
       ]);
 
+  // 0.8.4：圆角/描边由 CardTheme 统一（Brand.cardRadius + 低对比描边）
   Widget _card({required Widget child}) => Card(
-      elevation: 0,
       margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: Theme.of(context).dividerColor, width: 0.5)),
       child: Padding(padding: const EdgeInsets.all(14), child: child));
 
   Widget _quick(IconData icon, String label, VoidCallback onTap) => InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(14),
       child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 26),
-            const SizedBox(height: 4),
+            Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(14)),
+                child: Icon(icon,
+                    size: 22,
+                    color: Theme.of(context).colorScheme.primary)),
+            const SizedBox(height: 5),
             Text(label, style: const TextStyle(fontSize: 12)),
           ])));
 }

@@ -14,6 +14,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
+import 'widgets/brand.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import '../transfer/transfer_engine.dart';
@@ -808,14 +809,35 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     ]);
   }
 
+  /// 0.8.4 品牌化图标：目录=色块+文件夹；文件=类型色圆角方块（FileTypeTile）
+  Widget _leadingIcon(Entry e) {
+    final cs = Theme.of(context).colorScheme;
+    if (e.isDir) {
+      final isPriv = e.isPrivateRoot;
+      return Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: isPriv
+                ? cs.primary.withValues(alpha: 0.14)
+                : cs.surfaceContainerHighest.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(isPriv ? Icons.lock : Icons.folder,
+              size: 20,
+              color: isPriv ? cs.primary : cs.onSurfaceVariant));
+    }
+    return FileTypeTile(
+        ext: (e.ext ?? '').toLowerCase(), icon: _iconOf(e), size: 40);
+  }
+
   Widget _row(Entry e) {
     final selected = _selected.contains(e.path);
     return ListTile(
       leading: selected
           ? Icon(Icons.check_circle,
               color: Theme.of(context).colorScheme.primary)
-          : Icon(_iconOf(e),
-              color: e.isPrivateRoot ? Theme.of(context).colorScheme.primary : null),
+          : _leadingIcon(e),
       title: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: e.isDir
           ? null

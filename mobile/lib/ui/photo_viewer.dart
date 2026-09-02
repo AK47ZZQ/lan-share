@@ -192,7 +192,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                   : InteractiveViewer(
                       maxScale: 5,
                       child: Center(
-                        child: AuthImage(
+                        child: Hero(
+                          tag: 'ph-${p.path}',
+                          child: AuthImage(
                           url:
                               '${widget.base}/preview/${encPath(p.path)}?w=1280',
                           fit: BoxFit.contain,
@@ -206,27 +208,40 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                           errorBuilder: (ctx, _) => const Icon(
                               Icons.broken_image_outlined,
                               size: 48, color: Colors.white38),
+                          ),
                         ),
                       ),
                     );
             },
           ),
         ),
-        SafeArea(
-          child: Row(children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text('${it.taken}  ·  ${it.uploader}',
-                    style: const TextStyle(color: Colors.white60, fontSize: 12)),
-              ),
+        // 0.8.4：底部毛玻璃操作条（BackdropFilter 仅覆盖本条，不拖累图片层）
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            border: Border(
+                top: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.08), width: 0.5)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 14, right: 4, top: 4, bottom: 4),
+              child: Row(children: [
+                Expanded(
+                  child: Text('${it.taken}  ·  ${it.uploader}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                ),
+                IconButton(
+                    tooltip: '信息',
+                    icon: const Icon(Icons.info_outline,
+                        color: Colors.white60, size: 20),
+                    onPressed: _showInfo),
+              ]),
             ),
-            IconButton(
-                tooltip: '信息',
-                icon: const Icon(Icons.info_outline,
-                    color: Colors.white60, size: 20),
-                onPressed: _showInfo),
-          ]),
+          ),
         ),
       ]),
     );

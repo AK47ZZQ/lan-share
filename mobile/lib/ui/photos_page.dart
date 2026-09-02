@@ -657,15 +657,25 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
             // 很难看，真机反馈 0.4.5）
             SliverToBoxAdapter(
-                child: Padding(
-                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 4),
-                    child: Text(_dayLabel(day),
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13,
+                child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                        margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
                             color: Theme.of(context)
                                 .colorScheme
-                                .onSurfaceVariant)))),
+                                .primary
+                                .withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(999)),
+                        child: Text(_dayLabel(day),
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12.5,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary))))),
             SliverGrid(
                 gridDelegate:
                     const SliverGridDelegateWithFixedCrossAxisCount(
@@ -684,8 +694,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             : () => _openViewer(flat),
                         onLongPress: () => _toggleSelect(flat),
                         child: Stack(fit: StackFit.expand, children: [
-                          AuthImage(
-                              url: '$_base/thumb/${encPath(item.path)}'),
+                          Hero(
+                              tag: 'ph-${item.path}',
+                              child: AuthImage(
+                                  url: '$_base/thumb/${encPath(item.path)}')),
                           // 视频角标：▶ + 时长（0.6.0）
                           if (item.isVideo)
                             Positioned(

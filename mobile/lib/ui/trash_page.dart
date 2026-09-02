@@ -3,6 +3,7 @@
 // 清空回收站（0.6.3 新增入口）：DELETE /api/trash 仅 admin——一次清空所有
 // 成员的回收站项目，与 Web 端同款语义；按钮只对 admin 显示 + 二次确认。
 import 'package:flutter/material.dart';
+import 'widgets/brand.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
@@ -155,13 +156,10 @@ class _TrashPageState extends ConsumerState<TrashPage> {
             ? const Center(child: CircularProgressIndicator())
             : items.isEmpty
                 ? ListView(children: [
-                    const SizedBox(height: 120),
-                    Center(
-                        child: Text(_error ?? '回收站是空的',
-                            style: const TextStyle(color: Colors.grey))),
-                    const SizedBox(height: 8),
-                    Center(child: TextButton(
-                        onPressed: _load, child: const Text('刷新'))),
+                    EmptyState(
+                        title: _error ?? '回收站是空的',
+                        hint: '删除的文件在这里保留 30 天',
+                        action: TextButton(onPressed: _load, child: const Text('刷新'))),
                   ])
                 : RefreshIndicator(
                     onRefresh: _load,

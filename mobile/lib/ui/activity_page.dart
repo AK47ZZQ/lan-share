@@ -1,6 +1,7 @@
 // 家里动态页（0.6.2）：/api/activity 全量列表。首页动态卡的"全部 ›"落点。
 // 只读流，下拉刷新；点击不跳转（手机端目录跳转语义与 Web 不同，暂不做）。
 import 'package:flutter/material.dart';
+import 'widgets/brand.dart';
 
 import '../data/activity.dart';
 import '../data/api/api_client.dart';
@@ -51,10 +52,9 @@ class _ActivityPageState extends State<ActivityPage> {
                 : items != null && items.isEmpty
                     ? ListView(children: const [
                         SizedBox(height: 120),
-                        Center(
-                            child: Text('还没有动态\n上传、分享、新成员加入都会显示在这里',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.grey))),
+                        EmptyState(
+                            title: '还没有动态',
+                            hint: '上传、分享、新成员加入都会显示在这里'),
                       ])
                     : _error != null
                         ? ListView(children: [

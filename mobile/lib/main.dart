@@ -11,6 +11,7 @@ import 'state/settings.dart';
 import 'transfer/transfer_engine.dart';
 import 'ui/home_shell.dart';
 import 'ui/login_page.dart';
+import 'ui/theme/app_theme.dart';
 
 void main() {
   // 回调在 runApp 前注入：避免"启动期 401 拦截器无回调"的窗口期
@@ -76,16 +77,12 @@ class LanShareApp extends ConsumerWidget {
     final settings = ref.watch(settingsProvider);
     return MaterialApp(
       title: 'LAN Share',
+      debugShowCheckedModeBanner: false,
       themeMode: settings.themeMode,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5B6CFF)),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF5B6CFF), brightness: Brightness.dark),
-      ),
+      // 0.8.4 主题系统：brand tokens + 亮/暗/AMOLED 三套。
+      // AMOLED 开关生效于"暗色生效"的场合（dark 或 system 且系统为暗）。
+      theme: AppTheme.light(),
+      darkTheme: settings.amoledDark ? AppTheme.amoled() : AppTheme.dark(),
       home: session.loggedIn ? const HomeShell() : const LoginPage(),
     );
   }

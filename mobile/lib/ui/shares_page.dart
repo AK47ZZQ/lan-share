@@ -2,6 +2,7 @@
 // 撤销 + 复制链接 + 二维码 + 系统分享面板外发 + 编辑（0.6.0），
 // 能力与网页版分享管理页对齐。
 import 'package:flutter/material.dart';
+import 'widgets/brand.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -210,13 +211,10 @@ class _SharesPageState extends State<SharesPage> {
             ? const Center(child: CircularProgressIndicator())
             : items.isEmpty
                 ? ListView(children: [
-                    const SizedBox(height: 120),
-                    Center(
-                        child: Text(_error ?? '还没有分享过文件',
-                            style: const TextStyle(color: Colors.grey))),
-                    const SizedBox(height: 8),
-                    Center(
-                        child: TextButton(onPressed: _load, child: const Text('刷新'))),
+                    EmptyState(
+                        title: _error ?? '还没有分享过文件',
+                        hint: '在文件页选中文件 → ⋯ → 分享',
+                        action: TextButton(onPressed: _load, child: const Text('刷新'))),
                   ])
                 : RefreshIndicator(
                     onRefresh: _load,

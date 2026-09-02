@@ -5,6 +5,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/local/prefs.dart';
 import '../data/update_service.dart';
+import 'widgets/brand.dart';
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -89,8 +90,7 @@ class _AboutPageState extends State<AboutPage> {
         appBar: AppBar(title: const Text('关于')),
         body: ListView(padding: const EdgeInsets.all(16), children: [
           const SizedBox(height: 16),
-          Center(child: Icon(Icons.home_work_outlined,
-              size: 56, color: Theme.of(context).colorScheme.primary)),
+          const Center(child: BrandCloud(size: 72, onGradient: false)),
           const SizedBox(height: 12),
           Center(child: Text('LAN Share',
               style: Theme.of(context).textTheme.titleLarge)),

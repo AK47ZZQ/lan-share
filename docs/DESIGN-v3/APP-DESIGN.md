@@ -723,6 +723,28 @@ WebDAV 配额两条计数口径修正；前后端"null=未提供"契约在管理
 缺陷是跨端共债，修一端必须排查另一端**；Caddy 代理层 2GB 请求体上限
 与服务端 20GB WebDAV 特性不一致（代理先于应用层截断）。
 
+### 8.21 App UI 重设计（2026-09-04，v0.8.4+26）
+
+用户拍板简化：视觉 A（深紫蓝玻璃）、暗色 AMOLED 增强、一次全做完、品牌=
+登录页云朵+渐变底。落地四层：
+
+1. **tokens**：`ui/theme/app_theme.dart` 收拢色板/圆角/阴影/字号为常量
+   （Brand.gradient Primary#5B6CFF→Tertiary#9C6BFF）；亮/暗/AMOLED 三套
+   ColorScheme + 组件主题（卡片 20 圆角低对比描边、输入框填充态、底弹层
+   上圆角 24、NavigationBar 指示胶囊、FloatingAction 圆角 12）。
+2. **组件**：`ui/widgets/brand.dart`——BrandCloud（登录页白底圆角块复刻）、
+   BrandHeader（渐变大头）、EmptyState（云朵+标题+引导三件套，替换"还没 xx"
+   灰字）、FileTypeTile（扩展名→类型色的圆角方块 + 白字形）。
+3. **逐屏**：首页渐变品牌头+快捷色块；照片墙日期主色胶囊 + 缩略图↔全屏
+   Hero（tag=path，防重：查看器与网格同 tag 只在两路由各一）；查看器底部
+   毛玻璃操作条（BackdropFilter 仅本条，不碰图片层）；文件列表品牌图标。
+4. **动效**：页面转场 8ms 淡入+8px 上移（自定义 PageTransitionsBuilder，
+   克制不动 Sliver 图片路径）；主题三档 → AMOLED 开关走 darkTheme 替换。
+
+性能红线守住：未动照片墙 Sliver 结构、未动 AuthImage 缓存管线；Hero 仅在
+两路由各一份 tag 不冲突。AMOLED 显式使用 surface 分层近黑（#000/#12141F）
+而非简单反转。
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

@@ -21,6 +21,8 @@ import '../data/local/verifier_store.dart';
 import '../data/totp.dart';
 import '../state/session.dart';
 import 'scan_page.dart';
+import 'theme/app_theme.dart';
+import 'widgets/brand.dart';
 
 enum _Probe { idle, probing, ok, fail }
 
@@ -331,28 +333,13 @@ class _LoginPageState extends ConsumerState<LoginPage>
     );
   }
 
-  /// 上半屏品牌区：渐变背景 + Logo + 产品名 + slogan
+  /// 上半屏品牌区：渐变背景 + 云朵 Logo + 产品名 + slogan（0.8.4 统一到 Brand 组件）
   Widget _brandHeader(BuildContext context, ColorScheme cs) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(24, 44, 24, 56),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [cs.primary, cs.tertiary]),
-        borderRadius: const BorderRadius.only(
-            bottomLeft: Radius.circular(32),
-            bottomRight: Radius.circular(32)),
-      ),
+    return BrandHeader(
+      bottomRadius: Brand.headerRadius,
       child: Column(children: [
-        Container(
-          width: 72, height: 72,
-          decoration: BoxDecoration(
-              color: Colors.white24, borderRadius: BorderRadius.circular(20)),
-          child: const Icon(Icons.cloud_outlined,
-              color: Colors.white, size: 40),
-        ),
+        const SizedBox(height: 16),
+        const BrandCloud(size: 72),
         const SizedBox(height: 16),
         const Text('LAN Share',
             style: TextStyle(

@@ -557,6 +557,15 @@ class _MePageState extends ConsumerState<MePage> {
           }),
           onTap: _pickThemeMode,
         ),
+        // 0.8.4 暗色增强：AMOLED 纯黑底（OLED 屏省电 + 夜间观影友好）
+        SwitchListTile(
+          secondary: const Icon(Icons.nights_stay_outlined),
+          title: const Text('AMOLED 纯黑暗色'),
+          subtitle: const Text('暗色模式下使用纯黑背景（OLED 屏更省电）'),
+          value: settings.amoledDark,
+          onChanged: (v) =>
+              ref.read(settingsProvider.notifier).setAmoledDark(v),
+        ),
         const Divider(),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),

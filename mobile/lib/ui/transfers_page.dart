@@ -3,6 +3,7 @@
 // 0.6.0：状态筛选（全部/进行中/已完成/失败）、失败原因点按看全量、
 //        全部暂停/全部继续/重试全部失败（AppBar 菜单）。
 import 'package:flutter/material.dart';
+import 'widgets/brand.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../transfer/transfer_engine.dart';
@@ -85,20 +86,9 @@ class _TransfersPageState extends ConsumerState<TransfersPage> {
         ),
         Expanded(
           child: tasks.isEmpty
-              ? Center(
-                  child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                      Icon(Icons.swap_vert_circle_outlined,
-                          size: 56, color: Theme.of(context).colorScheme.outline),
-                      const SizedBox(height: 12),
-                      const Text('暂无传输任务'),
-                      const SizedBox(height: 4),
-                      Text('在"文件"页可上传，点按文件可下载',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).colorScheme.outline)),
-                    ]))
+              ? const EmptyState(
+                  title: '暂无传输任务',
+                  hint: '在「文件」页可上传，点按文件可下载')
               : visible.isEmpty
                   ? ListView(children: [
                       const SizedBox(height: 80),
