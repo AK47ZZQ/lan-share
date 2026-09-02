@@ -1,8 +1,10 @@
 """系统任务：定时清理（tmp/回收站/上传会话/zip/DB）+ 照片时间线 + 通用 QR。"""
 import asyncio
 import io
+import json
 import re
 import shutil
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -136,8 +138,59 @@ def _cleanup_db():
 # ─── 照片时间线 ───────────────────────────────────────────
 
 PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
+# 视频纳入照片时间线（App v0.6.0）：备份本就支持视频，此前时间线只扫图片，
+# 手机备份的视频在照片墙完全不可见。类型由扩展名推导（media_type），不建列。
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".webm", ".avi", ".mkv"}
 _last_photo_scan = 0.0
 _photo_scan_lock = threading.Lock()
+
+
+def _media_type(rel: str) -> str:
+    return "video" if Path(rel).suffix.lower() in VIDEO_EXTS else "photo"
+
+
+def _ffprobe_meta(path: Path) -> tuple[float | None, str | None]:
+    """视频元数据：(时长秒, 拍摄日期YYYY-MM-DD)。ffprobe 不在 PATH 时静默降级
+    （时长留空，App 只显示 ▶ 角标）；date 取容器 creation_time（手机拍摄的视频
+    mtime 常是"拷入时间"，比 EXIF 不可用的图片更需要这一层）。"""
+    exe = shutil.which("ffprobe")
+    if not exe:
+        return None, None
+    try:
+        r = subprocess.run(
+            [exe, "-v", "quiet", "-print_format", "json", "-show_format", str(path)],
+            capture_output=True, timeout=15)
+        if r.returncode != 0:
+            return None, None
+        fmt = (json.loads(r.stdout.decode("utf-8", "replace") or "{}").get("format") or {})
+        dur = float(fmt["duration"]) if fmt.get("duration") else None
+        ct = (fmt.get("tags") or {}).get("creation_time")
+        taken = str(ct)[:10] if ct else None
+        return dur, taken
+    except Exception:
+        return None, None
+
+
+def _probe_video_durations(cap: int = 20):
+    """补扫时长缺失的视频行：新入库视频在上面的增量扫描里拿到行，
+    元数据在此处批量补（每次扫描至多 20 条，避免一次请求拖长）。"""
+    rows = _db().execute("SELECT path FROM photos WHERE duration IS NULL").fetchall()
+    targets = [r["path"] for r in rows if Path(r["path"]).suffix.lower() in VIDEO_EXTS][:cap]
+    updates = []
+    for rel in targets:
+        f = SHARE_ROOT / rel
+        if not f.is_file():
+            continue
+        dur, taken = _ffprobe_meta(f)
+        if dur is not None:
+            updates.append((dur, taken, rel))
+    if updates:
+        with _db_lock:
+            _db().executemany(
+                "UPDATE photos SET duration=?, "
+                "taken_at=CASE WHEN ? IS NOT NULL THEN ? ELSE taken_at END "
+                "WHERE path=?", [(d, t, t, p) for (d, t, p) in updates])
+            _db().commit()
 
 
 def _photo_taken_at(f: Path) -> str:
@@ -175,7 +228,7 @@ def _scan_photos(force: bool = False):
             rel_parts = f.relative_to(SHARE_ROOT).parts
             if any(p.startswith(".") for p in rel_parts):
                 continue
-            if not f.is_file() or f.suffix.lower() not in PHOTO_EXTS:
+            if not f.is_file() or f.suffix.lower() not in PHOTO_EXTS | VIDEO_EXTS:
                 continue
             stat = f.stat()
             rel = str(f.relative_to(SHARE_ROOT)).replace("\\", "/")
@@ -196,6 +249,7 @@ def _scan_photos(force: bool = False):
             if gone:
                 _db().executemany("DELETE FROM photos WHERE path=?", [(g,) for g in gone])
             _db().commit()
+        _probe_video_durations()
         _last_photo_scan = time.time()
 
 
@@ -215,20 +269,23 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
                 offset: int = Query(default=0, ge=0),
                 month: str | None = Query(default=None),
                 uploader: str | None = Query(default=None),
+                media_type: str | None = Query(default=None),
                 refresh: bool = Query(default=False),
                 _user=Depends(require_user)):
-    """照片时间线：按拍摄日期倒序（EXIF 优先）。仅显示对当前用户可见的照片。
-    可按 month=YYYY-MM 与 uploader 过滤（共享相册双维度浏览）。
+    """照片时间线：按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）。
+    可按 month=YYYY-MM 与 uploader、media_type=photo|video 过滤。
     refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos(force=refresh)
     all_rows = _db().execute(
-        "SELECT path, taken_at FROM photos ORDER BY taken_at DESC, path").fetchall()
+        "SELECT path, taken_at, duration FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
     if uploader:
         rows = [r for r in rows if _photo_uploader(r["path"]) == uploader]
+    if media_type in ("photo", "video"):
+        rows = [r for r in rows if _media_type(r["path"]) == media_type]
     total = len(rows)
     rows = rows[offset:offset + limit]
     return {
@@ -239,6 +296,8 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
             "taken": r["taken_at"],
             "month": (r["taken_at"] or "")[:7],
             "uploader": _photo_uploader(r["path"]),
+            "media_type": _media_type(r["path"]),
+            "duration": r["duration"],
             "thumb": f"/thumb/{r['path']}",
         } for r in rows],
     }

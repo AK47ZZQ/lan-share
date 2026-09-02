@@ -157,7 +157,8 @@ _PG_SCHEMA = """
         path TEXT PRIMARY KEY,
         taken_at TEXT NOT NULL,
         mtime_ns BIGINT NOT NULL,
-        size BIGINT NOT NULL
+        size BIGINT NOT NULL,
+        duration DOUBLE PRECISION
     );
     CREATE TABLE IF NOT EXISTS grants(
         id BIGSERIAL PRIMARY KEY,
@@ -260,6 +261,7 @@ def init_db():
         # CREATE IF NOT EXISTS 不会给存量表补列：PG 生产库逐列显式增量（幂等）
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS webdav_password_hash TEXT")
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_rc TEXT")
+        _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration DOUBLE PRECISION")
         _backfill_audit_usernames()
         return
     conn = _db()
@@ -323,7 +325,8 @@ def init_db():
             path TEXT PRIMARY KEY,
             taken_at TEXT NOT NULL,
             mtime_ns INTEGER NOT NULL,
-            size INTEGER NOT NULL
+            size INTEGER NOT NULL,
+            duration REAL
         );
     """)
     _db().commit()
@@ -364,6 +367,9 @@ def _migrate_v3():
         acols = {r["name"] for r in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
         if "username" not in acols:
             conn.execute("ALTER TABLE audit_log ADD COLUMN username TEXT NOT NULL DEFAULT ''")
+        pcols = {r["name"] for r in conn.execute("PRAGMA table_info(photos)").fetchall()}
+        if "duration" not in pcols:
+            conn.execute("ALTER TABLE photos ADD COLUMN duration REAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS grants(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

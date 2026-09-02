@@ -131,7 +131,8 @@ def test_upload_instant_dedup(auth, workdir):
 
 
 def test_move_with_conflict_auto_rename(auth, workdir):
-    """移动重名自动 (2) 改名，不覆盖（os.rename 原子防覆盖）。"""
+    """移动重名自动改名不覆盖（os.rename 原子防覆盖）；0.6.0 起序号与
+    资源管理器一致从 (1) 起（旧为 (2)）。"""
     auth.post(f"/api/mkdir/{workdir}/src")
     auth.post(f"/api/mkdir/{workdir}/dst")
     auth.post(f"/api/upload/{workdir}/src",
@@ -144,12 +145,12 @@ def test_move_with_conflict_auto_rename(auth, workdir):
     assert r.status_code == 200, r.text
     results = r.json()["results"]
     assert results[0]["ok"] is True
-    assert results[0]["dest"].endswith("f (2).txt")
+    assert results[0]["dest"].endswith("f (1).txt")
 
     dst = os.path.join(os.environ["SHARE_ROOT"], workdir, "dst")
     with open(os.path.join(dst, "f.txt"), "rb") as f:
         assert f.read() == b"two"  # 原文件未被覆盖
-    with open(os.path.join(dst, "f (2).txt"), "rb") as f:
+    with open(os.path.join(dst, "f (1).txt"), "rb") as f:
         assert f.read() == b"one"
 
 

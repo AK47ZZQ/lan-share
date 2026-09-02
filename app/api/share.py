@@ -13,6 +13,7 @@ import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
 from fastapi import (Depends, File, Form, HTTPException, Request, Response)
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_TTL
@@ -301,3 +302,39 @@ async def revoke_share(request: Request, token: str, _user=Depends(require_user)
         audit("share_revoke", token, ip=client_ip(request))
         return {"ok": True}
     raise HTTPException(status_code=404, detail="Share not found")
+
+
+class ShareEditBody(BaseModel):
+    """分享编辑（App v0.6.0）：有效期从现在起重新计时；下载上限可改/取消。"""
+    expires_hours: Optional[int] = None
+    max_downloads: Optional[int] = None
+
+
+@app.patch("/api/shares/{token}")
+async def edit_share(request: Request, token: str, body: ShareEditBody,
+                     _user=Depends(require_user)):
+    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    if not s:
+        raise HTTPException(status_code=404, detail="Share not found")
+    if _user["role"] != "admin" and s["owner_id"] not in (None, _user["user_id"]):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if body.expires_hours is None and body.max_downloads is None:
+        raise HTTPException(status_code=400, detail="没有要修改的字段")
+    if body.expires_hours is not None and body.expires_hours < 1:
+        raise HTTPException(status_code=400, detail="expires_hours must be >= 1")
+    if body.max_downloads is not None and body.max_downloads < 1:
+        raise HTTPException(status_code=400, detail="max_downloads must be >= 1")
+    with _db_lock:
+        if body.expires_hours is not None:
+            _db().execute("UPDATE shares SET expires_at=? WHERE token=?",
+                          (time.time() + body.expires_hours * 3600, token))
+        if body.max_downloads is not None:
+            _db().execute("UPDATE shares SET max_downloads=? WHERE token=?",
+                          (body.max_downloads, token))
+        _db().commit()
+    audit("share_edit", token,
+          f"exp={body.expires_hours}h max={body.max_downloads}", client_ip(request))
+    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    return {"ok": True,
+            "expires_in": f"{max(0, int((s['expires_at'] - time.time()) / 3600))}h",
+            "max_downloads": s["max_downloads"]}

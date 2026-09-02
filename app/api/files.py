@@ -342,10 +342,13 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
                 raise HTTPException(status_code=400, detail="不能移动到自身的子目录")
             # os.rename 在 Windows 下目标已存在必抛 FileExistsError（原子防覆盖，
             # 无 _unique_dest 预检 + os.replace 的并发竞态窗口）
+            # 重名序号与资源管理器一致：首个冲突即 "name (1)"（0.6.0 起修正，
+            # 此前从 (2) 起跳）
             placed = None
             final = dest_dir / target.name
-            for i in range(1, 1000):
-                cand = final if i == 1 else final.with_name(f"{final.stem} ({i}){final.suffix}")
+            for cand in [final] + [
+                    final.with_name(f"{final.stem} ({i}){final.suffix}")
+                    for i in range(1, 999)]:
                 try:
                     os.rename(target, cand)
                     placed = cand
@@ -370,6 +373,52 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
 def _move_to_trash(target: Path, orig_path: str):
     """兼容别名：实现已下沉 filetools.move_to_trash（webdav/system 从此处导入）。"""
     move_to_trash(target, orig_path)
+
+
+@app.post("/api/copy")
+def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
+    """批量复制到目标目录（App v0.6.0 文件管理补齐）。与 move 的差别：
+    复制不删源——源只需读权；文件 copy2、目录 copytree；重名自动 "name (n)"。
+    同步 def 跑线程池：copytree 大目录耗时，不阻塞事件循环。"""
+    if not body.sources:
+        raise HTTPException(status_code=400, detail="未选择要复制的文件")
+    if len(body.sources) > 500:
+        raise HTTPException(status_code=400, detail="单次最多复制 500 项")
+    dest_dir = resolve(_user, body.dest_dir, "write")
+    if not dest_dir.is_dir():
+        raise HTTPException(status_code=404, detail="目标目录不存在")
+    results = []
+    for src in body.sources:
+        try:
+            target = resolve(_user, src, "read")
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="源文件不存在")
+            if target == dest_dir or (target.is_dir() and target in dest_dir.parents):
+                raise HTTPException(status_code=400, detail="不能复制到自身的子目录")
+            final = dest_dir / target.name
+            placed = None
+            if not final.exists():
+                placed = final
+            else:
+                for i in range(1, 1000):
+                    cand = final.with_name(f"{final.stem} ({i}){final.suffix}")
+                    if not cand.exists():
+                        placed = cand
+                        break
+            if placed is None:
+                raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
+            if target.is_dir():
+                shutil.copytree(target, placed)
+            else:
+                shutil.copy2(target, placed)
+            final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
+            results.append({"src": src, "ok": True, "dest": final_rel})
+            audit("copy", src, f"→ {final_rel}", client_ip(request))
+        except HTTPException as e:
+            results.append({"src": src, "ok": False, "error": e.detail})
+        except OSError as e:
+            results.append({"src": src, "ok": False, "error": str(e)})
+    return {"ok": True, "results": results}
 
 
 @app.delete("/api/files/{path:path}")
