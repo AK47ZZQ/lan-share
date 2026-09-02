@@ -627,6 +627,32 @@ E2E 从未暴露。**教训入册：约束类 bug 必须显式模拟约束缺失
 诊断卡；手动轮 setExpedited 进一步压启动延迟；MIUI 自启动/省电白名单
 引导页（检测 MIUI ROM 给出图文指引）；单轮条数上限与"大迁移分夜跑"。
 
+### 8.19 六轮 review + 对抗性审查：管理面板删除失效等 5 个 P0（2026-09-03 傍晚，v0.8.1+23）
+
+用户报管理面板删除按钮失效，要求全面审查。流程：第 1 轮人工 API 契约
+逐端点核对（App 请求 vs `admin.py/auth.py/notify.py` 服务端签名），第
+2–5 轮四个审查专员并行（状态生命周期 / UI 交互排版 / 安全权限 / 对抗性
+边界），第 6 轮修复+验证。方法论沉淀：
+
+- **契约错是删除失效的头号嫌疑**：服务端 `DELETE /api/admin/invites/{code}`
+  与 `/api/admin/grants/{gid}` 只有 DELETE 方法，App 复用 `_post` 助手 →
+  405 → 无提示失败。修法：新增 `_del` 助手（dio.delete + 中文错误
+  toast + `_loadAll`），三类删除统一走它。**教训：UI 助手函数按"方法"
+  分家，不要按"有无 body"分家。**
+- **`_prompt` 空值语义**："取消"与"留空提交"必须区分（`allowEmpty`
+  返回 `''` vs 取消返回 `null`）；凡文案带"留空=清除"的流程必须真机
+  点一遍。配额清除走 0（服务端 `quota_bytes or None` → NULL），
+  不能发 null（Pydantic 与缺省字段不可区分，直接跳过更新）。
+- **错误中文化统一出口**：`data/api/errors.dart` `errDetail(e)`——
+  DioException 取 `response.data['detail']`（服务端全中文 detail），
+  fallback HTTP 状态码；替换全部 `e.toString()` 直出。
+- **fromJson 防脏数据**：服务端字段一律 `as T? ?? fallback`，尤其
+  列表页 model（一条脏数据崩整页）。
+- 其余落地：`_busy` 防连点、`_loadDirs` 路径逐段 encode、zip 临时名
+  时间戳前缀、多选栏横向滚动、改用户名后清缩略图缓存、通知 `read`
+  字段 + 本地同步去红点、专辑 chip 主色区分、幽灵 uid 清理、
+  "已删除(#id)" 回退文案。
+
 ### 8.18 功能对齐网页版：管理面板/账号安全/打包下载/专辑/通知（2026-09-03 午后，v0.8.0+22）
 
 用户要求把 Web 能力全部迁移到 App。盘点后差距三块，服务端端点早已齐备

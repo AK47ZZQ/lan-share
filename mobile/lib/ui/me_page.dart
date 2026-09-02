@@ -1,5 +1,6 @@
 // 我的：登录身份 + 设备管理 + 设置区（0.6.0：主题三档/修改密码/通知/应用锁/
 // 缓存管理/关于与检查更新）+ 服务器地址 + 退出。
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -14,6 +15,7 @@ import 'admin_page.dart';
 import 'backup_settings_page.dart';
 import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
+import '../data/api/errors.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
@@ -59,14 +61,15 @@ class _MePageState extends ConsumerState<MePage> {
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/auth/devices');
-      final list = (r.data['devices'] as List)
-          .map((e) => _Device(
-              id: (e['id'] as num).toInt(),
-              name: e['name'] as String,
-              createdAt: (e['created_at'] as num).toDouble(),
-              lastSeen: e['last_seen'] as num?,
-              current: e['current'] as bool? ?? false))
-          .toList();
+      final list = ((r.data['devices'] as List?) ?? const []).map((e) {
+        final m = e as Map;
+        return _Device(
+            id: (m['id'] as num?)?.toInt() ?? 0,
+            name: m['name'] as String? ?? '未知设备',
+            createdAt: (m['created_at'] as num?)?.toDouble() ?? 0,
+            lastSeen: m['last_seen'] as num?,
+            current: m['current'] as bool? ?? false);
+      }).toList();
       if (!mounted) return;
       setState(() {
         _devices = list;
@@ -263,6 +266,8 @@ class _MePageState extends ConsumerState<MePage> {
       await Prefs.setUsername(newName);
       if (!mounted) return;
       ref.read(sessionProvider.notifier).applyRename(newName);
+      // 缩略图 key 含旧用户名路径：清掉避免旧目录名驻留本地（0.8.1 审查修复）
+      unawaited(AuthCacheManager.I.emptyCache());
       _toast('用户名已改为 $newName（私人目录已同步改名）');
       setState(() {});
     } catch (e) {
@@ -313,6 +318,8 @@ class _MePageState extends ConsumerState<MePage> {
     final newPwd = newCtrl.text;
     if (newPwd.isNotEmpty && newPwd.length < 8) {
       _toast('WebDAV 密码至少 8 位（留空=清除）');
+      newCtrl.dispose();
+      curCtrl.dispose();
       return;
     }
     try {
@@ -341,24 +348,30 @@ class _MePageState extends ConsumerState<MePage> {
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.post('/api/pair/code');
-      code = r.data['code'] as String;
+      code = r.data['code'] as String?;
       expires = (r.data['expires_in'] as num?)?.toInt() ?? 180;
     } catch (e) {
       _toast('生成失败：${_detail(e)}');
       return;
     }
     if (!mounted) return;
+    if (code == null || code.isEmpty) {
+      _toast('生成失败：服务端未返回配对码');
+      return;
+    }
     await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
                 title: const Text('配对码'),
                 content: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Text(code!,
-                      style: const TextStyle(
-                          fontSize: 36,
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 6)),
+                  FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(code!,
+                          style: const TextStyle(
+                              fontSize: 36,
+                              fontFamily: 'monospace',
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 6))),
                   const SizedBox(height: 8),
                   Text('在另一台设备的登录页选择"配对码登录"，输入此码即可免密登录本账号。$expires 秒内有效，一码一用。',
                       style: const TextStyle(fontSize: 12)),
@@ -403,7 +416,9 @@ class _MePageState extends ConsumerState<MePage> {
       final dio = await ApiClient.I.dio();
       final r = await dio
           .post('/api/auth/totp/rc', data: {'old_password': pwdCtrl.text});
-      codes = r.data['recovery_codes'] as List;
+      codes = ((r.data['recovery_codes'] as List?) ?? const [])
+          .whereType<String>()
+          .toList();
     } catch (e) {
       _toast('生成失败：${_detail(e)}');
       return;
@@ -411,6 +426,10 @@ class _MePageState extends ConsumerState<MePage> {
       pwdCtrl.dispose();
     }
     if (!mounted) return;
+    if (codes.isEmpty) {
+      _toast('生成失败：服务端未返回恢复码');
+      return;
+    }
     await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -492,10 +511,7 @@ class _MePageState extends ConsumerState<MePage> {
         .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
-  static String _detail(Object e) {
-    final s = e.toString();
-    return s.length > 80 ? s.substring(0, 80) : s;
-  }
+  static String _detail(Object e) => errDetail(e);
 
   @override
   Widget build(BuildContext context) {

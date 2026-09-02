@@ -15,6 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_dest.dart';
 import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
@@ -170,9 +171,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         final dio = await ApiClient.I.dio();
         final r = await dio.get('/api/photos/facets');
         months = {
-          for (final m in (r.data['months'] as List))
-            (m as Map)['month'] as String: (m['count'] as num).toInt(),
-        };
+          for (final m in ((r.data['months'] as List?) ?? const []))
+            (m as Map)['month'] as String? ?? '':
+                (m['count'] as num?)?.toInt() ?? 0,
+        }..removeWhere((k, _) => k.isEmpty);
         _months = months;
       } catch (_) {
         months = {};
@@ -247,11 +249,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   /// 新建精选专辑（admin）：标题 + 从现有月份里选
   Future<void> _addAlbum() async {
+    if (!mounted) return;
+    final c = TextEditingController();
     final title = await showDialog<String>(
         context: context,
-        builder: (d) {
-          final c = TextEditingController();
-          return AlertDialog(
+        builder: (d) => AlertDialog(
               title: const Text('新建精选专辑'),
               content: TextField(controller: c,
                   autofocus: true,
@@ -264,8 +266,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                 FilledButton(
                     onPressed: () => Navigator.pop(d, c.text.trim()),
                     child: const Text('下一步')),
-              ]);
-        });
+              ]));
+    c.dispose();
     if (title == null || title.isEmpty || !mounted) return;
     final month = await showModalBottomSheet<String>(
         context: context,
@@ -285,7 +287,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       _loadAlbums();
       setState(() => _months = null); // 破缓存让下次进来重新拉
     } catch (e) {
-      _toast(e.toString().substring(0, e.toString().length.clamp(0, 120)));
+      _toast(errDetail(e));
     }
   }
 
@@ -307,11 +309,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     try {
       final dio = await ApiClient.I.dio();
       await dio.delete('/api/admin/albums/${Uri.encodeComponent(a.id)}');
+      if (!mounted) return;
       setState(() =>
           _albums = _albums?.where((x) => x.id != a.id).toList());
       _toast('已删除');
     } catch (e) {
-      _toast(e.toString().substring(0, e.toString().length.clamp(0, 120)));
+      _toast(errDetail(e));
     }
   }
 
@@ -519,12 +522,20 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                           child: InputChip(
                                               visualDensity:
                                                   VisualDensity.compact,
-                                              avatar: const Icon(
+                                              avatar: Icon(
                                                   Icons.auto_awesome,
-                                                  size: 16),
+                                                  size: 16,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .primary),
                                               label: Text(a.title,
-                                                  style: const TextStyle(
-                                                      fontSize: 12)),
+                                                  style: TextStyle(
+                                                      fontSize: 12,
+                                                      fontWeight:
+                                                          FontWeight.w500,
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .primary)),
                                               selected:
                                                   _month == a.month,
                                               onPressed: () {
@@ -754,7 +765,7 @@ class _Album {
   final String title;
   final String month;
   _Album.fromJson(Map<String, dynamic> j)
-      : id = j['id'] as String,
-        title = j['title'] as String,
-        month = j['month'] as String;
+      : id = j['id'] as String? ?? '',
+        title = j['title'] as String? ?? '',
+        month = j['month'] as String? ?? '';
 }

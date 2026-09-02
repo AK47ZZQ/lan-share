@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import '../transfer/transfer_engine.dart';
@@ -639,15 +640,21 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.post('/api/zip', data: {'paths': paths});
-      final url = r.data['url'] as String;
+      final url = r.data['url'] as String?;
       final name = r.data['name'] as String? ?? 'share.zip';
+      if (url == null || url.isEmpty) {
+        _toast('打包失败：服务端未返回下载地址');
+        return;
+      }
       final tmp = await getTemporaryDirectory();
-      f = File('${tmp.path}/$name');
+      // 时间戳前缀防同名覆盖；进程被杀的残留由系统随 cache 目录回收
+      f = File(
+          '${tmp.path}/zip-${DateTime.now().millisecondsSinceEpoch}-$name');
       await dio.download(url, f.path);
       _toast('打包完成');
       await Share.shareXFiles([XFile(f.path)], subject: name);
     } catch (e) {
-      _toast('打包失败：${e.toString().substring(0, e.toString().length.clamp(0, 120))}');
+      _toast('打包失败：${errDetail(e)}');
     } finally {
       try {
         await f?.delete();
@@ -853,8 +860,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 border: Border(
                     top: BorderSide(
                         color: Theme.of(context).dividerColor, width: 0.5))),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
+            child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal, // 六键并排窄屏溢出（0.8.1 审查修复）
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
                   if (hasFile)
                     _op(Icons.download_outlined, '下载', _downloadSelected),
                   if (multi)
@@ -870,7 +879,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                   if (canManage)
                     _op(Icons.delete_outline, '删除',
                         () => _delete(entries)),
-                ])));
+                ]))));
   }
 
   Widget _op(IconData icon, String label, VoidCallback onTap) => Padding(

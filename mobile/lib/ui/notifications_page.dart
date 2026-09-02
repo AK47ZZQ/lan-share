@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
 
 class _Notif {
   final int id;
@@ -13,12 +14,22 @@ class _Notif {
   final int createdAt;
   final bool unread;
   _Notif.fromJson(Map<String, dynamic> j)
-      : id = (j['id'] as num).toInt(),
+      : id = (j['id'] as num?)?.toInt() ?? 0,
         type = j['type'] as String? ?? '',
         title = j['title'] as String? ?? '',
         body = j['body'] as String? ?? '',
         createdAt = (j['created_at'] as num?)?.toInt() ?? 0,
-        unread = j['read_at'] == null;
+        // 服务端字段是 read（bool），非 read_at（0.8.1 审查修复）
+        unread = j['read'] != true;
+
+  _Notif asRead() => _Notif.fromJson({
+        'id': id,
+        'type': type,
+        'title': title,
+        'body': body,
+        'created_at': createdAt,
+        'read': true,
+      });
 }
 
 class NotificationsPage extends StatefulWidget {
@@ -52,14 +63,19 @@ class _NotificationsPageState extends State<NotificationsPage> {
         _unread = (r.data['unread'] as num?)?.toInt() ?? 0;
         _error = null;
       });
-      // 打开页面即全部已读（与 Web 一致），徽标随之归零
+      // 打开页面即全部已读（与 Web 一致），徽标随之归零；
+      // 本地列表同步置已读，不再发请求重拉（0.8.1 审查修复）
       if (_unread > 0) {
         await dio.post('/api/notifications/read');
+        if (!mounted) return;
+        setState(() {
+          _unread = 0;
+          _items = items.map((n) => n.asRead()).toList();
+        });
       }
     } catch (e) {
       if (!mounted) return;
-      final s = e.toString();
-      setState(() => _error = s.length > 160 ? s.substring(0, 160) : s);
+      setState(() => _error = errDetail(e, max: 160));
     }
   }
 
