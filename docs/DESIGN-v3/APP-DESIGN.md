@@ -238,6 +238,63 @@ BackupDartRunner 作用域引用 applicationContext、把 ForegroundInfo 直接
 notify）——该提交实未编译过；拆出 `progressNotification()` 返回 Notification
 并用 run(ctx) 的 ctx。教训：**提交前必须过一次真构建，analyze/单测不编译 Kotlin**
 
+### 8.9 全功能实测修复批（2026-09-02 深夜 IX，v0.4.6+10）
+
+v0.5.2 之前的 App 改动都按"修改→单测→真构建→小切片模拟器回归"的
+轻流程过，但**没在模拟器上做过一次按用户日常路径走一遍的端到端真连**。
+本次按"登录 → 首页 → 照片 → 文件 → 传输 → 备份 → 分享管理 → 系统分享
+接收 → 我的"九模块顺序跑，每步都用 server-side 物理证据核对，挖出 4
+个存量 bug——其中 1 个 P1 是 v0.4.3 起的"照片墙准实时"**从未真正生效**：
+
+- **P1 跨 isolate 共享首选项缓存**：`BackupDartRunner` 由 WorkManager 拉
+  起，是独立 FlutterEngine（独立 isolate）。引擎完成一次备份后写
+  `flutter.backup_last_done_at` 与 `flutter.backup_pending_count`——但 UI
+  isolate 的 `shared_preferences` 插件**只在首次 `getInstance()` 时把磁
+  盘文件缓存到内存首帧**，后续 `getInt(...)` 都读旧值，等同于 UI 永远
+  看不到引擎写过。证据链：① jobscheduler 看 `WM-WorkerWrapper` 0.24s
+  SUCCESS（确认任务跑过且快速跳过）；② adb root 直读
+  `/data/data/.../shared_prefs/FlutterSharedPreferences.xml` 确认键值已更
+  新；③ `sqlite3` pull `databases/backup_ledger.db` 看 `ledger` 表 9 条
+  done 无新增（确认本次确实没新文件进来，引擎行为本身正确）。综合结论
+  是 UI 读不到 ≠ 引擎没写。修：`photos_page.dart` 10s 轮询前与
+  `home_page.dart` 的 `_loadLocal` 首行各加 `await sp.reload()`。教训：
+  任何"插件首帧缓存到进程内"副作用都要进 checklist，不靠用户报
+- **P2 复制分享链接 snackbar 插值错位**：`shares_page.dart:96`
+  `'已复制（$_addrTag(chosen)）'` 把**闭包对象本身**当字符串插值——Dart
+  单标识符 `$x` 是合法语法且编译器不警告，运行时 `toString()` 输出
+  `Closure: () => String`，用户看到的是元数据不是标签。补花括号
+  `'已复制（${_addrTag(chosen)}）'`。教训：Dart 字符串插值单标识符务必
+  显式花括号
+- **P2 照片页/文件页手动上传完成无联动**：picker 选 5 张图走完上传任务
+  → 相册列表不动——非备份路径没人监听 `engine` 状态，靠 10s 备份轮询
+  兜底，体感延迟。修：两页 `_pickAndUpload` 收集本次入队任务，订阅引
+  擎，所有任务 `finished` 且 `_path == dirAtEnqueue` 时 `_refresh()`。
+  订阅前快照当前目录是为了防用户切走目录后被旧 listener 强刷
+- **P2 备份位置文案过期**：设置页文案 `incoming/$username/手机相册/` 与
+  引擎实际 `destDir = 照片/手机相册/$username/` 不符（v0.4.2 真机反馈
+  第一批已统一）。改文案不改变逻辑（`backup_engine.dart:106` 的
+  `destDir` 一直是新路径，只是显示侧未跟）。教训：批量重构时显示侧要
+  grep 一遍硬编码路径兜底
+
+**四回归实测**：v0.4.6+10 模拟器上一一核验——① 备份位置文案显示
+`照片/手机相册/<用户名>/`；② 复制「局域网」标签 snackbar =
+`已复制（局域网）`；③ 手动上传 5 张，相册列表 1s 内多 5 张；④ 引擎跑
+一次后照片页 10s 内强刷新文件（jobscheduler 拉到任务 + adb root 读
+prefs 值已变 + 录屏确认列表刷新）。
+
+**模拟器环境注记**（写给后续接手人，不属 App bug）：
+- 模拟器无 Wi-Fi、只有蜂窝 3G（计费）→ WorkManager `UNMETERED` 约束
+  **永不满足** = 系统层宁停不偷跑。**开发期关掉"仅 Wi-Fi 备份"开关**才
+  能跑测试；真机 Wi-Fi 环境下不受影响
+- 网络验证进入 `PARTIAL_CONNECTIVITY` 时 Google 204 探测不可达，
+  CONNECTED 任务也会卡——`settings put global captive_portal_http_url/
+  https_url/fallback_url/other_fallback_urls` 指向
+  `http(s)://connect.rom.miui.com/generate_204` + `svc data disable/enable`
+  重验网络即可
+
+**发布**：release 包已覆盖 `App安装包/lanshare.apk`（与 v0.5.2+13 同分发
+链接，30 天有效）。
+
 ### 8.10 App 内置验证器（2026-09-02 傍晚，v0.5.2+13）
 
 - **动机**：两步验证补全后用户指出"手机上没有认证器 App"——把验证职责

@@ -1,5 +1,51 @@
 # 更新日志
 
+## 2026-09-02（深夜 IX）— 全功能实测修复批：模拟器九模块真连 + 4 bug 根修，v0.4.6+10
+
+v0.5.2 之前在模拟器上没做过**端到端全模块真连**——把 App 跑成"日常使用"
+顺一遍（登录 → 首页 → 照片 → 文件 → 传输 → 备份 → 分享管理 → 系统分享接收
+→ 我的），server-side 物理证据核验每一项，发现并修复 4 个 bug：
+
+- **P1 跨 isolate 共享首选项缓存**：WorkManager 拉起的 `BackupDartRunner` 是
+  独立 FlutterEngine（独立 isolate），引擎写 `backup_last_done_at` /
+  `backup_pending_count` 后 UI isolate 的 `SharedPreferences` 插件仍按首帧
+  缓存读——v0.4.3 起的"照片墙准实时（10s）"与首页备份卡**从未真正生效过**
+  （jobscheduler 验证 WM-WorkerWrapper SUCCESS=0.24s=快速跳过、adb root 读
+  prefs 确值已更、SQLite 账本 9 done 无新增 → 证据齐了才能定位）。修：
+  照片页轮询前与首页 `_loadLocal` 首行各加 `await sp.reload()`。**根因教训**：
+  任何插件"缓存到进程首帧"的副作用都要写进 checklist，不要等用户报
+
+- **P2 复制分享链接 snackbar 插值错位**：`shares_page.dart:96` 的
+  `'已复制（$_addrTag(chosen)）'` 把**闭包对象本身**插进字符串，渲染成
+  `已复制（Closure: () => String）`——用户看到的不是标签而是元数据。补花
+  括号 `'已复制（${_addrTag(chosen)}）'`。教训：插值表达式必须显式花括号，
+  编译器不警告单标识符被当成表达式
+
+- **P2 照片页 / 文件页手动上传完成无联动**：挑了 5 张图走 picker → 任务
+  全跑完后相册列表不动——非备份路径没人监听 `engine` 状态，靠 10s 备份轮询
+  兜底用户体感延迟。修：两页 `_pickAndUpload` 收集本次入队任务，订阅引擎，
+  当且仅当这些任务全部 `finished` 且当前路径未切走时 `_refresh()`——避免
+  用户切了目录又被旧 listener 强刷
+
+- **P2 备份位置文案过期**：设置页文案仍是 `incoming/$username/手机相册/`，
+  引擎早就统一到 `照片/手机相册/$username/`（v0.4.2 真机反馈第一批）。改
+  文案不改变逻辑（`backup_engine.dart:106` 的 `destDir` 一直是新路径，
+  只是显示侧未跟）。教训：批量重构时显示侧要 grep 一遍硬编码路径兜底
+
+**验证**：四回归全部在 v0.4.6+10 实测过——① 备份位置文案显示新路径；
+② 复制「局域网」标签 snackbar 内容 = `已复制（局域网）`；③ 手动选 5 张
+上传，相册列表 1s 内多 5 张；④ 引擎跑完一次，照片页 10s 内强刷新文件。
+release APK 已传 `App安装包/lanshare.apk`（覆盖分发、链接不变）。
+
+**模拟器实测注记**（写给后续接手人，不属 App bug）：
+- 模拟器无 Wi-Fi、只有蜂窝 3G（计费）→ WorkManager `UNMETERED` 约束**永不满足**
+  = 系统层宁停不偷跑。**关闭"仅 Wi-Fi 备份"开关**才能在开发期跑测试；
+  真机 Wi-Fi 环境下不受影响
+- 网络验证进入 `PARTIAL_CONNECTIVITY` 时 Google 204 探测不可达，CONNECTED
+  任务也会卡——改 `settings put global captive_portal_http_url ...` 指向
+  `http://connect.rom.miui.com/generate_204` + `svc data disable/enable` 重
+  验网络，否则开发期"备份从不跑"先怀疑 App 是方向性错误
+
 ## 2026-09-02（傍晚）— App 内置验证器：两步验证零第三方依赖（v0.5.2+13）
 
 用户指出"手机上没有认证器 App"——两步验证给家庭用户立了一道"先去装
