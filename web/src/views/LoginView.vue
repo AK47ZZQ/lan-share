@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { login as authLogin, refreshAuth } from '../auth'
 import { api } from '../api'
 import { toast } from '../ui'
+import CodeField from '../components/CodeField.vue'
 
 const username = ref('')
 const password = ref('')
@@ -11,6 +12,9 @@ const totpCode = ref('')
 const totpStep = ref(false)
 const busy = ref(false)
 const err = ref('')
+const codeRef = ref<InstanceType<typeof CodeField> | null>(null)
+// 认证器不可用时切恢复码（8 位 hex，文本框输入）
+const rcMode = ref(false)
 const route = useRoute()
 const router = useRouter()
 
@@ -37,16 +41,21 @@ async function submit() {
 }
 
 async function submitTotp() {
+  if (busy.value) return
+  const code = totpCode.value.trim()
+  if (!code) return
   err.value = ''
   busy.value = true
   try {
-    await api.loginTotp(username.value, password.value, totpCode.value)
+    await api.loginTotp(username.value, password.value, code)
     await refreshAuth()
     toast('欢迎回来', 'ok')
     const next = String(route.query.next || '/')
     router.replace(next.startsWith('/') ? next : '/')
   } catch (e) {
     err.value = (e as Error).message
+    totpCode.value = ''
+    codeRef.value?.reset()
   } finally { busy.value = false }
 }
 
@@ -87,12 +96,23 @@ async function redeem() {
       </form>
 
       <form v-if="totpStep" @submit.prevent="submitTotp">
-        <p class="sub" style="margin:0 0 10px">两步验证已启用，请输入认证器中的 6 位动态码</p>
-        <input v-model="totpCode" placeholder="6 位动态验证码" inputmode="numeric" autocomplete="one-time-code" autofocus maxlength="6" />
-        <button class="btn" type="submit" :disabled="busy || totpCode.length !== 6">
+        <p class="sub" style="margin:0 0 10px">{{ rcMode
+          ? '输入开通两步验证时保存的一枚恢复码（用一枚少一枚）'
+          : '两步验证已启用，请输入认证器中的 6 位动态码' }}</p>
+        <CodeField v-if="!rcMode" ref="codeRef" :disabled="busy" :autofocus="true"
+                   @update:code="totpCode = $event" @complete="submitTotp" />
+        <input v-else v-model="totpCode" placeholder="恢复码（如 a1b2c3d4 或 a1b2-c3d4）"
+               autocomplete="off" autofocus style="text-transform:uppercase" />
+        <button class="btn" type="submit"
+                :disabled="busy || totpCode.length < (rcMode ? 8 : 6)">
           {{ busy ? '验证中…' : '验证并登录' }}
         </button>
-        <p class="sub" style="text-align:center;margin:0"><a href="#" @click.prevent="totpStep = false; err = ''">返回重新登录</a></p>
+        <p class="sub" style="text-align:center;margin:0">
+          <a v-if="!rcMode" href="#" @click.prevent="rcMode = true; totpCode = ''; err = ''">认证器不可用？使用恢复码登录</a>
+          <a v-else href="#" @click.prevent="rcMode = false; totpCode = ''; err = ''">返回输入动态码</a>
+          <span style="opacity:.4">·</span>
+          <a href="#" @click.prevent="totpStep = false; rcMode = false; err = ''">返回重新登录</a>
+        </p>
       </form>
 
       <form v-else @submit.prevent="submit">

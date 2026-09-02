@@ -37,6 +37,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
   List<String> _addresses = const [];
 
   bool _pairMode = false;        // 配对码免密登录
+  bool _rcMode = false;          // 两步验证第二步：恢复码模式（认证器不可用时）
   bool _bioAvailable = false;
   SavedCredential? _saved;
 
@@ -44,6 +45,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
   bool _obscured = true;
   String _lastCode = ''; // 六格验证码/配对码（填满时更新，按钮兜底提交用）
   final _codeKey = GlobalKey<_CodeFieldState>();
+  final _rcCtrl = TextEditingController(); // 恢复码文本框
 
   late final AnimationController _shake = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 420));
@@ -69,6 +71,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
     _server.dispose();
     _username.dispose();
     _password.dispose();
+    _rcCtrl.dispose();
     _shake.dispose();
     super.dispose();
   }
@@ -267,6 +270,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
         _shake.forward(from: 0);
         if (next.needTotp || _pairMode) {
           _lastCode = '';
+          _rcCtrl.clear();
           _codeKey.currentState?.clear();
         }
       }
@@ -400,6 +404,10 @@ class _LoginPageState extends ConsumerState<LoginPage>
               onPressed: session.checking ? null : _bioLogin,
             ),
           ),
+          const SizedBox(height: 4),
+          // 开两步验证的账号，生物识别只免密码，动态码仍要输（语义如实）
+          Text('开启两步验证的账号仍需输入动态码',
+              style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 6),
           Row(children: [
             const Expanded(child: Divider()),
@@ -479,13 +487,37 @@ class _LoginPageState extends ConsumerState<LoginPage>
           onSubmitted: (_) => _submit(),
         ),
       ] else ...[
-        Text('输入认证器动态码',
+        Text(_rcMode ? '输入开通时保存的恢复码' : '输入认证器动态码',
             style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 4),
         Text(_username.text.trim(),
             style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 12),
-        _CodeField(key: _codeKey, onCompleted: _onCodeDone),
+        if (_rcMode)
+          TextField(
+              controller: _rcCtrl,
+              decoration: const InputDecoration(
+                  labelText: '恢复码（如 a1b2-c3d4）',
+                  prefixIcon: Icon(Icons.vpn_key_outlined)),
+              autocorrect: false,
+              enableSuggestions: false,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit())
+        else
+          _CodeField(key: _codeKey, onCompleted: _onCodeDone),
+        const SizedBox(height: 4),
+        TextButton(
+          onPressed: session.checking
+              ? null
+              : () => setState(() {
+                    _rcMode = !_rcMode;
+                    _lastCode = '';
+                    _rcCtrl.clear();
+                    _codeKey.currentState?.clear();
+                  }),
+          child: Text(_rcMode ? '返回输入动态码' : '认证器不可用？使用恢复码登录',
+              style: const TextStyle(fontSize: 12.5)),
+        ),
       ],
     ]);
   }
@@ -495,7 +527,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
       Text('输入电脑端生成的 6 位配对码',
           style: Theme.of(context).textTheme.titleSmall),
       const SizedBox(height: 4),
-      Text('60 秒有效 · 在「账号设置 → 手机 App 连接」生成',
+      Text('3 分钟内有效 · 在「账号设置 → 手机 App 连接」生成',
           style: Theme.of(context).textTheme.bodySmall),
       const SizedBox(height: 12),
       _CodeField(key: _codeKey, onCompleted: _onCodeDone),
@@ -531,7 +563,13 @@ class _LoginPageState extends ConsumerState<LoginPage>
       return;
     }
     if (s.needTotp) {
-      if (_lastCode.length == 6) {
+      if (_rcMode) {
+        final rc = _rcCtrl.text.trim();
+        if (rc.isNotEmpty) {
+          ref.read(sessionProvider.notifier)
+              .loginTotp(rc, server: _server.text.trim());
+        }
+      } else if (_lastCode.length == 6) {
         ref.read(sessionProvider.notifier)
             .loginTotp(_lastCode, server: _server.text.trim());
       }

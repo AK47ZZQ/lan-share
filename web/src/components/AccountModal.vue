@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, type Me } from '../api'
 import { refreshAuth } from '../auth'
-import { toast } from '../ui'
+import { toast, promptDlg } from '../ui'
 
 const props = defineProps<{ me: Me }>()
 const emit = defineEmits<{ close: []; updated: [] }>()
@@ -27,6 +27,10 @@ const totpCode = ref('')
 const totpBusy = ref(false)
 const totpErr = ref('')
 const totpDisablePwd = ref('')
+// 恢复码：明文仅开通/重新生成的响应里出现一次，展示到用户点"已妥善保存"为止
+const rcCodes = ref<string[]>([])
+const rcLeft = ref(props.me.totp_rc_left ?? 0)
+const rcBusy = ref(false)
 
 async function totpSetup() {
   totpErr.value = ''
@@ -42,14 +46,35 @@ async function totpEnable() {
   totpErr.value = ''
   totpBusy.value = true
   try {
-    await api.totpEnable(totpCode.value)
+    const r = await api.totpEnable(totpCode.value)
     totpEnabled.value = true
+    rcCodes.value = r.recovery_codes
+    rcLeft.value = r.recovery_codes.length
     totpSecret.value = ''; totpUri.value = ''; totpCode.value = ''
-    toast('两步验证已启用，下次登录需输入动态验证码', 'ok')
+    toast('两步验证已启用，请保存恢复码', 'ok')
     await refreshAuth()
     emit('updated')
   } catch (e) { totpErr.value = (e as Error).message } finally { totpBusy.value = false }
 }
+
+async function regenRc() {
+  try {
+    const pwd = await promptDlg('输入当前密码确认（旧恢复码全部作废）：', '', { title: '重新生成恢复码', placeholder: '当前密码' })
+    if (pwd === null) return
+    rcBusy.value = true
+    const r = await api.totpRcRegen(pwd)
+    rcCodes.value = r.recovery_codes
+    rcLeft.value = r.recovery_codes.length
+    toast('恢复码已重新生成，旧码全部作废', 'ok')
+  } catch (e) { toast((e as Error).message, 'err') } finally { rcBusy.value = false }
+}
+
+async function copyRc() {
+  try { await navigator.clipboard.writeText(rcCodes.value.map(c => c.slice(0, 4) + '-' + c.slice(4)).join('\n')); toast('恢复码已复制，请存入密码管理器或抄录', 'ok') }
+  catch { toast('复制失败，请手动抄录', 'err') }
+}
+
+function rcDone() { rcCodes.value = [] }
 
 async function totpDisable() {
   totpErr.value = ''
@@ -189,6 +214,25 @@ async function doPwd() {
           <div style="font-size:13.5px;font-weight:600">🛡️ 两步验证（TOTP）</div>
           <template v-if="totpEnabled">
             <p style="font-size:12.5px;color:var(--text-3);margin:0">已启用。登录时需要输入认证器（如 Google Authenticator、Microsoft Authenticator）的 6 位动态码。</p>
+            <template v-if="rcCodes.length">
+              <div style="display:grid;gap:8px;background:var(--glass);border:1px solid var(--line);border-radius:10px;padding:12px">
+                <div style="font-size:13px;font-weight:600">🔑 一次性恢复码（仅显示这一次）</div>
+                <p style="font-size:12px;color:var(--text-3);margin:0">手机丢失、认证器卸载时，在登录第二步输入任意一枚恢复码即可登录，用一枚少一枚。请复制存入密码管理器或抄录在纸上。</p>
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
+                  <code v-for="c in rcCodes" :key="c" style="user-select:all;background:var(--glass);padding:4px 8px;border-radius:6px;border:1px solid var(--line);font-size:12.5px;text-align:center">{{ c.slice(0, 4) }}-{{ c.slice(4) }}</code>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn sm" @click="copyRc">📋 复制全部</button>
+                  <button class="btn ghost sm" @click="rcDone">已妥善保存</button>
+                </div>
+              </div>
+            </template>
+            <p style="font-size:12.5px;color:var(--text-2);margin:0">
+              一次性恢复码剩余 <b>{{ rcLeft }}</b> 枚（认证器不可用时顶替动态码，用一枚少一枚）。{{ rcLeft === 0 ? '恢复码已用完且无法再看密钥，建议立即重新生成。' : '' }}
+            </p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn ghost sm" :disabled="rcBusy" @click="regenRc">🔄 重新生成恢复码</button>
+            </div>
             <input v-model="totpDisablePwd" type="password" placeholder="当前密码（确认关闭）" autocomplete="current-password" />
             <button class="btn danger sm" :disabled="totpBusy || !totpDisablePwd" @click="totpDisable">
               {{ totpBusy ? '提交中…' : '关闭两步验证' }}

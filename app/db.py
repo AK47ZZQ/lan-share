@@ -97,7 +97,8 @@ _PG_SCHEMA = """
         quota_bytes BIGINT,
         totp_secret TEXT,
         totp_enabled INTEGER NOT NULL DEFAULT 0,
-        webdav_password_hash TEXT
+        webdav_password_hash TEXT,
+        totp_rc TEXT
     );
     CREATE TABLE IF NOT EXISTS sessions(
         token_hash TEXT PRIMARY KEY,
@@ -258,6 +259,7 @@ def init_db():
         _db().executescript(_PG_SCHEMA)
         # CREATE IF NOT EXISTS 不会给存量表补列：PG 生产库逐列显式增量（幂等）
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS webdav_password_hash TEXT")
+        _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_rc TEXT")
         _backfill_audit_usernames()
         return
     conn = _db()
@@ -347,6 +349,8 @@ def _migrate_v3():
             conn.execute("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0")
         if "webdav_password_hash" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN webdav_password_hash TEXT")
+        if "totp_rc" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN totp_rc TEXT")
         ucols = {r["name"] for r in conn.execute("PRAGMA table_info(upload_sessions)").fetchall()}
         if "user_id" not in ucols:
             conn.execute("ALTER TABLE upload_sessions ADD COLUMN user_id INTEGER")

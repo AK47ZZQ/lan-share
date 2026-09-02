@@ -132,15 +132,17 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | POST | `/api/invites/redeem` | 🔓 | `{code, username, password}` 邀请码建号；原子认领；保留词/分隔符/重名 400 |
-| POST | `/api/login/totp` | 🔓 | `{username, password, code}` 两步登录第二步（动态码错误计入防爆破） |
+| POST | `/api/login/totp` | 🔓 | `{username, password, code}` 两步登录第二步（错误计入防爆破）；`code` 为 6 位动态码或一枚一次性恢复码（连字符/大小写/空白均可） |
 | POST | `/api/pair/code` | 🔑 | 已登录方生成一次性 6 位配对码 `{code, expires_in:180}`；同账号单码（重新生成即作废旧码） |
 | POST | `/api/pair/claim` | 🔓 | `{code, name}` 手机免密换设备 Token（响应同 `/api/auth/token`）；3 分钟一次性，IP 限速 5 次/分 |
 | POST | `/api/auth/totp/setup` | 🔑 | 生成 TOTP 密钥，`{secret, otpauth}`（未验证前不生效） |
-| POST | `/api/auth/totp/enable` | 🔑 | `{code}` 验证动态码后开通两步验证 |
-| POST | `/api/auth/totp/disable` | 🔑 | `{old_password}` 关闭两步验证（需原密码） |
+| POST | `/api/auth/totp/enable` | 🔑 | `{code}` 验证动态码后开通两步验证；响应含 `recovery_codes`（10 枚一次性恢复码，**明文仅此一次**，库内只存 SHA256） |
+| POST | `/api/auth/totp/rc` | 🔑 | `{old_password}` 重新生成恢复码（旧码全作废；需原密码） |
+| POST | `/api/auth/totp/disable` | 🔑 | `{old_password}` 关闭两步验证（需原密码；恢复码一并清除） |
 
 `POST /api/login`：已启用 TOTP 的账号密码正确时返回 `{"totp_required": true}`
-且**不发会话**；`/api/auth/me` 增加 `totp_enabled` 字段。
+且**不发会话**；`/api/auth/me` 增加 `totp_enabled`、`totp_rc_left`（剩余恢复
+码数）字段。
 
 **配对码**：Web 端「账号设置 → 手机 App 连接」生成，手机 App 免账号密码
 配对（场景：长辈手机不输长密码）；签出的设备 Token 与密码登录完全同规则
@@ -155,6 +157,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | DELETE | `/api/admin/users/{uid}` | 删号（grants/会话级联；私人目录改名 `.orphaned/<uid>-<名>/`） |
 | POST | `/api/admin/users/{uid}/username` | `{value}` 管理员改成员用户名（校验同自助改名的保留词/重名规则；私人目录同步改名；成员会话保持） |
 | POST | `/api/admin/users/{uid}/password` | `{value}` 管理员重置成员密码（≥8 位；该成员全部会话吊销） |
+| POST | `/api/admin/users/{uid}/totp-disable` | 仅解除成员两步验证（含恢复码）：不动密码、不吊销会话——认证器丢失且无法自助关闭时的精准通道 |
 | POST | `/api/admin/users/{uid}/webdav-password` | `{value}` 重置成员 WebDAV 独立密码（≥8 位）；`{value:""}` 清除回退登录密码；不动网页会话 |
 | GET | `/api/admin/webhook` | 查看事件推送 Webhook 模板 URL |
 | POST | `/api/admin/webhook` | `{url}` 设置推送模板（http(s) 且含 `{title}/{body}` 占位符；空串清除） |

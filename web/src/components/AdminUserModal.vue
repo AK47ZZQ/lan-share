@@ -62,6 +62,20 @@ async function clearDav() {
     emit('changed')
   } catch (e) { toast((e as Error).message, 'err') } finally { davBusy.value = false }
 }
+
+// 仅解除两步验证（不动密码、不登出）
+const totpBusy = ref(false)
+async function clearTotp() {
+  if (!(await confirmDlg(
+    `解除「${props.user.username}」的两步验证？成员下次登录不再需要动态码；密码与已登录设备不受影响。`,
+    { okText: '解除', danger: true }))) return
+  totpBusy.value = true
+  try {
+    await api.adminTotpDisable(props.user.id)
+    toast('两步验证已解除', 'ok')
+    emit('changed'); emit('close')
+  } catch (e) { toast((e as Error).message, 'err') } finally { totpBusy.value = false }
+}
 </script>
 
 <template>
@@ -92,6 +106,22 @@ async function clearDav() {
           </p>
           <p v-if="pwdErr" class="err" style="margin:0">{{ pwdErr }}</p>
         </form>
+
+        <div style="height:1px;background:var(--line);margin:16px 0" />
+
+        <div style="display:grid;gap:9px">
+          <div style="font-size:13.5px;font-weight:600">🛡️ 两步验证</div>
+          <p style="font-size:12px;color:var(--text-3);margin:0">
+            {{ props.user.totp_enabled
+              ? '已启用：成员登录需要认证器动态码。成员认证器丢失（无法自助关闭）时，可在此解除——不动密码、不登出已登录设备。'
+              : '未启用。' }}
+          </p>
+          <div v-if="props.user.totp_enabled">
+            <button class="btn danger sm" :disabled="totpBusy" @click="clearTotp">
+              {{ totpBusy ? '提交中…' : '解除两步验证' }}
+            </button>
+          </div>
+        </div>
 
         <div style="height:1px;background:var(--line);margin:16px 0" />
 

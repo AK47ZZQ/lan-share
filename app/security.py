@@ -74,7 +74,7 @@ def get_session_user(request: Request) -> Optional[sqlite3.Row]:
     th = _sha(tok)
     row = _db().execute(
         "SELECT s.expires_at, s.user_id, u.username, u.role, u.is_active, u.quota_bytes, "
-        "u.totp_secret, u.totp_enabled "
+        "u.totp_secret, u.totp_enabled, u.totp_rc "
         "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
         (th,)).fetchone()
     if not row:
@@ -103,7 +103,7 @@ def get_bearer_user(request: Request) -> Optional[sqlite3.Row]:
     th = _sha(auth[7:].strip())
     row = _db().execute(
         "SELECT t.id AS device_id, t.user_id, t.expires_at, t.last_seen, "
-        "u.username, u.role, u.is_active, u.quota_bytes, u.totp_enabled "
+        "u.username, u.role, u.is_active, u.quota_bytes, u.totp_enabled, u.totp_rc "
         "FROM device_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
         (th,)).fetchone()
     if not row or not row["is_active"]:

@@ -37,14 +37,15 @@ def _clean_username(name: str) -> str:
 @app.get("/api/admin/users")
 def admin_list_users(_admin=Depends(require_admin)):
     rows = _db().execute(
-        "SELECT id, username, role, is_active, quota_bytes, created_at, webdav_password_hash "
-        "FROM users ORDER BY id").fetchall()
+        "SELECT id, username, role, is_active, quota_bytes, created_at, webdav_password_hash, "
+        "totp_enabled FROM users ORDER BY id").fetchall()
     return [{
         "id": r["id"], "username": r["username"], "role": r["role"],
         "is_active": bool(r["is_active"]), "quota_bytes": r["quota_bytes"],
         "quota_human": human_size(r["quota_bytes"]) if r["quota_bytes"] else "-",
         "created_at": time.strftime("%Y-%m-%d", time.localtime(r["created_at"])),
         "webdav_set": bool(r["webdav_password_hash"]),
+        "totp_enabled": bool(r["totp_enabled"]),
     } for r in rows]
 
 
@@ -133,12 +134,29 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
     if len(body.value) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
     with _db_lock:
-        # 重置密码同时清除两步验证（成员手机丢失时的管理端恢复通道）
-        _db().execute("UPDATE users SET password_hash=?, totp_secret=NULL, totp_enabled=0 WHERE id=?",
+        # 重置密码同时清除两步验证与恢复码（成员手机丢失时的管理端恢复通道）
+        _db().execute("UPDATE users SET password_hash=?, totp_secret=NULL, totp_enabled=0, totp_rc=NULL WHERE id=?",
                       (hash_password(body.value), uid))
         _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         _db().commit()
     audit("admin_reset_password", row["username"], ip=client_ip(request))
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{uid}/totp-disable")
+def admin_totp_disable(uid: int, request: Request, _admin=Depends(require_admin)):
+    """仅解除成员的两步验证（含恢复码）：不动密码、不吊销会话。
+    成员认证器不可用、又无法自助关闭（关闭需原密码）时的管理端精准通道。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if not row["totp_enabled"] and not row["totp_rc"]:
+        raise HTTPException(status_code=400, detail="该账号未启用两步验证")
+    with _db_lock:
+        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL WHERE id=?",
+                      (uid,))
+        _db().commit()
+    audit("admin_totp_disable", row["username"], ip=client_ip(request))
     return {"ok": True}
 
 

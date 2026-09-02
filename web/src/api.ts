@@ -6,7 +6,7 @@ export interface Entry {
   name: string; path: string; is_dir: boolean; is_private_root?: boolean
   size: number | null; size_human: string; modified: string; ext: string | null
 }
-export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null; totp_enabled?: boolean }
+export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null; totp_enabled?: boolean; totp_rc_left?: number }
 export interface TrashItem { id: number; name: string; orig_path: string; size_human: string; deleted_at: string; days_left: number }
 export interface ShareItem {
   token: string; owner: string; target: string | null; path: string; name: string; size: number | null
@@ -15,7 +15,7 @@ export interface ShareItem {
 }
 export interface ShareHistoryRow { ts: number; ip: string; action: string }
 export interface ShareMeta { name: string; size_human: string; expires_in: string; needs_password: boolean; max_downloads: number | null; downloads: number }
-export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string; webdav_set?: boolean }
+export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string; webdav_set?: boolean; totp_enabled?: boolean }
 
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
 export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string; count: number }
@@ -55,8 +55,9 @@ export const api = {
   login: (username: string, password: string) => jpost('/api/login', { username, password }).then(r => handle<{ ok?: boolean; totp_required?: boolean; username?: string }>(r)),
   loginTotp: (username: string, password: string, code: string) => jpost('/api/login/totp', { username, password, code }).then(r => handle<{ ok: boolean }>(r)),
   totpSetup: () => jpost('/api/auth/totp/setup', {}).then(r => handle<{ secret: string; otpauth: string }>(r)),
-  totpEnable: (code: string) => jpost('/api/auth/totp/enable', { code }).then(r => handle<{ ok: boolean }>(r)),
+  totpEnable: (code: string) => jpost('/api/auth/totp/enable', { code }).then(r => handle<{ ok: boolean; recovery_codes: string[] }>(r)),
   totpDisable: (old_password: string) => jpost('/api/auth/totp/disable', { old_password }).then(r => handle<{ ok: boolean }>(r)),
+  totpRcRegen: (old_password: string) => jpost('/api/auth/totp/rc', { old_password }).then(r => handle<{ ok: boolean; recovery_codes: string[] }>(r)),
   notifications: () => fetch('/api/notifications').then(r => handle<{ unread: number; items: NotificationItem[] }>(r)),
   notificationsRead: () => jpost('/api/notifications/read', {}).then(r => handle<{ ok: boolean }>(r)),
   members: () => fetch('/api/members').then(r => handle<Member[]>(r)),
@@ -74,7 +75,7 @@ export const api = {
   adminSetWebdavPwd: (uid: number, value: string) =>
     jpost(`/api/admin/users/${uid}/webdav-password`, { value }).then(r => handle<{ ok: boolean; set: boolean }>(r)),
 
-  // 手机 App 免密配对：生成一次性 6 位码（60 秒有效）
+  // 手机 App 免密配对：生成一次性 6 位码（3 分钟有效）
   pairCode: () => jpost('/api/pair/code', {}).then(r => handle<{ code: string; expires_in: number }>(r)),
 
   getWebhook: () => fetch('/api/admin/webhook').then(r => handle<{ url: string }>(r)),
@@ -132,6 +133,8 @@ export const api = {
     jpost(`/api/admin/users/${uid}/username`, { value: new_username }).then(r => handle<{ ok: boolean; username: string }>(r)),
   adminSetPassword: (uid: number, value: string) =>
     jpost(`/api/admin/users/${uid}/password`, { value }).then(r => handle<{ ok: boolean }>(r)),
+  adminTotpDisable: (uid: number) =>
+    jpost(`/api/admin/users/${uid}/totp-disable`, {}).then(r => handle<{ ok: boolean }>(r)),
   adminCreateInvite: (role: string, hours: number) => jpost('/api/admin/invites', { role, hours }).then(r => handle<{ code: string }>(r)),
   adminInvites: () => fetch('/api/admin/invites').then(r => handle<{ code: string; role: string; expired: boolean; used: boolean }[]>(r)),
   adminDeleteInvite: (code: string) => fetch(`/api/admin/invites/${encodeURIComponent(code)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),

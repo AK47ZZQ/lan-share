@@ -1,4 +1,6 @@
 """认证 API：初始化/登录(含 TOTP 两步)/登出/改密/改用户名/账号状态/两步验证管理/设备 Token。"""
+import hashlib
+import json
 import os
 import re
 import secrets
@@ -124,7 +126,8 @@ async def login(body: AuthBody, request: Request, response: Response):
 
 @app.post("/api/login/totp")
 async def login_totp(body: TotpLoginBody, request: Request, response: Response):
-    """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。"""
+    """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。
+    认证器不可用时可用开通时下发的一次性恢复码顶替（用一枚销一枚）。"""
     pub = is_public_entry(request)
     row = _login_gate(body.username, request)
     ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
@@ -134,13 +137,37 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not row["totp_enabled"] or not row["totp_secret"]:
         raise HTTPException(status_code=400, detail="该账号未启用两步验证")
-    code = body.code.strip().replace(" ", "")
-    if not (code.isdigit() and len(code) == 6) or not pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1):
+
+    def _fail():
         record_login_fail(body.username, pub)
         audit("totp_fail", body.username, ip=client_ip(request))
+
+    raw = body.code.strip().replace(" ", "")
+    rc = raw.replace("-", "").lower()
+    used_rc = False
+    if raw.isdigit() and len(raw) == 6:
+        if not pyotp.TOTP(row["totp_secret"]).verify(raw, valid_window=1):
+            _fail()
+            raise HTTPException(status_code=401, detail="动态验证码错误")
+    elif _RC_RE.match(rc):
+        # 恢复码路径：SHA256 命中库存即消费（库内只存哈希，用一枚少一枚）
+        hashes = json.loads(row["totp_rc"]) if row["totp_rc"] else []
+        h = _rc_hash(rc)
+        if h not in hashes:
+            _fail()
+            raise HTTPException(status_code=401, detail="恢复码无效或已用掉")
+        hashes.remove(h)
+        with _db_lock:
+            _db().execute("UPDATE users SET totp_rc=? WHERE id=?",
+                          (json.dumps(hashes), row["id"]))
+            _db().commit()
+        used_rc = True
+    else:
+        _fail()
         raise HTTPException(status_code=401, detail="动态验证码错误")
+
     clear_login_fails(body.username, pub)
-    audit("login", body.username, "totp", client_ip(request))
+    audit("login", body.username, "totp_rc" if used_rc else "totp", client_ip(request))
     set_session_cookie(response, request, row["id"])
     return {"ok": True, "username": row["username"]}
 
@@ -173,10 +200,31 @@ async def me(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     return {"username": user["username"], "role": user["role"],
             "quota_bytes": user["quota_bytes"],
-            "totp_enabled": bool(user["totp_enabled"])}
+            "totp_enabled": bool(user["totp_enabled"]),
+            "totp_rc_left": len(json.loads(user["totp_rc"])) if user["totp_rc"] else 0}
 
 
 # ─── 两步验证（TOTP，可选启用）────────────────────────────
+
+# 恢复码：认证器不可用（手机丢失/卸载）时顶替动态码的一次性第二因子。
+# 库内只存 SHA256（JSON 数组），明文仅在生成响应中出现一次，用一枚少一枚。
+_RC_COUNT = 10
+_RC_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def _rc_hash(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def _gen_recovery_codes() -> tuple[list[str], str]:
+    """生成 _RC_COUNT 枚举 8 位 hex 恢复码，返回 (明文列表, 库存 JSON)。"""
+    codes = [secrets.token_hex(4) for _ in range(_RC_COUNT)]
+    return codes, json.dumps([_rc_hash(c) for c in codes])
+
+
+class TotpRcBody(BaseModel):
+    old_password: str
+
 
 @app.post("/api/auth/totp/setup")
 def totp_setup(user=Depends(require_user)):
@@ -195,7 +243,8 @@ def totp_setup(user=Depends(require_user)):
 
 @app.post("/api/auth/totp/enable")
 def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
-    """用动态验证码确认开通（证明认证器已正确录入）。"""
+    """用动态验证码确认开通（证明认证器已正确录入）。开通时生成一次性恢复码，
+    明文仅本响应返回一次，供认证器不可用时顶替第二因子。"""
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
     if row["totp_enabled"]:
         raise HTTPException(status_code=400, detail="两步验证已启用")
@@ -205,11 +254,30 @@ def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
     if not (code.isdigit() and len(code) == 6) \
             or not pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1):
         raise HTTPException(status_code=400, detail="验证码错误，请重试")
+    codes, rc_json = _gen_recovery_codes()
     with _db_lock:
-        _db().execute("UPDATE users SET totp_enabled=1 WHERE id=?", (user["user_id"],))
+        _db().execute("UPDATE users SET totp_enabled=1, totp_rc=? WHERE id=?",
+                      (rc_json, user["user_id"]))
         _db().commit()
     audit("totp_enabled", row["username"], ip="")
-    return {"ok": True}
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/auth/totp/rc")
+async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require_user)):
+    """重新生成恢复码（需原密码）：旧码全部作废。用于码没用过却弄丢了的情况。"""
+    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    if not row["totp_enabled"]:
+        raise HTTPException(status_code=400, detail="两步验证未启用")
+    if not await _verify_pw(body.old_password, row["password_hash"]):
+        audit("totp_rc_regen_fail", row["username"], ip=client_ip(request))
+        raise HTTPException(status_code=403, detail="原密码错误")
+    codes, rc_json = _gen_recovery_codes()
+    with _db_lock:
+        _db().execute("UPDATE users SET totp_rc=? WHERE id=?", (rc_json, user["user_id"]))
+        _db().commit()
+    audit("totp_rc_regen", row["username"], ip=client_ip(request))
+    return {"ok": True, "recovery_codes": codes}
 
 
 @app.post("/api/auth/totp/disable")
@@ -220,7 +288,7 @@ async def totp_disable(request: Request, body: TotpDisableBody, user=Depends(req
         audit("totp_disable_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     with _db_lock:
-        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?",
+        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL WHERE id=?",
                       (user["user_id"],))
         _db().commit()
     audit("totp_disabled", row["username"], ip=client_ip(request))

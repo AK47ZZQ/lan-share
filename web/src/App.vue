@@ -54,9 +54,10 @@ watchEffect(() => {
     <div v-for="t in toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
   </div>
 
-  <!-- 全局确认/输入对话框（Promise 化） -->
+  <!-- 全局确认/输入对话框（Promise 化）；z 高于业务弹窗——动态 teleport 的
+       模态会 append 到 body 末尾，同 z-index 时会反过来盖住本对话框 -->
   <teleport to="body">
-    <div v-if="dlg.open" class="overlay" @click.self="dlgCancel">
+    <div v-if="dlg.open" class="overlay dlg-overlay" @click.self="dlgCancel">
       <div class="modal-card" style="width:min(400px,92vw)">
         <h3>{{ dlg.title }}</h3>
         <p style="font-size:14px;margin:0 0 14px">{{ dlg.text }}</p>
@@ -138,6 +139,8 @@ watchEffect(() => {
 </template>
 
 <style>
+/* 全局确认/输入对话框必须压过所有业务弹窗（模态 overlay=400，toast=500） */
+.overlay.dlg-overlay { z-index: 450; }
 .um-theme { padding: 6px 10px 4px; display: grid; gap: 6px; }
 .theme-seg { display: flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
 .theme-seg button {
