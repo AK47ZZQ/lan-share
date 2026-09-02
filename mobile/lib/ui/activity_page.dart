@@ -43,7 +43,7 @@ class _ActivityPageState extends State<ActivityPage> {
     final cs = Theme.of(context).colorScheme;
     final items = _items;
     return Scaffold(
-        appBar: AppBar(title: const Text('家里动态')),
+        appBar: AppBar(title: const Text('动态')),
         body: RefreshIndicator(
             onRefresh: _load,
             child: items == null && _error == null

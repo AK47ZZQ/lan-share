@@ -1,9 +1,12 @@
 // 回收站（App v0.6.0）：列表 / 恢复 / 彻底删除；30 天保留期提示。
 // 服务端契约：GET /api/trash、POST /api/trash/{id}/restore、DELETE /api/trash/{id}
-// （清空回收站仅 admin 有端点，App 不给全员入口——误清空间换不回）。
+// 清空回收站（0.6.3 新增入口）：DELETE /api/trash 仅 admin——一次清空所有
+// 成员的回收站项目，与 Web 端同款语义；按钮只对 admin 显示 + 二次确认。
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
+import '../state/session.dart';
 
 class TrashItem {
   final int id;
@@ -24,14 +27,14 @@ class TrashItem {
       daysLeft: (j['days_left'] as num?)?.toInt() ?? 0);
 }
 
-class TrashPage extends StatefulWidget {
+class TrashPage extends ConsumerStatefulWidget {
   const TrashPage({super.key});
 
   @override
-  State<TrashPage> createState() => _TrashPageState();
+  ConsumerState<TrashPage> createState() => _TrashPageState();
 }
 
-class _TrashPageState extends State<TrashPage> {
+class _TrashPageState extends ConsumerState<TrashPage> {
   List<TrashItem>? _items;
   String? _error;
 
@@ -96,6 +99,36 @@ class _TrashPageState extends State<TrashPage> {
     }
   }
 
+  /// 清空整个回收站（仅 admin；端点会删掉所有成员的项目，含 private）。
+  /// 二次确认写明后果——这与逐项"彻底删除"不是一个量级的不可逆。
+  Future<void> _emptyAll() async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('清空整个回收站？'),
+                content: const Text(
+                    '将永久删除回收站中的全部项目（含其他成员放入的），此操作不可恢复。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.error),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('清空')),
+                ]));
+    if (ok != true) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.delete('/api/trash');
+      _toast('回收站已清空');
+      await _load();
+    } catch (_) {
+      _toast('清空失败（需要管理员身份）');
+    }
+  }
+
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -105,8 +138,19 @@ class _TrashPageState extends State<TrashPage> {
   @override
   Widget build(BuildContext context) {
     final items = _items;
+    final isAdmin = ref.watch(sessionProvider).role == 'admin';
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
-        appBar: AppBar(title: const Text('回收站')),
+        appBar: AppBar(
+            title: const Text('回收站'),
+            actions: [
+              if (isAdmin && items != null && items.isNotEmpty)
+                TextButton.icon(
+                    onPressed: _emptyAll,
+                    icon: Icon(Icons.delete_sweep_outlined, color: cs.error),
+                    label: Text('清空',
+                        style: TextStyle(color: cs.error))),
+            ]),
         body: items == null
             ? const Center(child: CircularProgressIndicator())
             : items.isEmpty

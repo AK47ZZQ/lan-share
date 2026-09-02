@@ -222,12 +222,12 @@ class _HomePageState extends ConsumerState<HomePage> {
                                       ]))),
                           ])),
                 ])),
-          // 家里动态（0.6.2）：家庭可见的上传/分享/新成员事件流
+          // 动态（0.6.3 由"家里动态"更名）：家庭可见的上传/分享/新成员事件流
           if (_activity != null && _activity!.isNotEmpty)
             _card(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                  _cardTitle('家里动态',
+                  _cardTitle('动态',
                       icon: Icons.newspaper_outlined,
                       trailing: TextButton(
                           style: TextButton.styleFrom(

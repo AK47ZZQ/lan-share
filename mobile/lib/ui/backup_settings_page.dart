@@ -391,10 +391,16 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
     try {
       final b = await MediaSource.buckets();
       if (!mounted) return;
-      setState(() => _buckets = b);
-    } catch (_) {
+      setState(() {
+        _buckets = b;
+        _error = null;
+      });
+    } catch (e) {
       if (!mounted) return;
-      setState(() => _error = '无法读取相册列表（需要媒体权限）');
+      // 带上原生/通道的原始错误：远程排障时这一行能直接分辨
+      // 缺权限、通道未注册、MediaStore 异常（0.6.3 排查小米"页面不显示"）
+      final s = e.toString();
+      setState(() => _error = s.length > 160 ? s.substring(0, 160) : s);
     }
   }
 
@@ -440,10 +446,45 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
                 ? _error != null
                     ? ListView(children: [
                         const SizedBox(height: 100),
-                        Center(child: Text(_error!)),
+                        const Center(child: Text('无法读取相册列表')),
+                        const SizedBox(height: 8),
+                        Padding(
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 24),
+                            child: Center(
+                                child: Text(_error!,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        fontSize: 12, color: Colors.grey)))),
+                        const SizedBox(height: 8),
+                        Center(
+                            child: TextButton(
+                                onPressed: _load,
+                                child: const Text('重试'))),
                       ])
                     : const Center(child: CircularProgressIndicator())
-                : ListView(children: [
+                : names.isEmpty
+                    ? ListView(children: [
+                        const SizedBox(height: 100),
+                        const Center(
+                            child: Text('没有读到任何相册',
+                                style: TextStyle(fontWeight: FontWeight.bold))),
+                        const SizedBox(height: 8),
+                        const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 24),
+                            child: Center(
+                                child: Text(
+                                    '手机媒体库为空，或系统未授齐"照片和视频"权限',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                        fontSize: 12, color: Colors.grey)))),
+                        const SizedBox(height: 8),
+                        Center(
+                            child: TextButton(
+                                onPressed: _load,
+                                child: const Text('刷新'))),
+                      ])
+                    : ListView(children: [
                     Padding(
                         padding: const EdgeInsets.all(16),
                         child: Text(
