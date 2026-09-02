@@ -17,6 +17,7 @@ import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'activity_page.dart';
 import 'backup_settings_page.dart';
+import 'notifications_page.dart';
 import 'recent_page.dart';
 import 'trash_page.dart';
 import 'widgets/auth_image.dart';
@@ -48,6 +49,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   String _shareSize = '';
   List<_RecentUpload>? _recent;
   List<ActivityItem>? _activity;
+  int _notifUnread = 0; // 站内通知未读数（0.8.0，30s 一刷）
   Timer? _tick, _diskTick;
 
   @override
@@ -152,6 +154,14 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (!mounted) return;
       setState(() => _activity = items);
     } catch (_) {}
+    // 通知未读数顺带刷新（0.8.0）：铃铛徽标用
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/notifications');
+      if (!mounted) return;
+      setState(() =>
+          _notifUnread = (r.data['unread'] as num?)?.toInt() ?? 0);
+    } catch (_) {}
   }
 
   @override
@@ -237,15 +247,50 @@ class _HomePageState extends ConsumerState<HomePage> {
                     children: [
                   _cardTitle('动态',
                       icon: Icons.newspaper_outlined,
-                      trailing: TextButton(
-                          style: TextButton.styleFrom(
+                      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                        // 站内通知（0.8.0）：定向分享被下载/新成员等，带未读徽标
+                        Stack(children: [
+                          IconButton(
                               visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(horizontal: 4)),
-                          onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(
-                                  builder: (_) => const ActivityPage())),
-                          child: const Text('全部 ›',
-                              style: TextStyle(fontSize: 12)))),
+                              icon: const Icon(Icons.notifications_outlined,
+                                  size: 20),
+                              onPressed: () async {
+                                await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const NotificationsPage()));
+                                _loadActivity();
+                              }),
+                          if (_notifUnread > 0)
+                            Positioned(
+                                right: 6,
+                                top: 6,
+                                child: Container(
+                                    padding: const EdgeInsets.all(3),
+                                    decoration: const BoxDecoration(
+                                        color: Colors.red,
+                                        shape: BoxShape.circle),
+                                    child: Text(
+                                        _notifUnread > 99
+                                            ? '99+'
+                                            : '$_notifUnread',
+                                        style: const TextStyle(
+                                            fontSize: 9,
+                                            color: Colors.white)))),
+                        ]),
+                        TextButton(
+                            style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 4)),
+                            onPressed: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => const ActivityPage())),
+                            child: const Text('全部 ›',
+                                style: TextStyle(fontSize: 12))),
+                      ])),
                   const SizedBox(height: 2),
                   for (final n in _activity!.take(5))
                     Padding(

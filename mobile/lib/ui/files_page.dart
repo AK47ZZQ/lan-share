@@ -3,10 +3,14 @@
 // 0.6.0：长按多选（下载/删除/移动/复制/单文件分享）、新建文件夹、重命名、
 //        删除（进服务端回收站）、排序切换、常用目录钉住、文件详情；
 //        移动/复制走 /api/move 与 0.6.0 新增的 /api/copy（目的地选 DirPickerPage）。
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../data/api/api_client.dart';
 import '../state/session.dart';
@@ -621,6 +625,37 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     showShareCreate(context, path: only.path, name: only.name);
   }
 
+  bool _zipping = false;
+
+  /// 打包下载（0.8.0 对齐 Web doZip）：服务端打 zip → 下载到临时目录 →
+  /// 系统分享面板（存文件/发微信）。大目录打包慢，全程有 toast 反馈。
+  Future<void> _zipSelected() async {
+    if (_zipping) return;
+    final paths = _selectedEntries.map((e) => e.path).toList();
+    if (paths.isEmpty) return;
+    setState(() => _zipping = true);
+    _toast('正在打包 ${paths.length} 项…');
+    File? f;
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.post('/api/zip', data: {'paths': paths});
+      final url = r.data['url'] as String;
+      final name = r.data['name'] as String? ?? 'share.zip';
+      final tmp = await getTemporaryDirectory();
+      f = File('${tmp.path}/$name');
+      await dio.download(url, f.path);
+      _toast('打包完成');
+      await Share.shareXFiles([XFile(f.path)], subject: name);
+    } catch (e) {
+      _toast('打包失败：${e.toString().substring(0, e.toString().length.clamp(0, 120))}');
+    } finally {
+      try {
+        await f?.delete();
+      } catch (_) {}
+      if (mounted) setState(() => _zipping = false);
+    }
+  }
+
   // ── 构建 ─────────────────────────────────────────────────
 
   @override
@@ -822,6 +857,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 children: [
                   if (hasFile)
                     _op(Icons.download_outlined, '下载', _downloadSelected),
+                  if (multi)
+                    _op(Icons.folder_zip_outlined, '打包', _zipSelected),
                   if (!multi && hasFile && canManage)
                     _op(Icons.link_outlined, '分享', _shareSingle),
                   if (canManage)

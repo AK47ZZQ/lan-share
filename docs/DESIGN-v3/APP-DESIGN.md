@@ -627,6 +627,45 @@ E2E 从未暴露。**教训入册：约束类 bug 必须显式模拟约束缺失
 诊断卡；手动轮 setExpedited 进一步压启动延迟；MIUI 自启动/省电白名单
 引导页（检测 MIUI ROM 给出图文指引）；单轮条数上限与"大迁移分夜跑"。
 
+### 8.18 功能对齐网页版：管理面板/账号安全/打包下载/专辑/通知（2026-09-03 午后，v0.8.0+22）
+
+用户要求把 Web 能力全部迁移到 App。盘点后差距三块，服务端端点早已齐备
+（零服务端改动）：
+
+**管理面板**（`admin_page.dart`，我的页 admin 可见）：成员 Tab（列表徽章
+role/2FA/停用、bottom sheet 操作=改角色/改用户名/重置密码/解除两步验证/
+WebDAV 密码重置/配额/停用启用/删除；底部卡=公网访问地址+事件推送
+webhook 保存测试）；邀请 Tab（成员/教访 72h 邀请码创建复制吊销）；授权
+Tab（批量：成员 chips × 目录两层树（跳过 private/incoming）× 读写 ×
+有效期，按成员过滤 chips、撤销）。后端契约要点：管理员改用户名/重置
+密码/解 2FA 走 `AdminCredBody{value}`（改用户名 `{"value":new_name}` 不
+需要密码；解 2FA 无 body）；授权路径服务端规范化为 `shared/` 前缀存储。
+Web"视角预览"（setPreviewAs 全局请求头）未迁移，App 需全局 dio 注入
+改造，记 §9 遗留。
+
+**我的页"账号与安全"**：修改用户名（/api/auth/username + SessionNotifier
+.applyRename 本地同步；账本账号隔离自动接管重对账）；WebDAV 独立密码
+（GET/POST /api/auth/webdav-password，留空提交=清除）；生成配对码
+（/api/pair/code 大字弹窗 180s）；重新生成恢复码（/api/auth/totp/rc，
+新码仅本次明文展示）。
+
+**文件打包下载**：多选栏"打包"——POST /api/zip {paths} → url 下载到
+临时目录 → share_plus 系统分享面板；服务端打包耗时以 toast 反馈。
+
+**照片精选专辑**：横排 InputChip（/api/albums），点击=按月过滤；
+admin 经月份选择页"新建精选专辑"（标题→选月份）与长按删除。
+
+**通知中心**（notifications_page.dart）：首页动态卡铃铛（未读徽标 30s
+一刷）→ /api/notifications 列表 + 打开即 POST read（与 Web 铃铛同语义）。
+
+**E2E**：模拟器 debug=admin 真账号：三 Tab 真实数据渲染（3 成员/公网
+地址预填/授权列表）、配对码真生成、通知中心空态正确；邀请创建→删除、
+授权创建→撤销 API 闭环。**事故与教训**：E2E 以"列表最后一条"定位测试
+授权时误删 id=12（ZZQZZQ 的 shared/PC软件安装包）——查实主人已重组
+根目录（原 shared/* 目录更名到根），该授权本已失效（重建报"目录不存在"），
+对 ZZQZZQ 实际访问零影响；**真实数据环境禁止"删除最后一个"式定位，
+测试数据要么自建自清、要么按唯一标记定位**。
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

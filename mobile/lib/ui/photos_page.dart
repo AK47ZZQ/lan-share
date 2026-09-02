@@ -50,6 +50,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   String _mediaFilter = 'all';  // all | photo | video
   String? _month;               // YYYY-MM 按月快跳（null=全部）
   Map<String, int>? _months;    // facets 缓存（月份选择页用）
+  List<_Album>? _albums;        // 精选专辑（0.8.0，管理员维护）
   static const _limit = 120;
 
   @override
@@ -60,6 +61,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (mounted) setState(() => _base = base);
     }();
     _loadMore();
+    _loadAlbums();
     _scroll.addListener(() {
       if (_scroll.position.extentAfter < 600) _loadMore();
     });
@@ -177,15 +179,23 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       }
     }
     if (!mounted) return;
+    final isAdmin = ref.read(sessionProvider).role == 'admin';
     // 闭包内无法提升可空局部变量：先物化成 final 列表再用
     final monthEntries = months.entries.toList();
     final sel = await showModalBottomSheet<String>(
         context: context,
         builder: (ctx) => SafeArea(
             child: monthEntries.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(child: Text('还没有照片')))
+                ? ListView(shrinkWrap: true, children: [
+                    const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: Text('还没有照片'))),
+                    if (isAdmin)
+                      ListTile(
+                          leading: const Icon(Icons.add),
+                          title: const Text('新建精选专辑'),
+                          onTap: () => Navigator.pop(ctx, '__add__')),
+                  ])
                 : ListView(shrinkWrap: true, children: [
                     ListTile(
                         leading: const Icon(Icons.calendar_today_outlined),
@@ -202,10 +212,113 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                   color: Theme.of(ctx).colorScheme.outline)),
                           selected: _month == e.key,
                           onTap: () => Navigator.pop(ctx, e.key)),
+                    if (isAdmin)
+                      ListTile(
+                          leading: const Icon(Icons.add),
+                          title: const Text('新建精选专辑'),
+                          onTap: () => Navigator.pop(ctx, '__add__')),
                   ])));
+    if (sel == '__add__') {
+      await _addAlbum();
+      return;
+    }
     if (sel == null || !mounted) return;
     setState(() => _month = sel.isEmpty ? null : sel);
     _refresh();
+  }
+
+  List<String> _sortedMonths() {
+    final keys = _months?.keys.toList() ?? <String>[];
+    keys.sort();
+    return keys;
+  }
+
+  /// 精选专辑加载（0.8.0）：失败静默（行不显示），不阻塞照片墙
+  Future<void> _loadAlbums() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/albums');
+      if (!mounted) return;
+      setState(() => _albums = (r.data as List)
+          .map((e) => _Album.fromJson(e as Map<String, dynamic>))
+          .toList());
+    } catch (_) {}
+  }
+
+  /// 新建精选专辑（admin）：标题 + 从现有月份里选
+  Future<void> _addAlbum() async {
+    final title = await showDialog<String>(
+        context: context,
+        builder: (d) {
+          final c = TextEditingController();
+          return AlertDialog(
+              title: const Text('新建精选专辑'),
+              content: TextField(controller: c,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                      labelText: '标题（如"暑假合集"）')),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(d),
+                    child: const Text('取消')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(d, c.text.trim()),
+                    child: const Text('下一步')),
+              ]);
+        });
+    if (title == null || title.isEmpty || !mounted) return;
+    final month = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+            child: ListView(shrinkWrap: true, children: [
+              const ListTile(title: Text('选择专辑月份')),
+              for (final m in _sortedMonths())
+                ListTile(title: Text(_monthLabel(m)),
+                    onTap: () => Navigator.pop(ctx, m)),
+            ])));
+    if (month == null || !mounted) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/admin/albums',
+          data: {'title': title, 'month': month});
+      _toast('专辑已创建');
+      _loadAlbums();
+      setState(() => _months = null); // 破缓存让下次进来重新拉
+    } catch (e) {
+      _toast(e.toString().substring(0, e.toString().length.clamp(0, 120)));
+    }
+  }
+
+  Future<void> _deleteAlbum(_Album a) async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text('删除专辑「${a.title}」？'),
+                content: const Text('只移除专辑条目，不影响照片。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(d, true),
+                      child: const Text('删除')),
+                ]));
+    if (ok != true || !mounted) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.delete('/api/admin/albums/${Uri.encodeComponent(a.id)}');
+      setState(() =>
+          _albums = _albums?.where((x) => x.id != a.id).toList());
+      _toast('已删除');
+    } catch (e) {
+      _toast(e.toString().substring(0, e.toString().length.clamp(0, 120)));
+    }
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   static String _monthLabel(String ym) {
@@ -382,6 +495,46 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               : RefreshIndicator(
                   onRefresh: _refresh,
                   child: Column(children: [
+                    // 精选专辑行（0.8.0 对齐 Web PhotosView）：管理员维护的
+                    // 月份合集，点击即按月过滤；长按删除（仅管理员）
+                    if (_albums != null && _albums!.isNotEmpty)
+                      SizedBox(
+                          height: 76,
+                          child: ListView(
+                              scrollDirection: Axis.horizontal,
+                              padding:
+                                  const EdgeInsets.fromLTRB(10, 6, 10, 0),
+                              children: [
+                                for (final a in _albums!)
+                                  Padding(
+                                      padding:
+                                          const EdgeInsets.only(right: 8),
+                                      child: GestureDetector(
+                                          onLongPress: ref
+                                                      .read(sessionProvider)
+                                                      .role ==
+                                                  'admin'
+                                              ? () => _deleteAlbum(a)
+                                              : null,
+                                          child: InputChip(
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              avatar: const Icon(
+                                                  Icons.auto_awesome,
+                                                  size: 16),
+                                              label: Text(a.title,
+                                                  style: const TextStyle(
+                                                      fontSize: 12)),
+                                              selected:
+                                                  _month == a.month,
+                                              onPressed: () {
+                                                setState(() => _month =
+                                                    _month == a.month
+                                                        ? null
+                                                        : a.month);
+                                                _refresh();
+                                              }))),
+                              ])),
                     // 类型筛选 + 月份 chip 行
                     SizedBox(
                         height: 44,
@@ -593,4 +746,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (deleted == true) _refresh();
     });
   }
+}
+
+/// 精选专辑条目（0.8.0）：/api/albums，管理员维护的月份合集
+class _Album {
+  final String id;
+  final String title;
+  final String month;
+  _Album.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String,
+        title = j['title'] as String,
+        month = j['month'] as String;
 }

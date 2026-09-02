@@ -1,0 +1,856 @@
+// 管理面板（0.8.0 对齐 Web AdminView）：成员 / 邀请 / 授权三 Tab +
+// 公网地址 + 事件推送（webhook）。仅 admin 可见入口（我的页）。
+// 视角预览（web setPreviewAs）暂不迁移：App 全局 dio 注入 header 改造大，
+// 记录在 APP-DESIGN §9 遗留。
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../data/api/api_client.dart';
+import '../state/session.dart';
+
+class _AdminUser {
+  final int id;
+  final String username;
+  final String role;
+  final bool isActive;
+  final int? quotaBytes;
+  final String quotaHuman;
+  final String createdAt;
+  final bool totpEnabled;
+  final bool webdavSet;
+  _AdminUser.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as int,
+        username = j['username'] as String,
+        role = j['role'] as String,
+        isActive = j['is_active'] as bool? ?? true,
+        quotaBytes = (j['quota_bytes'] as num?)?.toInt(),
+        quotaHuman = j['quota_human'] as String? ?? '',
+        createdAt = j['created_at'] as String? ?? '',
+        totpEnabled = j['totp_enabled'] as bool? ?? false,
+        webdavSet = j['webdav_set'] as bool? ?? false;
+}
+
+class _Grant {
+  final int id;
+  final int userId;
+  final String path;
+  final bool canWrite;
+  final int? expiresAt;
+  _Grant.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as int,
+        userId = j['user_id'] as int,
+        path = j['path'] as String,
+        canWrite = j['can_write'] as bool? ?? false,
+        expiresAt = (j['expires_at'] as num?)?.toInt();
+}
+
+class _Invite {
+  final String code;
+  final String role;
+  final bool expired;
+  final bool used;
+  _Invite.fromJson(Map<String, dynamic> j)
+      : code = j['code'] as String,
+        role = j['role'] as String,
+        expired = j['expired'] as bool? ?? false,
+        used = j['used'] as bool? ?? false;
+}
+
+class AdminPage extends ConsumerStatefulWidget {
+  const AdminPage({super.key});
+  @override
+  ConsumerState<AdminPage> createState() => _AdminPageState();
+}
+
+class _AdminPageState extends ConsumerState<AdminPage>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tab =
+      TabController(length: 3, vsync: this);
+  List<_AdminUser>? _users;
+  List<_Invite>? _invites;
+  List<_Grant>? _grants;
+  String? _error;
+  // 授权表单
+  final _gUsers = <int>{};
+  final _gPaths = <String>{};
+  bool _gWrite = false;
+  int _gExpiry = 0; // 0=永久
+  List<String> _dirOptions = const [];
+  int _grantFilter = -1; // -1=全部
+  // 设置卡
+  final _pubUrl = TextEditingController();
+  final _hookUrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAll();
+  }
+
+  @override
+  void dispose() {
+    _tab.dispose();
+    _pubUrl.dispose();
+    _hookUrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAll() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final users = (await dio.get('/api/admin/users'))
+          .data as List;
+      final invites = (await dio.get('/api/admin/invites')).data as List;
+      final grants = (await dio.get('/api/admin/grants')).data as List;
+      final pub = await dio.get('/api/public-url');
+      final hook = await dio.get('/api/admin/webhook');
+      if (!mounted) return;
+      setState(() {
+        _users = users.map((e) => _AdminUser.fromJson(e)).toList();
+        _invites = invites.map((e) => _Invite.fromJson(e)).toList();
+        _grants = grants.map((e) => _Grant.fromJson(e)).toList();
+        _pubUrl.text = pub.data['public_base_url'] as String? ?? '';
+        _hookUrl.text = hook.data['url'] as String? ?? '';
+        _error = null;
+      });
+      _loadDirs();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    }
+  }
+
+  /// 共享目录树（建授权用）：与 Web 同款只走两层，跳过 private/incoming
+  Future<void> _loadDirs() async {
+    final out = <String>[];
+    Future<void> walk(String p, int depth) async {
+      try {
+        final dio = await ApiClient.I.dio();
+        final r = await dio.get('/api/files/$p');
+        for (final e in (r.data['items'] as List)) {
+          final m = e as Map;
+          if (m['is_dir'] != true) continue;
+          final name = m['name'] as String;
+          if (name == 'private' || name == 'incoming') continue;
+          final path = m['path'] as String;
+          out.add(path);
+          if (depth < 2) await walk(path, depth + 1);
+        }
+      } catch (_) {/* 无权目录跳过 */}
+    }
+
+    await walk('', 0);
+    if (!mounted) return;
+    setState(() => _dirOptions = out..sort());
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg), width: 360));
+  }
+
+  Future<bool> _confirm(String title, String content,
+      {String okText = '确定'}) async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text(title),
+                content: Text(content),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor:
+                              Theme.of(d).colorScheme.error),
+                      onPressed: () => Navigator.pop(d, true),
+                      child: Text(okText)),
+                ]));
+    return ok == true;
+  }
+
+  Future<String?> _prompt(String title, String label,
+      {String initial = '',
+      bool obscure = false,
+      String? hint,
+      String okText = '保存'}) async {
+    final c = TextEditingController(text: initial);
+    final v = await showDialog<String>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text(title),
+                content: TextField(
+                    controller: c,
+                    obscureText: obscure,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                        labelText: label, hintText: hint)),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(d, c.text.trim()),
+                      child: Text(okText)),
+                ]));
+    c.dispose();
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  String _memberName(int uid) =>
+      _users?.firstWhere((u) => u.id == uid,
+          orElse: () => _AdminUser.fromJson({
+                'id': uid,
+                'username': '#$uid',
+                'role': 'member',
+                'quota_human': '',
+                'created_at': '',
+              })).username ??
+      '#$uid';
+
+  // ── 成员操作 ─────────────────────────────────────────────
+  Future<void> _userSheet(_AdminUser u) async {
+    final me = ref.read(sessionProvider).username;
+    await showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: ListView(shrinkWrap: true, children: [
+              ListTile(title: Text(u.username),
+                  subtitle: Text('${u.role} · 配额 ${u.quotaHuman}'),
+                  leading: const Icon(Icons.person_outline)),
+              ListTile(
+                  leading: const Icon(Icons.badge_outlined),
+                  title: const Text('修改角色'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final role = await _pickRole(u.role);
+                    if (role != null) await _patchUser(u.id, {'role': role});
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('改用户名 / 重置密码'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await _credFlow(u);
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.shield_outlined),
+                  title: Text(u.totpEnabled ? '解除两步验证' : '两步验证未开启'),
+                  onTap: u.totpEnabled
+                      ? () async {
+                          Navigator.pop(ctx);
+                          if (!await _confirm('解除两步验证',
+                              '将解除 ${u.username} 的两步验证（含恢复码），不动密码。')) {
+                            return;
+                          }
+                          await _post('/api/admin/users/${u.id}/totp-disable',
+                              {},
+                              okMsg: '已解除 ${u.username} 的两步验证');
+                        }
+                      : null),
+              ListTile(
+                  leading: const Icon(Icons.storage_outlined),
+                  title: const Text('设置配额'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final gb = await _prompt('私人空间配额',
+                        'GB（清空则不限制）',
+                        initial: u.quotaBytes == null
+                            ? ''
+                            : (u.quotaBytes! / (1 << 30)).round().toString(),
+                        hint: '不限');
+                    if (gb == null) return;
+                    final n = double.tryParse(gb);
+                    await _patchUser(u.id, {
+                      'quota_bytes':
+                          n != null && n > 0 ? (n * (1 << 30)).round() : null
+                    });
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.key_outlined),
+                  title: Text(u.webdavSet ? '重置 WebDAV 密码' : '设置 WebDAV 密码'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    final v = await _prompt('WebDAV 独立密码',
+                        '至少 8 位，留空提交=清除',
+                        obscure: true, okText: '保存');
+                    if (v == null) return;
+                    await _post(
+                        '/api/admin/users/${u.id}/webdav-password',
+                        {'value': v},
+                        okMsg: v.isEmpty
+                            ? '已清除 WebDAV 独立密码'
+                            : 'WebDAV 密码已更新');
+                  }),
+              ListTile(
+                  leading: Icon(u.isActive
+                      ? Icons.block_outlined
+                      : Icons.check_circle_outline),
+                  title: Text(u.isActive ? '停用账号' : '启用账号'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await _patchUser(u.id, {'is_active': !u.isActive});
+                  }),
+              if (u.username != me)
+                ListTile(
+                    leading: Icon(Icons.delete_outline,
+                        color: Theme.of(ctx).colorScheme.error),
+                    title: Text('删除成员',
+                        style: TextStyle(
+                            color: Theme.of(ctx).colorScheme.error)),
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      if (!await _confirm('删除成员「${u.username}」？',
+                          '其私人目录将移入 .orphaned/ 保留。',
+                          okText: '删除')) {
+                        return;
+                      }
+                      try {
+                        final dio = await ApiClient.I.dio();
+                        await dio.delete('/api/admin/users/${u.id}');
+                        _toast('已删除');
+                        _loadAll();
+                      } catch (e) {
+                        _toast(e.toString());
+                      }
+                    }),
+            ])));
+  }
+
+  Future<String?> _pickRole(String current) async {
+    String? picked;
+    await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: ListView(shrinkWrap: true, children: [
+              const ListTile(title: Text('选择角色')),
+              for (final r in const ['admin', 'member', 'guest'])
+                ListTile(
+                    leading: Icon(r == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off),
+                    title: Text(r),
+                    onTap: () {
+                      picked = r;
+                      Navigator.pop(ctx);
+                    }),
+            ])));
+    return picked;
+  }
+
+  /// 改用户名（管理员直改，私人目录/incoming 同步改名）→ 重置密码二选一流
+  Future<void> _credFlow(_AdminUser u) async {
+    final action = await showModalBottomSheet<String>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: ListView(shrinkWrap: true, children: [
+              ListTile(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('改用户名'),
+                  onTap: () => Navigator.pop(ctx, 'rename')),
+              ListTile(
+                  leading: const Icon(Icons.lock_reset_outlined),
+                  title: const Text('重置密码'),
+                  onTap: () => Navigator.pop(ctx, 'reset')),
+            ])));
+    if (action == 'rename') {
+      final newName = await _prompt('改用户名 — ${u.username}', '新用户名');
+      if (newName == null || newName == u.username) return;
+      await _post('/api/admin/users/${u.id}/username', {'value': newName},
+          okMsg: '用户名已改为 $newName');
+    } else if (action == 'reset') {
+      final newPwd = await _prompt('重置密码 — ${u.username}', '新密码（至少 8 位）',
+          obscure: true);
+      if (newPwd == null) return;
+      await _post('/api/admin/users/${u.id}/password', {'value': newPwd},
+          okMsg: '密码已重置（其两步验证同步解除、设备 Token 全部吊销）');
+    }
+  }
+
+  Future<void> _patchUser(int uid, Map<String, Object?> body) async {
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.patch('/api/admin/users/$uid', data: body);
+      _toast('已更新');
+      _loadAll();
+    } catch (e) {
+      _toast(e.toString());
+    }
+  }
+
+  Future<void> _post(String path, Map<String, Object?> body,
+      {String? okMsg}) async {
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post(path, data: body);
+      if (okMsg != null) _toast(okMsg);
+      _loadAll();
+    } catch (e) {
+      _toast(e.toString());
+    }
+  }
+
+  // ── 邀请 ────────────────────────────────────────────────
+  Future<void> _createInvite(String role) async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio
+          .post('/api/admin/invites', data: {'role': role, 'hours': 72});
+      final code = r.data['code'] as String;
+      if (!mounted) return;
+      await showDialog<void>(
+          context: context,
+          builder: (d) => AlertDialog(
+                  title: Text(role == 'member' ? '成员邀请码' : '教访邀请码'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    SelectableText(code,
+                        style: const TextStyle(
+                            fontSize: 24,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    const Text('72 小时内有效。新成员在登录页"邀请码建号"使用。',
+                        style: TextStyle(fontSize: 12)),
+                  ]),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(d),
+                        child: const Text('关闭')),
+                  ]));
+      _loadAll();
+    } catch (e) {
+      _toast(e.toString());
+    }
+  }
+
+  // ── 授权 ────────────────────────────────────────────────
+  Future<void> _addGrantBatch() async {
+    if (_gUsers.isEmpty || _gPaths.isEmpty) {
+      _toast('先选成员和目录');
+      return;
+    }
+    var ok = 0, fail = 0;
+    final dio = await ApiClient.I.dio();
+    for (final uid in _gUsers) {
+      for (final p in _gPaths) {
+        try {
+          await dio.post('/api/admin/grants', data: {
+            'user_id': uid,
+            'path': p,
+            'can_read': true,
+            'can_write': _gWrite,
+            if (_gExpiry > 0) 'expires_hours': _gExpiry,
+          });
+          ok++;
+        } catch (_) {
+          fail++;
+        }
+      }
+    }
+    if (!mounted) return;
+    _toast(fail == 0
+        ? '已创建 $ok 条授权（${_gUsers.length} 位成员 × ${_gPaths.length} 个目录）'
+        : '已创建 $ok 条，失败 $fail 条');
+    setState(() {
+      _gUsers.clear();
+      _gPaths.clear();
+    });
+    _loadAll();
+  }
+
+  // ── 设置卡 ──────────────────────────────────────────────
+  Future<void> _savePubUrl() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/admin/public-url',
+          data: {'url': _pubUrl.text.trim()});
+      _toast('公网地址已保存');
+    } catch (e) {
+      _toast(e.toString());
+    }
+  }
+
+  Future<void> _saveHook() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/admin/webhook',
+          data: {'url': _hookUrl.text.trim()});
+      _toast('推送地址已保存');
+    } catch (e) {
+      _toast(e.toString());
+    }
+  }
+
+  Future<void> _testHook() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/admin/webhook/test');
+      _toast('测试消息已发送，去手机上看看');
+    } catch (e) {
+      _toast(e.toString());
+    }
+  }
+
+  // ── UI ──────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+        appBar: AppBar(
+            title: const Text('管理'),
+            bottom: TabBar(controller: _tab, tabs: const [
+              Tab(text: '成员'),
+              Tab(text: '邀请'),
+              Tab(text: '授权'),
+            ])),
+        body: _error != null
+            ? ListView(children: [
+                const SizedBox(height: 80),
+                Center(
+                    child: Text(_error!,
+                        textAlign: TextAlign.center,
+                        style:
+                            const TextStyle(fontSize: 12, color: Colors.grey))),
+                Center(
+                    child: TextButton(
+                        onPressed: _loadAll, child: const Text('重试'))),
+              ])
+            : _users == null
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(controller: _tab, children: [
+                    _usersTab(cs),
+                    _invitesTab(cs),
+                    _grantsTab(cs),
+                  ]));
+  }
+
+  Widget _card({required Widget child}) => Card(
+      elevation: 0,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+              color: Theme.of(context).dividerColor, width: 0.5)),
+      child: Padding(padding: const EdgeInsets.all(12), child: child));
+
+  // ── 成员 Tab ──
+  Widget _usersTab(ColorScheme cs) {
+    final users = _users!;
+    return ListView(children: [
+      for (final u in users)
+        _card(
+            child: Row(children: [
+          CircleAvatar(
+              radius: 17,
+              backgroundColor: cs.primaryContainer,
+              child: Text(u.username.isEmpty
+                  ? '?'
+                  : u.username[0].toUpperCase(),
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: cs.onPrimaryContainer))),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+              Row(children: [
+                Flexible(
+                    child: Text(u.username,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600))),
+                const SizedBox(width: 6),
+                _badge(u.role, u.role == 'admin' ? cs.primary : cs.outline),
+                if (u.totpEnabled) ...[
+                  const SizedBox(width: 4),
+                  _badge('2FA', Colors.green),
+                ],
+                if (!u.isActive) ...[
+                  const SizedBox(width: 4),
+                  _badge('已停用', cs.error),
+                ],
+              ]),
+              const SizedBox(height: 2),
+              Text('加入于 ${u.createdAt} · 配额 ${u.quotaHuman}',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            ])),
+          IconButton(
+              icon: const Icon(Icons.more_vert),
+              onPressed: () => _userSheet(u)),
+        ])),
+      _card(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            const Text('🌐 公网访问地址',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+            const SizedBox(height: 2),
+            const Text('设置后分享卡片会同时提供局域网/公网两个复制按钮。',
+                style: TextStyle(fontSize: 11, color: Colors.grey)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                  child: TextField(
+                      controller: _pubUrl,
+                      decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          hintText: '如 https://your-frp-domain.com:xxxxx'))),
+              const SizedBox(width: 8),
+              FilledButton.tonal(
+                  onPressed: _savePubUrl, child: const Text('保存')),
+            ]),
+          ])),
+      _card(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            const Text('📮 事件推送（通知 bot）',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+            const SizedBox(height: 2),
+            const Text('GET 模板 URL，需含 {title}/{body} 占位符（ntfy/Bark/Server酱）。',
+                style: TextStyle(fontSize: 11, color: Colors.grey)),
+            const SizedBox(height: 8),
+            TextField(
+                controller: _hookUrl,
+                decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    hintText: 'https://ntfy.sh/你的主题/{title}')),
+            const SizedBox(height: 8),
+            Row(children: [
+              FilledButton.tonal(
+                  onPressed: _saveHook, child: const Text('保存')),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                  onPressed: _hookUrl.text.isEmpty ? null : _testHook,
+                  child: const Text('发送测试')),
+            ]),
+          ])),
+      const SizedBox(height: 24),
+    ]);
+  }
+
+  Widget _badge(String text, Color color) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(8)),
+      child: Text(text, style: TextStyle(fontSize: 10, color: color)));
+
+  // ── 邀请 Tab ──
+  Widget _invitesTab(ColorScheme cs) {
+    final invites = _invites!;
+    return ListView(children: [
+      Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Row(children: [
+            Expanded(
+                child: FilledButton.icon(
+                    onPressed: () => _createInvite('member'),
+                    icon: const Icon(Icons.person_add_alt_1, size: 18),
+                    label: const Text('邀请成员'))),
+            const SizedBox(width: 8),
+            Expanded(
+                child: OutlinedButton.icon(
+                    onPressed: () => _createInvite('guest'),
+                    icon: const Icon(Icons.school_outlined, size: 18),
+                    label: const Text('邀请教访'))),
+          ])),
+      for (final i in invites)
+        _card(
+            child: Row(children: [
+          const Icon(Icons.confirmation_number_outlined),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+              SelectableText(i.code,
+                  style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600)),
+              Text('${i.role} · ${i.used ? '已使用' : i.expired ? '已过期' : '有效'}',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: i.used || i.expired
+                          ? Colors.grey
+                          : Colors.green)),
+            ])),
+          IconButton(
+              tooltip: '复制',
+              icon: const Icon(Icons.copy_outlined, size: 20),
+              onPressed: () async {
+                await ClipboardSet.setText(i.code);
+                _toast('已复制');
+              }),
+          IconButton(
+              tooltip: '删除记录',
+              icon: Icon(Icons.close,
+                  size: 20, color: cs.error),
+              onPressed: () async {
+                await _post('/api/admin/invites/${Uri.encodeComponent(i.code)}',
+                    {},
+                    okMsg: '已删除');
+              }),
+        ])),
+      if (invites.isEmpty)
+        const Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(child: Text('还没有邀请记录',
+                style: TextStyle(color: Colors.grey)))),
+      Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text('成员在登录页使用邀请码自助建号（72 小时有效）。',
+              style: TextStyle(fontSize: 12, color: cs.outline))),
+    ]);
+  }
+
+  // ── 授权 Tab ──
+  Widget _grantsTab(ColorScheme cs) {
+    final members = _users!.where((u) => u.role != 'admin').toList();
+    final grants = _grantFilter == -1
+        ? _grants!
+        : _grants!.where((g) => g.userId == _grantFilter).toList();
+    return ListView(children: [
+      _card(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            const Text('➕ 新建授权（可批量）',
+                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
+            const SizedBox(height: 8),
+            const Text('成员（可多选）', style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 4),
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              for (final u in members)
+                FilterChip(
+                    label: Text(u.username, style: const TextStyle(fontSize: 12)),
+                    selected: _gUsers.contains(u.id),
+                    onSelected: (v) => setState(() =>
+                        v ? _gUsers.add(u.id) : _gUsers.remove(u.id))),
+              if (members.isEmpty)
+                const Text('暂无成员',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Text('共享目录（可多选，两层）',
+                  style: TextStyle(fontSize: 12)),
+              const Spacer(),
+              TextButton.icon(
+                  onPressed: _loadDirs,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('刷新目录',
+                      style: TextStyle(fontSize: 12))),
+            ]),
+            const SizedBox(height: 4),
+            if (_dirOptions.isEmpty)
+              const Text('共享空间还没有目录，点"刷新目录"重试',
+                  style: TextStyle(fontSize: 12, color: Colors.grey))
+            else
+              SizedBox(
+                  height: 120,
+                  child: SingleChildScrollView(
+                      child: Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final d in _dirOptions)
+                      FilterChip(
+                          label: Text('📁 $d',
+                              style: const TextStyle(fontSize: 11)),
+                          selected: _gPaths.contains(d),
+                          onSelected: (v) => setState(
+                              () => v ? _gPaths.add(d) : _gPaths.remove(d))),
+                  ]))),
+            const SizedBox(height: 8),
+            Row(children: [
+              Switch(
+                  value: _gWrite,
+                  onChanged: (v) => setState(() => _gWrite = v)),
+              const Text('可写入（默认只读）', style: TextStyle(fontSize: 13)),
+              const Spacer(),
+              DropdownButton<int>(
+                  value: _gExpiry,
+                  items: const [
+                    DropdownMenuItem(value: 0, child: Text('永久')),
+                    DropdownMenuItem(value: 24, child: Text('1 天')),
+                    DropdownMenuItem(value: 168, child: Text('7 天')),
+                    DropdownMenuItem(value: 720, child: Text('30 天')),
+                  ],
+                  onChanged: (v) => setState(() => _gExpiry = v ?? 0)),
+            ]),
+            const SizedBox(height: 8),
+            SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                    onPressed: _addGrantBatch,
+                    icon: const Icon(Icons.done_all, size: 18),
+                    label: Text(
+                        '保存授权（${_gUsers.length} 人 × ${_gPaths.length} 目录）'))),
+          ])),
+      Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+          child: Wrap(spacing: 6, children: [
+            FilterChip(
+                label: const Text('全部成员', style: TextStyle(fontSize: 12)),
+                selected: _grantFilter == -1,
+                onSelected: (_) => setState(() => _grantFilter = -1)),
+            for (final u in members)
+              FilterChip(
+                  label: Text('${u.username}（${_grants!.where((g) => g.userId == u.id).length}）',
+                      style: const TextStyle(fontSize: 12)),
+                  selected: _grantFilter == u.id,
+                  onSelected: (_) => setState(() => _grantFilter = u.id)),
+          ])),
+      for (final g in grants)
+        _card(
+            child: Row(children: [
+          const Icon(Icons.key_outlined),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+              Row(children: [
+                Flexible(
+                    child: Text(g.path,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13))),
+                const SizedBox(width: 6),
+                _badge(g.canWrite ? '读写' : '只读',
+                    g.canWrite ? cs.primary : cs.outline),
+              ]),
+              Text(
+                  '${_memberName(g.userId)} · ${g.expiresAt == null ? '永久' : DateTime.fromMillisecondsSinceEpoch(g.expiresAt! * 1000).toString().split(' ').first}',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            ])),
+          IconButton(
+              icon: Icon(Icons.close, size: 20, color: cs.error),
+              tooltip: '撤销授权',
+              onPressed: () async {
+                await _post('/api/admin/grants/${g.id}', {},
+                    okMsg: '已撤销');
+              }),
+        ])),
+      if (grants.isEmpty)
+        const Padding(
+            padding: EdgeInsets.all(40),
+            child: Center(
+                child: Text('暂无授权', style: TextStyle(color: Colors.grey)))),
+      const SizedBox(height: 24),
+    ]);
+  }
+}
+
+/// 剪贴板薄封装（单测可注入 hook 断言内容）
+class ClipboardSet {
+  static Future<void> Function(String)? hook;
+  static Future<void> setText(String s) async {
+    if (hook != null) return hook!(s);
+    await Clipboard.setData(ClipboardData(text: s));
+  }
+}

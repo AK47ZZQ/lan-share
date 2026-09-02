@@ -3,12 +3,14 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'about_page.dart';
+import 'admin_page.dart';
 import 'backup_settings_page.dart';
 import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
@@ -34,6 +36,7 @@ class _MePageState extends ConsumerState<MePage> {
   String? _server;
   String _cacheSize = '';
   String _version = '';
+  bool? _webdavSet; // WebDAV 独立密码是否已设置（0.8.0）
 
   @override
   void initState() {
@@ -44,6 +47,11 @@ class _MePageState extends ConsumerState<MePage> {
   Future<void> _load() async {
     _server = await Prefs.lastAddress();
     if (mounted) setState(() {});
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/auth/webdav-password');
+      if (mounted) setState(() => _webdavSet = r.data['set'] as bool? ?? false);
+    } catch (_) {/* 端点不可用保持未知 */}
     try {
       final pi = await PackageInfo.fromPlatform();
       if (mounted) setState(() => _version = pi.version);
@@ -207,6 +215,227 @@ class _MePageState extends ConsumerState<MePage> {
     }
   }
 
+  // ── 账号与安全（0.8.0 对齐 Web AccountModal）─────────────────
+
+  /// 改用户名：私人目录/incoming 同步改名；设备 Token 保持有效。
+  /// 改名后备份账本按账号隔离自动清空重对账（秒传迁移，v0.7.0 链路）。
+  Future<void> _changeUsername() async {
+    final session = ref.read(sessionProvider);
+    final nameCtrl = TextEditingController(text: session.username ?? '');
+    final pwdCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('修改用户名'),
+                content: SingleChildScrollView(child: Column(
+                    mainAxisSize: MainAxisSize.min, children: [
+                  TextField(controller: nameCtrl,
+                      decoration: const InputDecoration(labelText: '新用户名')),
+                  TextField(controller: pwdCtrl,
+                      obscureText: true,
+                      decoration:
+                          const InputDecoration(labelText: '当前密码')),
+                ])),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('修改')),
+                ]));
+    if (ok != true || !mounted) {
+      nameCtrl.dispose();
+      pwdCtrl.dispose();
+      return;
+    }
+    final newName = nameCtrl.text.trim();
+    if (newName.isEmpty || newName == session.username) {
+      nameCtrl.dispose();
+      pwdCtrl.dispose();
+      return;
+    }
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/auth/username',
+          data: {'new_username': newName, 'password': pwdCtrl.text});
+      if (!mounted) return;
+      await Prefs.setUsername(newName);
+      if (!mounted) return;
+      ref.read(sessionProvider.notifier).applyRename(newName);
+      _toast('用户名已改为 $newName（私人目录已同步改名）');
+      setState(() {});
+    } catch (e) {
+      _toast('修改失败：${_detail(e)}');
+    } finally {
+      nameCtrl.dispose();
+      pwdCtrl.dispose();
+    }
+  }
+
+  /// WebDAV 独立密码：设置/轮换/清除。独立于登录密码，客户端挂载用。
+  Future<void> _webdavDialog() async {
+    final curCtrl = TextEditingController();
+    final newCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('WebDAV 独立密码'),
+                content: SingleChildScrollView(child: Column(
+                    mainAxisSize: MainAxisSize.min, children: [
+                  Text(_webdavSet == true
+                      ? '已启用：WebDAV 挂载只认独立密码，登录密码对 /dav/ 无效。'
+                      : '未设置：WebDAV 挂载目前使用登录密码。',
+                      style: const TextStyle(fontSize: 12)),
+                  const SizedBox(height: 8),
+                  TextField(controller: curCtrl,
+                      obscureText: true,
+                      decoration:
+                          const InputDecoration(labelText: '当前登录密码')),
+                  TextField(controller: newCtrl,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                          labelText: 'WebDAV 新密码（至少 8 位，留空=清除）')),
+                ])),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('保存')),
+                ]));
+    if (ok != true || !mounted) {
+      curCtrl.dispose();
+      newCtrl.dispose();
+      return;
+    }
+    final newPwd = newCtrl.text;
+    if (newPwd.isNotEmpty && newPwd.length < 8) {
+      _toast('WebDAV 密码至少 8 位（留空=清除）');
+      return;
+    }
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.post('/api/auth/webdav-password', data: {
+        'current_password': curCtrl.text,
+        'webdav_password': newPwd,
+      });
+      if (!mounted) return;
+      setState(() => _webdavSet = r.data['set'] as bool? ?? false);
+      _toast(r.data['set'] == true
+          ? 'WebDAV 独立密码已生效（挂载客户端需改用新密码）'
+          : '已清除：WebDAV 回退用登录密码挂载');
+    } catch (e) {
+      _toast('保存失败：${_detail(e)}');
+    } finally {
+      curCtrl.dispose();
+      newCtrl.dispose();
+    }
+  }
+
+  /// 生成一次性配对码：给另一台设备免密登录本账号（登录页"配对码登录"）。
+  Future<void> _showPairCode() async {
+    String? code;
+    int expires = 0;
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.post('/api/pair/code');
+      code = r.data['code'] as String;
+      expires = (r.data['expires_in'] as num?)?.toInt() ?? 180;
+    } catch (e) {
+      _toast('生成失败：${_detail(e)}');
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('配对码'),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(code!,
+                      style: const TextStyle(
+                          fontSize: 36,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 6)),
+                  const SizedBox(height: 8),
+                  Text('在另一台设备的登录页选择"配对码登录"，输入此码即可免密登录本账号。$expires 秒内有效，一码一用。',
+                      style: const TextStyle(fontSize: 12)),
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () =>
+                          Clipboard.setData(ClipboardData(text: code!)),
+                      child: const Text('复制')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('完成')),
+                ]));
+  }
+
+  /// 重新生成两步验证恢复码：旧码全部作废，新码仅本次明文展示。
+  Future<void> _regenRecoveryCodes() async {
+    final pwdCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('重新生成恢复码'),
+                content: TextField(controller: pwdCtrl,
+                    obscureText: true,
+                    autofocus: true,
+                    decoration:
+                        const InputDecoration(labelText: '当前密码')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('生成')),
+                ]));
+    if (ok != true || !mounted) {
+      pwdCtrl.dispose();
+      return;
+    }
+    List codes;
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio
+          .post('/api/auth/totp/rc', data: {'old_password': pwdCtrl.text});
+      codes = r.data['recovery_codes'] as List;
+    } catch (e) {
+      _toast('生成失败：${_detail(e)}');
+      return;
+    } finally {
+      pwdCtrl.dispose();
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('新的恢复码（仅显示一次）'),
+                content: Column(mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('旧恢复码已全部作废。请把新码抄到安全的地方：',
+                      style: TextStyle(fontSize: 12)),
+                  const SizedBox(height: 8),
+                  for (final c in codes)
+                    Text(c as String,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', fontSize: 15)),
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Clipboard.setData(ClipboardData(
+                          text: codes.join('\n'))),
+                      child: const Text('复制全部')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('我已保存')),
+                ]));
+  }
+
   Future<void> _toggleAppLock(bool v) async {
     if (!v) {
       await ref.read(settingsProvider.notifier).setAppLock(false);
@@ -293,6 +522,15 @@ class _MePageState extends ConsumerState<MePage> {
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           child: Text('设置', style: TextStyle(fontWeight: FontWeight.bold)),
         ),
+        // 管理面板（0.8.0 对齐 Web AdminView）：仅管理员可见
+        if (session.role == 'admin')
+          ListTile(
+            leading: const Icon(Icons.admin_panel_settings_outlined),
+            title: const Text('管理面板'),
+            subtitle: const Text('成员 / 邀请码 / 授权 / 事件推送 / 公网地址'),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const AdminPage())),
+          ),
         ListTile(
           leading: const Icon(Icons.dark_mode_outlined),
           title: const Text('深色模式'),
@@ -303,10 +541,44 @@ class _MePageState extends ConsumerState<MePage> {
           }),
           onTap: _pickThemeMode,
         ),
+        const Divider(),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: Text('账号与安全',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+        ),
         ListTile(
           leading: const Icon(Icons.lock_outline),
           title: const Text('修改密码'),
           onTap: _changePassword,
+        ),
+        ListTile(
+          leading: const Icon(Icons.badge_outlined),
+          title: const Text('修改用户名'),
+          subtitle: const Text('私人目录同步改名，需密码确认'),
+          onTap: _changeUsername,
+        ),
+        ListTile(
+          leading: const Icon(Icons.storage_outlined),
+          title: const Text('WebDAV 独立密码'),
+          subtitle: Text(_webdavSet == null
+              ? '读取中…'
+              : _webdavSet!
+                  ? '已启用：挂载只认独立密码'
+                  : '未设置：挂载目前用登录密码'),
+          onTap: _webdavDialog,
+        ),
+        ListTile(
+          leading: const Icon(Icons.qr_code_2),
+          title: const Text('生成配对码'),
+          subtitle: const Text('另一台设备免密登录本账号（3 分钟有效）'),
+          onTap: _showPairCode,
+        ),
+        ListTile(
+          leading: const Icon(Icons.restore),
+          title: const Text('重新生成恢复码'),
+          subtitle: const Text('两步验证丢失认证器时的备用码，需密码确认'),
+          onTap: _regenRecoveryCodes,
         ),
         SwitchListTile(
           secondary: const Icon(Icons.notifications_outlined),

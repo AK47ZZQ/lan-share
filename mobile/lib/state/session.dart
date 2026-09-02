@@ -188,6 +188,14 @@ class SessionController extends StateNotifier<SessionState> {
     return s.length > 200 ? s.substring(0, 200) : s;
   }
 
+  /// 服务端改名后同步本机状态（0.8.0 我的页改用户名）：
+  /// 设备 Token 不变、会话保持；prefs 用户名缓存由调用方更新
+  void applyRename(String newName) {
+    _username = newName;
+    state = SessionState(
+        loggedIn: true, username: newName, role: state.role);
+  }
+
   Future<void> logout() async {
     _username = '';
     _password = '';
