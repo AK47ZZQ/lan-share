@@ -112,20 +112,28 @@ def move_to_trash(target: Path, orig_path: str):
 
 
 async def save_upload(file: UploadFile, dest: Path) -> dict:
+    """单请求直传。先写 .uploading 临时文件、完成后 os.replace 原子落位——
+    并发同名单请求不再交错写坏半截文件；旧版本在替换前进回收站。"""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
-        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+    tmp = dest.with_name(dest.name + ".uploading")
     size = 0
     sha256 = hashlib.sha256()
-    async with aiofiles.open(dest, "wb") as f:
+    overflow = False
+    async with aiofiles.open(tmp, "wb") as f:
         while chunk := await file.read(1024 * 1024):
             size += len(chunk)
             if size > MAX_UPLOAD_SIZE:
-                dest.unlink(missing_ok=True)
-                raise HTTPException(status_code=413,
-                                    detail=f"File too large (max {human_size(MAX_UPLOAD_SIZE)})")
+                overflow = True   # Windows 上打开中的文件不能 unlink，关句柄后再清
+                break
             sha256.update(chunk)
             await f.write(chunk)
+    if overflow:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=413,
+                            detail=f"File too large (max {human_size(MAX_UPLOAD_SIZE)})")
+    if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
+        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+    os.replace(tmp, dest)
     return {
         "name": dest.name,
         "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),

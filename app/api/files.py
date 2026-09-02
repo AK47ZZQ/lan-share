@@ -45,7 +45,7 @@ def _is_own_private_root(user, target: Path) -> bool:
         rel = target.relative_to(SHARE_ROOT)
     except ValueError:
         return False
-    return (rel.parts and rel.parts[0] == "private" and len(rel.parts) == 2
+    return (rel.parts and rel.parts[0].lower() == "private" and len(rel.parts) == 2
             and rel.parts[1].lower() == user["username"].lower())
 
 
@@ -54,7 +54,7 @@ def _under_private(path: Path, username: str) -> bool:
         rel = path.relative_to(SHARE_ROOT)
     except ValueError:
         return False
-    return (rel.parts and rel.parts[0] == "private"
+    return (rel.parts and rel.parts[0].lower() == "private"
             and len(rel.parts) > 1
             and rel.parts[1].lower() == username.lower())
 
@@ -70,9 +70,25 @@ def _cross_space_guard(user, src: Path, dest: Path):
         raise HTTPException(status_code=400,
                             detail="共享空间与私人空间之间不能移动（可复制后删除）")
 
+@app.get("/files/{path:path}")
+@app.get("/files")
+def download_file(path: str = "", _user=Depends(require_user)):
+    """静态直连下载（Caddy /files/* 反代至此）：与 /preview 同样走 resolve() 判权。
+    Caddyfile 不再直接 file_server 挂 SHARE_ROOT（越权旁路，review 2026-09-02 P0-1）；
+    FileResponse 的 filename 参数自带 Content-Disposition: attachment。"""
+    target = resolve(_user, path, "read")
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail="目录请在界面打包下载")
+    mime, _ = mimetypes.guess_type(str(target))
+    return FileResponse(target, media_type=mime or "application/octet-stream",
+                        filename=target.name)
+
+
 @app.get("/api/files/{path:path}")
 @app.get("/api/files")
-async def list_files(request: Request, path: str = "", _user=Depends(require_user)):
+def list_files(request: Request, path: str = "", _user=Depends(require_user)):
     user = preview_user(request, _user)   # admin 成员视角预览（X-As-User，只读）
     target = resolve(user, path, "read")
     if not target.exists():
@@ -213,11 +229,16 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     tmp = _chunk_dir(sid) / f"_tmp_{index:06d}"
     expected = min(cs, row["total_size"] - index * cs)
     size = 0
+    overflow = False
     async with aiofiles.open(tmp, "wb") as f:
         async for chunk in request.stream():
             size += len(chunk)
+            if size > expected:
+                # 超发立即停止接收（不再把整块写完才比对），防滥用端点灌盘
+                overflow = True
+                break
             await f.write(chunk)
-    if size != expected:
+    if overflow or size != expected:
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=400,
                             detail=f"Chunk {index}: got {size} bytes, expected {expected}")
@@ -366,7 +387,7 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
         except HTTPException as e:
             results.append({"src": src, "ok": False, "error": e.detail})
         except OSError as e:
-            results.append({"src": src, "ok": False, "error": str(e)})
+            results.append({"src": src, "ok": False, "error": f"系统错误（{type(e).__name__}）"})
     return {"ok": True, "results": results}
 
 
@@ -387,6 +408,26 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
     dest_dir = resolve(_user, body.dest_dir, "write")
     if not dest_dir.is_dir():
         raise HTTPException(status_code=404, detail="目标目录不存在")
+
+    def _tree_size(p: Path) -> int:
+        if p.is_dir():
+            total = 0
+            for f in p.rglob("*"):
+                try:
+                    if f.is_file():
+                        total += f.stat().st_size
+                except OSError:
+                    continue
+            return total
+        return p.stat().st_size
+
+    incoming = 0
+    for src in body.sources:
+        try:
+            incoming += _tree_size(Path(src))
+        except OSError:
+            pass   # 源缺失由下方逐项检查报 404
+    enforce_quota(_user, dest_dir, incoming)
     results = []
     for src in body.sources:
         try:
@@ -417,7 +458,7 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
         except HTTPException as e:
             results.append({"src": src, "ok": False, "error": e.detail})
         except OSError as e:
-            results.append({"src": src, "ok": False, "error": str(e)})
+            results.append({"src": src, "ok": False, "error": f"系统错误（{type(e).__name__}）"})
     return {"ok": True, "results": results}
 
 
@@ -430,23 +471,50 @@ async def delete_file(request: Request, path: str, _user=Depends(require_user)):
         raise HTTPException(status_code=400, detail="不能删除根目录")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Not found")
-    _move_to_trash(target, path)
+    # 回收站登记物理相对路径（此前存请求原样 vpath，visible() 无法判定归属）
+    _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
     audit("trash", path, ip=client_ip(request))
     return {"ok": True}
+
+
+_VPATH_RE = re.compile(r"^(shared|private):(.*)$", re.I)
+
+
+def _trash_rel_parts(orig_path: str) -> list[str] | None:
+    """回收站 orig_path → 物理路径段（供 visible() 判归属）。历史入口存过
+    vpath 形态（"private:<名>"，无用户段，归属不可判定）→ 返回 None，
+    此类条目仅 admin 可见/可操作（review 2026-09-02 P1-1）。"""
+    raw = (orig_path or "").replace("\\", "/")
+    m = _VPATH_RE.match(raw)
+    if m:
+        if m.group(1).lower() == "private":
+            return None
+        raw = m.group(2)
+    return [s for s in raw.split("/") if s not in ("", ".")]
 
 
 @app.get("/api/trash")
 async def list_trash(_user=Depends(require_user)):
     rows = _db().execute("SELECT * FROM trash ORDER BY deleted_at DESC").fetchall()
-    return [{
-        "id": r["id"],
-        "name": r["name"],
-        "orig_path": r["orig_path"],
-        "size": r["size"],
-        "size_human": human_size(r["size"]) if r["size"] else "-",
-        "deleted_at": datetime.fromtimestamp(r["deleted_at"]).isoformat(),
-        "days_left": max(0, TRASH_DAYS - int((time.time() - r["deleted_at"]) / 86400)),
-    } for r in rows if visible(_user, r["orig_path"].split("/"))]
+    is_admin = _user["role"] == "admin"
+    items = []
+    for r in rows:
+        parts = _trash_rel_parts(r["orig_path"])
+        if parts is None:
+            if not is_admin:
+                continue
+        elif not visible(_user, parts):
+            continue
+        items.append({
+            "id": r["id"],
+            "name": r["name"],
+            "orig_path": r["orig_path"],
+            "size": r["size"],
+            "size_human": human_size(r["size"]) if r["size"] else "-",
+            "deleted_at": datetime.fromtimestamp(r["deleted_at"]).isoformat(),
+            "days_left": max(0, TRASH_DAYS - int((time.time() - r["deleted_at"]) / 86400)),
+        })
+    return items
 
 
 @app.post("/api/trash/{trash_id}/restore")
@@ -454,6 +522,14 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
+    # 与删除入口同款可见性校验（review 2026-09-02 P1-1）：缺了它，成员可枚举
+    # trash id 把他人 private/incoming 的回收站条目"恢复"进自己空间
+    parts = _trash_rel_parts(row["orig_path"])
+    if parts is None:
+        if _user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Forbidden")
+    elif not visible(_user, parts):
+        raise HTTPException(status_code=403, detail="Forbidden")
     trash_path = SHARE_ROOT / row["trash_path"]
     if not trash_path.exists():
         with _db_lock:
@@ -478,7 +554,11 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
-    if not visible(_user, row["orig_path"].split("/")):
+    parts = _trash_rel_parts(row["orig_path"])
+    if parts is None:
+        if _user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Forbidden")
+    elif not visible(_user, parts):
         raise HTTPException(status_code=403, detail="Forbidden")
     trash_path = SHARE_ROOT / row["trash_path"]
     if trash_path.is_dir():
@@ -634,7 +714,12 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
         old_rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
     except ValueError:
         old_rel = ""
-    target.rename(dest)
+    try:
+        target.rename(dest)
+    except FileExistsError:
+        raise HTTPException(status_code=400, detail="目标名称已存在")
+    except OSError:
+        raise HTTPException(status_code=500, detail="重命名失败（目标被占用或系统错误）")
     if old_rel:
         sync_grants_on_move(old_rel, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     audit("rename", body.path, body.new_name, client_ip(request))
@@ -709,7 +794,7 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
 
 
 @app.get("/api/search")
-async def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user)):
+def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user)):
     results = []
     for f in SHARE_ROOT.rglob("*"):
         rel_parts = f.relative_to(SHARE_ROOT).parts
@@ -723,7 +808,7 @@ async def search_files(q: str = Query(..., min_length=1), _user=Depends(require_
 
 
 @app.get("/api/recent")
-async def recent_files(limit: int = Query(default=20, le=100), _user=Depends(require_user)):
+def recent_files(limit: int = Query(default=20, le=100), _user=Depends(require_user)):
     files = []
     for f in SHARE_ROOT.rglob("*"):
         rel_parts = f.relative_to(SHARE_ROOT).parts

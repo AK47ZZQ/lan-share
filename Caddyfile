@@ -19,14 +19,15 @@
 		-Server
 	}
 
+	# /files/* 下载必须走后端鉴权端点（review 2026-09-02 P0-1）：
+	# 此前此处直接 file_server 挂整个 SHARE_ROOT，任何登录用户都能越权读取
+	# 他人 private/、.trash/.chunks/.zips 与 .meta.db——权限模型被整体绕过。
+	# 现在反代到后端 /files/{path} 端点，由 resolve() 按 private/incoming/grants 判权。
 	handle /files/* {
 		forward_auth localhost:8766 {
 			uri /authcheck
 		}
-		uri strip_prefix /files
-		root * C:/lan-share/data
-		header Content-Disposition "attachment"
-		file_server browse
+		reverse_proxy localhost:8766
 	}
 
 	handle /thumb/* {

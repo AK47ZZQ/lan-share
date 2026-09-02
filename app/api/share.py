@@ -18,7 +18,8 @@ from starlette.background import BackgroundTask
 
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_TTL
 from app.db import _db, _db_lock
-from app.security import audit, client_ip, get_session_user, preview_user, require_user
+from app.security import (audit, client_ip, get_bearer_user, get_session_user,
+                          preview_user, require_user)
 from app.filetools import human_size
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
@@ -88,10 +89,11 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
 
 def _target_guard(s: sqlite3.Row, request: Request) -> bool:
     """定向分享访问判定：返回请求者是否是目标成员（或 admin）。
-    非定向分享恒返回 False（不拦截）；定向分享对无关者表现为不存在。"""
+    非定向分享恒返回 False（不拦截）；定向分享对无关者表现为不存在。
+    Cookie 会话与 App Bearer 均可（App 也能取定向分享，review 2026-09-02 P3）。"""
     if s["target_user_id"] is None:
         return False
-    u = get_session_user(request)
+    u = get_session_user(request) or get_bearer_user(request)
     if u and (u["user_id"] == s["target_user_id"] or u["role"] == "admin"):
         return True
     # 404 而非 403：不向无关者泄露分享的存在；detail 供落地页给出登录引导
@@ -248,15 +250,20 @@ async def list_shares(request: Request, _user=Depends(require_user)):
     viewer = preview_user(request, _user)   # admin 成员视角预览
     is_admin = viewer["role"] == "admin"
     rows = _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall()
+    uid_map = {r["id"]: r["username"]
+               for r in _db().execute("SELECT id, username FROM users").fetchall()}
     active = {}
     for s in rows:
-        if not is_admin and s["owner_id"] not in (None, viewer["user_id"]):
+        # v2 遗留分享（owner_id 为 NULL）仅 admin 可见/管理，成员不可见
+        if not is_admin and s["owner_id"] is None:
             continue
-        owner = _db().execute("SELECT username FROM users WHERE id=?", (s["owner_id"],)).fetchone()             if s["owner_id"] else None
-        target_user = _db().execute("SELECT username FROM users WHERE id=?", (s["target_user_id"],)).fetchone() if s["target_user_id"] else None
+        if not is_admin and s["owner_id"] != viewer["user_id"]:
+            continue
+        owner = uid_map.get(s["owner_id"]) if s["owner_id"] else None
+        target_user = uid_map.get(s["target_user_id"]) if s["target_user_id"] else None
         active[s["token"]] = {
-            "owner": owner["username"] if owner else ("早期分享" if is_admin else "我"),
-            "target": target_user["username"] if target_user else None,
+            "owner": owner or ("早期分享" if is_admin else "我"),
+            "target": target_user,
             "path": s["path"],
             "name": s["name"],
             "size": s["size"],
@@ -278,7 +285,8 @@ async def share_history(token: str, _user=Depends(require_user)):
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != "admin" and s["owner_id"] not in (None, _user["user_id"]):
+    # 无主（v2 遗留）分享归 admin 管；owner_id None 不再等同"人人可管"
+    if _user["role"] != "admin" and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     rows = _db().execute(
         "SELECT ts, ip, action FROM audit_log "
@@ -293,7 +301,7 @@ async def revoke_share(request: Request, token: str, _user=Depends(require_user)
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != "admin" and s["owner_id"] not in (None, _user["user_id"]):
+    if _user["role"] != "admin" and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     with _db_lock:
         cur = _db().execute("DELETE FROM shares WHERE token=?", (token,))
@@ -316,7 +324,7 @@ async def edit_share(request: Request, token: str, body: ShareEditBody,
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != "admin" and s["owner_id"] not in (None, _user["user_id"]):
+    if _user["role"] != "admin" and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     if body.expires_hours is None and body.max_downloads is None:
         raise HTTPException(status_code=400, detail="没有要修改的字段")

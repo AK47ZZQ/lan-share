@@ -132,14 +132,16 @@ def resolve(user, path: str, need: str = "read"):
         return safe_path("/".join(rel_parts))
 
     # ── shared 空间 ──
-    if parts and parts[0] == "private":
+    # 特殊段判定必须 normcase（Windows 大小写不敏感）："Private/" 在 NTFS 上就是
+    # private/，精确比较会让它落进 shared 默认可读分支 → 跨用户越权（review 2026-09-02 P0-2）
+    if parts and _normcase_eq(parts[0], "private"):
         # 旧 UI 入口：shared:private/... 永远映射到请求者本人 private（防跨用户）。
         # 兼容虚拟/物理两种路径形态（目录列表返回物理形态 private/<用户名>/...）
         own = SHARE_ROOT / "private" / username
         own.mkdir(parents=True, exist_ok=True)  # 私人空间永远可进入
         return safe_path("/".join(_own_private_rel(username, parts[1:])))
 
-    if parts and parts[0] == "incoming":
+    if parts and _normcase_eq(parts[0], "incoming"):
         sub = parts[1:]
         if need == "write":
             # 直传落各自子目录（权限内建，不查 grant）
@@ -187,7 +189,7 @@ def enforce_quota(user, dest, incoming_bytes: int):
         rel = dest.relative_to(SHARE_ROOT)
     except ValueError:
         return
-    if not rel.parts or rel.parts[0] != "private":
+    if not rel.parts or not _normcase_eq(rel.parts[0], "private"):
         return
     used = 0
     own = SHARE_ROOT / "private" / user["username"]
@@ -203,18 +205,30 @@ def enforce_quota(user, dest, incoming_bytes: int):
 
 
 def sync_grants_on_move(old_rel: str, new_rel: str):
-    """目录改名/移动后同步 grants.path（E6，事务内）。仅作用于 shared 空间的普通目录。"""
+    """目录改名/移动后同步 grants.path（E6，事务内）。仅作用于 shared 空间的普通目录。
+    前缀匹配走 normcase + Python 侧精确段比较——LIKE 通配符会被路径里的 %/_ 破坏。"""
     if not old_rel or not new_rel:
         return
     old_parts = old_rel.split("/")
     new_parts = new_rel.split("/")
-    if old_parts[0] in ("private", "incoming") or new_parts[0] in ("private", "incoming"):
+
+    def _reserved(parts):
+        return bool(parts) and (_normcase_eq(parts[0], "private")
+                                or _normcase_eq(parts[0], "incoming"))
+
+    if _reserved(old_parts) or _reserved(new_parts):
         return
     old_vkey = "shared/" + old_rel
     new_vkey = "shared/" + new_rel
+    ok_old = _normcase(old_vkey)
     with _db_lock:
-        _db().execute("UPDATE grants SET path=? WHERE path=? OR path LIKE ? || '/%'",
-                      (new_vkey, old_vkey, old_vkey))
+        for r in _db().execute("SELECT id, path FROM grants").fetchall():
+            gp = _normcase(r["path"])
+            if gp == ok_old:
+                _db().execute("UPDATE grants SET path=? WHERE id=?", (new_vkey, r["id"]))
+            elif gp.startswith(ok_old + "/"):
+                _db().execute("UPDATE grants SET path=? WHERE id=?",
+                              (new_vkey + r["path"][len(old_vkey):], r["id"]))
         _db().commit()
 
 
@@ -225,9 +239,9 @@ def visible(user, rel_parts) -> bool:
         return False
     role = user["role"] if "role" in user.keys() else "member"
     username = user["username"]
-    if parts[0] == "private":
+    if _normcase_eq(parts[0], "private"):
         return len(parts) > 1 and _normcase_eq(parts[1], username)
-    if parts[0] == "incoming":
+    if _normcase_eq(parts[0], "incoming"):
         if role == "admin":
             return True
         return len(parts) > 1 and _normcase_eq(parts[1], username)

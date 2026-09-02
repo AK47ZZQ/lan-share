@@ -14,6 +14,12 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
 - v3 新增 `tests/test_multiuser.py`（角色/空间/授权边界，对应 DESIGN-v3/PERMISSIONS.md）。
+- `tests/test_review_fixes.py`（12 项，2026-09-02 安全修复批）是**安全回归网**，
+  改动 `spaces.py` / Caddyfile `/files` / 回收站 / 设备 Token / TOTP 时必须保持全绿：
+  特殊段大小写变体（`Private/<他人>/` 不可读）、`/files` 下载判权、回收站越权
+  恢复、改密/停用吊销设备 Token、分块超发拒绝、遗留无主分享隔离、TOTP 动态码防重放。
+  **改 Caddyfile 也属于攻击面变更**：需同步自查 `handle` 块是否仍全部走后端鉴权，
+  并跑本文件回归（纯 pytest 覆盖不到 Caddy 层，至少手动验证未认证 401 / 点目录 403）。
 - 新前端：`cd web && npm run build`（产物 web/dist 即时生效，无需重启服务）。
 - 前端约定：**禁止使用浏览器原生 alert/confirm/prompt**——统一用
   `ui.ts` 的 toast / confirmDlg / promptDlg（Promise 化，App 根级渲染）；

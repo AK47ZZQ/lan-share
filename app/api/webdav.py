@@ -20,7 +20,7 @@ from app.security import (audit, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail, verify_password)
 from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve
-from app.api.files import _move_to_trash
+from app.api.files import _cross_space_guard, _is_own_private_root, _move_to_trash
 from app.main import app
 
 # ─── WebDAV ───────────────────────────────────────────────
@@ -105,6 +105,20 @@ def _dav_destination(request: Request, user) -> Path:
     segs = [s for s in p[len("/dav/"):].replace("\\", "/").split("/") if s not in ("", ".")]
     cleaned = "/".join(clean_filename(s) for s in segs)  # 目标名同界面规则清洗
     return resolve(user, cleaned, "write")
+
+
+def _dav_tree_size(p: Path) -> int:
+    """COPY 进私人空间前的配额计价（与 /api/copy 同语义）。"""
+    if p.is_dir():
+        total = 0
+        for f in p.rglob("*"):
+            try:
+                if f.is_file():
+                    total += f.stat().st_size
+            except OSError:
+                continue
+        return total
+    return p.stat().st_size
 
 
 _READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNLOCK"}
@@ -202,8 +216,10 @@ async def dav_handler(request: Request, path: str = ""):
             raise HTTPException(status_code=404)
         if target == SHARE_ROOT:
             raise HTTPException(status_code=403)
-        # 与界面删除一致：进回收站
-        _move_to_trash(target, path)
+        if _is_own_private_root(user, target):
+            raise HTTPException(status_code=403, detail="私人空间根目录不可删除")
+        # 与界面删除一致：进回收站（登记物理相对路径）
+        _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
         audit("dav_delete", path, ip=client_ip(request))
         return Response(status_code=204)
 
@@ -213,6 +229,13 @@ async def dav_handler(request: Request, path: str = ""):
         dest = _dav_destination(request, user)
         if dest == target:
             raise HTTPException(status_code=403, detail="Same resource")
+        if method == "MOVE":
+            # 与界面 /api/move 同款守卫：私人根不可移动、成员不得跨空间搬运（E9）
+            if _is_own_private_root(user, target):
+                raise HTTPException(status_code=403, detail="私人空间根目录不可移动")
+            _cross_space_guard(user, target, dest)
+        else:
+            enforce_quota(user, dest, _dav_tree_size(target))
         overwrite = request.headers.get("overwrite", "T").upper() != "F"
         if dest.exists():
             if not overwrite:

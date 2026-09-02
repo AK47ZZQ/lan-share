@@ -15,7 +15,7 @@ from app.db import _db, _db_lock
 from app.filetools import human_size
 from app.security import (audit, client_ip, hash_password, require_admin, require_user,
                           reset_netloc_cache)
-from app.spaces import RESERVED_USERNAMES
+from app.spaces import RESERVED_USERNAMES, _normcase_eq
 from app.api.notify import get_webhook_url, push_webhook, webhook_send
 from app.main import app
 
@@ -79,7 +79,10 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
         if body.is_active is not None:
             if not body.is_active:
                 _last_admin_guard(_db(), uid)
+                # 停用即吊销全部登录态：Cookie 会话 + App 设备 Token
+                #（否则重新启用后旧设备 Token 全部复活）
                 _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+                _db().execute("DELETE FROM device_tokens WHERE user_id=?", (uid,))
             _db().execute("UPDATE users SET is_active=? WHERE id=?",
                           (1 if body.is_active else 0, uid))
         if body.quota_bytes is not None:
@@ -120,6 +123,15 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
             old_dir.rename(new_dir)
         except OSError:
             audit("admin_dir_rename_fail", f"{row['username']} → {new_name}", ip=client_ip(request))
+    # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
+    old_inc = SHARE_ROOT / "incoming" / row["username"]
+    new_inc = SHARE_ROOT / "incoming" / new_name
+    if old_inc.exists() and not os.path.normcase(str(old_inc)) == os.path.normcase(str(new_inc)):
+        try:
+            old_inc.rename(new_inc)
+        except OSError:
+            audit("admin_incoming_rename_fail", f"{row['username']} → {new_name}",
+                  ip=client_ip(request))
     audit("admin_rename_user", f"{row['username']} → {new_name}", ip=client_ip(request))
     return {"ok": True, "username": new_name}
 
@@ -134,10 +146,12 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
     if len(body.value) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
     with _db_lock:
-        # 重置密码同时清除两步验证与恢复码（成员手机丢失时的管理端恢复通道）
-        _db().execute("UPDATE users SET password_hash=?, totp_secret=NULL, totp_enabled=0, totp_rc=NULL WHERE id=?",
+        # 重置密码 = 凭据疑似泄露的恢复动作：清 TOTP/恢复码 + 吊销全部 Cookie 会话
+        # 与 App 设备 Token（Bearer 90 天滑动，不吊销则接管恢复不彻底）
+        _db().execute("UPDATE users SET password_hash=?, totp_secret=NULL, totp_enabled=0, totp_rc=NULL, totp_last_step=NULL WHERE id=?",
                       (hash_password(body.value), uid))
         _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        _db().execute("DELETE FROM device_tokens WHERE user_id=?", (uid,))
         _db().commit()
     audit("admin_reset_password", row["username"], ip=client_ip(request))
     return {"ok": True}
@@ -153,8 +167,8 @@ def admin_totp_disable(uid: int, request: Request, _admin=Depends(require_admin)
     if not row["totp_enabled"] and not row["totp_rc"]:
         raise HTTPException(status_code=400, detail="该账号未启用两步验证")
     with _db_lock:
-        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL WHERE id=?",
-                      (uid,))
+        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL, "
+                      "totp_last_step=NULL WHERE id=?", (uid,))
         _db().commit()
     audit("admin_totp_disable", row["username"], ip=client_ip(request))
     return {"ok": True}
@@ -287,11 +301,15 @@ def invite_redeem(body: RedeemBody, request: Request):
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     now = time.time()
     with _db_lock:
-        cur = _db().execute(
-            "INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,?) "
-            "RETURNING id",
-            (username, hash_password(body.password), now, row["role"]))
-        uid = cur.fetchone()["id"]
+        try:
+            cur = _db().execute(
+                "INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,?) "
+                "RETURNING id",
+                (username, hash_password(body.password), now, row["role"]))
+            uid = cur.fetchone()["id"]
+        except Exception:
+            # 并发 redeem 撞同名：唯一约束兜底（占位查询与插入之间的窗口）
+            raise HTTPException(status_code=409, detail="该用户名已被占用")
         # 原子占位：仅当邀请未被使用且未过期时认领（并发 redeem 安全）
         claim = _db().execute(
             "UPDATE invites SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL "
@@ -418,9 +436,9 @@ def admin_create_grant(body: GrantBody, request: Request, _admin=Depends(require
     p = body.path.strip().replace("\\", "/").strip("/")
     if p.startswith("shared:"):
         p = p[len("shared:"):]
-    if p.startswith("private"):
-        raise HTTPException(status_code=400, detail="私人空间不可授权")
     parts = [s for s in p.split("/") if s not in ("", ".")]
+    if parts and _normcase_eq(parts[0], "private"):
+        raise HTTPException(status_code=400, detail="私人空间不可授权")
     if not parts or any(s == ".." or s.startswith(".") for s in parts):
         raise HTTPException(status_code=400, detail="非法授权路径")
     vkey = "shared/" + "/".join(parts)

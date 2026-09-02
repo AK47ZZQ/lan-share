@@ -1,5 +1,6 @@
 """认证 API：初始化/登录(含 TOTP 两步)/登出/改密/改用户名/账号状态/两步验证管理/设备 Token。"""
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -69,13 +70,14 @@ async def auth_state(request: Request):
 
 @app.post("/api/setup")
 async def setup(body: AuthBody, request: Request, response: Response):
-    if user_count() > 0:
-        raise HTTPException(status_code=403, detail="管理员已存在")
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="密码至少 8 位")
-    if not body.username.strip():
-        raise HTTPException(status_code=400, detail="用户名不能为空")
+    # 检查 + 插入同锁（否则空库并发 setup 可建出双管理员）
     with _db_lock:
+        if user_count() > 0:
+            raise HTTPException(status_code=403, detail="管理员已存在")
+        if len(body.password) < 8:
+            raise HTTPException(status_code=400, detail="密码至少 8 位")
+        if not body.username.strip():
+            raise HTTPException(status_code=400, detail="用户名不能为空")
         _db().execute("INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,'admin')",
                       (body.username.strip(), hash_password(body.password), time.time()))
         _db().commit()
@@ -124,6 +126,18 @@ async def login(body: AuthBody, request: Request, response: Response):
     return {"ok": True, "username": row["username"]}
 
 
+def _totp_match_step(secret: str, code: str) -> int | None:
+    """±1 窗口内匹配动态码，返回命中的时间步；不中返回 None。
+    不用 pyotp.verify 只取布尔——它不记步，同一 30s 窗口内的码可被重放；
+    返回步数后与 users.totp_last_step 比对即可拦截（review 2026-09-02 P3）。"""
+    totp = pyotp.TOTP(secret)
+    now_step = int(time.time() // 30)
+    for off in (-1, 0, 1):
+        if hmac.compare_digest(totp.at((now_step + off) * 30), code):
+            return now_step + off
+    return None
+
+
 @app.post("/api/login/totp")
 async def login_totp(body: TotpLoginBody, request: Request, response: Response):
     """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。
@@ -146,9 +160,15 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
     rc = raw.replace("-", "").lower()
     used_rc = False
     if raw.isdigit() and len(raw) == 6:
-        if not pyotp.TOTP(row["totp_secret"]).verify(raw, valid_window=1):
+        matched = _totp_match_step(row["totp_secret"], raw)
+        # 命中步 <= 已用步 = 同码重放/过期步回放，一律拒绝
+        if matched is None or matched <= (row["totp_last_step"] or 0):
             _fail()
             raise HTTPException(status_code=401, detail="动态验证码错误")
+        with _db_lock:
+            _db().execute("UPDATE users SET totp_last_step=? WHERE id=?",
+                          (matched, row["id"]))
+            _db().commit()
     elif _RC_RE.match(rc):
         # 恢复码路径：SHA256 命中库存即消费（库内只存哈希，用一枚少一枚）
         hashes = json.loads(row["totp_rc"]) if row["totp_rc"] else []
@@ -234,7 +254,7 @@ def totp_setup(user=Depends(require_user)):
         raise HTTPException(status_code=400, detail="两步验证已启用")
     secret = pyotp.random_base32()
     with _db_lock:
-        _db().execute("UPDATE users SET totp_secret=?, totp_enabled=0 WHERE id=?",
+        _db().execute("UPDATE users SET totp_secret=?, totp_enabled=0, totp_last_step=NULL WHERE id=?",
                       (secret, user["user_id"]))
         _db().commit()
     uri = pyotp.totp.TOTP(secret).provisioning_uri(name=row["username"], issuer_name="LAN Share")
@@ -288,7 +308,8 @@ async def totp_disable(request: Request, body: TotpDisableBody, user=Depends(req
         audit("totp_disable_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     with _db_lock:
-        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL WHERE id=?",
+        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL, "
+                      "totp_last_step=NULL WHERE id=?",
                       (user["user_id"],))
         _db().commit()
     audit("totp_disabled", row["username"], ip=client_ip(request))
@@ -322,8 +343,9 @@ async def change_password(request: Request, response: Response, body: PasswordBo
     with _db_lock:
         _db().execute("UPDATE users SET password_hash=? WHERE id=?",
                       (new_hash, row["id"]))
-        # 改密后吊销全部旧会话，重新签发当前这一个
+        # 改密后吊销全部旧会话与设备 Token（与 admin 重置同语义），重新签发当前 Cookie
         _db().execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+        _db().execute("DELETE FROM device_tokens WHERE user_id=?", (row["id"],))
         _db().commit()
     audit("password_change", row["username"], ip=client_ip(request))
     set_session_cookie(response, request, row["id"])
@@ -377,6 +399,15 @@ async def change_username(request: Request, body: UsernameBody,
             old_dir.rename(new_dir)
         except OSError:
             audit("username_dir_rename_fail", f"{row['username']} → {new_name}",
+                  ip=client_ip(request))
+    # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
+    old_inc = SHARE_ROOT / "incoming" / row["username"]
+    new_inc = SHARE_ROOT / "incoming" / new_name
+    if old_inc.exists() and not _normcase_eq(old_inc, new_inc):
+        try:
+            old_inc.rename(new_inc)
+        except OSError:
+            audit("incoming_dir_rename_fail", f"{row['username']} → {new_name}",
                   ip=client_ip(request))
     # 会话按 user_id 关联，改名不影响登录态；旧用户名的防爆破计数自然失效
     audit("username_change", row["username"], f"→ {new_name}", client_ip(request))

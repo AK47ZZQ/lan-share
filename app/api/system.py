@@ -13,6 +13,7 @@ from pathlib import Path
 import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
 from fastapi import Depends, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.config import (CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS,
@@ -29,20 +30,21 @@ ensure_heif_support()   # HEIC/HEIF 解码注册（照片时间线 EXIF/元数�
 
 @app.on_event("startup")
 async def start_cleanup():
+    def _run_all():
+        _cleanup_tmp()
+        _cleanup_trash()
+        _cleanup_uploads()
+        _cleanup_zips()
+        _cleanup_db()
+
     async def cleanup_loop():
         while True:
-            _cleanup_tmp()
-            _cleanup_trash()
-            _cleanup_uploads()
-            _cleanup_zips()
-            _cleanup_db()
+            # 清理任务含全树 rglob（同步 IO），必须放线程池——直接 await 会周期性
+            # 冻住整个事件循环（review 2026-09-02 P2-4）
+            await run_in_threadpool(_run_all)
             await asyncio.sleep(CLEANUP_INTERVAL)
 
-    _cleanup_tmp()
-    _cleanup_trash()
-    _cleanup_uploads()
-    _cleanup_zips()
-    _cleanup_db()
+    await run_in_threadpool(_run_all)
     asyncio.create_task(cleanup_loop())
 
 
@@ -127,6 +129,7 @@ def _cleanup_db():
     now = time.time()
     with _db_lock:
         _db().execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+        _db().execute("DELETE FROM device_tokens WHERE expires_at < ?", (now,))
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
         _db().execute("DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < ?",
                       (now - 30 * 86400,))
@@ -172,29 +175,38 @@ def _ffprobe_meta(path: Path) -> tuple[float | None, str | None]:
 
 
 def _probe_video_durations(cap: int = 20):
-    """补扫时长缺失的视频行：新入库视频在上面的增量扫描里拿到行，
-    元数据在此处批量补（每次扫描至多 20 条，避免一次请求拖长）。"""
+    """补扫时长缺失的视频行。duration 语义：NULL=待补扫（仅视频），0=非视频/已处理。
+    图片行入库即写 0；存量 NULL 图片行在此收编，之后补扫查询不再被图片行白拉全表。
+    两段式更新，PG 友好：CASE 里悬空 NULL 参数会让 psycopg 报
+    IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
     rows = _db().execute("SELECT path FROM photos WHERE duration IS NULL").fetchall()
-    targets = [r["path"] for r in rows if Path(r["path"]).suffix.lower() in VIDEO_EXTS][:cap]
+    if not rows:
+        return
+    videos, others = [], []
+    for r in rows:
+        (videos if Path(r["path"]).suffix.lower() in VIDEO_EXTS else others).append(r["path"])
     updates = []
-    for rel in targets:
+    for rel in videos[:cap]:
         f = SHARE_ROOT / rel
         if not f.is_file():
-            continue
+            continue   # 留 NULL：下次全量扫描的 gone 清理会删行
         dur, taken = _ffprobe_meta(f)
         if dur is not None:
             updates.append((dur, taken, rel))
-    if updates:
-        with _db_lock:
-            # 两段式更新，PG 友好：CASE 里悬空 NULL 参数会让 psycopg 报
-            # IndeterminateDatatype；taken_at 仅在有值时单独刷
+    if not others and not updates:
+        return
+    with _db_lock:
+        if others:
+            _db().executemany("UPDATE photos SET duration=0 WHERE path=?",
+                              [(p,) for p in others])
+        if updates:
             _db().executemany("UPDATE photos SET duration=? WHERE path=?",
                               [(d, p) for (d, t, p) in updates])
             taken_updates = [(t, p) for (d, t, p) in updates if t]
             if taken_updates:
                 _db().executemany("UPDATE photos SET taken_at=? WHERE path=?",
                                   taken_updates)
-            _db().commit()
+        _db().commit()
 
 
 def _photo_taken_at(f: Path) -> str:
@@ -240,28 +252,32 @@ def _scan_photos(force: bool = False):
             row = _db().execute("SELECT mtime_ns, size FROM photos WHERE path=?", (rel,)).fetchone()
             if row and row["mtime_ns"] == stat.st_mtime_ns and row["size"] == stat.st_size:
                 continue
-            updates.append((rel, _photo_taken_at(f), stat.st_mtime_ns, stat.st_size))
+            # 图片行 duration 写 0（非视频即"已处理"），视频留 NULL 交给补扫；
+            # 内容变更（mtime 变）时 duration 一并重置，换过的视频会被重新探测
+            updates.append((rel, _photo_taken_at(f), stat.st_mtime_ns, stat.st_size,
+                            None if f.suffix.lower() in VIDEO_EXTS else 0))
         with _db_lock:
             if updates:
                 _db().executemany(
-                    "INSERT INTO photos(path, taken_at, mtime_ns, size) VALUES(?,?,?,?) "
+                    "INSERT INTO photos(path, taken_at, mtime_ns, size, duration) VALUES(?,?,?,?,?) "
                     "ON CONFLICT(path) DO UPDATE SET taken_at=excluded.taken_at, "
-                    "mtime_ns=excluded.mtime_ns, size=excluded.size", updates)
+                    "mtime_ns=excluded.mtime_ns, size=excluded.size, duration=excluded.duration", updates)
                 _db().execute("DELETE FROM photos WHERE mtime_ns=0")
             gone = [r["path"] for r in _db().execute("SELECT path FROM photos").fetchall()
                     if r["path"] not in seen]
             if gone:
                 _db().executemany("DELETE FROM photos WHERE path=?", [(g,) for g in gone])
             _db().commit()
-        _probe_video_durations()
         _last_photo_scan = time.time()
+    # 补扫放扫描锁外：ffprobe 批量最坏 20×15s，不占住扫描锁拖慢时间线刷新
+    _probe_video_durations()
 
 
 def _photo_uploader(rel: str) -> str:
     """拍摄者维度：按路径归属推导（private/<u>/、incoming/<u>/ 归属本人；
     App 上传/备份统一落 照片/手机相册/<u>/，同样归属本人；其余算共享。"""
     parts = rel.split("/")
-    if len(parts) > 1 and parts[0] in ("private", "incoming"):
+    if len(parts) > 1 and parts[0].lower() in ("private", "incoming"):
         return parts[1]
     if len(parts) > 3 and parts[0] == "照片" and parts[1] == "手机相册":
         return parts[2]

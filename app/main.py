@@ -15,7 +15,7 @@ from app.db import init_db
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, set_audit_user)
 
-app = FastAPI(title="LAN Share", version="2.0.0")
+app = FastAPI(title="LAN Share", version="3.8.0")
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):

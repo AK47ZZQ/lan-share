@@ -11,6 +11,8 @@
 - **TOTP 两步验证（v3.5，可选启用）**：账号设置里自助开通（pyotp，RFC 6238，±1 窗口）。
   已启用账号登录分两步：密码正确只返回 `totp_required` 不发会话；密码+6 位动态码经
   `/api/login/totp` 换会话——动态码错误同样计入按账号防爆破（5 次锁 15 分钟），防在线猜码。
+  **动态码防重放（2026-09-02）**：命中窗口记录进 `users.totp_last_step`，同一步
+  （30s）或更早步的码重复提交一律拒绝；开通/关闭/管理端解除时清零。
   关闭 TOTP 需原密码；admin 重置成员密码会同步清除其 TOTP（手机丢失恢复通道）。
   ⚠️ 取舍：WebDAV Basic 维持仅密码（客户端协议不支持动态码）——TOTP 防的是浏览器密码
   泄露与爆破，WebDAV 凭据泄露风险自担（家庭场景可接受）。
@@ -28,6 +30,10 @@
   （JOIN users 过滤）。浏览器不自动携带 Authorization 头，无 CSRF 面；
   与 Cookie 会话并存（require_user 先 Cookie 后 Bearer）。Token 响应附
   `Cache-Control: no-store` 防中间缓存。
+  **吊销语义（2026-09-02 补齐）**：自助改密、admin 重置密码、admin 停用账号
+  三条路径都会同时删除该账号全部 device_tokens——设备 Token 90 天滑动有效期
+  不再成为"改密踢端"的旁路（review 2026-09-02 P1-2）；停用后重新启用也不会
+  让旧 Token 复活，需重新登录。过期 Token 由每小时清理任务删除。
 - **WebDAV 独立密码（v3.7，可选）**：账号设置里自助设置与登录密码无关的
   WebDAV 专用凭据（scrypt 同强度）。设置后 DAV 入口只认独立密码、登录密码
   对 `/dav/` 失效——凭据泄露面隔离，可单独轮换而不动主密码/不解锁 TOTP 账号；
@@ -93,14 +99,32 @@
   Windows 非法字符全集（`/ \ : * ? " < > |` 与控制符；手机端 Linux FS 可传来
   后者，漏洗会落盘 500）、NTFS 备用数据流冒号、Windows 保留名（con/aux/nul…）、
   结尾点/空格；WebDAV 各方法路径入口同样逐段清洗。
+  **特殊段全量 normcase（2026-09-02 修复 P0-2）**：`resolve()`/`visible()`/
+  `enforce_quota()`/授权表同步对 `private`/`incoming` 段一律 normcase 比较——
+  Windows 大小写不敏感，`Private/<他人>/` 这类变体不再落入 shared 默认可读分支。
+- **`/files/*` 静态下载走应用层判权（2026-09-02 修复 P0-1）**：Caddy 对 `/files/*`
+  只做 forward_auth 预检 + 反代，**不再直接 file_server 挂 SHARE_ROOT**——
+  下载统一落在后端 `/files/{path}` 端点，经 `resolve()` 按 private/incoming/
+  grants 判权；点目录（`.meta.db`/`.trash`/`.chunks` 等）由 `safe_path` 拒绝。
+  注意 forward_auth 只认 Cookie 会话，App（Bearer）下载走 `/preview/`。
 - **上传完整性**：分块合并后强制 SHA256 + 大小校验，不符即拒；秒传只信任服务端计算过的指纹。
 - **上传大小上限**：单请求 `/api/upload` 2GB；分片上传总大小硬上限 64GB（配额另约束）；
   WebDAV PUT 20GB（流式写盘）。分块大小按文件大小自适应（≤2GB→5MB / ≤5GB→16MB /
   ≤10GB→32MB / 更大→64MB），兼顾小文件请求数和大文件吞吐量。
+  分块接收**超发即断**（2026-09-02）：收到字节数超过该块预期立即停止写盘并拒绝，
+  不再"整块收完才比对"；单请求直传先写 `.uploading` 临时文件、完成后
+  `os.replace` 原子落位（并发同名不再交错写坏）；复制（API 与 WebDAV COPY）
+  进入私人空间前按目标体积计配额。
 - **误删保护**：所有删除/覆盖路径（界面删除、WebDAV 删除/覆盖、移动覆盖、**上传覆盖**
   ——分片 finish/秒传/单请求三条路径）统一进回收站保留 30 天。
-- **下载授权**：`/files/*` 静态直连由 Caddy `forward_auth` 校验会话；分享下载走一次性票据
+  **回收站归属判定（2026-09-02 修复 P1-1）**：删除登记物理相对路径；列表/彻底删除/
+  恢复三个入口都按 `visible()` 判归属——成员无法枚举 trash id 把他人 private/incoming
+  的回收站条目恢复进自己空间；历史 vpath 形态（`private:<名>`，无用户段）条目仅 admin
+  可见可操作。
+- **下载授权**：`/files/*` 由 Caddy `forward_auth` 预检后反代到后端鉴权端点
+  （2026-09-02 起，不再静态直连）；分享下载走一次性票据
   （POST 验证密码后签发，10 分钟 TTL 可复用，密码不进 URL/日志）。
+  **遗留分享（owner 为 NULL）仅 admin 可见/管理**，成员列表不可见、不可撤销/编辑。
 - **移动防覆盖**：`/api/move` 重名目标用 `os.rename` 原子改名（Windows 下目标存在必抛错），
   没有"预检+覆盖"竞态窗口；单次 ≤500 项；隐藏路径被 `safe_path` 拒绝。
 - **去重指纹自愈**：`blobs` 表登记硬链接源路径 `sample_path`；源文件被移动/删除后路径失效，
