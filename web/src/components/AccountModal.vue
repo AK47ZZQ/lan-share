@@ -80,20 +80,19 @@ const serverUrl = window.location.origin
 
 function stopPairTimer() {
   if (pairTimer) { clearInterval(pairTimer); pairTimer = null }
-  pairLeft.value = 0
 }
 
 async function genPairCode() {
   pairErr.value = ''
   pairBusy.value = true
+  stopPairTimer()
   try {
     const r = await api.pairCode()
     pairCode.value = r.code
     pairLeft.value = r.expires_in
-    stopPairTimer()
     pairTimer = setInterval(() => {
       pairLeft.value--
-      if (pairLeft.value <= 0) { pairCode.value = ''; stopPairTimer() }
+      if (pairLeft.value <= 0) { pairLeft.value = 0; stopPairTimer() }
     }, 1000)
   } catch (e) { pairErr.value = (e as Error).message } finally { pairBusy.value = false }
 }
@@ -234,13 +233,13 @@ async function doPwd() {
             </div>
           </div>
           <div style="font-size:12.5px;color:var(--text-2)">
-            长辈的手机不想输密码？在 App 登录页选「配对码登录」，输入这里生成的 6 位码即可（60 秒有效，一码一用）。
+            长辈的手机不想输密码？在 App 登录页选「配对码登录」，输入这里生成的 6 位码即可（3 分钟内有效，一码一用）。
             配对出的设备可随时在「设备管理」吊销。
           </div>
           <template v-if="pairCode">
             <div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">
-              <span style="font-size:34px;font-weight:700;letter-spacing:8px;font-variant-numeric:tabular-nums">{{ pairCode }}</span>
-              <span style="font-size:12px;color:var(--text-3)">{{ pairLeft > 0 ? `${pairLeft}s 后过期` : '已过期' }}</span>
+              <span :style="`font-size:34px;font-weight:700;letter-spacing:8px;font-variant-numeric:tabular-nums;${pairLeft > 0 ? '' : 'opacity:.4'}`">{{ pairCode }}</span>
+              <span style="font-size:12px;color:var(--text-3)">{{ pairLeft > 0 ? `${pairLeft}s 后过期` : '已过期，请重新生成' }}</span>
             </div>
           </template>
           <button class="btn sm" :disabled="pairBusy" @click="genPairCode" style="justify-self:start">

@@ -133,8 +133,8 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 |------|------|------|------|
 | POST | `/api/invites/redeem` | 🔓 | `{code, username, password}` 邀请码建号；原子认领；保留词/分隔符/重名 400 |
 | POST | `/api/login/totp` | 🔓 | `{username, password, code}` 两步登录第二步（动态码错误计入防爆破） |
-| POST | `/api/pair/code` | 🔑 | 已登录方生成一次性 6 位配对码 `{code, expires_in:60}`；同账号单码（重新生成即作废旧码） |
-| POST | `/api/pair/claim` | 🔓 | `{code, name}` 手机免密换设备 Token（响应同 `/api/auth/token`）；60 秒一次性，IP 限速 5 次/分 |
+| POST | `/api/pair/code` | 🔑 | 已登录方生成一次性 6 位配对码 `{code, expires_in:180}`；同账号单码（重新生成即作废旧码） |
+| POST | `/api/pair/claim` | 🔓 | `{code, name}` 手机免密换设备 Token（响应同 `/api/auth/token`）；3 分钟一次性，IP 限速 5 次/分 |
 | POST | `/api/auth/totp/setup` | 🔑 | 生成 TOTP 密钥，`{secret, otpauth}`（未验证前不生效） |
 | POST | `/api/auth/totp/enable` | 🔑 | `{code}` 验证动态码后开通两步验证 |
 | POST | `/api/auth/totp/disable` | 🔑 | `{old_password}` 关闭两步验证（需原密码） |

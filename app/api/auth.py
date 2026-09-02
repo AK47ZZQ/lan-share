@@ -465,7 +465,7 @@ class PairClaimBody(BaseModel):
     name: str = "我的手机"
 
 
-_PAIR_TTL = 60.0
+_PAIR_TTL = 180.0  # 3 分钟：留足"拿起另一台设备→解锁→找到入口→输码"的时间；6 位码 + 一码一用 + claim 限速下不放大爆破面
 # 进程内存态即可：本项目 NSSM 单 worker 部署；重启即全失效（重生成即可）
 _pair_codes: dict[str, tuple[int, float]] = {}
 _pair_lock = threading.Lock()

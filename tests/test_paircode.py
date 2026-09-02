@@ -1,6 +1,6 @@
 """配对码登录回归：已登录方生成一次性 6 位码，手机免密换设备 Token。
 
-安全面：60 秒时效 + 一码一用 + 按 IP 限速防爆破 + 未登录不可生成。
+安全面：3 分钟时效 + 一码一用 + 按 IP 限速防爆破 + 未登录不可生成。
 凭据面：与 /api/auth/token 同规则（同名轮换、设备列表可见、可吊销）。
 """
 import os
@@ -43,7 +43,7 @@ def test_pair_code_full_flow(client, clean_devices):
     r = admin.post("/api/pair/code")
     assert r.status_code == 200, r.text
     code = r.json()["code"]
-    assert len(code) == 6 and code.isdigit() and r.json()["expires_in"] == 60
+    assert len(code) == 6 and code.isdigit() and r.json()["expires_in"] == 180
 
     # 手机免密 claim 换设备 Token → Bearer 直接可用
     r = phone.post("/api/pair/claim", json={"code": code, "name": "长辈的手机"})
