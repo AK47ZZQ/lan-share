@@ -145,6 +145,7 @@ PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
 # 手机备份的视频在照片墙完全不可见。类型由扩展名推导（media_type），不建列。
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".webm", ".avi", ".mkv"}
 _last_photo_scan = 0.0
+_last_force_scan = 0.0
 _photo_scan_lock = threading.Lock()
 
 
@@ -228,16 +229,26 @@ def _photo_taken_at(f: Path) -> str:
 
 def _scan_photos(force: bool = False):
     """增量扫描图片库：新/变更文件提取拍摄日期，消失的文件清理条目。
-    60s 内不重复扫；force（客户端已知有新照片，如备份刚完成）放宽到 5s——
-    既保证备份后时间线及时更新，又不给高频请求开无门槛的全盘扫描。"""
-    global _last_photo_scan
+    普通请求 60s 内不重复扫；force（客户端已知有新照片，如备份刚完成/
+    照片页脉搏轮询）走**独立的 5s 节流**——强刷必须真扫，不被其他客户端
+    的普通请求顶掉（0.7.2 前共用一个时间戳，网页正刷照片墙时 App 的
+    refresh=1 常被 5s 内的普通命中吞掉，强刷扫了个寂寞）。扫描范围是
+    SHARE_ROOT 全盘 rglob，新建文件夹里的照片天然覆盖，无固定目录清单。"""
+    global _last_photo_scan, _last_force_scan
     now = time.time()
-    floor = 5 if force else 60
-    if now - _last_photo_scan < floor:
-        return
-    with _photo_scan_lock:
-        if time.time() - _last_photo_scan < floor:
+    if force:
+        if now - _last_force_scan < 5:
             return
+    else:
+        if now - _last_photo_scan < 60:
+            return
+    with _photo_scan_lock:
+        if force:
+            if time.time() - _last_force_scan < 5:
+                return
+        else:
+            if time.time() - _last_photo_scan < 60:
+                return
         seen = set()
         updates = []
         for f in SHARE_ROOT.rglob("*"):
@@ -269,6 +280,7 @@ def _scan_photos(force: bool = False):
                 _db().executemany("DELETE FROM photos WHERE path=?", [(g,) for g in gone])
             _db().commit()
         _last_photo_scan = time.time()
+        _last_force_scan = time.time()
     # 补扫放扫描锁外：ffprobe 批量最坏 20×15s，不占住扫描锁拖慢时间线刷新
     _probe_video_durations()
 

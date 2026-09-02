@@ -48,6 +48,7 @@ def _reset_in_memory_state():
     server._tickets.clear()
     _auth._pair_codes.clear()
     _system._last_photo_scan = 0.0   # 照片扫描 60s 节流：不重置会跨测试串残留行
+    _system._last_force_scan = 0.0   # 0.7.2 起 force 独立节流，同上
     yield
     server._rate.clear()
     server._login_fails.clear()

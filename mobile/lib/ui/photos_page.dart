@@ -45,6 +45,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   int _gen = 0;                 // 加载代际：刷新后丢弃过期响应，防重复/漂移
   int? _lastBackupDone;         // 备份完成时间戳快照：变了才触发整页刷新
   Timer? _backupWatch;
+  Timer? _pulse;                // 服务端脉搏轮询（0.7.2）：任何来源的新照片自动上墙
+  Map<String, Object?>? _pulseSnap; // 脉搏快照（total+首张路径），变了才整页强刷
   String _mediaFilter = 'all';  // all | photo | video
   String? _month;               // YYYY-MM 按月快跳（null=全部）
   Map<String, int>? _months;    // facets 缓存（月份选择页用）
@@ -65,6 +67,35 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // 强刷（服务端 refresh=1 放宽扫描节流到 5s）。轮询只读本地 prefs，开销可忽略
     _backupWatch = Timer.periodic(
         const Duration(seconds: 10), (_) => _checkBackupDone());
+    // 0.7.2 起触发面不只本机备份：20s 脉搏 ping 一次 limit=1&refresh=1
+    // （服务端 force 独立 5s 节流，响应只有一个缩略项，开销可忽略），
+    // total/首张变了即整页强刷——网页、别的手机、文件页、分享接收传的
+    // 照片同样自动出现（此前只认备份引擎，家里人网页传 178 项墙面不动）
+    _pulse = Timer.periodic(const Duration(seconds: 20), (_) => _pulseCheck());
+  }
+
+  /// 服务端脉搏：对时间线做一次"有没有变"的轻探测。快照与上次不同
+  /// （新增/删除/最新一张换人）→ 整页强刷。首次只记录不触发。
+  Future<void> _pulseCheck() async {
+    if (!mounted || _loading) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/photos',
+          queryParameters: {'limit': 1, 'refresh': true});
+      final total = (r.data['total'] as num?)?.toInt() ?? 0;
+      final items = (r.data['items'] as List? ?? const []);
+      final first =
+          items.isEmpty ? '' : ((items.first as Map)['path'] as String? ?? '');
+      final prev = _pulseSnap;
+      _pulseSnap = {'total': total, 'first': first};
+      if (mounted &&
+          prev != null &&
+          (prev['total'] != total || prev['first'] != first)) {
+        await _refresh();
+      }
+    } catch (_) {
+      // 网络抖动/未登录：静默，下个 tick 再试
+    }
   }
 
   Future<void> _checkBackupDone() async {
@@ -186,6 +217,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   @override
   void dispose() {
     _backupWatch?.cancel();
+    _pulse?.cancel();
     _scroll.dispose();
     super.dispose();
   }
