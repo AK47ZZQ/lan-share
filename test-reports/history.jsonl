@@ -1,0 +1,2 @@
+{"ts":"2026-09-01T00:00:00","total":85,"passed":85,"failed":0,"duration_s":83.5,"new_failures":[],"fixed":[],"flaky":[],"severity":"ok"}
+{"ts":"2026-09-01T18:26:00","total":85,"passed":85,"failed":0,"skipped":0,"duration_s":83.95,"new_failures":[],"fixed":[],"flaky":[],"severity":"ok","categories":{"PERM":0,"TRAVEL":0,"FILE":0,"DB":0,"AUTH":0,"NETWORK":0,"PERF":0,"ENV":0,"FLAKY":0}}
