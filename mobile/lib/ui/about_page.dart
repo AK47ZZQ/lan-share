@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/local/prefs.dart';
+import '../data/net.dart';
 import '../data/update_service.dart';
+import '../transfer/transfer_task.dart' show humanSize;
 import 'widgets/brand.dart';
 
 class AboutPage extends StatefulWidget {
@@ -77,6 +79,27 @@ class _AboutPageState extends State<AboutPage> {
   Future<void> _downloadAndInstall() async {
     final remote = _remote;
     if (remote == null || !remote.available) return;
+    final onPublic = isPublicAddress(await Prefs.lastAddress());
+    if (!mounted) return;
+    // 公网入口下载整包 APK（几十 MB）吃隧道月流量，先确认（2026-09-03）
+    if ((remote.size ?? 0) > 30 * 1024 * 1024 && onPublic) {
+      final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+              title: const Text('当前为公网入口'),
+              content: Text(
+                  '更新包约 ${humanSize(remote.size ?? 0)}，将走公网隧道下载'
+                  '（限速且消耗月流量）。建议连家里 Wi-Fi 后再更新。'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('取消')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('仍要下载')),
+              ]));
+      if (ok != true || !mounted) return;
+    }
     setState(() => _progress = 0);
     try {
       final path = await UpdateService.download(remote,

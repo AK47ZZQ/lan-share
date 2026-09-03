@@ -21,9 +21,9 @@ import '../data/local/saved_credential.dart';
 import '../data/local/verifier_store.dart';
 import '../data/totp.dart';
 import '../state/session.dart';
-import 'scan_page.dart';
 import 'theme/app_theme.dart';
 import 'widgets/brand.dart';
+import 'widgets/server_picker.dart' show shortHost, showServerPicker;
 
 enum _Probe { idle, probing, ok, fail }
 
@@ -39,7 +39,6 @@ class _LoginPageState extends ConsumerState<LoginPage>
   final _server = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
-  List<String> _addresses = const [];
 
   bool _pairMode = false;        // 配对码免密登录
   bool _rcMode = false;          // 两步验证第二步：恢复码模式（认证器不可用时）
@@ -60,7 +59,6 @@ class _LoginPageState extends ConsumerState<LoginPage>
   void initState() {
     super.initState();
     () async {
-      _addresses = await Prefs.addresses();
       _server.text = await Prefs.lastAddress();
       _username.text = await Prefs.lastLoginUser() ?? '';
       _saved = await SavedCredentialStore.load();
@@ -92,19 +90,8 @@ class _LoginPageState extends ConsumerState<LoginPage>
     return null;
   }
 
-  /// 从 URL 提取短显示名（host[:非默认端口]），解析失败截断原文
-  static String _shortHost(String raw) {
-    try {
-      final u = Uri.parse(raw);
-      if (u.host.isEmpty) return raw;
-      final p = u.port;
-      final hasPort = p > 0 &&
-          !((u.scheme == 'https' && p == 443) || (u.scheme == 'http' && p == 80));
-      return hasPort ? '${u.host}:$p' : u.host;
-    } catch (_) {
-      return raw.length > 24 ? '${raw.substring(0, 24)}…' : raw;
-    }
-  }
+  /// 从 URL 提取短显示名：共用实现见 widgets/server_picker.dart
+  static String _shortHost(String raw) => shortHost(raw);
 
   /// 连接预检：任何 HTTP 状态码（含 401/404）都证明服务器在线，
   /// 只有连接超时/失败才算不可达——无需服务端专门健康检查端点。
@@ -141,87 +128,13 @@ class _LoginPageState extends ConsumerState<LoginPage>
   }
 
   Future<void> _pickServer() async {
-    final controller = TextEditingController(text: _server.text.trim());
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.fromLTRB(
-            20, 20, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment:
-            CrossAxisAlignment.start, children: [
-          Text('连接服务器', style: Theme.of(ctx).textTheme.titleMedium),
-          const SizedBox(height: 4),
-          Text('手机与电脑需在同一网络下可直连；出门在外用公网地址。',
-              style: Theme.of(ctx).textTheme.bodySmall),
-          const SizedBox(height: 12),
-          ..._addresses.map((a) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: a == _server.text.trim()
-                    ? _probeDot(context)
-                    : const Icon(Icons.dns_outlined, size: 22),
-                title: Text(_shortHost(a), style: const TextStyle(fontSize: 14)),
-                subtitle: a == _server.text.trim()
-                    ? Text(_probeLabel(), style: const TextStyle(fontSize: 11.5))
-                    : Text(a, style: const TextStyle(fontSize: 11.5)),
-                trailing: a == _server.text.trim()
-                    ? Icon(Icons.check_circle,
-                        size: 18, color: Theme.of(ctx).colorScheme.primary)
-                    : null,
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _applyAddress(a);
-                },
-              )),
-          const Divider(),
-          ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.qr_code_scanner, size: 22),
-              title: const Text('扫码添加', style: TextStyle(fontSize: 14)),
-              subtitle: const Text('扫电脑端「账号设置 → 手机 App 连接」的二维码',
-                  style: TextStyle(fontSize: 11.5)),
-              onTap: () async {
-                final url = await Navigator.of(ctx).push<String>(
-                    MaterialPageRoute(builder: (_) => const ScanPage()));
-                if (!ctx.mounted) return;
-                Navigator.pop(ctx);
-                if (url != null) _applyAddress(url);
-              }),
-          const SizedBox(height: 8),
-          TextField(
-            controller: controller,
-            decoration: InputDecoration(
-                labelText: '手动输入地址',
-                hintText: 'https://192.168.1.100:8765',
-                isDense: true),
-            keyboardType: TextInputType.url,
-            autocorrect: false,
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.tonal(
-              onPressed: () {
-                final v = controller.text.trim();
-                Navigator.pop(ctx);
-                if (v.isNotEmpty) _applyAddress(v);
-              },
-              child: const Text('使用此地址'),
-            ),
-          ),
-        ]),
-      ),
-    );
-    // sheet 已关闭，builder 闭包不再使用；不释放会每次开面板泄漏一个
-    controller.dispose();
+    await showServerPicker(context, current: _server.text.trim(),
+        onPick: _applyAddress);
   }
 
   Future<void> _applyAddress(String url) async {
     _server.text = url;
     await Prefs.rememberAddress(url);
-    _addresses = await Prefs.addresses();
     if (mounted) setState(() {});
     _runProbe();
   }
@@ -266,7 +179,8 @@ class _LoginPageState extends ConsumerState<LoginPage>
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final cs = Theme.of(context).colorScheme;
-    ref.listen(sessionProvider, (prev, next) {
+    ref.listen(sessionProvider, (prev, next) async {
+      final messenger = ScaffoldMessenger.of(context);
       // 登录成功：记住用户名 + 存凭据档（配对码登录没有密码，不存）
       if (next.loggedIn && (prev?.loggedIn != true)) {
         final user = _username.text.trim();
@@ -290,11 +204,22 @@ class _LoginPageState extends ConsumerState<LoginPage>
           _codeKey.currentState?.clear();
         }
       }
-      // 自签证书首次连接：弹"信任此服务器"确认框（APP-DESIGN §5）
+      // 自签证书首次连接：先看新入口出示的指纹是否与本机任一已信任地址
+      // 同源（主/备隧道共用同一副证书密钥）——同源则静默信任免弹框，
+      // 陌生指纹才弹确认框（2026-09-03 备用隧道）
       if (next.trustIssue != null &&
           (prev?.trustIssue == null ||
               prev!.trustIssue?.fingerprint != next.trustIssue!.fingerprint)) {
-        _askTrust(next.trustIssue!);
+        final issue = next.trustIssue!;
+        if (TrustStore.I.knowsFingerprint(issue.fingerprint)) {
+          await TrustStore.I.trust(issue.host, issue.port, issue.fingerprint);
+          messenger.showSnackBar(const SnackBar(
+              content: Text('指纹与已信任服务器一致，已自动信任此入口'),
+              duration: Duration(seconds: 2)));
+          _submit();
+        } else {
+          await _askTrust(issue);
+        }
       }
     });
 

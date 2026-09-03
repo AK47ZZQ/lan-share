@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
+import '../data/net.dart';
 import '../data/local/secure_store.dart';
 import 'backup_config.dart';
 import 'backup_dest.dart';
@@ -453,24 +454,7 @@ class BackupEngine {
     }
   }
 
-  /// §6：公网地址（非 RFC1918/localhost 域名或 IP）默认不自动备份，省流量
-  static bool _isPublicHost(String host) {
-    if (host.isEmpty) return true;
-    var h = host;
-    if (h.startsWith('[') && h.endsWith(']')) {
-      h = h.substring(1, h.length - 1); // Uri.host 保留 IPv6 方括号，剥掉再判
-    }
-    if (h.contains(':')) {
-      // IPv6：环回/链路本地/ULA(fc00::/7) 视为内网，其余（含 GUA）按公网
-      final l = h.toLowerCase();
-      return !(l == '::1' || l.startsWith('fe80') || l.startsWith('fc') || l.startsWith('fd'));
-    }
-    if (RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(h)) {
-      final p = h.split('.').map(int.parse).toList();
-      if (p[0] == 10 || p[0] == 127 || (p[0] == 192 && p[1] == 168)) return false;
-      if (p[0] == 172 && p[1] >= 16 && p[1] <= 31) return false;
-      return true;
-    }
-    return !(h.endsWith('.local') || h.endsWith('.lan'));
-  }
+  /// §6：公网地址默认不自动备份，省流量。判定逻辑收口到 data/net.dart
+  ///（2026-09-03：公网徽标/上传提醒共用同一事实源）
+  static bool _isPublicHost(String host) => isPublicHost(host);
 }

@@ -81,6 +81,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   int _grantFilter = -1; // -1=全部
   // 设置卡
   final _pubUrl = TextEditingController();
+  final _pubAlt = TextEditingController();
   final _hookUrl = TextEditingController();
   bool _busy = false; // 保存/创建类按钮防连点（0.8.1 审查修复）
 
@@ -94,6 +95,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   void dispose() {
     _tab.dispose();
     _pubUrl.dispose();
+    _pubAlt.dispose();
     _hookUrl.dispose();
     super.dispose();
   }
@@ -113,6 +115,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
         _invites = invites.map((e) => _Invite.fromJson(e)).toList();
         _grants = grants.map((e) => _Grant.fromJson(e)).toList();
         _pubUrl.text = pub.data['public_base_url'] as String? ?? '';
+        _pubAlt.text = pub.data['public_base_url_alt'] as String? ?? '';
         _hookUrl.text = hook.data['url'] as String? ?? '';
         _error = null;
       });
@@ -519,7 +522,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     try {
       final dio = await ApiClient.I.dio();
       await dio.post('/api/admin/public-url',
-          data: {'url': _pubUrl.text.trim()});
+          data: {'url': _pubUrl.text.trim(), 'url_alt': _pubAlt.text.trim()});
       _toast('公网地址已保存');
     } catch (e) {
       _toast(errDetail(e));
@@ -652,7 +655,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             const Text('🌐 公网访问地址',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
             const SizedBox(height: 2),
-            const Text('设置后分享卡片会同时提供局域网/公网两个复制按钮。',
+            const Text('主/备公网入口（备用隧道同一服务器即可填）；保存后分享卡片和登录页会一并提供。',
                 style: TextStyle(fontSize: 11, color: Colors.grey)),
             const SizedBox(height: 8),
             Row(children: [
@@ -660,6 +663,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   child: TextField(
                       controller: _pubUrl,
                       decoration: const InputDecoration(
+                          labelText: '主隧道',
                           isDense: true,
                           border: OutlineInputBorder(),
                           hintText: '如 https://your-frp-domain.com:xxxxx'))),
@@ -668,6 +672,14 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   onPressed: _busy ? null : _savePubUrl,
                   child: const Text('保存')),
             ]),
+            const SizedBox(height: 8),
+            TextField(
+                controller: _pubAlt,
+                decoration: const InputDecoration(
+                    labelText: '备用隧道',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    hintText: '如 https://your-frp-domain.com:xxxxx')),
           ])),
       _card(
           child: Column(

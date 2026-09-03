@@ -2,7 +2,7 @@ name: lanshare_app
 description: "LAN Share 家庭网盘 · 手机 App（Flutter，APP-DESIGN v0.1）"
 publish_to: 'none'
 
-version: 0.9.0+37
+version: 0.10.0+38
 
 environment:
   sdk: ^3.13.1

@@ -65,6 +65,19 @@ class TrustStore {
   /// 连接失败后 UI 读取待确认指纹（无则 null）
   String? pendingFor(String host, int port) => _pending['$host:$port'];
 
+  /// 指纹是否与本机任一已信任地址的指纹同源。主/备隧道指向同一服务器 →
+  /// 同一副证书密钥 → 指纹必然一致；新入口出示已知指纹可安全免确认信任，
+  /// 出示未知指纹（节点端 TLS 终结/中间人/换了服务器）仍须走显式确认。
+  bool knowsFingerprint(String fp) {
+    final norm = _normFp(fp);
+    if (norm.isEmpty) return false;
+    return _trusted.values.any((v) => _normFp(v) == norm);
+  }
+
+  /// 归一化：去冒号、统一大写（服务端 /api/app/entries 下发冒号大写格式，
+  /// 本地存的是无冒号小写 hex——比对前必须归一）
+  static String _normFp(String fp) => fp.replaceAll(':', '').toUpperCase();
+
   Future<void> trust(String host, int port, String fp) async {
     final key = '$host:$port';
     _trusted[key] = fp;

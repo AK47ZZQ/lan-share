@@ -12,6 +12,7 @@ import '../backup/backup_round.dart';
 import '../data/activity.dart';
 import '../data/api/api_client.dart';
 import '../data/local/prefs.dart';
+import '../data/net.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
@@ -202,7 +203,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                           fontSize: 19,
                           fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
-                  Text('家庭网盘概览 · 下拉刷新',
+                  Text(_serverPublic == null
+                      ? '家庭网盘概览 · 下拉刷新'
+                      : '家庭网盘概览 · 下拉刷新 · ${_serverPublic!}入口',
                       style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.92),
                           fontSize: 12)),
@@ -484,6 +487,12 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   String _base = '';
 
+
+  /// 当前入口标注：null=尚未取到地址（副标题不显示入口字样）
+  String? get _serverPublic {
+    if (_base.isEmpty) return null;
+    return isPublicAddress(_base) ? '公网' : '局域网';
+  }
   String _greeting(String username) {
     final h = DateTime.now().hour;
     final hi = h < 6

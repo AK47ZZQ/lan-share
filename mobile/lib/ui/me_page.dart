@@ -16,7 +16,9 @@ import 'backup_settings_page.dart';
 import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
+import '../data/api/trust_flow.dart';
 import '../data/local/prefs.dart';
+import '../data/net.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import 'theme/app_theme.dart';
@@ -24,6 +26,7 @@ import '../transfer/transfer_task.dart' show humanSize;
 import 'shares_page.dart';
 import 'trash_page.dart';
 import 'verifier_page.dart';
+import 'widgets/server_picker.dart' show shortHost, showServerPicker;
 
 class MePage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -582,6 +585,35 @@ class _MePageState extends ConsumerState<MePage> {
 
   static String _detail(Object e) => errDetail(e);
 
+  // ── 服务器入口切换（2026-09-03 主/备隧道）────────────────
+  // 设备 Token 与服务器绑定而非与地址绑定：主/备/局域网同一后端，
+  // 切换地址后 Bearer 依然有效，业务数据随各自页面的轮询/刷新自愈。
+  Future<void> _pickServer() async {
+    final current = _server;
+    if (current == null) return;
+    await showServerPicker(context, current: current, onPick: (url) async {
+      final ok = await ensureAddressTrusted(context, url,
+          onAutoTrusted: () => _toast('指纹与已信任服务器一致，已自动信任此入口'));
+      if (!ok || !mounted) return;
+      await ApiClient.I.switchServer(url);
+      await Prefs.rememberAddress(url);
+      if (!mounted) return;
+      setState(() => _server = url);
+      _toast('已切换到 ${shortHost(url)}');
+    });
+  }
+
+  /// 公网入口徽标
+  Widget _netBadge(BuildContext context) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.tertiaryContainer,
+          borderRadius: BorderRadius.circular(999)),
+      child: Text('公网',
+          style: TextStyle(
+              fontSize: 11,
+              color: Theme.of(context).colorScheme.onTertiaryContainer)));
+
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
@@ -599,8 +631,14 @@ class _MePageState extends ConsumerState<MePage> {
         ),
         ListTile(
           leading: const Icon(Icons.dns_outlined),
-          title: Text(_server ?? ''),
-          subtitle: const Text('当前服务器'),
+          title: Text(_server != null ? shortHost(_server!) : ''),
+          subtitle: Text(_server != null && isPublicAddress(_server!)
+              ? '当前入口 · 公网（点按切换 主/备隧道/局域网）'
+              : '当前入口 · 局域网（点按切换 公网隧道）'),
+          trailing: _server != null && isPublicAddress(_server!)
+              ? _netBadge(context)
+              : null,
+          onTap: _pickServer,
         ),
         const Divider(),
         const Padding(

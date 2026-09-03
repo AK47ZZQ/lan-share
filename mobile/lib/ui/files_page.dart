@@ -14,6 +14,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
+import '../data/local/prefs.dart';
+import '../data/net.dart';
 import 'widgets/brand.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
@@ -382,6 +384,28 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       final res = await FilePicker.platform
           .pickFiles(type: FileType.any, allowMultiple: true);
       if (res == null || res.files.isEmpty) return;
+      // 公网入口大文件提醒（2026-09-03）：>100MB 走隧道慢且耗月流量，先确认
+      final bigs = res.files.where((f) => f.size > 100 * 1024 * 1024).toList();
+      if (bigs.isNotEmpty && isPublicAddress(await Prefs.lastAddress())) {
+        final total = bigs.fold<int>(0, (a, f) => a + f.size);
+        if (!mounted) return;
+        final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+                title: const Text('当前为公网入口'),
+                content: Text(
+                    '选中的文件里有 ${bigs.length} 个大文件，共约 ${humanSize(total)}。'
+                    '公网隧道限速且消耗月流量，大文件建议连家里 Wi-Fi 再传。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('仍要上传')),
+                ]));
+        if (ok != true) return;
+      }
       var n = 0;
       final enqueued = <TransferTask>[];
       for (final f in res.files) {
