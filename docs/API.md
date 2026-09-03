@@ -196,10 +196,21 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/admin/albums` | ⚙️ | `{title, month}` 新增精选专辑（同月唯一，month=YYYY-MM） |
 | DELETE | `/api/admin/albums/{id}` | ⚙️ | 移除精选专辑 |
 
+### App 分发与更新历史（v0.6.0 / v0.9.0）
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/app/latest` | 🔑 | 最新分发版本 `{version, build, filename, notes, sha256, available, size, size_human}`；数据源 `App安装包/version.json` |
+| GET | `/api/app/history` | 🔑 | 更新历史 `{items: [{version, build, date, notes}]}`（新版本在前）；数据源 `App安装包/versions.json`，宽容解析（缺文件/坏条目→空列表） |
+| GET | `/api/app/download` | 🔑 | APK 文件流（审计 `app_download`） |
+
+> 发版约定：`App安装包/` 下 **APK + version.json + versions.json 三件套**一起更新
+> （version.json.notes=检查更新弹窗文案；versions.json=App「更新历史」栏目）。
+
 ### 其他
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | GET | `/healthz` | 🔓 | `{status, db, data_dir, disk_free_gb, disk_used_pct}` |
 | GET | `/api/disk/detail` | 🔑 | 全员可查；`categories` 仅 admin；成员返回 `private_used/quota_bytes` |
-| GET | `/api/qr?text=` | 🔑 | 任意文本二维码 SVG |
+| GET | `/api/qr?text=` | 🔑 | 任意文本二维码 SVG（**ECC-Q + 中心云朵 logo**，分享码同源） |

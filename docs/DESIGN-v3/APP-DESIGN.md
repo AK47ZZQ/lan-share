@@ -799,6 +799,27 @@ pubspec 再镜像。模拟器验收坐标法：截图 900 宽 ×1.2=1080 设备�
 按角色用（文字=onSurface/onSurfaceVariant，边框=outline/outlineVariant）**，
 自定义 textTheme 的墨水方向必须有单测钉死。
 
+### 8.24 通知图标与品牌资产单源（2026-09-04，v0.8.14+36）
+
+状态栏通知小图标必须是**白色剪影**（`drawable-*dpi/ic_notification.png`，
+24dp 基准五档），生成源与启动图标同脚本。`make-app-icon.py` 一次产出：
+安卓遗留/自适应前景/monochrome + 通知剪影 + PWA 三件 + favicon.svg
+（写入 `web/public` 与 `web/dist`）——**品牌改动只改这一个脚本**。
+AGP `enableResourceOptimizations` 已在 gradle.properties 关闭（资源名混淆
+会毁运行时按名字查找），`res/raw/keep.xml` 兜底。
+另：主页/登录品牌头 0.8.14 起铺满全宽并经 `topInset` 延伸进状态栏
+（edge-to-edge），`AnnotatedRegion` 按页签切状态栏图标亮度（首页白/其余深）。
+
+### 8.25 更新历史栏目（2026-09-04，v0.9.0+37）
+
+- **数据**：`App安装包/versions.json`（`items: [{version, build, date, notes}]`，
+  新版本在前），发版时与 version.json 一起维护（**发版三件套**）。
+- **端点**：`GET /api/app/history`（登录；宽容解析，坏数据→空列表）。
+- **UI**：关于页卡片「更新历史」：版本 pill（品牌色）+ 日期 + 说明；
+  `build == 本地` 标「当前」（绿）、`== 服务端最新` 标「最新」（品牌色）；
+  拉取失败静默隐藏栏目。扫码类（服务端 /api/qr、分享码、App 分享弹窗）
+  中心嵌云朵 logo，ECC 升 Q（25% 冗余）保扫读。
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺
