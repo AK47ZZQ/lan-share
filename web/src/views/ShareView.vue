@@ -41,14 +41,14 @@ onMounted(async () => {
 <template>
   <main class="login-wrap">
     <div class="card login-card" style="text-align:left">
-      <div class="login-logo"><span class="logo big">◈</span></div>
+      <div class="login-logo"><img class="logo big" src="/static/favicon.svg" alt="LAN Share" /></div>
       <h1 style="text-align:center">文件分享</h1>
       <div v-if="meta" style="margin-top:16px">
         <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
           <span class="icon" style="width:44px;height:44px;display:grid;place-items:center;font-size:20px;background:var(--glass-strong);border:1px solid var(--line);border-radius:12px">📄</span>
-          <div>
-            <div style="font-weight:600">{{ meta.name }}</div>
-            <small style="color:var(--text-3)">{{ meta.size_human }} · {{ meta.expires_in }}内有效
+          <div style="min-width:0">
+            <div style="font-weight:600;overflow-wrap:anywhere" :title="meta.name">{{ meta.name }}</div>
+            <small style="color:var(--text-3);overflow-wrap:anywhere">{{ meta.size_human }} · {{ meta.expires_in }}内有效
               <template v-if="meta.max_downloads"> · 已下 {{ meta.downloads }}/{{ meta.max_downloads }}</template></small>
           </div>
         </div>
