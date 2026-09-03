@@ -82,10 +82,17 @@ curl -k https://192.168.1.100:8765/healthz
   也是 `is_public_entry()` 的 Host 匹配依据（改地址后立即生效，见 app/security.py）。
   **2026-09-03 全链路 E2E 实测通过**（App TOFU→登录→缩略图→上传→分享→取件，指纹比对一致）。
 - 樱花FRP 落地事实：启动器 `SakuraFrpService`（NSSM 式自启服务，v3.1.8）；
-  隧道 **LANShare** = TCP 透传 → `127.0.0.1:8765`（Caddy），公网地址
-  `https://your-frp-domain.com:xxxxx`（anycast，当前落地节点 223.85.20.43，节点会变——
-  以 `your-frp-domain.com` 域名为准，勿写死 IP）。配置/日志在
-  `C:\ProgramData\SakuraFrpService\`；隧道增删改在樱花FRP 网页面板或启动器。
+  配置/日志在 `C:\ProgramData\SakuraFrpService\`；隧道增删改在樱花FRP 网页面板或启动器。
+  节点为 anycast（当前落地 223.85.20.43，会变）——一律用 `your-frp-domain.com` 域名，勿写死 IP。
+- **主隧道 LANShare**（`https://your-frp-domain.com:xxxxx`）：纯 TCP 透传 → `127.0.0.1:8765`（Caddy），
+  端到端 TLS=本机自签证书，App TOFU 指纹 `D3:7A:…:B4:D3`。
+- **备用隧道**（`https://your-frp-domain.com:xxxxx`，2026-09-03 启用）：原 HermesAgent 改造。
+  frpc「自动HTTPS」探测到 Caddy 已直接监听 `:8801`，自动切到 **HTTPS 反代模式**——
+  公网段证书为樱花自动签发（与主隧道不同源），本地段仍是 Caddy 同一套规则。
+  两个推论：① App/浏览器首连备用入口会弹一次证书确认（指纹不同，安全上理应如此）；
+  ② `public_base_url_alt` 已入库，`is_public_entry()` 主/备双 Host 同时命中
+  （防爆破分账、healthz 收敛对备用入口同样生效，测试 test_public_alt.py）。
+  若想要与主隧道同级的端到端透传：在面板把备用隧道改为纯 TCP→8765 即可，App 侧无需改动。
 - 免费档限额（见启动器日志）：**10 Mbps**/隧道、**2 条**隧道、**5 GiB/月**流量
   （每月 1 日重置，签到可累加）。公网侧定位=出门在外应急浏览/小文件，
   大备份与大文件传输走局域网（App 备份公网默认跳过、网页公网上传有提醒，均为既有设计）。

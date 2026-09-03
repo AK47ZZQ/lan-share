@@ -179,35 +179,50 @@ _login_fails: dict[str, list[float]] = {}
 # ─── 公网入口判定 ─────────────────────────────────────────
 # FRP 隧道使公网流量 client_ip 全为 127.0.0.1，无法按 IP 区分内外，只能靠 Host
 # （Caddy 对 8765/8767 都透传原始 Host：局域网=192.168.x:8765，公网=frp 域名）。
-_netloc_cache: list = []   # [netloc, ts]
+_netloc_cache: list = []   # [主 netloc, 全部 netloc 集合, ts]
 
 
 def public_netloc() -> str:
-    """管理面板配置的公网地址 netloc（如 your-frp-domain.com:xxxxx），60s 缓存；未配置返回空。"""
+    """管理面板配置的主公网地址 netloc（如 your-frp-domain.com:xxxxx），60s 缓存；未配置返回空。"""
+    return _netlocs_cached()[0]
+
+
+def public_netlocs() -> set:
+    """主 + 备用公网地址的 netloc 集合（is_public_entry 的判定域）。
+    备用隧道与主隧道指向同一 Caddy，Host 不同——入口判定必须同时覆盖，
+    否则备用入口的流量会被当成 LAN（healthz 泄露 + 防爆破不分账）。"""
+    return _netlocs_cached()[1]
+
+
+def _netlocs_cached():
     now = time.time()
-    if _netloc_cache and now - _netloc_cache[1] < 60:
-        return _netloc_cache[0]
-    netloc = ""
+    if _netloc_cache and now - _netloc_cache[2] < 60:
+        return _netloc_cache[0], _netloc_cache[1]
+    primary, allset = "", set()
     try:
-        row = _db().execute("SELECT value FROM settings WHERE key='public_base_url'").fetchone()
-        if row and row["value"]:
-            netloc = (urlsplit(row["value"]).netloc or "").lower()
+        for key in ("public_base_url", "public_base_url_alt"):
+            row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            netloc = (urlsplit(row["value"]).netloc or "").lower() if row and row["value"] else ""
+            if netloc:
+                allset.add(netloc)
+                if key == "public_base_url":
+                    primary = netloc
     except Exception:
-        netloc = ""
-    _netloc_cache[:] = [netloc, now]
-    return netloc
+        pass
+    _netloc_cache[:] = [primary, allset, now]
+    return primary, allset
 
 
 def reset_netloc_cache():
     """管理面板改公网地址后立即生效（否则等 60s 缓存过期）。"""
-    _netloc_cache[:] = ["", 0]
+    _netloc_cache[:] = ["", set(), 0]
 
 
 def is_public_entry(request: Request) -> bool:
-    """请求是否来自公网入口。防爆破/限速/healthz 管控的判定基础：
+    """请求是否来自公网入口（主/备用任一命中）。防爆破/限速/healthz 管控的判定基础：
     公网侧的失败只锁公网侧，LAN 家人登录永不因公网攻击被锁（DoS 隔离）。"""
     host = (request.headers.get("host") or "").lower()
-    return bool(host) and host == public_netloc()
+    return bool(host) and host in public_netlocs()
 
 
 def allow_rate(key: str, limit: int, window: int = 60) -> bool:

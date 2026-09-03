@@ -7,12 +7,16 @@
 对比 build 号后经 /api/app/download 拉包安装。两个端点都要求登录（不出公网
 探测面）；文件名一律取 basename，防 version.json 内容造成路径穿越。
 """
+import base64
+import hashlib
 import json
+import re
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from app.config import SHARE_ROOT
+from app.config import PROJECT_ROOT, SHARE_ROOT
+from app.db import _db
 from app.filetools import human_size
 from app.main import app
 from app.security import audit, client_ip, require_user
@@ -105,3 +109,43 @@ def app_download(request: Request, _user=Depends(require_user)):
         raise HTTPException(status_code=404, detail="APK 文件不存在，请联系管理员上传")
     audit("app_download", data["filename"], ip=client_ip(request))
     return FileResponse(apk, media_type=APK_MIME, filename=apk.name)
+
+
+# ─── 公网入口清单（App 登录页「主/备隧道」快捷选择）────────
+# 免登录：App 在认证之前就要拿到入口列表。两个下发项均非机密——
+# 公网地址本就随分享链接外发，证书指纹任何 TLS 连接者都能读到；
+# 敏感的 healthz/磁盘水位仍由 is_public_entry 的 Host 匹配收敛。
+
+_PEM_BODY = re.compile(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", re.S)
+_cert_fp_cache: list = []   # [指纹hex冒号格式, mtime, size]
+
+
+def _cert_fingerprint() -> str:
+    """本机 TLS 证书 SHA256 指纹（冒号格式与 App TOFU 弹框一致）；无证书返回空串。
+    纯标准库：PEM→DER→SHA256，与 App 端 TrustStore 对同一 DER 摘要，逐字可比。"""
+    path = PROJECT_ROOT / "certs" / "cert.pem"
+    try:
+        st = path.stat()
+        if _cert_fp_cache and _cert_fp_cache[1:] == [st.st_mtime, st.st_size]:
+            return _cert_fp_cache[0]
+        der = base64.b64decode("".join(_PEM_BODY.findall(path.read_text(encoding="ascii"))))
+        fp = ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
+    except Exception:
+        return ""
+    _cert_fp_cache[:] = [fp, st.st_mtime, st.st_size]
+    return fp
+
+
+def _setting(key: str) -> str:
+    row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else ""
+
+
+@app.get("/api/app/entries")
+def app_entries():
+    """主/备公网入口 + 证书指纹。地址为 null 表示未配置对应隧道；
+    App 端只展示非空项，主备切换、指纹预校验都以此为准。"""
+    pub = _setting("public_base_url")
+    alt = _setting("public_base_url_alt")
+    return {"public": pub or None, "public_alt": alt or None,
+            "cert_sha256": _cert_fingerprint()}

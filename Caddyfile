@@ -6,7 +6,9 @@
 	redir https://{host}:8765{uri} 308
 }
 
-:8765, :8767, :443 {
+# 8801 = 备用隧道（樱花FRP frpc「自动HTTPS」探测口）：Caddy 在此以同一证书
+# 直接提供 TLS，frpc 探测到本地即 HTTPS 后保持纯 TCP 透传（与主隧道 35391 同形）。
+:8765, :8767, :443, :8801 {
 	tls C:/lan-share/certs/cert.pem C:/lan-share/certs/key.pem
 
 	# 剥离外部传入的 X-Forwarded-For，防止伪造（后端取 XFF 最后一个值）

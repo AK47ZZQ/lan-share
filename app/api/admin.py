@@ -5,6 +5,7 @@
 import re
 import secrets
 import time
+from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -337,27 +338,34 @@ def _get_setting(key: str) -> str:
 
 @app.get("/api/admin/public-url")
 def get_public_url(_admin=Depends(require_admin)):
-    return {"public_base_url": _get_setting("public_base_url")}
+    return {"public_base_url": _get_setting("public_base_url"),
+            "public_base_url_alt": _get_setting("public_base_url_alt")}
 
 
 @app.get("/api/public-url")
 def get_public_url_user(_user=Depends(require_user)):
-    """公网访问地址：全员可读（分享/直传双地址复制用，非敏感）。"""
-    return {"public_base_url": _get_setting("public_base_url")}
+    """公网访问地址：全员可读（分享/直传多地址复制用，非敏感）。"""
+    return {"public_base_url": _get_setting("public_base_url"),
+            "public_base_url_alt": _get_setting("public_base_url_alt")}
 
 
 @app.post("/api/admin/public-url")
 def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
     url = (body.get("url") or "").strip().rstrip("/")
-    if url and not url.startswith(("https://", "http://")):
-        raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
+    url_alt = (body.get("url_alt") or "").strip().rstrip("/")
+    for u in (url, url_alt):
+        if u and not u.startswith(("https://", "http://")):
+            raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
+    if url and url_alt and urlsplit(url).netloc.lower() == urlsplit(url_alt).netloc.lower():
+        raise HTTPException(status_code=400, detail="备用地址不能与主地址相同")
     with _db_lock:
-        _db().execute("INSERT INTO settings(key, value) VALUES('public_base_url', ?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (url,))
+        for key, val in (("public_base_url", url), ("public_base_url_alt", url_alt)):
+            _db().execute("INSERT INTO settings(key, value) VALUES(?, ?) "
+                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, val))
         _db().commit()
     reset_netloc_cache()   # 入口判定即时生效
-    audit("public_url_set", url, ip=client_ip(request))
-    return {"ok": True, "public_base_url": url}
+    audit("public_url_set", f"{url} | alt={url_alt}", ip=client_ip(request))
+    return {"ok": True, "public_base_url": url, "public_base_url_alt": url_alt}
 
 
 # ─── 事件推送（通知 bot）──────────────────────────────────

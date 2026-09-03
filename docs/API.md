@@ -196,6 +196,14 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/admin/albums` | ⚙️ | `{title, month}` 新增精选专辑（同月唯一，month=YYYY-MM） |
 | DELETE | `/api/admin/albums/{id}` | ⚙️ | 移除精选专辑 |
 
+### 公网入口清单（免登录，App v0.10.0+）
+
+`GET /api/app/entries` → `{"public": url|null, "public_alt": url|null, "cert_sha256": "AA:BB:…"}`
+
+- 主/备隧道地址来自管理面板「公网访问地址」（settings 表 `public_base_url` / `public_base_url_alt`）
+- 证书指纹与本机 `certs/cert.pem` 的 SHA256（DER）一致，App 端 TOFU 预校验逐字可比
+- 免登录是有意设计（App 认证前就要拿入口清单）；两项均非机密，healthz 等敏感面仍按 Host 收敛
+
 ### App 分发与更新历史（v0.6.0 / v0.9.0）
 
 | 方法 | 路径 | 认证 | 说明 |
