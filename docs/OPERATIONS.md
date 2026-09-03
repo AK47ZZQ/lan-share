@@ -26,6 +26,20 @@ powershell Restart-Service lan-share-api
 
 ## 2. 健康与水位
 
+公网入口手工探活（每日 01:00 巡检自动化已内置，见 ZCode 定时任务；手工排查用）：
+主隧道 `curl -sk -o /dev/null -w "%{http_code}" https://your-frp-domain.com:xxxxx/healthz`
+**期望 404**（healthz 对公网收敛是设计行为，404=隧道通且 Host 匹配生效）；
+备用隧道 `https://your-frp-domain.com:xxxxx/healthz` 同判；局域网基线
+`https://192.168.1.100:8765/healthz` 期望 200。公网探针非 404 时：
+`powershell Get-Service SakuraFrpService` + 查看 `C:\ProgramData\SakuraFrpService\Logs\`
+最新日志尾部；恢复后按 settings 表 `notify_webhook_url` 的 {title}/{body} 模板发告警。
+
+**入口分账速查**：Caddy 反代使所有请求 client_ip=127.0.0.1——防爆破、登录限速、
+API 限速（api:lan 120 / api:pub 240）全部按 Host 分账；改公网地址走管理面板
+「公网访问地址」主/备两栏，`reset_netloc_cache()` 即时生效。
+
+## 2. 健康与水位
+
 ```bash
 curl -k https://192.168.1.100:8765/healthz
 # 返回进程存活 + DB 连通 + 数据目录可写 + 磁盘水位

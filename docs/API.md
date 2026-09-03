@@ -116,8 +116,11 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 |------|------|
 | `/api/login` | 10 次/分/IP |
 | `/api/share*` | 30 次/分/IP |
-| 其它 `/api/*` | 120 次/分/IP |
+| 其它 `/api/*` | 按入口分账：局域网 `api:lan` 120 / 公网 `api:pub` 240 次/分/IP（独立桶，互不挤占） |
 | `/api/upload/chunk/*`、`/authcheck`、`/thumb`、`/preview`、`/dav` | 不限（仍有认证保护） |
+
+> 429 统一携带 `Retry-After: 30`（v0.10.1 起）；Caddy 反代使内外网 `client_ip`
+> 同为 127.0.0.1，桶必须按入口分账，否则全家共享一个配额。
 
 ## v3 多用户（家庭团队版）
 
