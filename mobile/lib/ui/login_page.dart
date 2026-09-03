@@ -10,6 +10,7 @@ import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
@@ -297,11 +298,14 @@ class _LoginPageState extends ConsumerState<LoginPage>
       }
     });
 
-    return Scaffold(
+    // 0.8.12：状态栏白图标（顶部是渐变品牌头）；去掉 SafeArea 让渐变
+    // 延伸进状态栏（品牌头 topInset 让位，内容不与状态栏重叠）
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
       // SingleChildScrollView 的子项高度无界：不可用 Spacer/minHeight 布局技巧
       // （unbounded 主轴上 flex child 直接布局异常→整页白屏）。
-      body: SafeArea(
-        child: SingleChildScrollView(
+      body: SingleChildScrollView(
           child: Column(children: [
             _brandHeader(context, cs),
             const SizedBox(height: 28),
@@ -336,6 +340,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
   /// 上半屏品牌区：渐变背景 + 云朵 Logo + 产品名 + slogan（0.8.4 统一到 Brand 组件）
   Widget _brandHeader(BuildContext context, ColorScheme cs) {
     return BrandHeader(
+      topInset: MediaQuery.of(context).padding.top,
       bottomRadius: Brand.headerRadius,
       child: Column(children: [
         const SizedBox(height: 16),

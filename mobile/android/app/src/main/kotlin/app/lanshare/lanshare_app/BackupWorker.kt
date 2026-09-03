@@ -120,7 +120,8 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
             ctx, 1, ctx.packageManager.getLaunchIntentForPackage(ctx.packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, Channels.RESULT)
-            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFF5B6CFF.toInt())
             .setContentTitle("LAN Share 自动备份已暂停")
             .setContentText("服务器证书需要确认，请打开 App 完成信任")
             .setContentIntent(open)
@@ -139,7 +140,8 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
             ctx, 0, ctx.packageManager.getLaunchIntentForPackage(ctx.packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(ctx, Channels.RESULT)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setColor(0xFF5B6CFF.toInt())
             .setContentTitle("LAN Share 自动备份")
             .setContentText(text)
             .setContentIntent(open)
@@ -157,7 +159,8 @@ class BackupWorker(private val ctx: Context, params: WorkerParameters) :
 
         fun progressNotification(ctx: Context, text: String): Notification =
             NotificationCompat.Builder(ctx, Channels.PROGRESS)
-                .setSmallIcon(android.R.drawable.stat_sys_upload)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setColor(0xFF5B6CFF.toInt())
                 .setContentTitle("LAN Share 自动备份")
                 .setContentText(text)
                 .setOngoing(true)

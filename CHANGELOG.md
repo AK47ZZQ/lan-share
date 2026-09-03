@@ -1,5 +1,38 @@
 # 更新日志
 
+## 2026-09-04（晨）— App v0.8.14+36：主页头部铺满适配状态栏 + 品牌资产全家桶（通知图标/favicon）
+
+用户三连需求：图标云朵改回"白边镂空、内部透底"；主页顶部颜色块铺满不留边框
+并整体适配状态栏不重叠；状态栏通知图标更新——并要求头脑风暴其余待同步点。
+
+- **主页头部铺满**：`ListView` 去侧边距，`BrandHeader` 铺满全宽（底部弧保留），
+  其余卡片包回 12px 边距的 `Padding+Column`；新增 `BrandHeader.topInset`，
+  传入 `MediaQuery.padding.top` 让渐变延伸进状态栏、内容从状态栏下方开始
+  （edge-to-edge 下不再重叠）。登录页同步：去 SafeArea + topInset。
+- **状态栏图标亮度**：`HomeShell` 用 `AnnotatedRegion` 按页签切换——首页
+  （渐变头）白图标，其余浅底页深图标；登录页白图标。
+- **通知小图标**：新增 `drawable-*dpi/ic_notification.png`（白云剪影 24dp
+  基准五档）；替换 BackupWorker 三处 `android.R.drawable.stat_*` 系统图标 +
+  `setColor(0xFF5B6CFF)`；flutter_local_notifications 初始化
+  `'ic_launcher'`→`'ic_notification'` + details.icon/color。
+- **[潜伏缺陷] 资源名优化咬人**：AGP `enableResourceOptimizations`（默认开，
+  与 minify/shrink 无关）把 release 资源名混淆成 `res/-B.png`，运行时
+  `getIdentifier("ic_notification")` 必失败——意味着 0.6.0 起状态栏小图标
+  一直是糊的默认图。修：`gradle.properties` 关闭该优化（与 shrink=false
+  同理，体积换稳定）；`res/raw/keep.xml` 兜底。APK 已验证五档 ic_notification
+  真名保留。
+- **图标云朵回描边镂空**：白边、内部透底色（evenodd 双子路径），比例保持
+  35% 画布、全幅圆角块不变。
+- **favicon**：`/static/favicon.svg` 此前 404（index.html 引用了不存在的
+  文件），脚本现生成同款渐变+描边云 SVG（public+dist）。
+- 验证：analyze 零问题、Dart 81 全绿；模拟器截图验收主页铺满/状态栏白图标
+  无重叠/桌面图标；分发 0.8.14+36（sha256 8c8fe5b6…）+ notes。
+  注：0.8.12+34/0.8.13+35 为本轮中间构建，资源名问题根治后由 36 覆盖。
+
+**品牌同步头脑风暴结论**（已做=启动图标/PWA 三件/favicon/通知图标/通知色；
+候选=Web 登录页 logo 检查、`theme-color` meta、外链分享 og:image 预览、
+二维码中心 logo、Android 12+ splash 背景（自动跟启动图标）、桌面小部件）。
+
 ## 2026-09-04（凌晨 V）— App v0.8.11+33：云朵回原比例 + 半透明磨砂样式
 
 用户定版两处：① 云朵比例回到原大小（35% 画布，v0.8.9 时的大小——铺满后的

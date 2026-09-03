@@ -186,10 +186,12 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     return RefreshIndicator(
         onRefresh: _refreshAll,
-        child: ListView(padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-            children: [
-          // 0.8.4 品牌头：渐变底 + 云朵 + 问候（与登录页同一套语言）
+        child: ListView(padding: EdgeInsets.zero, children: [
+          // 0.8.4 品牌头：渐变底 + 云朵 + 问候。
+          // 0.8.12 起铺满全宽（去 ListView 侧边距）并延伸进状态栏
+          // （topInset=状态栏高度，内容从状态栏下方开始，不重叠）
           BrandHeader(
+            topInset: MediaQuery.of(context).padding.top,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const BrandCloud(size: 44),
@@ -206,7 +208,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                           fontSize: 12)),
                 ]),
           ),
-          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            child: Column(children: [
           // 最近上传横滑条（0.6.0）：跨入口的媒体文件按修改时间倒排
           if (_recent != null && _recent!.isNotEmpty)
             _card(
@@ -474,6 +478,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     }),
                     _quick(Icons.link_outlined, '我的分享', widget.onGoMe),
                   ])),
+            ])),
         ]));
   }
 

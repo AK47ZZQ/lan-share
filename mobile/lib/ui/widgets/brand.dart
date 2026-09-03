@@ -36,10 +36,15 @@ class BrandCloud extends StatelessWidget {
 class BrandHeader extends StatelessWidget {
   final Widget child;
   final double bottomRadius;
+
+  /// 状态栏高度内嵌（edge-to-edge 下渐变延伸到屏幕顶，内容再从状态栏
+  /// 下方开始——主页/登录传 MediaQuery.padding.top，避免与状态栏重叠）
+  final double topInset;
   const BrandHeader({
     super.key,
     required this.child,
     this.bottomRadius = Brand.headerRadius,
+    this.topInset = 0,
   });
 
   @override
@@ -49,7 +54,7 @@ class BrandHeader extends StatelessWidget {
         bottomRight: Radius.circular(bottomRadius));
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+      padding: EdgeInsets.fromLTRB(20, 20 + topInset, 20, 32),
       decoration: BoxDecoration(
         // 渐变随主题色板走（PaletteScope 由 MaterialApp.builder 挂载）
         gradient: LinearGradient(

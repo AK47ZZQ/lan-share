@@ -7,6 +7,7 @@
 //        只在"真正进过后台(paused/hidden)再回来"时落锁——指纹弹窗自身的
 //        inactive→resumed 不算切后台；弹窗在屏期间挂起判定；登出重登不重锁。
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 
@@ -139,7 +140,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
         ),
       );
     }
-    return Scaffold(
+    // 状态栏图标亮度随页签：首页顶部是渐变品牌头（白图标），其余浅底（深图标）
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: _tab == 0 ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+      child: Scaffold(
       body: IndexedStack(index: _tab, children: [
         HomePage(
             onGoPhotos: () => setState(() => _tab = 1),
@@ -166,6 +170,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
           NavigationDestination(icon: Icon(Icons.person_outline),
               selectedIcon: Icon(Icons.person), label: '我的'),
         ],
+      ),
       ),
     );
   }

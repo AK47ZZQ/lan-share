@@ -36,9 +36,12 @@ CLOUD_SOLID = CLOUD_OUTLINE.split("M19 18")[0]
 CORNER = 90        # 遗留图标圆角半径（512 母版）
 TILE_FRAC = 1.00   # 圆角块全幅覆盖（0.62 时四周露渐变"边框"——用户指出后改满）
 CLOUD_IN_TILE = 0.35  # 云朵宽占块边长比例（用户定版：回原比例，小一点好看）
-CLOUD_ALPHA = 145     # 云朵不透明度（≈57%，半透明磨砂——与圆角块同一语言）
+CLOUD_STYLE = "outline"  # 描边镂空（白边、内部透底色）——用户定版；实心版仅存于 monochrome
 TILE_RADIUS = 0.176   # 块圆角占其边长（=遗留 CORNER 90/512，角部对齐不露边）
 MONO_FRAC = 0.42      # monochrome 实心云占画布比例
+
+# 状态栏通知小图标（白色剪影，24dp 基准）：系统只取 alpha 通道染白
+NOTIF_DPI = {"mdpi": 24, "hdpi": 36, "xhdpi": 48, "xxhdpi": 72, "xxxhdpi": 96}
 
 # 密度 → (遗留 px[48dp], 自适应前景 px[108dp])
 DENSITIES = {"mdpi": (48, 108), "hdpi": (72, 162), "xhdpi": (96, 216),
@@ -173,7 +176,8 @@ def draw_cloud_solid(canvas: Image.Image, box: tuple[int, int, int, int],
 
 
 def brand_mark(size: int, bg_image: Image.Image | None = None) -> Image.Image:
-    """品牌标：渐变（或透明）底 + 全幅半透明白圆角块 + 半透明磨砂云朵。"""
+    """品牌标：渐变（或透明）底 + 全幅半透明白圆角块 + 描边镂空云朵
+    （白边、内部透底色——用户定版样式）。"""
     im = bg_image.convert("RGBA") if bg_image is not None \
         else Image.new("RGBA", (size, size), (0, 0, 0, 0))
     layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -186,13 +190,10 @@ def brand_mark(size: int, bg_image: Image.Image | None = None) -> Image.Image:
                         fill=WHITE + (TILE_ALPHA,))
     # 圆角块内不能替换底色，须整体 alpha 合成到画布
     im = Image.alpha_composite(im, layer)
-    # 云朵同为半透明：独立层绘制后合成（直接画会替换底色像素）
     cw = round(CLOUD_IN_TILE * tile)
-    cloud = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw_cloud_solid(cloud, (cx - cw // 2, cy - cw // 2,
-                             cx - cw // 2 + cw, cy - cw // 2 + cw),
-                     alpha=CLOUD_ALPHA)
-    return Image.alpha_composite(im, cloud)
+    draw_cloud_outline(im, (cx - cw // 2, cy - cw // 2,
+                            cx - cw // 2 + cw, cy - cw // 2 + cw))
+    return im
 
 
 def rounded(im: Image.Image, radius: int) -> Image.Image:
@@ -250,6 +251,15 @@ with open(os.path.join(gd, "ic_launcher_bg.xml"), "w") as f:
             f'        android:endColor="#{GRAD_BOT[0]:02X}{GRAD_BOT[1]:02X}{GRAD_BOT[2]:02X}"/>\n'
             '</shape>\n')
 
+# 状态栏通知小图标：白色实心云剪影（drawable-*dpi，24dp 基准）
+for dpi, px in NOTIF_DPI.items():
+    d = os.path.join(RES, f"drawable-{dpi}")
+    os.makedirs(d, exist_ok=True)
+    im = Image.new("RGBA", (px, px), (0, 0, 0, 0))
+    inset = round(px * 0.06)  # 状态栏图标惯例留一点边
+    draw_cloud_solid(im, (inset, inset, px - inset, px - inset))
+    im.save(os.path.join(d, "ic_notification.png"))
+
 # PWA 三件：512 母版 + 192 + apple-touch(180)，与安卓同一品牌
 master512 = brand_mark(512, bg_image=gradient(512))
 for out_dir in PWA_DIRS:
@@ -258,4 +268,21 @@ for out_dir in PWA_DIRS:
     master512.resize((192, 192), Image.LANCZOS).save(os.path.join(out_dir, "icon-192.png"))
     master512.resize((180, 180), Image.LANCZOS).save(os.path.join(out_dir, "apple-touch-icon.png"))
 
-print("icon assets written:", os.path.abspath(RES), "+ PWA icons")
+# favicon.svg（浏览器标签页）：同款渐变圆角块 + 描边云，单文件矢量
+WEB_STATIC = [os.path.join(ROOT, "web", "public", "static"),
+              os.path.join(ROOT, "web", "dist", "static")]
+favicon = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">\n'
+           '  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">\n'
+           f'    <stop offset="0" stop-color="#{GRAD_TOP[0]:02X}{GRAD_TOP[1]:02X}{GRAD_TOP[2]:02X}"/>\n'
+           f'    <stop offset="1" stop-color="#{GRAD_BOT[0]:02X}{GRAD_BOT[1]:02X}{GRAD_BOT[2]:02X}"/>\n'
+           '  </linearGradient></defs>\n'
+           '  <rect width="512" height="512" rx="90" fill="url(#g)"/>\n'
+           f'  <path transform="translate(167,167) scale(7.416)" d="{CLOUD_OUTLINE}"\n'
+           '        fill="#fff" fill-rule="evenodd"/>\n'
+           '</svg>\n')
+for out_dir in WEB_STATIC:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "favicon.svg"), "w", encoding="utf-8") as f:
+        f.write(favicon)
+
+print("icon assets written:", os.path.abspath(RES), "+ PWA icons + favicon")
