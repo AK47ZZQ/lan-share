@@ -3,7 +3,7 @@
 //  · 队列 JSON 落盘（documents/transfer_queue.json）——杀进程后重启恢复；
 //    断点真值在服务端：续传一律 /api/upload/state 探测，本地 received 只做并集加速
 //  · 分片原子写在服务端，半截分片不会混入 received；客户端按确认块推进度
-//  · 暂停=取消当前请求（服务端留 _tmp 不入账）；网络错误退避重试至多 5 次
+//  · 暂停=取消当前请求（服务端留 _tmp 不入账）；网络错误退避重试至多 8 次
 //  · 登出全部挂起（不置 userPaused，登录后自动续传）
 import 'dart:async';
 import 'dart:convert';
@@ -18,6 +18,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
 import '../data/local/notify.dart';
+import '../data/local/prefs.dart';
+import '../data/net.dart';
 import 'transfer_task.dart';
 
 /// 上传前预计算 sha256 的大小上限（秒传探测用；超限不预计算，
@@ -32,6 +34,27 @@ class _DigestSink implements Sink<Digest> {
   void add(Digest d) => value = d;
   @override
   void close() {}
+}
+
+/// 后台 isolate 计算 sha256（compute 入口必须是顶层函数，v0.10.3）：
+/// 同步打开文件逐块喂摘要，返回 hex 串；失败由调用方兜底。
+String _sha256Of(String path) {
+  final f = File(path);
+  final sink = _DigestSink();
+  final byteSink = sha256.startChunkedConversion(sink);
+  final raf = f.openSync();
+  try {
+    final buf = Uint8List(1024 * 1024);
+    while (true) {
+      final n = raf.readIntoSync(buf);
+      if (n <= 0) break;
+      byteSink.addSlice(buf, 0, n, false);
+    }
+  } finally {
+    raf.closeSync();
+  }
+  byteSink.close();
+  return sink.value!.toString();
 }
 
 class TransferEngine extends ChangeNotifier {
@@ -52,7 +75,15 @@ class TransferEngine extends ChangeNotifier {
   bool _loaded = false;
   bool _loggedIn = false;
   bool _kicking = false;
+  // 公网弱网加固（v0.10.3）：10Mbps 下并发任务互相抢带宽，公网入口
+  // 串行（1 路）更稳；局域网保持 2 路。入队/登录时刷新。
+  bool _public = false;
   String _docsPath = '';
+
+  /// 入口刷新（入队前 await）：切入口后并发策略即时跟上
+  Future<void> _refreshPublic() async {
+    _public = isPublicAddress(await Prefs.lastAddress());
+  }
 
   int get activeCount => _running.length;
 
@@ -60,6 +91,8 @@ class TransferEngine extends ChangeNotifier {
   Future<void> onLogin() async {
     _loggedIn = true;
     await _load();
+    // ignore: unawaited_futures
+    _refreshPublic();
     _kick();
   }
 
@@ -116,6 +149,8 @@ class TransferEngine extends ChangeNotifier {
     required int size,
   }) async {
     await _ensureDocs();
+    // ignore: unawaited_futures
+    _refreshPublic();
     for (final t in tasks) {
       if (t.kind == TransferKind.download &&
           !t.finished &&
@@ -224,7 +259,9 @@ class TransferEngine extends ChangeNotifier {
   int speedOf(TransferTask t) => _speed[t.id] ?? 0;
 
   // ── 调度 ──────────────────────────────────────────────────
-  static const _maxActive = 2;
+  // 并发数：局域网 2 路 / 公网 1 路（10Mbps 与蜂窝下 2 路互相抢带宽，
+  // 单路能稳定吃满；切入口后 _refreshPublic 生效）
+  int get _maxActive => _public ? 1 : 2;
 
   void _kick() {
     if (_kicking || !_loggedIn || !_loaded) return;
@@ -298,21 +335,13 @@ class TransferEngine extends ChangeNotifier {
 
     if (t.sha256 == null && t.size <= _kHashLimit) {
       _setStatus(t, TransferStatus.hashing);
-      final sink = _DigestSink();
-      final byteSink = sha256.startChunkedConversion(sink);
-      final raf = await f.open();
+      // 后台 isolate 计算：200MB 上限内 sha256 全程不啃 UI 线程
+      // （v0.10.3 加固；失败只影响秒传探测，不阻塞上传）
       try {
-        final buf = Uint8List(1024 * 1024);
-        while (true) {
-          final n = await raf.readInto(buf);
-          if (n <= 0) break;
-          byteSink.addSlice(buf, 0, n, false);
-        }
-      } finally {
-        await raf.close();
+        t.sha256 = await compute(_sha256Of, t.localPath);
+      } catch (_) {
+        t.sha256 = null;
       }
-      byteSink.close();
-      t.sha256 = sink.value!.toString();
       _schedulePersist();
     }
 

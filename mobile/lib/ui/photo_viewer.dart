@@ -56,7 +56,10 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
       setState(() {});
       return;
     }
-    _slide = Timer.periodic(const Duration(seconds: 3), (_) {
+    // 幻灯片间隔：局域网 3s / 公网 8s（蜂窝下大图加载慢，3s 会让
+    // 播放永远追不上加载——v0.10.3 按入口自适应）
+    final slide = Duration(seconds: isPublicAddress(widget.base) ? 8 : 3);
+    _slide = Timer.periodic(slide, (_) {
       if (_index >= widget.items.length - 1) {
         _slide?.cancel();
         _slide = null;

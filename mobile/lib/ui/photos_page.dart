@@ -17,6 +17,7 @@ import '../backup/backup_dest.dart';
 import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
 import '../data/local/prefs.dart';
+import '../data/net.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
@@ -52,7 +53,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   String? _month;               // YYYY-MM 按月快跳（null=全部）
   Map<String, int>? _months;    // facets 缓存（月份选择页用）
   List<_Album>? _albums;        // 精选专辑（0.8.0，管理员维护）
-  static const _limit = 120;
+  // 每页条数：局域网 120 / 公网 60（弱网首屏少拉半屏，滚动突发更小，v0.10.3）
+  int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
   @override
   void initState() {
