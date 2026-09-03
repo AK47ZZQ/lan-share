@@ -80,9 +80,17 @@ class TransferEngine extends ChangeNotifier {
   bool _public = false;
   String _docsPath = '';
 
-  /// 入口刷新（入队前 await）：切入口后并发策略即时跟上
+  /// 入口刷新（调度前必须完成）：切入口后并发策略即时跟上
   Future<void> _refreshPublic() async {
     _public = isPublicAddress(await Prefs.lastAddress());
+  }
+
+  /// 先刷新入口档位再调度：enqueueUpload 是同步签名（调用方靠返回值判空），
+  /// 不能整体 await——公网用户冷启动首批任务若直接 _kick()，会按默认
+  /// 局域网档 2 路并发跑，直到下一轮刷新才纠正（v0.10.3 审查补丁）
+  Future<void> _refreshAndKick() async {
+    await _refreshPublic();
+    _kick();
   }
 
   int get activeCount => _running.length;
@@ -91,8 +99,7 @@ class TransferEngine extends ChangeNotifier {
   Future<void> onLogin() async {
     _loggedIn = true;
     await _load();
-    // ignore: unawaited_futures
-    _refreshPublic();
+    await _refreshPublic();
     _kick();
   }
 
@@ -139,7 +146,8 @@ class TransferEngine extends ChangeNotifier {
     tasks.add(task);
     _schedulePersist();
     notifyListeners();
-    _kick();
+    // ignore: discarded_futures
+    _refreshAndKick();
     return task;
   }
 
@@ -149,8 +157,7 @@ class TransferEngine extends ChangeNotifier {
     required int size,
   }) async {
     await _ensureDocs();
-    // ignore: unawaited_futures
-    _refreshPublic();
+    await _refreshPublic(); // 调度前先定档位（局域网 2 路 / 公网 1 路）
     for (final t in tasks) {
       if (t.kind == TransferKind.download &&
           !t.finished &&

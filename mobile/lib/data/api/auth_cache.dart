@@ -78,7 +78,7 @@ class AuthFileService extends FileService {
       {Map<String, String>? headers}) async {
     // 公网弱网加固（2026-09-03）：并发数按入口动态调整
     // （局域网 8 路 / 公网 3 路，见 _Semaphore 注释）
-    _semaphore.setMax(isPublicAddress(await Prefs.lastAddress()) ? 8 : 3);
+    _semaphore.setMax(isPublicAddress(await Prefs.lastAddress()) ? 3 : 8);
     // flutter_cache_manager 对存过 ETag 的图片会带 If-None-Match 走条件下载，
     // 服务端命中即 304——但走下载路径时管理器没有本地文件可复用，304 等于
     // 空手而归（0.4.4 真机"加载完划走就不显示"真凶）。剥掉条件头强制 200

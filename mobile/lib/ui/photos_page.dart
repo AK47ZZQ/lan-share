@@ -118,11 +118,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _loadMore({bool force = false}) async {
     if (_loading || _done || !mounted) return;
     final gen = _gen;
+    // _limit 依赖异步赋值的 _base：必须在此刻物化，请求与 _done 判断
+    // 用同一个值——否则首屏请求发出时 _base 还没到位被判成公网（limit=60），
+    // 响应回来后 _done 又按局域网档（120）比较，60<120 恒真 → 翻页永久关闭
+    final limit = _limit;
     setState(() => _loading = true);
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/photos', queryParameters: {
-        'limit': _limit,
+        'limit': limit,
         'offset': _offset,
         if (force) 'refresh': true,
         if (_mediaFilter != 'all') 'media_type': _mediaFilter,
@@ -135,7 +139,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       setState(() {
         _items.addAll(list);
         _offset += list.length;
-        _done = list.length < _limit;
+        _done = list.length < limit;
         _failed = false;
       });
     } catch (_) {
