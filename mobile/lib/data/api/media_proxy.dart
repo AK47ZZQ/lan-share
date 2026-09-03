@@ -35,6 +35,21 @@ class MediaProxy {
     _server!.listen(_handle, onError: (Object _) {});
   }
 
+  /// 重试前重置回源 HttpClient 与本地服务：蜂窝下回源 socket 可能已僵死，
+  /// 不重置则"重试"永远复用同一个坏连接（2026-09-03 弱网加固）。
+  Future<void> reset() async {
+    final s = _server;
+    _server = null;
+    final c = _client;
+    _client = null;
+    c?.close(force: true);
+    if (s != null) {
+      try {
+        await s.close(force: true);
+      } catch (_) {}
+    }
+  }
+
   static String _randomToken() {
     final rnd = Random.secure();
     return List.generate(24, (_) => 'abcdefghjkmnpqrstuvwxyz23456789'[rnd.nextInt(31)]).join();

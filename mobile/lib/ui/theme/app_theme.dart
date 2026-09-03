@@ -343,6 +343,10 @@ abstract final class AppTheme {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Brand.controlRadius)),
         backgroundColor: snackBg,
+        // 两种模式下 snackBg 都是深海军底：文字必须显式压浅色，否则
+        // 深色模式沿用 M3 默认 onInverseSurface（深色）= 深字深底看不清
+        contentTextStyle: const TextStyle(color: Colors.white, fontSize: 14),
+        actionTextColor: const Color(0xFF8F9BFF),
       ),
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(

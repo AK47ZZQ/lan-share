@@ -9,15 +9,22 @@ import 'package:http/io_client.dart' show IOClient;
 
 import '../local/prefs.dart';
 import '../local/secure_store.dart';
+import '../net.dart';
 import 'trust.dart';
 
 /// 简易 FIFO 并发闸：时间线一次重建会同时发起几十张缩略图请求，
-/// 不加闸会瞬间打满连接池并放大服务端峰值；8 并发对 LAN 足够跑满带宽。
+/// 不加闸会瞬间打满连接池并放大服务端峰值。并发数按入口动态调整——
+/// 局域网 8 路足够跑满带宽；公网 10Mbps 下 8 路反而互相拖累拥塞控制，
+/// 3 路即可串满（2026-09-03 弱网加固）。
 class _Semaphore {
-  final int max;
+  int max;
   int _running = 0;
   final _queue = <void Function()>[];
   _Semaphore(this.max);
+
+  void setMax(int m) {
+    max = m;
+  }
 
   Future<T> run<T>(Future<T> Function() body) {
     final c = Completer<T>();
@@ -69,6 +76,9 @@ class AuthFileService extends FileService {
   @override
   Future<FileServiceResponse> get(String url,
       {Map<String, String>? headers}) async {
+    // 公网弱网加固（2026-09-03）：并发数按入口动态调整
+    // （局域网 8 路 / 公网 3 路，见 _Semaphore 注释）
+    _semaphore.setMax(isPublicAddress(await Prefs.lastAddress()) ? 8 : 3);
     // flutter_cache_manager 对存过 ETag 的图片会带 If-None-Match 走条件下载，
     // 服务端命中即 304——但走下载路径时管理器没有本地文件可复用，304 等于
     // 空手而归（0.4.4 真机"加载完划走就不显示"真凶）。剥掉条件头强制 200

@@ -12,6 +12,7 @@ import 'package:video_player/video_player.dart';
 
 import '../data/api/api_client.dart';
 import '../data/api/media_proxy.dart';
+import '../data/net.dart';
 import '../state/session.dart' show sessionProvider;
 import '../transfer/transfer_engine.dart';
 import 'photo_models.dart';
@@ -33,6 +34,8 @@ class PhotoViewerPage extends ConsumerStatefulWidget {
 
 class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   late int _index = widget.initial;
+  // 图片加载失败重试：换 key 强制 AuthImage 重新解析
+  int _imgRetry = 0;
   // 控制器必须持有并销毁：此前在 build 里每次 new PageController，
   // 翻页后任何重建都会把位置重置回 initial 且泄漏旧控制器
   late final PageController _pageController =
@@ -181,38 +184,65 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
       ),
       body: Column(children: [
         Expanded(
-          child: PageView.builder(
-            itemCount: widget.items.length,
-            controller: _pageController,
-            onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) {
-              final p = widget.items[i];
-              return p.isVideo
-                  ? _VideoPage(item: p)
-                  : InteractiveViewer(
-                      maxScale: 5,
-                      child: Center(
-                        child: Hero(
-                          tag: 'ph-${p.path}',
-                          child: AuthImage(
-                          url:
-                              '${widget.base}/preview/${encPath(p.path)}?w=1280',
-                          fit: BoxFit.contain,
-                          placeholder: (ctx) => const Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                CircularProgressIndicator(),
-                                SizedBox(height: 12),
-                                Text('加载中…', style: TextStyle(color: Colors.white70)),
-                              ]),
-                          errorBuilder: (ctx, _) => const Icon(
-                              Icons.broken_image_outlined,
-                              size: 48, color: Colors.white38),
+          // 2026-09-03 美化：图片区不再黑得发闷——顶部深海军渐变过渡
+          // （照片本身仍是黑底承托，观感从"空洞黑屏"变"渐变影棚"）
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                    begin: Alignment.topLeft, end: Alignment.bottomRight,
+                    colors: [
+                  Color(0xFF0B0E18),
+                  Color(0xFF101624),
+                  Color(0xFF0B0E18)
+                ])),
+            child: PageView.builder(
+              itemCount: widget.items.length,
+              controller: _pageController,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (context, i) {
+                final p = widget.items[i];
+                return p.isVideo
+                    ? _VideoPage(item: p)
+                    : InteractiveViewer(
+                        maxScale: 5,
+                        child: Center(
+                          child: Hero(
+                            tag: 'ph-${p.path}',
+                            child: AuthImage(
+                              key: ValueKey('viewer-${p.path}-$_imgRetry'),
+                              // 公网弱网加固：1280 原图档在蜂窝下太慢，
+                              // 公网入口退到 960 档（手机屏上仍清晰）
+                              url: '${widget.base}/preview/${encPath(p.path)}?w='
+                                  '${isPublicAddress(widget.base) ? 960 : 1280}',
+                              fit: BoxFit.contain,
+                              // 防黑屏闪烁：先用照片墙已缓存的缩略图垫底
+                              // （磁盘秒出），高清在底图上渐进显现
+                              placeholder: (ctx) =>
+                                  _LoadingStage(base: widget.base, path: p.path),
+                              errorBuilder: (ctx, _) => Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.broken_image_outlined,
+                                        size: 46, color: Colors.white38),
+                                    const SizedBox(height: 10),
+                                    const Text('加载失败，检查网络后重试',
+                                        style: TextStyle(
+                                            color: Colors.white54,
+                                            fontSize: 12)),
+                                    const SizedBox(height: 4),
+                                    TextButton.icon(
+                                        onPressed: () => setState(
+                                            () => _imgRetry++),
+                                        icon: const Icon(Icons.refresh,
+                                            size: 18),
+                                        label: const Text('重试')),
+                                  ]),
+                            ),
                           ),
                         ),
-                      ),
-                    );
-            },
+                      );
+              },
+            ),
           ),
         ),
         // 0.8.4：底部毛玻璃操作条（BackdropFilter 仅覆盖本条，不拖累图片层）
@@ -248,6 +278,38 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   }
 }
 
+// ── 图片加载过渡（2026-09-03 美化）────────────────────────
+// 以照片墙已缓存的缩略图垫底（磁盘秒出，Hero 飞入不黑屏），
+// 高清图在其上渐进显现；中央一枚柔光圆盘 + 小号 spinner，
+// 替代此前的纯黑底 + 大号"加载中…"。
+class _LoadingStage extends StatelessWidget {
+  final String base;
+  final String path;
+  const _LoadingStage({required this.base, required this.path});
+
+  @override
+  Widget build(BuildContext context) {
+    final enc = path.split('/').map(Uri.encodeComponent).join('/');
+    return Stack(alignment: Alignment.center, children: [
+      Positioned.fill(
+          child: AuthImage(url: '$base/thumb/$enc', fit: BoxFit.contain)),
+      Container(
+          width: 72,
+          height: 72,
+          decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.35),
+              shape: BoxShape.circle,
+              border:
+                  Border.all(color: Colors.white.withValues(alpha: 0.15))),
+          child: const Center(
+              child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5)))),
+    ]);
+  }
+}
+
 // ── 视频页 ─────────────────────────────────────────────────
 
 class _VideoPage extends StatefulWidget {
@@ -278,6 +340,12 @@ class _VideoPageState extends State<_VideoPage> {
       await c.play();
       if (mounted) setState(() {});
     } catch (_) {
+      // 公网弱网加固：回源 socket 可能已僵死——重试前重置代理并释放
+      // 旧控制器，否则"重试"永远复用同一个坏连接
+      // ignore: discarded_futures
+      MediaProxy.I.reset();
+      _ctrl?.dispose();
+      _ctrl = null;
       if (mounted) {
         setState(() => _error = '视频无法播放');
       }
