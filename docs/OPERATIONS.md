@@ -78,7 +78,26 @@ curl -k https://192.168.1.100:8765/healthz
 - 局域网入口 `https://192.168.1.100:8765`（主机已设静态 IP）。
   **建议路由器侧再做 DHCP 静态绑定**（双保险；主机换网卡后需同步更新）。
 - 公网：樱花FRP 隧道 → 与局域网同一 Caddy 入口，功能完全对等；
-  上传页 `publicBase` 决定分享/二维码里的公网地址。
+  管理面板「公网访问地址」`public_base_url` 决定分享/二维码里的公网地址，
+  也是 `is_public_entry()` 的 Host 匹配依据（改地址后立即生效，见 app/security.py）。
+  **2026-09-03 全链路 E2E 实测通过**（App TOFU→登录→缩略图→上传→分享→取件，指纹比对一致）。
+- 樱花FRP 落地事实：启动器 `SakuraFrpService`（NSSM 式自启服务，v3.1.8）；
+  隧道 **LANShare** = TCP 透传 → `127.0.0.1:8765`（Caddy），公网地址
+  `https://your-frp-domain.com:xxxxx`（anycast，当前落地节点 223.85.20.43，节点会变——
+  以 `your-frp-domain.com` 域名为准，勿写死 IP）。配置/日志在
+  `C:\ProgramData\SakuraFrpService\`；隧道增删改在樱花FRP 网页面板或启动器。
+- 免费档限额（见启动器日志）：**10 Mbps**/隧道、**2 条**隧道、**5 GiB/月**流量
+  （每月 1 日重置，签到可累加）。公网侧定位=出门在外应急浏览/小文件，
+  大备份与大文件传输走局域网（App 备份公网默认跳过、网页公网上传有提醒，均为既有设计）。
+- 公网探活巡检：`curl -sk -o /dev/null -w "%{http_code}" https://your-frp-domain.com:xxxxx/healthz`
+  正常应返回 **404**（healthz 对公网收敛是设计行为，404 恰恰证明 Host 匹配生效；
+  连不上=隧道/节点故障，去启动器日志看 frpc 重连）。
+- 环境坑：本机模拟器/虚拟机内 DNS 可能整体失效（宿主 Tailscale MagicDNS 劫持所致，
+  TCP 正常仅解析坏）——Android 模拟器用 Private DNS 解决：
+  `settings put global private_dns_mode hostname` +
+  `settings put global private_dns_specifier dns.alidns.com`。真机无此问题。
+- 遗留噪音：另一条隧道 **HermesAgent** 指向 `127.0.0.1:8801`（无服务监听），
+  启动器日志持续报连接失败；是主人另一项目占用的免费档第 2 条隧道，勿动。
 - 端口一览：80/8080 跳转；8765 主入口；8767/443 备用同规则；8766 仅本机。
 
 ## 7. 存储治理
