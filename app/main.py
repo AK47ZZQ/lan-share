@@ -44,11 +44,20 @@ async def security_middleware(request: Request, call_next):
         limit, bucket = SHARE_RATE_LIMIT, "share"
     elif path.startswith("/api/") or path == "/authcheck":
         # authcheck 是 Caddy forward_auth 子请求，跟随 /files 静态请求高频出现，单独桶
-        limit, bucket = (0, None) if path == "/authcheck" else (API_RATE_LIMIT, "api")
+        if path == "/authcheck":
+            limit, bucket = 0, None
+        else:
+            # 弱网加固（v0.10.1）：Caddy 反代使内外网 client_ip 都是 127.0.0.1，
+            # 全家共享一个桶会让公网设备互相挤掉——按入口分账（LAN 120/公网 240），
+            # 家里三个人同时翻照片墙不再互相 429
+            pub = is_public_entry(request)
+            limit = API_RATE_LIMIT * 2 if pub else API_RATE_LIMIT
+            bucket = "api:pub" if pub else "api:lan"
     else:
         limit, bucket = 0, None
     if limit and bucket and not allow_rate(f"{ip}:{bucket}", limit):
-        return JSONResponse({"detail": "Too many requests"}, status_code=429)
+        return JSONResponse({"detail": "Too many requests"}, status_code=429,
+                            headers={"Retry-After": "30"})
     return await call_next(request)
 
 # ─── 路由模块（app 与中间件就绪后导入）──────────────────

@@ -531,10 +531,12 @@ class TransferEngine extends ChangeNotifier {
       throw Exception(detail.toString());
     }
     t.attempts += 1;
-    if (t.attempts > 5) {
+    // 公网弱网加固（v0.10.1）：蜂窝路径丢包/切换常见，退避池加长到 8 次
+    // （最长 8 分钟），期间任务保持 pending 不落 error；仍失败才放弃
+    if (t.attempts > 8) {
       throw Exception('连续失败多次：${_brief(e)}');
     }
-    final wait = [2, 5, 10, 30, 60][backoff.clamp(0, 4)];
+    final wait = [2, 5, 10, 30, 60, 120, 240, 480][backoff.clamp(0, 7)];
     t.error = '网络波动，${wait}s 后重试（第 ${t.attempts} 次）';
     notifyListeners();
     await Future.delayed(Duration(seconds: wait));

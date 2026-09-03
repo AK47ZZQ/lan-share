@@ -61,7 +61,9 @@ class AuthFileService extends FileService {
     final token = await _getToken();
     req.headers['authorization'] = 'Bearer ${token ?? ''}';
     if (headers != null) req.headers.addAll(headers);
-    return _client.send(req);
+    // 公网弱网加固（v0.10.1）：整体 45s 上限——蜂窝下卡死的连接
+    // 会抛 TimeoutException 而非无限转圈；下轮网格重建自动再试
+    return _client.send(req).timeout(const Duration(seconds: 45));
   }
 
   @override
@@ -80,6 +82,13 @@ class AuthFileService extends FileService {
       // Token 可能被并发读坏或已轮换：清缓存强读一次再试
       await resp.stream.drain<void>();
       _cachedToken = null;
+      resp = await _semaphore.run(() => _send(url, headers: h));
+    }
+    // 公网弱网加固（v0.10.1）：5xx/429 是瞬时扰动，等 1.5s 重试一次
+    // 再判死；304 剥离在上游（不依赖条件请求）——重试不重复扣缓存。
+    if (resp.statusCode >= 500 || resp.statusCode == 429) {
+      await resp.stream.drain<void>();
+      await Future.delayed(const Duration(milliseconds: 1500));
       resp = await _semaphore.run(() => _send(url, headers: h));
     }
     if (resp.statusCode < 200 || resp.statusCode >= 300) {

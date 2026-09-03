@@ -93,9 +93,14 @@ class TrustStore {
     await SecureStore.setString('trust_hosts', _trusted.keys.join('\n'));
   }
 
-  /// 创建带信任策略的 HttpClient（Dio 适配器与缩略图下载共用）
+  /// 创建带信任策略的 HttpClient（Dio 适配器/缩略图/媒体代理共用）。
+  /// 显式超时是公网弱网加固（v0.10.1）：Dart 默认 connectionTimeout 很长、
+  /// keep-alive idle 15s——蜂窝下容易卡死/误断。活动传输不受 idleTimeout
+  /// 影响（它只作用于空闲复用连接），这里放宽是安全兜底。
   static HttpClient createHttpClient() {
     final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 12);
+    client.idleTimeout = const Duration(minutes: 5);
     client.badCertificateCallback = (cert, host, port) =>
         I.allow(cert, host, port);
     return client;
