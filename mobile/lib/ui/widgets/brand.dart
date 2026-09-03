@@ -48,7 +48,12 @@ class BrandHeader extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       decoration: BoxDecoration(
-        gradient: Brand.gradient,
+        // 渐变随主题色板走（PaletteScope 由 MaterialApp.builder 挂载）
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: PaletteScope.of(context).gradient,
+        ),
         borderRadius: BorderRadius.only(
             bottomLeft: Radius.circular(bottomRadius),
             bottomRight: Radius.circular(bottomRadius)),

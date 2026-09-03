@@ -1,38 +1,123 @@
-# 生成安卓启动图标（与 web/public/icons 的 PWA 品牌一致：紫渐变 + 白 L）。
+# 生成启动/品牌图标（品牌：登录页同款云朵 + 渐变底，2026-09-04 起替代"白 L"）。
 # 产出：
-#   mipmap-*/ic_launcher.png          遗留图标（渐变全出血 + 圆角，API<26 与设置页兜底）
-#   mipmap-*/ic_launcher_fg.png       自适应前景（仅白 L，透明底，108dp 画布）
-#   mipmap-anydpi-v26/ic_launcher.xml 自适应装配（背景=@drawable/ic_launcher_bg 渐变）
-# 用法：hermes venv python scripts/make-app-icon.py
-# 几何与颜色按 web/public/icons/icon-512.png 实测（2026-09-01），改品牌先改这里。
+#   mipmap-*/ic_launcher.png          遗留图标（渐变全出血 + 白云 + 圆角，API<26 与设置页兜底）
+#   mipmap-*/ic_launcher_fg.png       自适应前景（仅白云，透明底，108dp 画布）
+#   mipmap-anydpi-v26/ic_launcher.xml 自适应装配（背景=@drawable/ic_launcher_bg 渐变，
+#                                     monochrome 复用前景白云轮廓）
+#   web/public/icons + web/dist/icons PWA 三件（192/512/apple-touch，同一 512 母版缩放）
+# 云朵取自 Material Icons "cloud"（24×24 viewBox 填充外形）：内置 mini SVG 路径
+# 解析器（M/C/c/h/z + 隐式重复）+ 三次贝塞尔拉直为多边形，不引 SVG 依赖。
+# 用法：hermes venv python scripts/make-app-icon.py；改品牌先改这里。
 from PIL import Image, ImageDraw
 import os
+import re
 
-RES = os.path.join(os.path.dirname(__file__), "..", "mobile", "android", "app", "src", "main", "res")
-GRAD_TOP = (91, 107, 255)    # #5B6BFF
-GRAD_BOT = (137, 91, 255)    # #895BFF
-L_COLOR = (255, 255, 255)
+ROOT = os.path.join(os.path.dirname(__file__), "..")
+RES = os.path.join(ROOT, "mobile", "android", "app", "src", "main", "res")
+PWA_DIRS = [os.path.join(ROOT, "web", "public", "icons"),
+            os.path.join(ROOT, "web", "dist", "icons")]
+GRAD_TOP = (91, 107, 255)    # #5B6BFF（登录页渐变起点）
+GRAD_BOT = (137, 91, 255)    # #895BFF（渐变终点）
+CLOUD = (255, 255, 255)
 
-# L 在 512 母版上的几何（bbox 居中放置）
-L_BOX = (210, 163, 320, 349)   # x0,y0,x1,y1 总bbox（宽110 高186）
-BAR_W = 41                      # 竖杆宽
-FOOT_H = 34                     # 底脚高
-CORNER = 90                     # 遗留图标圆角半径（512 母版）
+# Material Icons "cloud" 填充外形（单条子路径；outlined 版的内孔不需要）
+CLOUD_PATH = ("M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 "
+              "2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 "
+              "0-2.64-2.05-4.78-4.65-4.96z")
+
+CORNER = 90          # 遗留图标圆角半径（512 母版）
+CLOUD_FRAC = 0.58    # 云朵宽占画布边长比例（自适应安全区 66%，留余量）
 
 # 密度 → (遗留 px[48dp], 自适应前景 px[108dp])
 DENSITIES = {"mdpi": (48, 108), "hdpi": (72, 162), "xhdpi": (96, 216),
              "xxhdpi": (144, 324), "xxxhdpi": (192, 432)}
 
 
-def draw_l(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
-    """在 canvas 的 box 区域内画 L（竖杆左对齐 + 底脚全宽）。"""
+def _flatten_cubic(p0, p1, p2, p3, n=16):
+    """三次贝塞尔 → n 段折线点列（不含起点）。"""
+    pts = []
+    for i in range(1, n + 1):
+        t = i / n
+        mt = 1 - t
+        x = mt**3 * p0[0] + 3 * mt**2 * t * p1[0] + 3 * mt * t**2 * p2[0] + t**3 * p3[0]
+        y = mt**3 * p0[1] + 3 * mt**2 * t * p1[1] + 3 * mt * t**2 * p2[1] + t**3 * p3[1]
+        pts.append((x, y))
+    return pts
+
+
+def parse_path(d: str):
+    """mini SVG 路径解析：支持 M m L l H h V v C c Z z 与命令隐式重复。
+    返回子路径列表（每条是绝对坐标折线，闭合处补回起点）。"""
+    parts = re.findall(r"[MmLlHhVvCcZz]|-?\d+(?:\.\d+)?(?:e-?\d+)?", d)
+    i, pos, start = 0, (0.0, 0.0), (0.0, 0.0)
+    cur, subs, prev = [], [], ""
+
+    def num():
+        nonlocal i
+        v = float(parts[i])
+        i += 1
+        return v
+
+    while i < len(parts):
+        tok = parts[i]
+        cmd = tok if re.match(r"[A-Za-z]", tok) else prev  # 数字=隐式重复上一命令
+        if re.match(r"[A-Za-z]", tok):
+            i += 1
+        prev = cmd
+        if cmd == "M":
+            pos = (num(), num())
+            start = pos
+            cur = [pos]
+            prev = "L"  # M 后随数字按 L 处理
+        elif cmd == "m":
+            pos = (pos[0] + num(), pos[1] + num())
+            start = pos
+            cur = [pos]
+            prev = "l"
+        elif cmd == "L":
+            pos = (num(), num())
+            cur.append(pos)
+        elif cmd == "l":
+            pos = (pos[0] + num(), pos[1] + num())
+            cur.append(pos)
+        elif cmd in "Hh":
+            dx = num()
+            pos = (dx if cmd == "H" else pos[0] + dx, pos[1])
+            cur.append(pos)
+        elif cmd in "Vv":
+            dy = num()
+            pos = (pos[0], dy if cmd == "V" else pos[1] + dy)
+            cur.append(pos)
+        elif cmd == "C":
+            p1, p2, p3 = (num(), num()), (num(), num()), (num(), num())
+            cur.extend(_flatten_cubic(pos, p1, p2, p3))
+            pos = p3
+        elif cmd == "c":
+            p1 = (pos[0] + num(), pos[1] + num())
+            p2 = (pos[0] + num(), pos[1] + num())
+            p3 = (pos[0] + num(), pos[1] + num())
+            cur.extend(_flatten_cubic(pos, p1, p2, p3))
+            pos = p3
+        elif cmd in "Zz":
+            if cur:
+                cur.append(start)
+                subs.append(cur)
+                cur = []
+            pos = start
+    if cur:
+        subs.append(cur)
+    return subs
+
+
+def draw_cloud(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
+    """把云朵外形等比缩放画进 canvas 的 box（正方形，云朵垂直居中）。"""
     x0, y0, x1, y1 = box
-    w, h = x1 - x0, y1 - y0
-    bar = BAR_W / 110 * w
-    foot = FOOT_H / 186 * h
-    d = ImageDraw.Draw(canvas)
-    d.rectangle([x0, y0, x0 + bar - 1, y1 - 1], fill=L_COLOR)
-    d.rectangle([x0, y1 - foot, x1 - 1, y1 - 1], fill=L_COLOR)
+    side = min(x1 - x0, y1 - y0)
+    scale = side / 24.0
+    ox = (x0 + x1) / 2 - 12 * scale
+    oy = (y0 + y1) / 2 - 12 * scale  # 路径 bbox y∈[4,20]，中心即 12
+    poly = [(x * scale + ox, y * scale + oy) for (x, y) in parse_path(CLOUD_PATH)[0]]
+    ImageDraw.Draw(canvas).polygon(poly, fill=CLOUD)
 
 
 def rounded(im: Image.Image, radius: int) -> Image.Image:
@@ -52,24 +137,26 @@ def gradient(size: int) -> Image.Image:
     return col.resize((size, size))
 
 
+def cloud_on(size: int, frac: float, bg_image: Image.Image | None = None) -> Image.Image:
+    """size 见方的画布，居中画 frac 比例的白云；bg_image=None 为透明底。"""
+    im = bg_image.convert("RGBA") if bg_image is not None \
+        else Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    w = round(frac * size)
+    cx = cy = size // 2
+    draw_cloud(im, (cx - w // 2, cy - w // 2, cx - w // 2 + w, cy - w // 2 + w))
+    return im
+
+
 for dpi, (legacy_px, fg_px) in DENSITIES.items():
     d = os.path.join(RES, f"mipmap-{dpi}")
     os.makedirs(d, exist_ok=True)
 
-    # 遗留：全出血渐变 + 白 L + 圆角
-    legacy = gradient(legacy_px)
-    # L bbox 占画布比例与 512 母版一致（110/512, 186/512），居中
-    lw = round(110 / 512 * legacy_px); lh = round(186 / 512 * legacy_px)
-    cx, cy = legacy_px // 2, legacy_px // 2
-    draw_l(legacy, (cx - lw // 2, cy - lh // 2, cx - lw // 2 + lw, cy - lh // 2 + lh))
+    # 遗留：全出血渐变 + 白云 + 圆角
+    legacy = cloud_on(legacy_px, CLOUD_FRAC, bg_image=gradient(legacy_px))
     rounded(legacy, round(CORNER / 512 * legacy_px)).save(os.path.join(d, "ic_launcher.png"))
 
-    # 自适应前景：透明底 + 白 L（同比例，居中；安全区 66/108 充裕）
-    fg = Image.new("RGBA", (fg_px, fg_px), (0, 0, 0, 0))
-    lw = round(110 / 512 * fg_px); lh = round(186 / 512 * fg_px)
-    cx, cy = fg_px // 2, fg_px // 2
-    draw_l(fg, (cx - lw // 2, cy - lh // 2, cx - lw // 2 + lw, cy - lh // 2 + lh))
-    fg.save(os.path.join(d, "ic_launcher_fg.png"))
+    # 自适应前景：透明底 + 白云（安全区 66/108，0.58 充裕）
+    cloud_on(fg_px, CLOUD_FRAC).save(os.path.join(d, "ic_launcher_fg.png"))
 
 ad = os.path.join(RES, "mipmap-anydpi-v26")
 os.makedirs(ad, exist_ok=True)
@@ -91,4 +178,14 @@ with open(os.path.join(gd, "ic_launcher_bg.xml"), "w") as f:
             f'        android:endColor="#{GRAD_BOT[0]:02X}{GRAD_BOT[1]:02X}{GRAD_BOT[2]:02X}"/>\n'
             '</shape>\n')
 
-print("icon assets written to", os.path.abspath(RES))
+# PWA 三件：512 母版 + 192 + apple-touch(180)，与安卓同一品牌
+for out_dir in PWA_DIRS:
+    os.makedirs(out_dir, exist_ok=True)
+    cloud_on(512, CLOUD_FRAC, bg_image=gradient(512)).save(
+        os.path.join(out_dir, "icon-512.png"))
+    cloud_on(512, CLOUD_FRAC, bg_image=gradient(512)).resize(
+        (192, 192), Image.LANCZOS).save(os.path.join(out_dir, "icon-192.png"))
+    cloud_on(512, CLOUD_FRAC, bg_image=gradient(512)).resize(
+        (180, 180), Image.LANCZOS).save(os.path.join(out_dir, "apple-touch-icon.png"))
+
+print("icon assets written:", os.path.abspath(RES), "+ PWA icons")

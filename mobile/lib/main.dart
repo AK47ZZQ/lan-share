@@ -1,3 +1,4 @@
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -75,15 +76,31 @@ class LanShareApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
     final settings = ref.watch(settingsProvider);
-    return MaterialApp(
-      title: 'LAN Share',
-      debugShowCheckedModeBanner: false,
-      themeMode: settings.themeMode,
-      // 0.8.4 主题系统：brand tokens + 亮/暗/AMOLED 三套。
-      // AMOLED 开关生效于"暗色生效"的场合（dark 或 system 且系统为暗）。
-      theme: AppTheme.light(),
-      darkTheme: settings.amoledDark ? AppTheme.amoled() : AppTheme.dark(),
-      home: session.loggedIn ? const HomeShell() : const LoginPage(),
-    );
+    // 主题引擎（0.8.5）：accent 指向预置色板，'auto' 跟随壁纸取色
+    // （Android 12+ Material You；拿不到动态色时回落云朵紫蓝）。
+    return DynamicColorBuilder(builder: (lightDynamic, darkDynamic) {
+      final palette = settings.accent == Palettes.auto && lightDynamic != null
+          ? Palette(
+              id: Palettes.auto,
+              name: '跟随壁纸',
+              seed: lightDynamic.primary,
+              gradient: [lightDynamic.primary, lightDynamic.tertiary],
+              darkBg: darkDynamic?.surface ?? Palettes.violet.darkBg)
+          : paletteById(settings.accent);
+      return MaterialApp(
+        title: 'LAN Share',
+        debugShowCheckedModeBanner: false,
+        themeMode: settings.themeMode,
+        // 0.8.4 主题系统：brand tokens + 亮/暗/AMOLED 三套，0.8.5 挂色板。
+        // AMOLED 开关生效于"暗色生效"的场合（dark 或 system 且系统为暗）。
+        theme: AppTheme.light(palette),
+        darkTheme:
+            settings.amoledDark ? AppTheme.amoled(palette) : AppTheme.dark(palette),
+        // 品牌头/云朵组件从作用域取当前色板的渐变
+        builder: (context, child) =>
+            PaletteScope(palette: palette, child: child ?? const SizedBox.shrink()),
+        home: session.loggedIn ? const HomeShell() : const LoginPage(),
+      );
+    });
   }
 }

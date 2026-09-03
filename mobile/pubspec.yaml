@@ -2,7 +2,7 @@ name: lanshare_app
 description: "LAN Share 家庭网盘 · 手机 App（Flutter，APP-DESIGN v0.1）"
 publish_to: 'none'
 
-version: 0.8.4+26
+version: 0.8.5+27
 
 environment:
   sdk: ^3.13.1
@@ -34,6 +34,8 @@ dependencies:
   package_info_plus: ^8.1.1      # 关于页/检查更新读取自身 version+build（official）
   flutter_local_notifications: ^18.0.1  # 传输完成系统通知（备份通知走 Kotlin 自有通道，
                                  #  App 内传输完成复用系统能力需本插件）
+  # ── v0.8.5 主题引擎 ────────────────────────────────────────
+  dynamic_color: ^2.1.0          # 「跟随壁纸」主题色（Android 12+ Material You 动态取色，official）
 
 dev_dependencies:
   flutter_test:

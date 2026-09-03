@@ -745,6 +745,38 @@ WebDAV 配额两条计数口径修正；前后端"null=未提供"契约在管理
 两路由各一份 tag 不冲突。AMOLED 显式使用 surface 分层近黑（#000/#12141F）
 而非简单反转。
 
+### 8.22 主题引擎 + 云朵品牌图标（2026-09-04，v0.8.5+27）
+
+用户拍板"组合拳"：方向四主题引擎为主体（方向一/二/三成预置色板，深色默认
+用方向三深海军底），云朵 Logo 与渐变保留并随色板联动，云朵+渐变做成启动
+图标。服务端零改动：
+
+1. **Palette**（`app_theme.dart`）：{id, name, seed, gradient[2], darkBg}。
+   预置六套：violet 云朵紫蓝（默认，darkBg=#0B1020 深海军）/teal 晨雾青/
+   warm 暖沙陶土/rose 玫瑰落日/forest 墨绿/slate 极简灰。`paletteById`
+   未知值回落 violet；'auto' 是 accent 取值（跟随壁纸）不是色板 id。
+2. **暗色派生**：暗色表面阶梯不再用 M3 中性灰——从 `darkBg` 向上
+   `_tier(lerp→white)` 派生（lowest=bg，low .035 / container .06 / high
+   .09 / highest .13；dialog/sheet/chip/snackbar 同源），任意色板深底
+   都自动和谐；AMOLED 底纯黑，表面 lerp(black→white) 后掺 6% 种子色相。
+3. **PaletteScope**：MaterialApp.builder 挂 InheritedWidget，BrandHeader
+   等品牌组件从作用域取渐变，作用域外回落 violet。主入口
+   `DynamicColorBuilder`：accent='auto' 且拿得到动态色（Android 12+）时
+   用 dynamic primary/tertiary 构造临时色板，否则 `paletteById`。
+4. **设置**：`AppSettings.accent`（`ui_accent`，默认 violet）+「我的」页
+   「主题色」行（渐变圆 leading + 弹窗色板 Wrap 选择，含跟随壁纸项）。
+5. **图标**：`make-app-icon.py` 重写——mini SVG 路径解析（M/m C/c H/h V/v
+   L/l Z/z + 隐式重复 + 三次贝塞尔 16 段拉直，零依赖），Material "cloud"
+   填充外形白云 + 渐变底，宽占画布 58%（自适应安全区 66% 内）；产出安卓
+   遗留/自适应前景/monochrome + **PWA 三件**（web/public/icons 与
+   web/dist/icons 同步重绘，SW 只缓存带哈希 assets、图标直供无需版本位）。
+
+教训：**Git Bash 下 robocopy 的 `/MIR` 会被 MSYS 路径转换吃掉**（变成
+`.../git/MIR` 路径参数），须 `MSYS_NO_PATHCONV=1`；`flutter pub add` 在
+镜像目录（C:\lan-share-mobile）操作的是构建副本，依赖行必须回写仓库源
+pubspec 再镜像。模拟器验收坐标法：截图 900 宽 ×1.2=1080 设备像素；AMOLED
+是否真纯黑用 PIL 采样 `getpixel` 最硬。
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

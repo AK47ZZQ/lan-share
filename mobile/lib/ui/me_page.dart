@@ -19,6 +19,7 @@ import '../data/api/errors.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
+import 'theme/app_theme.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 import 'shares_page.dart';
 import 'trash_page.dart';
@@ -158,6 +159,74 @@ class _MePageState extends ConsumerState<MePage> {
     if (sel != null) {
       await ref.read(settingsProvider.notifier).setThemeMode(sel);
     }
+  }
+
+  // 主题引擎（0.8.5）：6 套预置色板 + 跟随壁纸，点色板即换全 App 配色
+  Future<void> _pickAccent() async {
+    final cur = ref.read(settingsProvider).accent;
+    final sel = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+                title: const Text('主题色'),
+                children: [
+                  Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                      child: Wrap(
+                          spacing: 10,
+                          runSpacing: 14,
+                          children: [
+                            for (final p in Palettes.all)
+                              _accentSwatch(ctx, cur, p.id, p.name,
+                                  BoxDecoration(
+                                      gradient: LinearGradient(
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                          colors: p.gradient))),
+                            _accentSwatch(
+                                ctx,
+                                cur,
+                                Palettes.auto,
+                                '跟随壁纸',
+                                BoxDecoration(
+                                    color: Theme.of(ctx)
+                                        .colorScheme
+                                        .surfaceContainerHighest),
+                                icon: Icons.wallpaper),
+                          ])),
+                ]));
+    if (sel != null) {
+      await ref.read(settingsProvider.notifier).setAccent(sel);
+    }
+  }
+
+  Widget _accentSwatch(BuildContext ctx, String cur, String id, String label,
+      BoxDecoration deco, {IconData? icon}) {
+    final cs = Theme.of(ctx).colorScheme;
+    final selected = cur == id;
+    return InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => Navigator.pop(ctx, id),
+        child: SizedBox(
+            width: 78,
+            child: Column(children: [
+              Container(
+                  width: 48,
+                  height: 48,
+                  decoration: deco.copyWith(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                          color: selected ? cs.primary : cs.outlineVariant,
+                          width: selected ? 3 : 1)),
+                  child: icon == null
+                      ? null
+                      : Icon(icon, size: 22, color: cs.onSurfaceVariant)),
+              const SizedBox(height: 5),
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+            ])));
   }
 
   Future<void> _changePassword() async {
@@ -557,6 +626,28 @@ class _MePageState extends ConsumerState<MePage> {
           }),
           onTap: _pickThemeMode,
         ),
+        // 0.8.5 主题引擎：预置色板 / 跟随壁纸（Material You）
+        Builder(builder: (context) {
+          final isAuto = settings.accent == Palettes.auto;
+          final cur = paletteById(settings.accent);
+          return ListTile(
+            leading: Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient:
+                        isAuto ? null : LinearGradient(colors: cur.gradient),
+                    color: isAuto
+                        ? Theme.of(context).colorScheme.surfaceContainerHighest
+                        : null),
+                child:
+                    isAuto ? const Icon(Icons.wallpaper, size: 16) : null),
+            title: const Text('主题色'),
+            subtitle: Text(isAuto ? '跟随壁纸' : cur.name),
+            onTap: _pickAccent,
+          );
+        }),
         // 0.8.4 暗色增强：AMOLED 纯黑底（OLED 屏省电 + 夜间观影友好）
         SwitchListTile(
           secondary: const Icon(Icons.nights_stay_outlined),

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppSettings {
   final ThemeMode themeMode;
   final bool amoledDark; // 暗色增强：AMOLED 纯黑底（0.8.4 起，独立于三档）
+  final String accent; // 主题色板 id（Palettes.all）或 'auto'（跟随壁纸，0.8.5）
   final bool appLock;
   final bool notifyTransferDone;
   final String filesSort; // name | modified | size
@@ -17,6 +18,7 @@ class AppSettings {
   const AppSettings({
     this.themeMode = ThemeMode.system,
     this.amoledDark = false,
+    this.accent = 'violet',
     this.appLock = false,
     this.notifyTransferDone = true,
     this.filesSort = 'name',
@@ -37,6 +39,7 @@ class SettingsController extends StateNotifier<AppSettings> {
           (m) => m.name == (sp.getString('ui_theme_mode') ?? 'system'),
           orElse: () => ThemeMode.system),
       amoledDark: sp.getBool('ui_amoled_dark') ?? false,
+      accent: sp.getString('ui_accent') ?? 'violet',
       appLock: sp.getBool('ui_app_lock') ?? false,
       notifyTransferDone: sp.getBool('notify_transfer_done') ?? true,
       filesSort: sp.getString('files_sort') ?? 'name',
@@ -55,6 +58,13 @@ class SettingsController extends StateNotifier<AppSettings> {
     state = _copy(amoledDark: v);
     final sp = await SharedPreferences.getInstance();
     await sp.setBool('ui_amoled_dark', v);
+  }
+
+  /// 切主题色板（Palettes.all 的 id 或 'auto' 跟随壁纸）
+  Future<void> setAccent(String v) async {
+    state = _copy(accent: v);
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString('ui_accent', v);
   }
 
   Future<void> setAppLock(bool v) async {
@@ -84,12 +94,13 @@ class SettingsController extends StateNotifier<AppSettings> {
     await sp.setStringList('files_pinned_dirs', cur);
   }
 
-  AppSettings _copy({ThemeMode? themeMode, bool? amoledDark, bool? appLock,
-      bool? notifyTransferDone, String? filesSort, bool? filesAsc,
+  AppSettings _copy({ThemeMode? themeMode, bool? amoledDark, String? accent,
+      bool? appLock, bool? notifyTransferDone, String? filesSort, bool? filesAsc,
       List<String>? pinnedDirs}) =>
       AppSettings(
           themeMode: themeMode ?? state.themeMode,
           amoledDark: amoledDark ?? state.amoledDark,
+          accent: accent ?? state.accent,
           appLock: appLock ?? state.appLock,
           notifyTransferDone: notifyTransferDone ?? state.notifyTransferDone,
           filesSort: filesSort ?? state.filesSort,
