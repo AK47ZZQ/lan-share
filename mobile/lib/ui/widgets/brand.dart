@@ -44,6 +44,9 @@ class BrandHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final radius = BorderRadius.only(
+        bottomLeft: Radius.circular(bottomRadius),
+        bottomRight: Radius.circular(bottomRadius));
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -54,9 +57,12 @@ class BrandHeader extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: PaletteScope.of(context).gradient,
         ),
-        borderRadius: BorderRadius.only(
-            bottomLeft: Radius.circular(bottomRadius),
-            bottomRight: Radius.circular(bottomRadius)),
+        borderRadius: radius,
+      ),
+      // 8% 暗色罩膜：暖沙等浅色系渐变端不压暗的话，白字对比不足
+      foregroundDecoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.08),
+        borderRadius: radius,
       ),
       child: child,
     );
@@ -95,7 +101,8 @@ class EmptyState extends StatelessWidget {
           const SizedBox(height: 6),
           Text(hint!,
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12.5, color: cs.outline)),
+              style: TextStyle(
+                  fontSize: 12.5, color: cs.onSurfaceVariant)),
         ],
         const SizedBox(height: 14),
         ?action,

@@ -773,7 +773,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
       Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Text('成员在登录页使用邀请码自助建号（72 小时有效）。',
-              style: TextStyle(fontSize: 12, color: cs.outline))),
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant))),
     ]);
   }
 

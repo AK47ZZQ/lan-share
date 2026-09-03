@@ -83,7 +83,7 @@ class _ActivityPageState extends State<ActivityPage> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 14)),
         subtitle: Text(activityRelTime(n.ts),
-            style: TextStyle(fontSize: 12, color: cs.outline)),
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
       );
 }
 

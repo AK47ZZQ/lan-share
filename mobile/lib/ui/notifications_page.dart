@@ -121,7 +121,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                   const EdgeInsets.fromLTRB(16, 10, 16, 0),
                               child: Text('$_unread 条未读 · 打开已全部标记已读',
                                   style: TextStyle(
-                                      fontSize: 11, color: cs.outline))),
+                                      fontSize: 11, color: cs.onSurfaceVariant))),
                         for (final n in items)
                           ListTile(
                               leading: Badge(
@@ -145,7 +145,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                       style: const TextStyle(fontSize: 12)),
                               trailing: Text(_rel(n.createdAt),
                                   style: TextStyle(
-                                      fontSize: 11, color: cs.outline))),
+                                      fontSize: 11, color: cs.onSurfaceVariant))),
                       ])));
   }
 

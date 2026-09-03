@@ -799,7 +799,7 @@ class _VerifierFillCardState extends State<_VerifierFillCard> {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                 Text('本机验证器',
-                    style: TextStyle(fontSize: 11, color: cs.outline)),
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
                 Text(shown,
                     style: const TextStyle(
                         fontSize: 26,
@@ -807,7 +807,7 @@ class _VerifierFillCardState extends State<_VerifierFillCard> {
                         letterSpacing: 5)),
               ]),
             ),
-            Icon(Icons.touch_app_outlined, size: 20, color: cs.outline),
+            Icon(Icons.touch_app_outlined, size: 20, color: cs.onSurfaceVariant),
           ]),
         ),
       ),

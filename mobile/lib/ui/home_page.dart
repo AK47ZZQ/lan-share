@@ -202,7 +202,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   const SizedBox(height: 2),
                   Text('家庭网盘概览 · 下拉刷新',
                       style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.8),
+                          color: Colors.white.withValues(alpha: 0.92),
                           fontSize: 12)),
                 ]),
           ),
@@ -310,7 +310,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Row(children: [
                           Icon(_activityIcon(n.action),
-                              size: 15, color: cs.outline),
+                              size: 15, color: cs.onSurfaceVariant),
                           const SizedBox(width: 8),
                           Expanded(
                               child: Text(activityText(n),
@@ -320,7 +320,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                           const SizedBox(width: 6),
                           Text(activityRelTime(n.ts),
                               style: TextStyle(
-                                  fontSize: 11, color: cs.outline)),
+                                  fontSize: 11, color: cs.onSurfaceVariant)),
                         ])),
                 ])),
           _card(
@@ -329,7 +329,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     _cardTitle('自动备份',
                         icon: Icons.backup_outlined,
                         trailing: _badge(_backupOn ? '已开启' : '已关闭',
-                            _backupOn ? Colors.green : cs.outline)),
+                            _backupOn ? Colors.green : cs.onSurfaceVariant)),
                     const SizedBox(height: 6),
                     Text(_backupText(),
                         style: const TextStyle(fontSize: 13)),
@@ -352,7 +352,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                     fontSize: 12,
                                     color: v.warn
                                         ? Colors.orange
-                                        : cs.outline)));
+                                        : cs.onSurfaceVariant)));
                       }),
                     ],
                     // 失败提示（0.6.2）：此前失败只能进账本页才知道
@@ -410,7 +410,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                             icon: Icons.swap_vert_circle_outlined,
                             trailing: Text('全部 ›',
                                 style:
-                                    TextStyle(fontSize: 12, color: cs.outline))),
+                                    TextStyle(fontSize: 12, color: cs.onSurfaceVariant))),
                         const SizedBox(height: 6),
                         Text(
                             active > 0
@@ -430,7 +430,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                           ? Icons.upload_outlined
                                           : Icons.download_outlined,
                                       size: 15,
-                                      color: cs.outline),
+                                      color: cs.onSurfaceVariant),
                                   const SizedBox(width: 6),
                                   Expanded(
                                       child: Text(t.name,
@@ -448,7 +448,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                             ? null
                             : Text('文件库 $_shareSize',
                                 style: TextStyle(
-                                    fontSize: 12, color: cs.outline))),
+                                    fontSize: 12, color: cs.onSurfaceVariant))),
                     const SizedBox(height: 10),
                     LinearProgressIndicator(
                         value: _diskTotal > 0 && _diskUsed <= _diskTotal
@@ -461,7 +461,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                         _diskTotal > 0
                             ? '已用 ${humanSize(_diskUsed)} / ${humanSize(_diskTotal)}'
                             : '磁盘信息加载中…',
-                        style: TextStyle(fontSize: 12, color: cs.outline)),
+                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
                   ])),
           _card(
               child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,

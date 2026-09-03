@@ -777,6 +777,28 @@ WebDAV 配额两条计数口径修正；前后端"null=未提供"契约在管理
 pubspec 再镜像。模拟器验收坐标法：截图 900 宽 ×1.2=1080 设备像素；AMOLED
 是否真纯黑用 PIL 采样 `getpixel` 最硬。
 
+### 8.23 字体对比度热修（2026-09-04，v0.8.7+29）
+
+用户报主页字体看不清。像素采样（PIL darkest/lightest + WCAG 对比公式）
+定位两个 v0.8.4 潜伏根因：
+
+1. **Typography 墨水映射写反**：`Typography.material2021()` 的 `.black`/
+   `.white` 指**墨水色**（黑墨配亮背景/白墨配暗背景），v0.8.4 的
+   `_textTheme` 恰好取反——亮色主题全 App 默认文字色变白，主页动态正文/
+   备份状态等"裸 TextStyle"文本在浅卡上不可见（对比 1.0:1）。修复换向，
+   并加 DefaultTextStyle 墨水方向回归测试。测试三坑：须包 Scaffold
+   （Material 才把 textTheme 装配成 DefaultTextStyle）、须 `pumpAndSettle`
+   （AnimatedDefaultTextStyle 不 settle 采到旧树值）、裸 MaterialApp 的
+   ambient 是框架 fallback 不代表真实渲染。
+2. **`cs.outline` 被当正文色**：M3 里 outline 是边框语义（≈3.5:1），
+   15 处文字误用（主页 8 处 + 各页散点），统一改 `onSurfaceVariant`。
+   主题层再把亮色 onSurfaceVariant 向 onSurface 拉近 35%（≈8:1）加固。
+
+通用教训：**"看不清"类反馈用像素采样定位（darkest/lightest + WCAG 对比
+比），别靠截图目测**——900px 缩略截图上白字和浅灰字肉眼难分；**语义色
+按角色用（文字=onSurface/onSurfaceVariant，边框=outline/outlineVariant）**，
+自定义 textTheme 的墨水方向必须有单测钉死。
+
 ## 9. 风险清单
 
 1. **iOS 后台窗口**：平台硬限制，产品语义已定为"小块多餐+前台引导"，不做全量承诺

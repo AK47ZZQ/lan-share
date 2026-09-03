@@ -137,7 +137,7 @@ class _VerifierPageState extends State<VerifierPage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(Icons.phonelink_lock_outlined,
-                          size: 64, color: cs.outline),
+                          size: 64, color: cs.onSurfaceVariant),
                       const SizedBox(height: 12),
                       Text('还没绑定两步验证',
                           style: Theme.of(context).textTheme.titleMedium),

@@ -236,6 +236,11 @@ abstract final class AppTheme {
       useMaterial3: true,
       brightness: brightness,
       colorScheme: scheme.copyWith(
+        // 次级文字对比加固：M3 默认 onSurfaceVariant 偏浅（暖色系色板更明显），
+        // 亮色下向 onSurface 拉近 35%（约 8:1 对比）；暗色默认已达标不动
+        onSurfaceVariant: isDark
+            ? scheme.onSurfaceVariant
+            : Color.lerp(scheme.onSurfaceVariant, scheme.onSurface, 0.35)!,
         surface: baseSurface,
         surfaceContainerLowest: cLowest,
         surfaceContainerLow: cLow,
@@ -371,9 +376,12 @@ abstract final class AppTheme {
   }
 
   static TextTheme _textTheme(Brightness b) {
+    // 墨水色按"背景亮度"取反：亮背景用黑墨（.black），暗背景用白墨（.white）。
+    // 0.8.4 曾映射写反——亮色主题全 App 默认文字变白字画浅卡（主页正文不可见），
+    // 已有 DefaultTextStyle 墨水方向的回归测试钉死。
     final base = b == Brightness.dark
-        ? Typography.material2021(platform: TargetPlatform.android).black
-        : Typography.material2021(platform: TargetPlatform.android).white;
+        ? Typography.material2021(platform: TargetPlatform.android).white
+        : Typography.material2021(platform: TargetPlatform.android).black;
     return base.copyWith(
       titleLarge: base.titleLarge?.copyWith(
           fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: 0),

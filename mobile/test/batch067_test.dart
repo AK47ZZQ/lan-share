@@ -108,5 +108,35 @@ void main() {
       final light = AppTheme.light(Palettes.teal);
       expect(light.colorScheme.primary, isNot(AppTheme.light(Palettes.violet).colorScheme.primary));
     });
+
+    testWidgets('默认墨水色方向正确（0.8.4 曾把 Typography 墨水映射写反：'
+        '亮色白字画浅卡=不可见）', (tester) async {
+      late Color lightInk, darkInk;
+      // 必须包 Scaffold：Material 层才会把 theme.textTheme 装配成
+      // DefaultTextStyle（真实页面的环境墨水色）；裸 MaterialApp 拿到的是
+      // 框架 fallback 样式，不代表真实渲染
+      await tester.pumpWidget(MaterialApp(
+          theme: AppTheme.light(Palettes.violet),
+          home: Scaffold(
+              body: Builder(builder: (c) {
+            lightInk = DefaultTextStyle.of(c).style.color!;
+            return const SizedBox.shrink();
+          }))));
+      // Material 用 AnimatedDefaultTextStyle 装配墨色，不等动画结束会采到旧值
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(MaterialApp(
+          theme: AppTheme.dark(Palettes.violet),
+          home: Scaffold(
+              body: Builder(builder: (c) {
+            darkInk = DefaultTextStyle.of(c).style.color!;
+            return const SizedBox.shrink();
+          }))));
+      await tester.pumpAndSettle();
+      // 亮色墨水必须是深的（低亮度），暗色墨水必须是浅的（高亮度）
+      expect(lightInk.computeLuminance(), lessThan(0.3),
+          reason: '亮色主题默认文字必须是深墨');
+      expect(darkInk.computeLuminance(), greaterThan(0.6),
+          reason: '暗色主题默认文字必须是浅墨');
+    });
   });
 }
