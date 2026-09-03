@@ -81,7 +81,7 @@ async function redeem() {
 <template>
   <main class="login-wrap">
     <div class="card login-card">
-      <div class="login-logo"><span class="logo big">◈</span></div>
+      <div class="login-logo"><img class="logo big" src="/static/favicon.svg" alt="LAN Share" /></div>
       <h1>{{ redeeming ? '加入家庭空间' : 'LAN Share' }}</h1>
       <p class="sub">{{ redeeming ? '用邀请码创建你的账号' : '家庭团队网盘' }}</p>
 
@@ -134,7 +134,7 @@ async function redeem() {
 .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
 .login-card { width: min(380px, 92vw); padding: 38px 34px 30px; text-align: center; }
 .login-logo { display: flex; justify-content: center; margin-bottom: 10px; }
-.logo.big { width: 54px; height: 54px; font-size: 26px; border-radius: 16px; }
+.logo.big { width: 54px; height: 54px; border-radius: 16px; display: block; box-shadow: 0 6px 18px rgba(91, 108, 255, .4); }
 .login-card h1 { margin: 0; font-size: 24px; letter-spacing: .3px; }
 .login-card .sub { margin: 4px 0 22px; color: var(--text-3); font-size: 13.5px; }
 .login-card form { display: grid; gap: 11px; text-align: left; }

@@ -65,6 +65,38 @@ def app_latest(_user=Depends(require_user)):
     }
 
 
+def _load_history() -> list:
+    """versions.json → 宽容解析（缺文件/坏条目一律跳过，App 端空列表隐藏栏目）。"""
+    f = SHARE_ROOT / DIST_DIR / "versions.json"
+    if not f.is_file():
+        return []
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    items = data.get("items") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+    out = []
+    for it in items:
+        if not isinstance(it, dict) or not it.get("version"):
+            continue
+        try:
+            build = int(it.get("build"))
+        except (TypeError, ValueError):
+            continue
+        out.append({"version": str(it["version"]), "build": build,
+                    "date": str(it.get("date") or ""),
+                    "notes": str(it.get("notes") or "")})
+    return out
+
+
+@app.get("/api/app/history")
+def app_history(_user=Depends(require_user)):
+    """App 更新历史（App安装包/versions.json，发版时随 notes 一起维护）。"""
+    return {"items": _load_history()}
+
+
 @app.get("/api/app/download")
 def app_download(request: Request, _user=Depends(require_user)):
     data = _load_version()

@@ -1,5 +1,28 @@
 # 更新日志
 
+## 2026-09-04（午后）— v0.9.0+37：检查更新「更新历史」栏目 + 品牌收尾三件套（网页端/二维码）
+
+用户拍板：头脑风暴的 1/2/3 全做、顺手的做，并在检查更新界面下新增"每一次
+版本的更新列举"栏目。本次跨三端（服务端 + Web + App）：
+
+- **[服务端] `/api/app/history` 更新历史端点**：读 `App安装包/versions.json`
+  （发版时随 notes 一起维护的版本列表），宽容解析（缺文件/坏条目→空列表，
+  App 端隐藏栏目）；登录可用。pytest +6（history 契约 4 + QR logo 2），
+  全量 133 绿。**发版纪律升级：发版 = APK + version.json + versions.json
+  三件套都要动。**
+- **[服务端] QR 中心云朵 logo**：`/api/qr` 与 `/api/share/{token}/qr` 收拢
+  到同一 `qr_svg_response()`——ECC 升 Q（25% 冗余）+ 嵌套 `<svg>` 百分比
+  定位注入白底圆角块 + 品牌云朵（parity 与启动图标同源路径）。
+- **[Web]** 登录页与侧栏的旧 `◈` 菱形 logo 全部换成云朵品牌图
+  （`/static/favicon.svg`，单源）；`index.html` 补 og:type/title/description/
+  image 分享卡片 meta（此前缺失；theme-color 已有）。`vite build` 重建 dist。
+- **[App]** 「关于与检查更新」页新增**「更新历史」栏目**：版本号（品牌色）+
+  日期 + 说明逐条列出，`当前`（绿）/`最新`（品牌色）徽章标注；拉取失败
+  静默隐藏。分享二维码弹窗中心加云朵 chip（ECC 同步升 Q）。
+- 验证：pytest 133 全绿、analyze 零问题、Dart 83 全绿（+2 history 解析）；
+  NSSM 重启后线上验证 history 27 条/QR logo/og meta/favicon 全部 ✓；
+  模拟器验收关于页历史栏目渲染；APK 0.9.0+37 分发（sha256 18ccadc1…）。
+
 ## 2026-09-04（晨）— App v0.8.14+36：主页头部铺满适配状态栏 + 品牌资产全家桶（通知图标/favicon）
 
 用户三连需求：图标云朵改回"白边镂空、内部透底"；主页顶部颜色块铺满不留边框

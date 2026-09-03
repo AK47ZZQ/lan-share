@@ -29,6 +29,23 @@ class UpdateInfo {
       size: (j['size'] as num?)?.toInt());
 }
 
+/// 更新历史条目（/api/app/history，服务端 App安装包/versions.json）
+class UpdateHistoryItem {
+  final String version;
+  final int build;
+  final String date;
+  final String notes;
+  UpdateHistoryItem({required this.version, required this.build,
+      required this.date, required this.notes});
+
+  factory UpdateHistoryItem.fromJson(Map<String, dynamic> j) =>
+      UpdateHistoryItem(
+          version: j['version'] as String? ?? '',
+          build: (j['build'] as num?)?.toInt() ?? 0,
+          date: j['date'] as String? ?? '',
+          notes: j['notes'] as String? ?? '');
+}
+
 class UpdateService {
   UpdateService._();
 
@@ -41,6 +58,21 @@ class UpdateService {
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return null;
       rethrow;
+    }
+  }
+
+  /// 更新历史（新版本在前）；未配置/请求失败返回空列表（UI 隐藏栏目）
+  static Future<List<UpdateHistoryItem>> history() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/app/history');
+      final items = (r.data['items'] as List? ?? const [])
+          .map((e) =>
+              UpdateHistoryItem.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      return items;
+    } catch (_) {
+      return [];
     }
   }
 

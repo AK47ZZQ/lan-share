@@ -21,6 +21,8 @@ class _AboutPageState extends State<AboutPage> {
   String? _checkError;
   bool _checking = false;
   double? _progress; // null=未在下载
+  List<UpdateHistoryItem> _history = [];
+  bool _historyLoaded = false;
 
   @override
   void initState() {
@@ -33,6 +35,20 @@ class _AboutPageState extends State<AboutPage> {
         _info = info;
         _server = server;
       });
+    }();
+    // 0.9.0 更新历史：拉取失败静默隐藏栏目（不影响检查更新主流程）
+    () async {
+      try {
+        final items = await UpdateService.history();
+        if (!mounted) return;
+        setState(() {
+          _history = items;
+          _historyLoaded = true;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _historyLoaded = true);
+      }
     }();
   }
 
@@ -79,6 +95,19 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
+  Widget _badge(BuildContext context, String text, Color color) {
+    return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(999)),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                color: color)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final info = _info;
@@ -97,7 +126,8 @@ class _AboutPageState extends State<AboutPage> {
           const SizedBox(height: 4),
           Center(child: Text(
               'v${info?.version ?? '…'} (${info?.buildNumber ?? "…"})',
-              style: TextStyle(color: Theme.of(context).colorScheme.outline))),
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant))),
           const SizedBox(height: 4),
           Center(child: Text('家庭自包含网盘 · ${_server ?? ''}',
               style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)),
@@ -159,6 +189,76 @@ class _AboutPageState extends State<AboutPage> {
                                 : '服务端 APK 未上传')),
                     ],
                   ]))),
+          const SizedBox(height: 16),
+          // 0.9.0 更新历史：每次版本的更新说明（服务端 versions.json 驱动）
+          if (_historyLoaded && _history.isNotEmpty)
+            Card(elevation: 0,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                        color: Theme.of(context).dividerColor, width: 0.5)),
+                child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(children: [
+                            Icon(Icons.history,
+                                size: 17,
+                                color: Theme.of(context).colorScheme.primary),
+                            const SizedBox(width: 6),
+                            Text('更新历史',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(fontSize: 14)),
+                          ]),
+                          const SizedBox(height: 6),
+                          for (final h in _history)
+                            Padding(
+                                padding: const EdgeInsets.only(top: 10),
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(children: [
+                                        Text('v${h.version}',
+                                            style: TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w700,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .primary)),
+                                        const SizedBox(width: 8),
+                                        if (h.date.isNotEmpty)
+                                          Text(h.date,
+                                              style: TextStyle(
+                                                  fontSize: 11.5,
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant)),
+                                        const SizedBox(width: 6),
+                                        if (h.build == localBuild)
+                                          _badge(context, '当前', Colors.green)
+                                        else if (remote != null &&
+                                            h.build == remote.build)
+                                          _badge(context, '最新',
+                                              Theme.of(context)
+                                                  .colorScheme
+                                                  .primary),
+                                      ]),
+                                      if (h.notes.isNotEmpty) ...[
+                                        const SizedBox(height: 3),
+                                        Text(h.notes,
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                height: 1.4,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurfaceVariant)),
+                                      ],
+                                    ])),
+                        ]))),
           const SizedBox(height: 16),
           TextButton.icon(
               icon: const Icon(Icons.policy_outlined, size: 18),

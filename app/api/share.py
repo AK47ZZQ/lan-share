@@ -235,10 +235,8 @@ async def share_qr(token: str, request: Request, _user=Depends(require_user)):
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("host") or request.url.netloc
     url = f"{proto}://{host}/s/{token}"
-    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
-    buf = io.BytesIO()
-    img.save(buf)
-    return Response(content=buf.getvalue(), media_type="image/svg+xml")
+    from app.api.system import qr_svg_response
+    return qr_svg_response(url)
 
 
 @app.get("/api/shares")

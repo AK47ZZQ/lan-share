@@ -149,8 +149,7 @@ label.field { display: grid; gap: 5px; font-size: 13px; color: var(--text-2); }
 }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; letter-spacing: .2px; white-space: nowrap; color: var(--text); text-decoration: none; }
 .logo {
-  width: 30px; height: 30px; border-radius: 9px; background: var(--grad);
-  display: grid; place-items: center; color: #fff; font-size: 15px;
+  width: 30px; height: 30px; border-radius: 9px; display: block;
   box-shadow: 0 4px 12px rgba(91, 108, 255, .4);
 }
 nav.tabs { display: flex; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }

@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../theme/app_theme.dart';
+
 class QrDialog extends StatelessWidget {
   final String url;
   final String title;
@@ -13,15 +15,28 @@ class QrDialog extends StatelessWidget {
     return AlertDialog(
         title: Text(title, style: const TextStyle(fontSize: 16)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                  color: Colors.white, borderRadius: BorderRadius.circular(8)),
-              child: QrImageView(
-                  data: url,
-                  version: QrVersions.auto,
-                  size: 220.0,
-                  backgroundColor: Colors.white)),
+          // 0.9.0：中心云朵 logo（ECC 升 Q 保 25% 冗余）；与服务端
+          // /api/qr 出的中心 logo 同一品牌语言
+          Stack(alignment: Alignment.center, children: [
+            Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8)),
+                child: QrImageView(
+                    data: url,
+                    version: QrVersions.auto,
+                    size: 220.0,
+                    errorCorrectionLevel: QrErrorCorrectLevel.Q,
+                    backgroundColor: Colors.white)),
+            Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(10)),
+                child: const Icon(Brand.cloud,
+                    size: 30, color: Color(0xFF5B6CFF))),
+          ]),
           const SizedBox(height: 10),
           SelectableText(url,
               textAlign: TextAlign.center,
