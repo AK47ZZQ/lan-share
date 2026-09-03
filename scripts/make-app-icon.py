@@ -34,9 +34,10 @@ CLOUD_OUTLINE = ("M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04
 CLOUD_SOLID = CLOUD_OUTLINE.split("M19 18")[0]
 
 CORNER = 90        # 遗留图标圆角半径（512 母版）
-TILE_FRAC = 0.62   # 圆角块边长占画布比例（登录页品牌头同款结构）
-CLOUD_IN_TILE = 0.56  # 云朵宽占圆角块边长比例（截图目测 ~55%）
-TILE_RADIUS = 0.28    # 圆角块圆角占其边长比例（登录页 cloudTileRadius 20/72）
+TILE_FRAC = 1.00   # 圆角块全幅覆盖（0.62 时四周露渐变"边框"——用户指出后改满）
+CLOUD_IN_TILE = 0.35  # 云朵宽占块边长比例（用户定版：回原比例，小一点好看）
+CLOUD_ALPHA = 145     # 云朵不透明度（≈57%，半透明磨砂——与圆角块同一语言）
+TILE_RADIUS = 0.176   # 块圆角占其边长（=遗留 CORNER 90/512，角部对齐不露边）
 MONO_FRAC = 0.42      # monochrome 实心云占画布比例
 
 # 密度 → (遗留 px[48dp], 自适应前景 px[108dp])
@@ -158,19 +159,21 @@ def draw_cloud_outline(canvas: Image.Image, box: tuple[int, int, int, int]) -> N
     canvas.paste(white, (0, 0), mask)
 
 
-def draw_cloud_solid(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
-    """实心云朵（仅外轮廓），monochrome 用。"""
+def draw_cloud_solid(canvas: Image.Image, box: tuple[int, int, int, int],
+                     alpha: int = 255) -> None:
+    """实心云朵（仅外轮廓）。注意：调用方须把 canvas 当独立透明层画好后
+    alpha_composite——直接写在有底色的画布上会替换而非叠加半透明。"""
     x0, y0, x1, y1 = box
     side = min(x1 - x0, y1 - y0)
     scale = side / 24.0
     ox = (x0 + x1) / 2 - 12 * scale
     oy = (y0 + y1) / 2 - 12 * scale
     poly = _scaled(parse_path(CLOUD_SOLID)[0], scale, ox, oy)
-    ImageDraw.Draw(canvas).polygon(poly, fill=WHITE)
+    ImageDraw.Draw(canvas).polygon(poly, fill=WHITE + (alpha,))
 
 
 def brand_mark(size: int, bg_image: Image.Image | None = None) -> Image.Image:
-    """品牌标：渐变（或透明）底 + 半透明白圆角块 + 描边云朵。"""
+    """品牌标：渐变（或透明）底 + 全幅半透明白圆角块 + 半透明磨砂云朵。"""
     im = bg_image.convert("RGBA") if bg_image is not None \
         else Image.new("RGBA", (size, size), (0, 0, 0, 0))
     layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -183,10 +186,13 @@ def brand_mark(size: int, bg_image: Image.Image | None = None) -> Image.Image:
                         fill=WHITE + (TILE_ALPHA,))
     # 圆角块内不能替换底色，须整体 alpha 合成到画布
     im = Image.alpha_composite(im, layer)
+    # 云朵同为半透明：独立层绘制后合成（直接画会替换底色像素）
     cw = round(CLOUD_IN_TILE * tile)
-    draw_cloud_outline(im, (cx - cw // 2, cy - cw // 2,
-                            cx - cw // 2 + cw, cy - cw // 2 + cw))
-    return im
+    cloud = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw_cloud_solid(cloud, (cx - cw // 2, cy - cw // 2,
+                             cx - cw // 2 + cw, cy - cw // 2 + cw),
+                     alpha=CLOUD_ALPHA)
+    return Image.alpha_composite(im, cloud)
 
 
 def rounded(im: Image.Image, radius: int) -> Image.Image:
