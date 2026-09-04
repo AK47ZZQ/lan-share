@@ -573,6 +573,9 @@ class _MePageState extends ConsumerState<MePage> {
                 ]));
     if (ok != true) return;
     await AuthCacheManager.I.emptyCache();
+    // 负缓存一并放行：否则已记失败的缩略图 10 分钟内仍是坏图图标，
+    // 与"清理后重新下载缩略图"的承诺不符（review 0.12.0 P3）
+    AuthCacheManager.I.clearFailureCache();
     await _loadCacheSize();
     _toast('已清理');
   }

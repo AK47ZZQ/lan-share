@@ -50,6 +50,19 @@ class _Semaphore {
   }
 }
 
+/// 图片拉取失败的类型化异常：statusCode 可空（超时/断网等非 HTTP 失败）。
+/// 负缓存（AuthImage）据它区分"服务端稳定出不了图"（404/重试后仍 5xx，
+/// 可负缓存）与"瞬时故障"（401/429/网络异常，不记——否则 token 过期
+/// 一瞬间会把整屏缩略图固化成 10 分钟坏图）。
+class ImageFetchException implements Exception {
+  final int? statusCode;
+  ImageFetchException(this.statusCode);
+  @override
+  String toString() => statusCode == null
+      ? 'image fetch failed'
+      : 'image fetch HTTP $statusCode';
+}
+
 class AuthFileService extends FileService {
   final http.Client _client = IOClient(TrustStore.createHttpClient());
   final _semaphore = _Semaphore(8);
@@ -103,7 +116,7 @@ class AuthFileService extends FileService {
     }
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       await resp.stream.drain<void>();
-      throw Exception('image fetch HTTP ${resp.statusCode}');
+      throw ImageFetchException(resp.statusCode);
     }
     return HttpGetResponse(resp);
   }
@@ -127,6 +140,34 @@ class AuthCacheManager extends CacheManager {
   }
 
   void rememberResolved(String url, File f) => _resolved[url] = f;
+
+  // ── 会话级失败负缓存（0.12.0 文件页缩略图扩面后引入）──────────
+  // 服务端对损坏媒体/缺解码器（如 HEIC 无 heif 插件）会稳定 404/500，
+  // 客户端对 5xx 还有 1.5s 重试——文件页任意目录都出缩略图后，坏格子
+  // 在滚动往返中每次重挂载都重复"2 次请求 + 最坏 50s 占用信号量槽"，
+  // 会饿死照片墙共用通道。失败 URL 记入，TTL 过期自动放行重试
+  // （服务端文件被替换修复后最多 10 分钟自愈）。
+  static const _failTtl = Duration(minutes: 10);
+  final _failed = <String, DateTime>{};
+
+  bool isFailed(String url) {
+    final t = _failed[url];
+    if (t == null) return false;
+    if (DateTime.now().difference(t) > _failTtl) {
+      _failed.remove(url);
+      return false;
+    }
+    return true;
+  }
+
+  void markFailed(String url) => _failed[url] = DateTime.now();
+
+  /// 主动放行单个 URL 重试（查看器"重试"按钮用）
+  void clearFailed(String url) => _failed.remove(url);
+
+  /// 登出/换号时整体清空：负缓存 URL 不含账号，服务端按可见性返回 404，
+  /// 账号 A 无权看（被记 404）的路径换账号 B 后可能可看（review 0.12.0 P2）
+  void clearFailureCache() => _failed.clear();
 
   AuthCacheManager._()
       : super(Config('authCachedImageData', fileService: AuthFileService(),

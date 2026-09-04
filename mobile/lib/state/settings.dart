@@ -13,6 +13,7 @@ class AppSettings {
   final bool notifyTransferDone;
   final String filesSort; // name | modified | size
   final bool filesAsc;
+  final bool filesGrid; // 文件页布局：true=方形网格 / false=横向列表（v0.12，Web 同款）
   final List<String> pinnedDirs; // 常用目录（相对路径，'' 根不可钉）
 
   const AppSettings({
@@ -23,6 +24,7 @@ class AppSettings {
     this.notifyTransferDone = true,
     this.filesSort = 'name',
     this.filesAsc = true,
+    this.filesGrid = false,
     this.pinnedDirs = const [],
   });
 }
@@ -44,6 +46,7 @@ class SettingsController extends StateNotifier<AppSettings> {
       notifyTransferDone: sp.getBool('notify_transfer_done') ?? true,
       filesSort: sp.getString('files_sort') ?? 'name',
       filesAsc: sp.getBool('files_asc') ?? true,
+      filesGrid: sp.getBool('files_grid') ?? false,
       pinnedDirs: sp.getStringList('files_pinned_dirs') ?? const [],
     );
   }
@@ -86,6 +89,13 @@ class SettingsController extends StateNotifier<AppSettings> {
     await sp.setBool('files_asc', state.filesAsc);
   }
 
+  /// 文件页布局切换（方形网格 / 横向列表），与排序同款持久化
+  Future<void> setFilesGrid(bool v) async {
+    state = _copy(filesGrid: v);
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool('files_grid', v);
+  }
+
   Future<void> togglePinnedDir(String path) async {
     final cur = List<String>.of(state.pinnedDirs);
     cur.contains(path) ? cur.remove(path) : cur.add(path);
@@ -96,7 +106,7 @@ class SettingsController extends StateNotifier<AppSettings> {
 
   AppSettings _copy({ThemeMode? themeMode, bool? amoledDark, String? accent,
       bool? appLock, bool? notifyTransferDone, String? filesSort, bool? filesAsc,
-      List<String>? pinnedDirs}) =>
+      bool? filesGrid, List<String>? pinnedDirs}) =>
       AppSettings(
           themeMode: themeMode ?? state.themeMode,
           amoledDark: amoledDark ?? state.amoledDark,
@@ -105,6 +115,7 @@ class SettingsController extends StateNotifier<AppSettings> {
           notifyTransferDone: notifyTransferDone ?? state.notifyTransferDone,
           filesSort: filesSort ?? state.filesSort,
           filesAsc: filesAsc ?? state.filesAsc,
+          filesGrid: filesGrid ?? state.filesGrid,
           pinnedDirs: pinnedDirs ?? state.pinnedDirs);
 }
 

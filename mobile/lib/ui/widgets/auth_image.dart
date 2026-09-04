@@ -31,6 +31,13 @@ class _AuthImageState extends State<AuthImage> {
   }
 
   void _resolve() {
+    // 负缓存命中（0.12.0）：本会话已稳定失败的 URL 直接走错误分支，
+    // 不再重复请求打共享缩略图通道
+    if (AuthCacheManager.I.isFailed(widget.url)) {
+      _instant = null;
+      _future = Future.error('negative-cache');
+      return;
+    }
     _instant = AuthCacheManager.I.peekResolved(widget.url);
     if (_instant != null) {
       _future = Future.value(_instant);
@@ -40,6 +47,16 @@ class _AuthImageState extends State<AuthImage> {
           .then((f) {
             AuthCacheManager.I.rememberResolved(widget.url, f);
             return f;
+          }, onError: (Object e) {
+            // 只把"服务端稳定出不了图"记入负缓存：404（无缩略图/不可见）
+            // 与 5xx（损坏媒体/缺解码器，内部已重试过一次）。401/429/断网/
+            // 超时是瞬时故障，不记——否则 token 过期瞬间整屏缩略图会被
+            // 固化成 10 分钟坏图（review 0.12.0 P1）
+            final sc = e is ImageFetchException ? e.statusCode : null;
+            if (sc == 404 || (sc != null && sc >= 500)) {
+              AuthCacheManager.I.markFailed(widget.url);
+            }
+            throw e;
           });
     }
   }

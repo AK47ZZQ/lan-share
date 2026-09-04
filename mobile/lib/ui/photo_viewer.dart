@@ -11,13 +11,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/auth_cache.dart';
 import '../data/api/media_proxy.dart';
 import '../data/net.dart';
 import '../state/session.dart' show sessionProvider;
 import '../transfer/transfer_engine.dart';
+import '../transfer/transfer_task.dart';
 import 'photo_models.dart';
 import 'share_create_sheet.dart';
 import 'widgets/auth_image.dart';
+import 'widgets/open_local.dart';
 
 class PhotoViewerPage extends ConsumerStatefulWidget {
   final String base;
@@ -123,8 +126,11 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _row('类型', it.isVideo ? '视频' : '照片'),
-                      _row('拍摄日期', it.taken.isEmpty ? '-' : it.taken),
-                      _row('来源', it.uploader),
+                      // 文件页入口（uploader 为空）的 taken 实为文件修改时间，
+                      // 标签随入口切换；来源空段不渲染
+                      _row(it.uploader.isEmpty ? '修改时间' : '拍摄日期',
+                          it.taken.isEmpty ? '-' : it.taken),
+                      if (it.uploader.isNotEmpty) _row('来源', it.uploader),
                       if (it.isVideo && it.durationLabel.isNotEmpty)
                         _row('时长', it.durationLabel),
                       const SizedBox(height: 6),
@@ -137,6 +143,26 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                       onPressed: () => Navigator.pop(dctx),
                       child: const Text('关闭')),
                 ]));
+  }
+
+  /// 预览 URL 单一事实源：显示与"重试放行负缓存"共用，改档位/路径
+  /// 格式只动这里（review 0.12.0 P2——两份手写字符串迟早漂移）。
+  /// 公网弱网加固：1280 原图档在蜂窝下太慢，退 960 档（手机屏仍清晰）。
+  /// cacheKey（文件页入口=modified）追加 &v= 破同名覆盖后的陈旧缓存
+  String _previewUrl(PhotoItem p) {
+    var url = '${widget.base}/preview/${encPath(p.path)}?w='
+        '${isPublicAddress(widget.base) ? 960 : 1280}';
+    final v = p.cacheKey;
+    if (v != null && v.isNotEmpty) {
+      url += '&v=${Uri.encodeComponent(v)}';
+    }
+    return url;
+  }
+
+  /// 底部状态行：拍摄日期 / 上传者 任意缺省就跳过该段，两段都在才拼接
+  String _statusLine(PhotoItem it) {
+    final parts = [if (it.taken.isNotEmpty) it.taken, if (it.uploader.isNotEmpty) it.uploader];
+    return parts.isEmpty ? it.name : parts.join('  ·  ');
   }
 
   Widget _row(String k, String v) => Padding(
@@ -173,6 +199,23 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                 tooltip: '删除',
                 icon: const Icon(Icons.delete_outline),
                 onPressed: _deleteCurrent),
+          // 0.12.0：该文件已有下载完成的本地副本时，可一键交给系统应用打开
+          ListenableBuilder(
+              listenable: TransferEngine.I,
+              builder: (context, _) {
+                final done = TransferEngine.I.tasks
+                    .where((t) =>
+                        t.kind == TransferKind.download &&
+                        t.remotePath == it.path &&
+                        t.status == TransferStatus.done)
+                    .toList();
+                if (done.isEmpty) return const SizedBox.shrink();
+                return IconButton(
+                    tooltip: '用其他应用打开（已下载）',
+                    icon: const Icon(Icons.open_in_new),
+                    onPressed: () =>
+                        openLocalFile(context, done.last.localPath));
+              }),
           IconButton(
               tooltip: '下载原图',
               icon: const Icon(Icons.download_outlined),
@@ -213,10 +256,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                             tag: 'ph-${p.path}',
                             child: AuthImage(
                               key: ValueKey('viewer-${p.path}-$_imgRetry'),
-                              // 公网弱网加固：1280 原图档在蜂窝下太慢，
-                              // 公网入口退到 960 档（手机屏上仍清晰）
-                              url: '${widget.base}/preview/${encPath(p.path)}?w='
-                                  '${isPublicAddress(widget.base) ? 960 : 1280}',
+                              url: _previewUrl(p),
                               fit: BoxFit.contain,
                               // 防黑屏闪烁：先用照片墙已缓存的缩略图垫底
                               // （磁盘秒出），高清在底图上渐进显现
@@ -234,8 +274,14 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                                             fontSize: 12)),
                                     const SizedBox(height: 4),
                                     TextButton.icon(
-                                        onPressed: () => setState(
-                                            () => _imgRetry++),
+                                        onPressed: () {
+                                          // 先放行负缓存再换 key 重试，否则
+                                          // 命中负缓存秒回错误、重试形同虚设
+                                          // （review 0.12.0 P2）
+                                          AuthCacheManager.I
+                                              .clearFailed(_previewUrl(p));
+                                          setState(() => _imgRetry++);
+                                        },
                                         icon: const Icon(Icons.refresh,
                                             size: 18),
                                         label: const Text('重试')),
@@ -262,7 +308,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
               padding: const EdgeInsets.only(left: 14, right: 4, top: 4, bottom: 4),
               child: Row(children: [
                 Expanded(
-                  child: Text('${it.taken}  ·  ${it.uploader}',
+                  // 0.12.0：文件页入口进来 uploader 为空（/api/files 无归属
+                  // 字段），空段不渲染，避免孤零零的 " · " 分隔点
+                  child: Text(_statusLine(it),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white60, fontSize: 12)),
@@ -337,12 +385,19 @@ class _VideoPageState extends State<_VideoPage> {
   Future<void> _start() async {
     try {
       final url = await MediaProxy.I.urlFor(widget.item.path);
+      // 翻页动画期间页面可能已销毁：此刻再建控制器会泄漏、play 会
+      // 打在已 dispose 的控制器上，catch 又会误杀共享代理（对抗审查 P2）
+      if (!mounted) return;
       final c = VideoPlayerController.networkUrl(Uri.parse(url));
       _ctrl = c;
       await c.initialize();
+      if (!mounted) return;
       await c.play();
       if (mounted) setState(() {});
     } catch (_) {
+      // 页面已销毁：不动共享代理（可能正在给下一页供流），
+      // 也不再碰已随 State 释放的控制器
+      if (!mounted) return;
       // 公网弱网加固：回源 socket 可能已僵死——重试前重置代理并释放
       // 旧控制器，否则"重试"永远复用同一个坏连接
       // ignore: discarded_futures

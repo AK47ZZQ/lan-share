@@ -64,6 +64,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final base = await Prefs.lastAddress();
       if (mounted) setState(() => _base = base);
     }();
+    // 会话内切换主/备隧道时同步 _base（对抗审查 P1：本页在 IndexedStack
+    // 里不重建，缩略图/预览器会永久打旧地址）
+    Prefs.addressNotifier.addListener(_onAddressChanged);
     _loadMore();
     _loadAlbums();
     _ensureMonths();   // 年月快滚轴数据源（v0.11），失败静默
@@ -343,8 +346,14 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     return '${p[0]} 年 ${int.parse(p[1])} 月';
   }
 
+  void _onAddressChanged() {
+    final b = Prefs.addressNotifier.value;
+    if (mounted && b.isNotEmpty && b != _base) setState(() => _base = b);
+  }
+
   @override
   void dispose() {
+    Prefs.addressNotifier.removeListener(_onAddressChanged);
     _backupWatch?.cancel();
     _pulse?.cancel();
     _scroll.dispose();

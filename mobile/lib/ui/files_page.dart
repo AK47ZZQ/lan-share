@@ -3,25 +3,32 @@
 // 0.6.0：长按多选（下载/删除/移动/复制/单文件分享）、新建文件夹、重命名、
 //        删除（进服务端回收站）、排序切换、常用目录钉住、文件详情；
 //        移动/复制走 /api/move 与 0.6.0 新增的 /api/copy（目的地选 DirPickerPage）。
+// 0.12.0：Web 同款双布局（▦ 方形网格 / ☰ 横向列表，settings 持久化）、
+//         图片/视频 /thumb/ 缩略图（AuthImage 鉴权+磁盘缓存，失败回退类型图标）、
+//         点可预览文件直接进全屏预览器（当前目录可预览项作相邻翻页范围）。
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
+import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
+import 'widgets/open_local.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'dir_picker_page.dart';
+import 'photo_models.dart';
+import 'photo_viewer.dart';
 import 'recent_page.dart';
 import 'share_create_sheet.dart';
 import 'trash_page.dart';
@@ -48,6 +55,18 @@ class Entry {
       sizeHuman: j['size_human'] as String? ?? '',
       modified: j['modified'] as String? ?? '',
       ext: j['ext'] as String?);
+
+  // 与服务端 /thumb/ 的 IMG_EXTS | VID_EXTS 对齐（files.py:739），
+  // 集合外的类型服务端不出缩略图，客户端直接走类型图标不发请求
+  static const _imgExts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
+      '.heic', '.heif'};
+  static const _vidExts = {'.mp4', '.mkv', '.mov', '.webm', '.avi'};
+
+  bool get isImage =>
+      !isDir && _imgExts.contains((ext ?? '').toLowerCase());
+  bool get isVideo =>
+      !isDir && _vidExts.contains((ext ?? '').toLowerCase());
+  bool get previewable => isImage || isVideo;
 }
 
 class _Dir {
@@ -59,12 +78,9 @@ class _Dir {
 IconData _iconOf(Entry e) {
   if (e.isDir) return e.isPrivateRoot ? Icons.lock : Icons.folder;
   final ext = (e.ext ?? '').toLowerCase();
-  if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.heif'].contains(ext)) {
-    return Icons.image_outlined;
-  }
-  if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].contains(ext)) {
-    return Icons.movie_outlined;
-  }
+  // 扩展名集合与 Entry._imgExts/_vidExts 同源（review 0.12.0：单一事实源）
+  if (Entry._imgExts.contains(ext)) return Icons.image_outlined;
+  if (Entry._vidExts.contains(ext)) return Icons.movie_outlined;
   if (['.mp3', '.flac', '.wav', '.m4a'].contains(ext)) return Icons.music_note;
   if (['.zip', '.7z', '.rar'].contains(ext)) return Icons.archive_outlined;
   if (ext == '.pdf') return Icons.picture_as_pdf_outlined;
@@ -90,11 +106,31 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   bool _picking = false; // 选文件互斥（SAF 面板可能很慢）
   bool _deleting = false;
   final _selected = <String>{}; // 多选模式：当前目录内条目 path
+  // 服务器地址（缩略图 URL 与预览器 base）。initState 异步取首值，此后
+  // 监听 Prefs.addressNotifier——会话内切换主/备隧道时同步。本页挂在
+  // IndexedStack 里不重建，不监听就会永久打旧地址（对抗审查 P1）
+  String? _base;
 
   @override
   void initState() {
     super.initState();
+    () async {
+      final b = await Prefs.lastAddress();
+      if (mounted) setState(() => _base = b);
+    }();
+    Prefs.addressNotifier.addListener(_onAddressChanged);
     _push('');
+  }
+
+  void _onAddressChanged() {
+    final b = Prefs.addressNotifier.value;
+    if (mounted && b.isNotEmpty && b != _base) setState(() => _base = b);
+  }
+
+  @override
+  void dispose() {
+    Prefs.addressNotifier.removeListener(_onAddressChanged);
+    super.dispose();
   }
 
   String get _path => _stack.isEmpty ? '' : _stack.last.path;
@@ -120,6 +156,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   // ── 导航 ──────────────────────────────────────────────────
 
+  String? _failedPath; // 最近一次加载失败的目标路径（错误视图"重试"用）
+
   Future<void> _push(String path) async {
     if (_loading) return;
     setState(() {
@@ -136,9 +174,13 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       });
     } catch (_) {
       if (!mounted) return;
+      // 记下失败目标：错误视图"重试"必须重试它而不是栈顶（对抗审查 P2：
+      // 旧实现重试 _path 会把"当前目录"重复压栈，面包屑出现重复项且
+      // 用户真正想进的目录被丢失）
       setState(() {
         _loading = false;
         _error = '目录加载失败';
+        _failedPath = path;
       });
     }
   }
@@ -162,7 +204,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       setState(() {
         if (_stack.isNotEmpty) _stack.last = _Dir(target, items);
         _selected.clear();
+        // AppBar"刷新"也复位错误态（对抗审查 P2：此前成功也不清，
+        // 错误视图永驻；失败则静默）
+        _error = null;
       });
+      // 刷新成功顺手放行本目录缩略图负缓存：服务端/文件修复后下拉
+      // 即自愈，不必干等 10 分钟 TTL（对抗审查 P3）
+      if (_base != null) {
+        for (final e in items) {
+          if (e.previewable) AuthCacheManager.I.clearFailed(_thumbUrl(e)!);
+        }
+      }
     } catch (_) {}
   }
 
@@ -174,6 +226,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         _stack.removeLast();
       }
       _selected.clear();
+      _error = null; // 回退到已知有效的栈内目录，退出错误视图
     });
   }
 
@@ -246,15 +299,22 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         builder: (_) => DirPickerPage(title: copy ? '复制到…' : '移动到…')));
     if (dest == null || !mounted) return;
     final dio = await ApiClient.I.dio();
-    final r = await (copy
-        ? dio.post('/api/copy', data: {
-            'sources': items.map((e) => e.path).toList(),
-            'dest_dir': dest,
-          })
-        : dio.post('/api/move', data: {
-            'sources': items.map((e) => e.path).toList(),
-            'dest_dir': dest,
-          }));
+    dynamic r;
+    try {
+      r = await (copy
+          ? dio.post('/api/copy', data: {
+              'sources': items.map((e) => e.path).toList(),
+              'dest_dir': dest,
+            })
+          : dio.post('/api/move', data: {
+              'sources': items.map((e) => e.path).toList(),
+              'dest_dir': dest,
+            }));
+    } catch (e) {
+      // 断网/服务端 5xx 时静默失败连刷新都不做，用户会以为成功（review 0.12.0 P2）
+      _toast('${copy ? "复制" : "移动"}失败：${_detail(e)}');
+      return;
+    }
     if (!mounted) return;
     final results = (r.data['results'] as List? ?? const [])
         .whereType<Map>()
@@ -499,7 +559,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                         style: const TextStyle(fontSize: 11)),
                     onTap: () {
                       Navigator.pop(ctx);
-                      OpenFilex.open(downloaded.first.localPath);
+                      // ignore: discarded_futures
+                      openLocalFile(context, downloaded.last.localPath);
                     }),
               if (canManage) ...[
                 ListTile(
@@ -619,6 +680,54 @@ class _FilesPageState extends ConsumerState<FilesPage> {
             ])));
   }
 
+  // ── 预览（0.12.0，Web 同款：点可预览文件直接进全屏查看器）──
+
+  bool _opening = false; // 防重入：快速双击会 push 两个 viewer
+
+  /// 可预览文件点击直接进预览器；预览器内左右滑在「当前目录全部可预览
+  /// 文件」间翻页（Web FileViewer navItems 同款范围）。返回 true=已删除，
+  /// 列表随之刷新。不可预览类型保持弹操作菜单。
+  Future<void> _openFile(Entry e) async {
+    if (_opening) return;
+    if (!e.previewable || _base == null) {
+      // ignore: discarded_futures
+      _fileSheet(e);
+      return;
+    }
+    _opening = true;
+    try {
+      final items =
+          _sorted.where((x) => x.previewable).map(_toPhotoItem).toList();
+      var idx = items.indexWhere((p) => p.path == e.path);
+      if (idx < 0) idx = 0; // 理论不可达（e 本身可预览），防御性兜底
+      final deleted = await Navigator.push<bool>(context, MaterialPageRoute(
+          builder: (_) =>
+              PhotoViewerPage(base: _base!, items: items, initial: idx)));
+      if (deleted == true) await _refresh();
+    } finally {
+      _opening = false;
+    }
+  }
+
+  PhotoItem _toPhotoItem(Entry e) => PhotoItem(
+      path: e.path,
+      name: e.name,
+      taken: e.modified.split('T').first,
+      month: '',
+      uploader: '',
+      mediaType: e.isVideo ? 'video' : 'photo',
+      cacheKey: e.modified);
+
+  /// 缩略图 URL：图/视频且服务器地址已就绪才出（AuthImage 鉴权+磁盘缓存，
+  /// 与照片墙同一条 /thumb/ 通道）。null=显示类型图标，不发请求。
+  /// ?v=modified：同名覆盖后 URL 变化，绕开客户端 180 天磁盘缓存陈旧
+  /// （服务端 FastAPI 忽略未知 query 参数，零服务端改动；对抗审查 P2）
+  String? _thumbUrl(Entry e) {
+    if (!e.previewable || _base == null) return null;
+    return '${_base!}/thumb/${encPath(e.path)}?v='
+        '${Uri.encodeComponent(e.modified)}';
+  }
+
   // ── 多选批量操作 ──────────────────────────────────────────
 
   void _toggleSelect(Entry e) {
@@ -728,6 +837,14 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     icon: const Icon(Icons.create_new_folder_outlined),
                     onPressed: canManage ? _mkdir : null),
                 IconButton(
+                    tooltip: settings.filesGrid ? '切换为列表视图' : '切换为网格视图',
+                    icon: Icon(settings.filesGrid
+                        ? Icons.view_list_outlined
+                        : Icons.grid_view_outlined),
+                    onPressed: () => ref
+                        .read(settingsProvider.notifier)
+                        .setFilesGrid(!settings.filesGrid)),
+                IconButton(
                     tooltip: '排序', icon: const Icon(Icons.sort), onPressed: _sortMenu),
                 PopupMenuButton<String>(
                     onSelected: (v) {
@@ -779,14 +896,15 @@ class _FilesPageState extends ConsumerState<FilesPage> {
               Expanded(
                 child: _loading
                     ? const Center(child: CircularProgressIndicator())
-                    : _error != null
-                        ? ListView(children: [
-                            const SizedBox(height: 120),
-                            Center(child: Text(_error!)),
-                            Center(child: TextButton(
-                                onPressed: () => _push(_path),
-                                child: const Text('重试'))),
-                          ])
+                        : _error != null
+                            ? ListView(children: [
+                                const SizedBox(height: 120),
+                                Center(child: Text(_error!)),
+                                Center(child: TextButton(
+                                    onPressed: () =>
+                                        _push(_failedPath ?? _path),
+                                    child: const Text('重试'))),
+                              ])
                         : RefreshIndicator(
                             onRefresh: _refresh,
                             child: _current.isEmpty
@@ -794,7 +912,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                                     SizedBox(height: 140),
                                     Center(child: Text('此目录为空')),
                                   ])
-                                : _buildList(settings),
+                                : _buildBody(settings),
                           ),
               ),
             ]),
@@ -802,39 +920,88 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     );
   }
 
-  Widget _buildList(AppSettings settings) {
+  /// 双布局（0.12.0 Web 同款）：常用目录区两种布局共用（置顶），条目区
+  /// 按设置在方形网格 / 横向列表间切换。CustomScrollView 统一承载，
+  /// 网格/列表都是 Sliver 虚拟化（0.4.4 shrinkWrap 全量构建的教训不再犯）。
+  Widget _buildBody(AppSettings settings) {
     final items = _sorted;
     final pinned = _path.isEmpty
         ? settings.pinnedDirs.where((p) => p.isNotEmpty).toList()
         : const <String>[];
-    return ListView(children: [
+    return CustomScrollView(slivers: [
       if (pinned.isNotEmpty) ...[
-        const Padding(
-            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Text('常用目录',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold))),
-        for (final p in pinned)
-          ListTile(
-              dense: true,
-              leading: const Icon(Icons.star, size: 20),
-              title: Text(p.split('/').last,
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
-              trailing: IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: '移除常用',
-                  onPressed: () => ref
-                      .read(settingsProvider.notifier)
-                      .togglePinnedDir(p)),
-              onTap: () => _push(p)),
-        const Divider(height: 1),
+        SliverToBoxAdapter(
+            child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text('常用目录',
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.bold)))),
+        SliverList(
+            delegate: SliverChildBuilderDelegate(
+                (context, i) => _pinnedRow(pinned[i]),
+                childCount: pinned.length)),
+        const SliverToBoxAdapter(child: Divider(height: 1)),
       ],
-      for (var i = 0; i < items.length; i++) _row(items[i]),
-      const SizedBox(height: 88), // FAB 底部留白
+      if (settings.filesGrid)
+        SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            sliver: SliverGrid(
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                // 宽屏（平板/横屏）加列；手机竖屏 3 列与 Web 网格观感一致
+                crossAxisCount: _gridColumns,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 0.72,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                  (context, i) => _gridCard(items[i]),
+                  childCount: items.length),
+            ))
+      else
+        SliverList(
+            delegate: SliverChildBuilderDelegate((context, i) => _row(items[i]),
+                childCount: items.length)),
+      const SliverToBoxAdapter(child: SizedBox(height: 88)), // FAB 底部留白
     ]);
   }
 
+  int get _gridColumns {
+    final w = MediaQuery.of(context).size.width;
+    return w >= 640 ? 5 : w >= 440 ? 4 : 3;
+  }
+
+  Widget _pinnedRow(String p) => ListTile(
+      dense: true,
+      leading: const Icon(Icons.star, size: 20),
+      title: Text(p.split('/').last,
+          maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: IconButton(
+          icon: const Icon(Icons.close, size: 18),
+          tooltip: '移除常用',
+          onPressed: () =>
+              ref.read(settingsProvider.notifier).togglePinnedDir(p)),
+      onTap: () => _push(p));
+
+  /// 缩略图有则显示（Cover 裁切），失败/无则回退品牌类型图标——
+  /// 与 Web「缩略图优先、图标兜底」同款策略
+  Widget _leading(Entry e) {
+    final thumb = _thumbUrl(e);
+    if (thumb != null) {
+      return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+              width: 40,
+              height: 40,
+              child: AuthImage(url: thumb,
+                  fit: BoxFit.cover,
+                  // 瞬时失败不闪红：静默回退类型图标（Web 同款占位）
+                  errorBuilder: (_, _) => _iconFallback(e))));
+    }
+    return _iconFallback(e);
+  }
+
   /// 0.8.4 品牌化图标：目录=色块+文件夹；文件=类型色圆角方块（FileTypeTile）
-  Widget _leadingIcon(Entry e) {
+  Widget _iconFallback(Entry e) {
     final cs = Theme.of(context).colorScheme;
     if (e.isDir) {
       final isPriv = e.isPrivateRoot;
@@ -861,7 +1028,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       leading: selected
           ? Icon(Icons.check_circle,
               color: Theme.of(context).colorScheme.primary)
-          : _leadingIcon(e),
+          : _leading(e),
       title: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: e.isDir
           ? null
@@ -880,7 +1047,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           _push(e.path);
         } else {
           // ignore: discarded_futures
-          _fileSheet(e);
+          _openFile(e);
         }
       },
       onLongPress: () {
@@ -893,6 +1060,129 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         }
       },
     );
+  }
+
+  // ── 方形网格卡片（0.12.0 Web 同款 fgrid）──────────────────
+
+  Widget _gridCard(Entry e) {
+    final selected = _selected.contains(e.path);
+    final cs = Theme.of(context).colorScheme;
+    final thumb = _thumbUrl(e);
+    final radius = BorderRadius.circular(14);
+    return InkWell(
+        onTap: () {
+          if (_selecting) {
+            _toggleSelect(e);
+          } else if (e.isDir) {
+            _push(e.path);
+          } else {
+            // ignore: discarded_futures
+            _openFile(e);
+          }
+        },
+        onLongPress: () {
+          if (_selecting) return;
+          // ignore: discarded_futures
+          e.isDir ? _dirSheet(e) : _toggleSelect(e);
+        },
+        borderRadius: radius,
+        child: Container(
+            decoration: BoxDecoration(
+                borderRadius: radius,
+                border: Border.all(
+                    color: selected ? cs.primary : Colors.transparent,
+                    width: 2)),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                      child: Stack(fit: StackFit.expand, children: [
+                    ClipRRect(
+                        borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(12)),
+                        child: thumb != null
+                            ? AuthImage(
+                                url: thumb,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _) => _gridIcon(e))
+                            : _gridIcon(e)),
+                    // 视频角标：网格里不点开也能认出是视频
+                    if (e.isVideo && thumb != null)
+                      Positioned(
+                          right: 6,
+                          bottom: 6,
+                          child: Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.55),
+                                  shape: BoxShape.circle),
+                              child: const Icon(Icons.play_arrow_rounded,
+                                  size: 16, color: Colors.white))),
+                    if (selected)
+                      Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Icon(Icons.check_circle,
+                              size: 22,
+                              color: cs.primary,
+                              shadows: const [
+                                Shadow(
+                                    blurRadius: 4,
+                                    color: Colors.black38,
+                                    offset: Offset(0, 1)),
+                              ])),
+                  ])),
+                  Padding(
+                      // iOS 辅助功能特大字号（~3.1x）会把固定高度卡片的
+                      // 文本区撑爆（Expanded 归零 RenderFlex overflow），
+                      // 文本区字号钳制 1.3x（review 0.12.0 P3）
+                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                      child: MediaQuery.withClampedTextScaling(
+                        maxScaleFactor: 1.3,
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(e.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12.5)),
+                              const SizedBox(height: 2),
+                              Text(
+                                  e.isDir
+                                      ? e.modified.split('T').first
+                                      : e.sizeHuman,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: cs.onSurfaceVariant)),
+                            ]),
+                      )),
+                ])));
+  }
+
+  /// 网格卡片的图标兜底：铺满底色的类型图标（列表模式用色块，网格放大）
+  Widget _gridIcon(Entry e) {
+    final cs = Theme.of(context).colorScheme;
+    if (e.isDir) {
+      final isPriv = e.isPrivateRoot;
+      return ColoredBox(
+          color: isPriv
+              ? cs.primary.withValues(alpha: 0.14)
+              : cs.surfaceContainerHighest.withValues(alpha: 0.6),
+          child: Center(
+              child: Icon(isPriv ? Icons.lock : Icons.folder,
+                  size: 36,
+                  color: isPriv ? cs.primary : cs.onSurfaceVariant)));
+    }
+    return ColoredBox(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+        child: Center(
+            child: FileTypeTile(
+                ext: (e.ext ?? '').toLowerCase(),
+                icon: _iconOf(e),
+                size: 44)));
   }
 
   Widget _selectionBar(bool canManage) {

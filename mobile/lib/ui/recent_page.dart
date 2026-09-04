@@ -2,13 +2,13 @@
 // 搜索框走 /api/search（服务端 rglob 文件名子串匹配）。点按进文件操作面板。
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:open_filex/open_filex.dart';
 
 import '../data/api/api_client.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'share_create_sheet.dart';
+import 'widgets/open_local.dart';
 
 class RecentPage extends ConsumerStatefulWidget {
   const RecentPage({super.key});
@@ -139,7 +139,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
                     title: const Text('用其他应用打开'),
                     onTap: () {
                       Navigator.pop(ctx);
-                      OpenFilex.open(downloaded.first.localPath);
+                      openLocalFile(context, downloaded.last.localPath);
                     }),
               if (canShare)
                 ListTile(

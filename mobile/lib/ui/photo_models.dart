@@ -11,9 +11,14 @@ class PhotoItem {
   final double? duration; // 秒
   final int? width;       // 原始宽（瀑布流宽高比；null/0=未知→方格回退，v0.11）
   final int? height;      // 原始高
+  /// 缓存击穿键（0.12.0）：文件页入口传文件 modified——同名覆盖后
+  /// 预览 URL 随之变化，绕开客户端 180 天磁盘缓存陈旧。照片墙不传
+  /// （无 mtime 字段，维持既有取舍）。
+  final String? cacheKey;
   PhotoItem({required this.path, required this.name, required this.taken,
       required this.month, required this.uploader,
-      this.mediaType = 'photo', this.duration, this.width, this.height});
+      this.mediaType = 'photo', this.duration, this.width, this.height,
+      this.cacheKey});
 
   bool get isVideo => mediaType == 'video';
 

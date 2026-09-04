@@ -206,6 +206,8 @@ class SessionController extends StateNotifier<SessionState> {
     await SavedCredentialStore.clear();
     // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
     await AuthCacheManager.I.emptyCache();
+    // 失败负缓存同上：账号 A 无权看被记 404 的 URL，B 可能有权
+    AuthCacheManager.I.clearFailureCache();
     state = const SessionState();
   }
 }
