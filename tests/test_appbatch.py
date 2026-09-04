@@ -11,7 +11,7 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER
 
-import server  # noqa: E402  (conftest 已先设置 SHARE_ROOT 并导入)
+import server
 
 
 def _rand() -> str:

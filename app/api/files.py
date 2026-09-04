@@ -5,7 +5,6 @@ import os
 import re
 import secrets
 import shutil
-import sqlite3
 import subprocess
 import threading
 import time
@@ -21,12 +20,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.config import (MAX_CHUNKED_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, UPLOAD_SESSION_TTL,
-                        ZIP_TTL, SHARE_ROOT, chunk_size_for)
+from app.config import (MAX_CHUNKED_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, ZIP_TTL, SHARE_ROOT, chunk_size_for)
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, preview_user, require_user, require_admin
 from app.filetools import (_file_dict, clean_filename, dir_tree, ensure_heif_support,
-                           human_size, move_to_trash, safe_path, save_upload)
+                           human_size, move_to_trash, save_upload)
 from app.spaces import enforce_quota, resolve, sample_readable, sync_grants_on_move, visible
 from app.main import app
 
@@ -45,8 +43,8 @@ def _is_own_private_root(user, target: Path) -> bool:
         rel = target.relative_to(SHARE_ROOT)
     except ValueError:
         return False
-    return (rel.parts and rel.parts[0].lower() == "private" and len(rel.parts) == 2
-            and rel.parts[1].lower() == user["username"].lower())
+    return bool(rel.parts and rel.parts[0].lower() == "private" and len(rel.parts) == 2
+                and rel.parts[1].lower() == user["username"].lower())
 
 
 def _under_private(path: Path, username: str) -> bool:
@@ -54,9 +52,9 @@ def _under_private(path: Path, username: str) -> bool:
         rel = path.relative_to(SHARE_ROOT)
     except ValueError:
         return False
-    return (rel.parts and rel.parts[0].lower() == "private"
-            and len(rel.parts) > 1
-            and rel.parts[1].lower() == username.lower())
+    return bool(rel.parts and rel.parts[0].lower() == "private"
+                and len(rel.parts) > 1
+                and rel.parts[1].lower() == username.lower())
 
 
 def _cross_space_guard(user, src: Path, dest: Path):
@@ -628,8 +626,7 @@ async def preview_file(path: str, w: int | None = Query(default=None),
             from PIL import Image, ImageOps
             tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
             try:
-                img = Image.open(target)
-                img = ImageOps.exif_transpose(img)   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
+                img = ImageOps.exif_transpose(Image.open(target))   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
                 img.thumbnail((w, w))
                 img.convert("RGB").save(tmp, "JPEG", quality=82)
                 os.replace(tmp, cached)
@@ -780,9 +777,9 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
                 img.draft("JPEG", (320, 320))
             except (AttributeError, ValueError):
                 pass
-            img = ImageOps.exif_transpose(img)   # 同 preview：EXIF 方向矫正后再缩放
-            img.thumbnail((320, 320))
-            img.convert("RGB").save(tmp, "JPEG", quality=80)
+            rotated = ImageOps.exif_transpose(img)   # 同 preview：EXIF 方向矫正后再缩放
+            rotated.thumbnail((320, 320))
+            rotated.convert("RGB").save(tmp, "JPEG", quality=80)
         else:
             # 短视频 -ss 会越界抽不到帧：先试 1s 处，失败退回首帧
             for seek_args in (["-ss", "1"], []):
@@ -836,7 +833,7 @@ def _scan_share_sizes():
     NTFS 硬链接去重的同一份内容按物理只计一次；隐藏（点前缀）路径全部排除。"""
     seen = set()
     physical = 0
-    categories = {}
+    categories: dict[str, int] = {}
     for f in SHARE_ROOT.rglob("*"):
         try:
             if not f.is_file():

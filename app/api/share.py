@@ -1,7 +1,6 @@
 """分享 API：外链创建/取件（密码走 POST body 换一次性票据）/QR/取件记录/撤销。"""
 import hashlib
 import hmac
-import io
 import secrets
 import sqlite3
 import threading
@@ -11,7 +10,7 @@ from typing import Optional
 
 import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
-from fastapi import (Depends, File, Form, HTTPException, Request, Response)
+from fastapi import (Depends, Form, HTTPException, Request)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -36,11 +35,12 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         raise HTTPException(status_code=400, detail="expires_hours must be >= 1")
     if max_downloads is not None and max_downloads < 1:
         raise HTTPException(status_code=400, detail="max_downloads must be >= 1")
-    # 只能分享自己可读的路径（v3：分享权限跟随创建者）
-    target = resolve(_user, path, "read")
-    if not target.exists():
+    # 只能分享自己可读的路径（v3：分享权限跟随创建者）。
+    # 局部名 target_path：与上方 Form 参数 target（定向成员）严格区分
+    target_path = resolve(_user, path, "read")
+    if not target_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
-    if target.is_dir():
+    if target_path.is_dir():
         raise HTTPException(status_code=400, detail="暂不支持分享文件夹，请打包后分享")
 
     # 定向分享：目标成员必须存在且在用
@@ -66,8 +66,8 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         _db().execute(
             "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain, target_user_id) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (token, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), target.name,
-             target.stat().st_size if target.is_file() else None,
+            (token, str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"), target_path.name,
+             target_path.stat().st_size if target_path.is_file() else None,
              time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
              _user["user_id"] if "user_id" in _user.keys() else None,
              password or None, target_id))
@@ -76,13 +76,13 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
                 "INSERT INTO notifications(user_id, type, title, body, link, created_at) "
                 "VALUES(?,?,?,?,?,?)",
                 (target_id, "share", f"{_user['username']} 给你分享了文件",
-                 target.name, f"/s/{token}", time.time()))
+                 target_path.name, f"/s/{token}", time.time()))
         _db().commit()
     audit("share_create", path, f"{expires_hours}h", client_ip(request))
     if target_id:
         audit("share_target", path, f"→ {target_username}", client_ip(request))
         push_webhook("📬 收到定向分享",
-                     f"{_user['username']} 分享给 {target_username}：{target.name}")
+                     f"{_user['username']} 分享给 {target_username}：{target_path.name}")
     return {"ok": True, "token": token, "expires_in": f"{expires_hours}h",
             "target": target_username}
 

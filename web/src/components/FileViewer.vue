@@ -327,6 +327,9 @@ watch(audioEl, (a) => {
 // ── 视频 ─────────────────────────────────────────────────
 const videoEl = ref<HTMLVideoElement | null>(null)
 const videoSpeed = ref(1)
+const videoError = ref(false)   // 浏览器解不了的编码（HEVC/H.265 等）→ 下载兜底
+function onVideoError() { videoError.value = true }
+watch(() => item.value?.path, () => { videoError.value = false })
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 function setSpeed(s: number) {
   videoSpeed.value = s
@@ -544,8 +547,22 @@ function iconOf(it: ViewerItem): string {
 
           <!-- 视频 -->
           <div v-else-if="kind === 'video'" class="fv-center">
-            <video ref="videoEl" :key="item?.path" :src="`/preview/${enc(item?.path || '')}`"
-                   class="fv-media" controls autoplay playsinline @loadedmetadata="setSpeed(videoSpeed)" />
+            <template v-if="!videoError">
+              <video ref="videoEl" :key="item?.path" :src="`/preview/${enc(item?.path || '')}`"
+                     class="fv-media" controls autoplay playsinline
+                     @loadedmetadata="setSpeed(videoSpeed)" @error="onVideoError" />
+            </template>
+            <template v-else>
+              <div style="display:grid;gap:12px;justify-items:center;padding:32px;text-align:center;max-width:420px">
+                <div style="font-size:44px">🎬</div>
+                <div style="font-weight:600">该视频编码当前浏览器无法播放</div>
+                <p style="font-size:12.5px;color:var(--text-3);margin:0">
+                  手机拍摄的 HEVC/H.265 视频常见于此情况。文件本身完好，可下载后用本地播放器观看；
+                  或改用 LAN Share App 内置播放器（自带解码）。
+                </p>
+                <a class="btn sm" :href="`/files/${enc(item?.path || '')}`" target="_blank">⬇ 下载视频</a>
+              </div>
+            </template>
           </div>
 
           <!-- 音频 -->

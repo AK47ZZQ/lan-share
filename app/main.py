@@ -9,8 +9,7 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, File
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import urlsplit
 
-from app.config import (API_RATE_LIMIT, LOGIN_RATE_LIMIT, PROJECT_ROOT, SHARE_RATE_LIMIT,
-                        SHARE_ROOT)
+from app.config import (API_RATE_LIMIT, LOGIN_RATE_LIMIT, PROJECT_ROOT, SHARE_RATE_LIMIT)
 from app.db import init_db
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, set_audit_user)
@@ -62,6 +61,7 @@ async def security_middleware(request: Request, call_next):
 
 # ─── 路由模块（app 与中间件就绪后导入）──────────────────
 from app.api import admin, appver, auth, files, share, webdav, system, notify  # noqa: E402,F401
+from app.api import healthreport  # noqa: E402,F401
 
 # CSP：脚本全部外部化（script-src 'self'）；样式保留内联（style-src 'unsafe-inline'，
 # 仅 CSS 注入风险，收益/成本比合理）。前端已无任何内联事件处理器。

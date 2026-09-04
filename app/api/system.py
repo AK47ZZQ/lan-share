@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 import qrcode
-import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
+import qrcode.image.svg
 from fastapi import Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -172,47 +172,69 @@ def _media_type(rel: str) -> str:
     return "video" if Path(rel).suffix.lower() in VIDEO_EXTS else "photo"
 
 
-def _ffprobe_meta(path: Path) -> tuple[float | None, str | None]:
-    """视频元数据：(时长秒, 拍摄日期YYYY-MM-DD)。ffprobe 不在 PATH 时静默降级
-    （时长留空，App 只显示 ▶ 角标）；date 取容器 creation_time（手机拍摄的视频
-    mtime 常是"拷入时间"，比 EXIF 不可用的图片更需要这一层）。"""
+_FFPROBE_FALLBACKS = ("C:/env/ffmpeg/bin/ffprobe.exe",)   # NSSM 服务 PATH 常不带 ffmpeg
+
+
+def _ffprobe_exe() -> str | None:
     exe = shutil.which("ffprobe")
+    if exe:
+        return exe
+    for p in _FFPROBE_FALLBACKS:
+        if Path(p).is_file():
+            return p
+    return None
+
+
+def _ffprobe_meta(path: Path) -> tuple[float | None, str | None, str | None]:
+    """视频元数据：(时长秒, 拍摄日期YYYY-MM-DD, 视频编码)。ffprobe 不可用时静默
+    降级（三项留空，App 只显示 ▶ 角标）；date 取容器 creation_time（手机拍摄的
+    视频 mtime 常是"拷入时间"，比 EXIF 不可用的图片更需要这一层）；编码取第一
+    视频流 codec_name，前端据此对 HEVC 等浏览器播不了的格式给下载兜底提示。"""
+    exe = _ffprobe_exe()
     if not exe:
-        return None, None
+        return None, None, None
     try:
         r = subprocess.run(
-            [exe, "-v", "quiet", "-print_format", "json", "-show_format", str(path)],
+            [exe, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(path)],
             capture_output=True, timeout=15)
         if r.returncode != 0:
-            return None, None
-        fmt = (json.loads(r.stdout.decode("utf-8", "replace") or "{}").get("format") or {})
+            return None, None, None
+        data = json.loads(r.stdout.decode("utf-8", "replace") or "{}")
+        fmt = data.get("format") or {}
         dur = float(fmt["duration"]) if fmt.get("duration") else None
         ct = (fmt.get("tags") or {}).get("creation_time")
         taken = str(ct)[:10] if ct else None
-        return dur, taken
+        codec = next((s.get("codec_name") for s in data.get("streams") or []
+                      if s.get("codec_type") == "video" and s.get("codec_name")), None)
+        return dur, taken, codec
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def _probe_video_durations(cap: int = 20):
-    """补扫时长缺失的视频行。duration 语义：NULL=待补扫（仅视频），0=非视频/已处理。
-    图片行入库即写 0；存量 NULL 图片行在此收编，之后补扫查询不再被图片行白拉全表。
-    两段式更新，PG 友好：CASE 里悬空 NULL 参数会让 psycopg 报
-    IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
-    rows = _db().execute("SELECT path FROM photos WHERE duration IS NULL").fetchall()
+    """补扫视频行缺失的时长/编码。duration 语义：NULL=待补扫（仅视频），0=非视频/
+    已处理。图片行入库即写 0；存量 NULL 图片行在此收编，之后补扫查询不再被图片行
+    白拉全表。codec 是 v0.11 新列：存量视频行 duration 已有、codec 为 NULL 的也
+    一并纳入补扫（探到啥刷啥，互不阻塞）。两段式更新，PG 友好：CASE 里悬空 NULL
+    参数会让 psycopg 报 IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
+    rows = _db().execute("SELECT path, duration, codec FROM photos "
+                         "WHERE duration IS NULL OR codec IS NULL").fetchall()
     if not rows:
         return
-    videos, others = [], []
+    todo, others = [], []
     for r in rows:
-        (videos if Path(r["path"]).suffix.lower() in VIDEO_EXTS else others).append(r["path"])
+        if Path(r["path"]).suffix.lower() in VIDEO_EXTS:
+            todo.append(r["path"])
+        elif r["duration"] is None:
+            others.append(r["path"])   # codec IS NULL 的图片行不重扫，只收编 duration
     updates = []
-    for rel in videos[:cap]:
+    for rel in todo[:cap]:
         f = SHARE_ROOT / rel
         if not f.is_file():
             continue   # 留 NULL：下次全量扫描的 gone 清理会删行
-        dur, taken = _ffprobe_meta(f)
-        if dur is not None:
-            updates.append((dur, taken, rel))
+        dur, taken, codec = _ffprobe_meta(f)
+        if dur is not None or codec:
+            updates.append((dur, taken, codec, rel))
     if not others and not updates:
         return
     with _db_lock:
@@ -220,9 +242,9 @@ def _probe_video_durations(cap: int = 20):
             _db().executemany("UPDATE photos SET duration=0 WHERE path=?",
                               [(p,) for p in others])
         if updates:
-            _db().executemany("UPDATE photos SET duration=? WHERE path=?",
-                              [(d, p) for (d, t, p) in updates])
-            taken_updates = [(t, p) for (d, t, p) in updates if t]
+            _db().executemany("UPDATE photos SET duration=?, codec=? WHERE path=?",
+                              [(d, c, p) for (d, t, c, p) in updates])
+            taken_updates = [(t, p) for (d, t, c, p) in updates if t]
             if taken_updates:
                 _db().executemany("UPDATE photos SET taken_at=? WHERE path=?",
                                   taken_updates)
@@ -340,7 +362,7 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
     _scan_photos(force=refresh)
     users = _known_users()
     all_rows = _db().execute(
-        "SELECT path, taken_at, duration FROM photos ORDER BY taken_at DESC, path").fetchall()
+        "SELECT path, taken_at, duration, codec FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
@@ -360,6 +382,7 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
             "uploader": _photo_uploader(r["path"], users),
             "media_type": _media_type(r["path"]),
             "duration": r["duration"],
+            "codec": r["codec"],
             "thumb": f"/thumb/{r['path']}",
         } for r in rows],
     }

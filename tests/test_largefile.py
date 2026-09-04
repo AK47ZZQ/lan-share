@@ -3,7 +3,7 @@
 只测接口行为与配置函数，不真正传输大数据。
 """
 
-from conftest import ADMIN_USER  # noqa: F401
+from conftest import ADMIN_USER
 import pytest
 
 from app.config import CHUNK_SIZE, MAX_CHUNKED_SIZE, chunk_size_for
@@ -156,8 +156,8 @@ def test_chunked_upload_overwrite_trashes_old(auth):
 
 def test_simple_upload_overwrite_trashes_old(auth):
     name = "overwrite-simple.txt"
-    assert auth.post(f"/api/upload/?path=", files={"file": (name, b"first")}).status_code == 200
-    assert auth.post(f"/api/upload/?path=", files={"file": (name, b"second")}).status_code == 200
+    assert auth.post("/api/upload/?path=", files={"file": (name, b"first")}).status_code == 200
+    assert auth.post("/api/upload/?path=", files={"file": (name, b"second")}).status_code == 200
     assert name in _trash_names(auth)
 
 

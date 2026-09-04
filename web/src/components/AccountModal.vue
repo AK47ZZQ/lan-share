@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, type Me } from '../api'
 import { refreshAuth } from '../auth'
-import { toast, promptDlg } from '../ui'
+import { toast, promptDlg, confirmDlg } from '../ui'
 
 const props = defineProps<{ me: Me }>()
 const emit = defineEmits<{ close: []; updated: [] }>()
@@ -94,6 +94,40 @@ async function copySecret() {
   catch { toast('复制失败，请手动记录密钥', 'err') }
 }
 
+// 登录设备管理（App 配对出的设备 Token 在此可见/可吊销）
+import type { DeviceInfo } from '../api'
+const devices = ref<DeviceInfo[]>([])
+const devicesBusy = ref(false)
+const devicesErr = ref('')
+
+function relTime(ts: number): string {
+  if (!ts) return '从未'
+  const s = Math.max(0, Date.now() / 1000 - ts)
+  if (s < 90) return '刚刚'
+  if (s < 3600) return `${Math.round(s / 60)} 分钟前`
+  if (s < 86400) return `${Math.round(s / 3600)} 小时前`
+  return `${Math.round(s / 86400)} 天前`
+}
+
+async function loadDevices() {
+  devicesErr.value = ''
+  try { devices.value = (await api.listDevices()).devices }
+  catch (e) { devicesErr.value = (e as Error).message }
+}
+
+async function revokeDevice(d: DeviceInfo) {
+  const tip = d.current
+    ? '这是当前正在使用的浏览器，吊销后本页登录会立即失效，需要重新登录。确定吊销？'
+    : `吊销设备「${d.name}」后，该设备将无法再访问（下次请求即被拒）。确定吊销？`
+  if (!(await confirmDlg(tip, { danger: true, title: '吊销设备' }))) return
+  devicesBusy.value = true
+  try {
+    await api.revokeDevice(d.id)
+    toast(d.current ? '已吊销当前设备，请重新登录' : `设备「${d.name}」已吊销`, 'ok')
+    await loadDevices()
+  } catch (e) { toast((e as Error).message, 'err') } finally { devicesBusy.value = false }
+}
+
 // 手机 App 连接（扫码填地址 + 配对码免密登录）
 const pairCode = ref('')
 const pairLeft = ref(0)          // 剩余秒数
@@ -138,6 +172,7 @@ const davBusy = ref(false)
 const davErr = ref('')
 onMounted(async () => {
   try { davSet.value = (await api.webdavPwdStatus()).set } catch { /* 忽略，默认未设置 */ }
+  loadDevices()
 })
 
 async function saveDav() {
@@ -290,6 +325,30 @@ async function doPwd() {
             {{ pairBusy ? '生成中…' : pairCode ? '重新生成' : '生成配对码' }}
           </button>
           <p v-if="pairErr" class="err" style="margin:0">{{ pairErr }}</p>
+        </div>
+
+        <div style="height:1px;background:var(--line);margin:16px 0" />
+
+        <!-- 登录设备管理 -->
+        <div style="display:grid;gap:9px">
+          <div style="font-size:13.5px;font-weight:600">📲 登录设备</div>
+          <p style="font-size:12.5px;color:var(--text-3);margin:0">
+            手机 App 配对后留在本账号的长期凭据。手机丢失或淘汰时，在这里吊销对应设备即可（其他设备不受影响）。
+          </p>
+          <template v-if="devices.length">
+            <div v-for="d in devices" :key="d.id"
+                 style="display:flex;align-items:center;gap:10px;background:var(--glass);border:1px solid var(--line);border-radius:10px;padding:9px 12px">
+              <div style="flex:1;min-width:0;display:grid;gap:2px">
+                <span style="font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  {{ d.name }}<span v-if="d.current" style="margin-left:6px;font-size:11px;color:var(--accent,#4a9eff)">● 本机</span>
+                </span>
+                <span style="font-size:11.5px;color:var(--text-3)">最近活跃 {{ relTime(d.last_seen) }}</span>
+              </div>
+              <button class="btn danger sm" :disabled="devicesBusy" @click="revokeDevice(d)">吊销</button>
+            </div>
+          </template>
+          <p v-else style="font-size:12.5px;color:var(--text-3);margin:0">还没有 App 设备——用上面的二维码或配对码连接后会出现。</p>
+          <p v-if="devicesErr" class="err" style="margin:0">{{ devicesErr }}</p>
         </div>
 
         <div style="height:1px;background:var(--line);margin:16px 0" />

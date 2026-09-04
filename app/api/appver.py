@@ -85,8 +85,11 @@ def _load_history() -> list:
     for it in items:
         if not isinstance(it, dict) or not it.get("version"):
             continue
+        raw_build = it.get("build")
+        if raw_build is None:
+            continue
         try:
-            build = int(it.get("build"))
+            build = int(raw_build)
         except (TypeError, ValueError):
             continue
         out.append({"version": str(it["version"]), "build": build,

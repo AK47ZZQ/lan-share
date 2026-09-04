@@ -15,8 +15,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
-import server  # noqa: E402  (conftest 已先设置 SHARE_ROOT 并导入)
-import app.api.system as system_mod  # noqa: E402  (照片扫描节流旗标在 system 模块上)
+import server
+import app.api.system as system_mod
 
 
 def _rand() -> str:

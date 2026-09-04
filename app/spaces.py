@@ -20,6 +20,7 @@
 import os
 import re
 import time
+from pathlib import Path
 
 from fastapi import HTTPException
 
@@ -114,7 +115,7 @@ def sample_readable(user, sample) -> bool:
     return True  # member/admin：shared 默认可读
 
 
-def resolve(user, path: str, need: str = "read"):
+def resolve(user, path: str, need: str = "read") -> Path:
     """解析虚拟路径 → 物理路径；无权限一律 403（不区分 404 防探测）。
 
     user: sqlite3.Row（users 行，含 role；调用方来自 require_user/require_admin）。

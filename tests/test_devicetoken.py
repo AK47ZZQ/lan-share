@@ -9,7 +9,7 @@ import time
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
-import server  # noqa: E402  (conftest 已先设置 SHARE_ROOT 并导入)
+import server
 
 
 def _rand() -> str:

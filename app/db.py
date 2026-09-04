@@ -159,7 +159,8 @@ _PG_SCHEMA = """
         taken_at TEXT NOT NULL,
         mtime_ns BIGINT NOT NULL,
         size BIGINT NOT NULL,
-        duration DOUBLE PRECISION
+        duration DOUBLE PRECISION,
+        codec TEXT
     );
     CREATE TABLE IF NOT EXISTS grants(
         id BIGSERIAL PRIMARY KEY,
@@ -264,6 +265,7 @@ def init_db():
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_rc TEXT")
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration DOUBLE PRECISION")
+        _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS codec TEXT")
         _backfill_audit_usernames()
         return
     conn = _db()
@@ -328,7 +330,8 @@ def init_db():
             taken_at TEXT NOT NULL,
             mtime_ns INTEGER NOT NULL,
             size INTEGER NOT NULL,
-            duration REAL
+            duration REAL,
+            codec TEXT
         );
     """)
     _db().commit()
@@ -374,6 +377,8 @@ def _migrate_v3():
         pcols = {r["name"] for r in conn.execute("PRAGMA table_info(photos)").fetchall()}
         if "duration" not in pcols:
             conn.execute("ALTER TABLE photos ADD COLUMN duration REAL")
+        if "codec" not in pcols:
+            conn.execute("ALTER TABLE photos ADD COLUMN codec TEXT")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS grants(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

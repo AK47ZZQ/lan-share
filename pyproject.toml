@@ -1,0 +1,30 @@
+# M0 质量门禁（check.bat 调用；见 PLAN-v3 §2 企业级实践取舍表）。
+# 取舍原则：门禁只拦"会咬人的"问题（错误级 + pyflakes + 危险 bugtrap），
+# 风格统一交给 review——BLE001/S110 等"裸 except 兜底"是本项目刻意的
+# 跨引擎容错风格，B008 是 FastAPI 依赖注入惯用法，均显式豁免。
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9",   # pycodestyle 错误级
+    "F",                # pyflakes（未用变量/未定义名/f-string）
+    "B",                # bugbear（常见 bugtrap）
+    "RUF100",           # 失效的 noqa 注释
+]
+ignore = [
+    "B008",   # FastAPI Depends()/File() 写在参数默认值是框架惯用法
+    "BLE001", # 裸 Exception 兜底：SQLite/PG 双引擎 + 跨平台 FS 的刻意容错
+    "B904",   # except 内 raise 不带 from：存量风格，收益低
+    "B017",   # pytest.raises(Exception) 测试断言
+    "B011",   # assert False 在测试里是有意的中断
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811", "F841", "B007", "B011", "E401", "E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true

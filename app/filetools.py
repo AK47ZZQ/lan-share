@@ -32,7 +32,7 @@ def ensure_heif_support():
         pass
 
 
-def human_size(size_bytes: int) -> str:
+def human_size(size_bytes: int | float) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size_bytes < 1024:
             return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} B"
@@ -53,7 +53,7 @@ def safe_path(rel: str) -> Path:
     return target
 
 
-def clean_filename(name: str) -> str:
+def clean_filename(name: str | None) -> str:
     # Windows 文件名非法字符全集：/ \ : * ? " < > | 与控制符——手机端（Linux FS）
     # 传来的文件名可含后者，漏洗会在落盘时 OSError 500
     n = re.sub(r'[/\\:*?"<>|\x00-\x1f]', '_', name or 'unnamed')

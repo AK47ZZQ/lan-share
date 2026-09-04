@@ -2,7 +2,6 @@
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import threading
@@ -392,7 +391,7 @@ async def change_username(request: Request, body: UsernameBody,
     # 私人空间目录跟随用户名迁移（Windows 大小写不敏感：仅大小写变化时 rename 会变 no-op）
     old_dir = SHARE_ROOT / "private" / row["username"]
     new_dir = SHARE_ROOT / "private" / new_name
-    if old_dir.exists() and not _normcase_eq(old_dir, new_dir):
+    if old_dir.exists() and not _normcase_eq(str(old_dir), str(new_dir)):
         new_dir.parent.mkdir(parents=True, exist_ok=True)
         try:
             old_dir.rename(new_dir)
@@ -402,7 +401,7 @@ async def change_username(request: Request, body: UsernameBody,
     # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
     old_inc = SHARE_ROOT / "incoming" / row["username"]
     new_inc = SHARE_ROOT / "incoming" / new_name
-    if old_inc.exists() and not _normcase_eq(old_inc, new_inc):
+    if old_inc.exists() and not _normcase_eq(str(old_inc), str(new_inc)):
         try:
             old_inc.rename(new_inc)
         except OSError:

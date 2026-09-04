@@ -21,6 +21,7 @@ export interface Grant { id: number; user_id: number; path: string; can_read: bo
 export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string; count: number }
 export interface DiskInfo { total: string; used: string; free: string; total_human: string; used_human: string; free_human: string; total_bytes: number; used_bytes: number; free_bytes: number; share_size: string; share_size_human: string; warning: boolean }
 export interface Member { id: number; username: string; role: string }
+export interface DeviceInfo { id: number; name: string; created_at: number; last_seen: number; current: boolean }
 export interface NotificationItem { id: number; type: string; title: string; body: string | null; link: string | null; created_at: number; read: boolean }
 export interface PhotoItem { path: string; name: string; taken: string; month: string; uploader: string; thumb: string }
 export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
@@ -78,9 +79,18 @@ export const api = {
   // 手机 App 免密配对：生成一次性 6 位码（3 分钟有效）
   pairCode: () => jpost('/api/pair/code', {}).then(r => handle<{ code: string; expires_in: number }>(r)),
 
+  // 登录设备管理（本账号）：App 配对出的设备在此可见/可吊销
+  listDevices: () => fetch('/api/auth/devices').then(r => handle<{ devices: DeviceInfo[] }>(r)),
+  revokeDevice: (id: number) => fetch(`/api/auth/devices/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+
   getWebhook: () => fetch('/api/admin/webhook').then(r => handle<{ url: string }>(r)),
   setWebhook: (url: string) => jpost('/api/admin/webhook', { url }).then(r => handle<{ ok: boolean; url: string }>(r)),
   testWebhook: () => jpost('/api/admin/webhook/test', {}).then(r => handle<{ ok: boolean }>(r)),
+
+  // 每日健康日报（磁盘/备份/证书/隧道 → Webhook）
+  getHealthReport: () => fetch('/api/admin/healthreport').then(r => handle<{ enabled: boolean; time: string; backup_dest: string; webhook_set: boolean }>(r)),
+  setHealthReport: (enabled: boolean, time: string) => jpost('/api/admin/healthreport', { enabled, time }).then(r => handle<{ ok: boolean; enabled: boolean; time: string }>(r)),
+  testHealthReport: () => jpost('/api/admin/healthreport/test', {}).then(r => handle<{ ok: boolean; sent: boolean | null; warn: boolean; report: string; webhook_set: boolean }>(r)),
 
   list: (path: string) => getAs(`/api/files/${enc(path)}`).then(r => handle<{ path: string; items: Entry[] }>(r)),
   mkdir: (path: string) => fetch(`/api/mkdir/${enc(path)}`, { method: 'POST' }).then(r => handle<{ ok: boolean }>(r)),

@@ -503,7 +503,7 @@ def activity(limit: int = 50, user=Depends(require_user)):
         "WHERE ts > ? ORDER BY id DESC LIMIT 500", (cutoff,)).fetchall()
     show = {"upload", "upload_instant", "mkdir", "share", "share_target", "share_download",
             "invite_redeemed", "trash", "restore", "move", "rename"}
-    items = []
+    items: list[dict] = []
     max_items = max(1, min(limit, 100))
     username = user["username"]
     for r in rows:

@@ -10,8 +10,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER
 
-import server  # noqa: E402  (conftest 已先设置 SHARE_ROOT 并导入)
-import app.api.auth as _auth  # noqa: E402
+import server
+import app.api.auth as _auth
 
 
 @pytest.fixture()
