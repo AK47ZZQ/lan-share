@@ -525,3 +525,80 @@ def activity(limit: int = 50, user=Depends(require_user)):
             "target": target, "detail": r["detail"], "count": 1,
         })
     return items
+
+
+# ─── 数据导出逃生门（B3）：把某成员的数据足迹打包带走 ───────
+
+class ExportBody(BaseModel):
+    username: str
+
+
+@app.post("/api/admin/export")
+def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admin)):
+    """导出成员数据：私人空间 + 直传(incoming)子树全量 zip，附 manifest.json
+    （账号信息/分享/设备/通知统计）。
+
+    边界声明（写进 manifest）：共享空间里的文件无逐文件归属元数据，不在本
+    导出范围；照片时间线引用的文件若落在上述两棵树内会自然包含。走 /api/zip
+    同一套短时效票据，下载一次即删。"""
+    row = _db().execute("SELECT * FROM users WHERE username=?", (body.username,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="成员不存在")
+
+    import json
+    import zipfile
+    from datetime import datetime
+
+    from app.api.files import ZIP_TTL, _zips, _zips_lock
+
+    username = row["username"]
+    roots = [("private", SHARE_ROOT / "private" / username),
+             ("incoming", SHARE_ROOT / "incoming" / username)]
+    if not any(r.exists() for _, r in roots):
+        raise HTTPException(status_code=404, detail="该成员没有可导出的数据")
+
+    zdir = SHARE_ROOT / ".zips"
+    zdir.mkdir(exist_ok=True)
+    zpath = zdir / f"export-{secrets.token_urlsafe(8)}.zip"
+    file_count = 0
+    file_bytes = 0
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+        for label, root in roots:
+            if not root.exists():
+                continue
+            for f in root.rglob("*"):
+                if not f.is_file():
+                    continue
+                # arcname 保留 private/incoming 前缀（相对 SHARE_ROOT），恢复时按空间原样落位
+                z.write(f, str(f.relative_to(SHARE_ROOT)).replace("\\", "/"))
+                file_count += 1
+                file_bytes += f.stat().st_size
+        shares = _db().execute(
+            "SELECT token, path, name, created_at, expires_at FROM shares "
+            "WHERE owner_id=?", (row["id"],)).fetchall()
+        devices = _db().execute(
+            "SELECT name, created_at, last_seen FROM device_tokens WHERE user_id=?",
+            (row["id"],)).fetchall()
+        manifest = {
+            "kind": "lan-share-member-export",
+            "generated_at": datetime.now().isoformat(),
+            "member": {"username": username, "role": row["role"],
+                       "created_at": row["created_at"]},
+            "scope": ["private/<用户名>/", "incoming/<用户名>/"],
+            "scope_note": "共享空间文件无逐文件归属元数据，不在此包内",
+            "stats": {"files": file_count, "bytes": file_bytes,
+                      "shares": len(shares), "devices": len(devices)},
+            "shares": [dict(s) for s in shares],
+            "devices": [dict(d) for d in devices],
+        }
+        z.writestr("manifest.json",
+                   json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
+
+    token = secrets.token_urlsafe(16)
+    with _zips_lock:
+        _zips[token] = {"path": zpath, "exp": time.time() + ZIP_TTL}
+    audit("export", f"{username} files={file_count} bytes={file_bytes}",
+          ip=client_ip(request))
+    return {"ok": True, "url": f"/api/zip/{token}",
+            "name": f"lan-share-export-{username}-{datetime.now().strftime('%Y%m%d')}.zip",
+            "files": file_count, "bytes": file_bytes}

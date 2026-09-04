@@ -11,6 +11,7 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 
+import '../data/local/inbox_poll.dart';
 import '../share/share_bridge.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
@@ -43,10 +44,13 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
     // 不再在 initState 读 appLock 置锁：冷启动锁由 build 门
     // (appLock && !sessionUnlocked) 覆盖，且不受 settings 异步加载时序影响；
     // initState 无条件置锁曾导致登出重登立刻再锁（v0.6.0 锁死第 3 环）。
+    // 站内通知前台轮询（v0.11）：未登录时静默失败，登录后自然生效。
+    InboxPoll.I.start();
   }
 
   @override
   void dispose() {
+    InboxPoll.I.stop();
     WidgetsBinding.instance.removeObserver(this);
     if (ShareBridge.onIncoming == _consumeShares) ShareBridge.onIncoming = null;
     super.dispose();
@@ -55,6 +59,13 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lockGate.onState(state);
+    // 前台才轮询（后台推送属厂商通道，阶段 2）；回前台立即对齐一次
+    if (state == AppLifecycleState.resumed) {
+      InboxPoll.I.start();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      InboxPoll.I.stop();
+    }
     if (state == AppLifecycleState.resumed &&
         _lockGate.shouldLockOnResume(
             biometricBusy: ref.read(biometricBusyProvider)) &&

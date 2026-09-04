@@ -160,7 +160,9 @@ _PG_SCHEMA = """
         mtime_ns BIGINT NOT NULL,
         size BIGINT NOT NULL,
         duration DOUBLE PRECISION,
-        codec TEXT
+        codec TEXT,
+        width INTEGER,
+        height INTEGER
     );
     CREATE TABLE IF NOT EXISTS grants(
         id BIGSERIAL PRIMARY KEY,
@@ -207,9 +209,26 @@ _PG_SCHEMA = """
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
+    CREATE TABLE IF NOT EXISTS photo_comments(
+        id BIGSERIAL PRIMARY KEY,
+        photo_path TEXT NOT NULL,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        created_at DOUBLE PRECISION NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pc_photo ON photo_comments(photo_path, id);
+    CREATE TABLE IF NOT EXISTS photo_reactions(
+        id BIGSERIAL PRIMARY KEY,
+        photo_path TEXT NOT NULL,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        emoji TEXT NOT NULL,
+        created_at DOUBLE PRECISION NOT NULL,
+        UNIQUE(photo_path, user_id, emoji)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_photo ON photo_reactions(photo_path);
 """
 
-_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications")
+_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "photo_comments")
 
 
 def pg_setval_sequences(conn: _PgConn):
@@ -266,6 +285,8 @@ def init_db():
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration DOUBLE PRECISION")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS codec TEXT")
+        _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS width INTEGER")
+        _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS height INTEGER")
         _backfill_audit_usernames()
         return
     conn = _db()
@@ -331,7 +352,9 @@ def init_db():
             mtime_ns INTEGER NOT NULL,
             size INTEGER NOT NULL,
             duration REAL,
-            codec TEXT
+            codec TEXT,
+            width INTEGER,
+            height INTEGER
         );
     """)
     _db().commit()
@@ -379,6 +402,10 @@ def _migrate_v3():
             conn.execute("ALTER TABLE photos ADD COLUMN duration REAL")
         if "codec" not in pcols:
             conn.execute("ALTER TABLE photos ADD COLUMN codec TEXT")
+        if "width" not in pcols:
+            conn.execute("ALTER TABLE photos ADD COLUMN width INTEGER")
+        if "height" not in pcols:
+            conn.execute("ALTER TABLE photos ADD COLUMN height INTEGER")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS grants(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -425,6 +452,23 @@ def _migrate_v3():
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
             CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
+            CREATE TABLE IF NOT EXISTS photo_comments(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_path TEXT NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                body TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_pc_photo ON photo_comments(photo_path, id);
+            CREATE TABLE IF NOT EXISTS photo_reactions(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_path TEXT NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                emoji TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(photo_path, user_id, emoji)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pr_photo ON photo_reactions(photo_path);
         """)
         conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users)")
         conn.commit()

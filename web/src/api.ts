@@ -25,7 +25,9 @@ export interface DeviceInfo { id: number; name: string; created_at: number; last
 export interface NotificationItem { id: number; type: string; title: string; body: string | null; link: string | null; created_at: number; read: boolean }
 export interface PhotoItem { path: string; name: string; taken: string; month: string; uploader: string; thumb: string }
 export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
-export interface Album { id: string; title: string; month: string }
+export interface Album { id: string; title: string; month: string; created_by?: string }
+export interface PhotoComment { id: number; user: string; body: string; created_at: number; mine: boolean }
+export interface PhotoReactions { emojis: string[]; reactions: { emoji: string; count: number; names: string[] }[]; mine: string[] }
 
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
@@ -65,6 +67,17 @@ export const api = {
   albums: () => fetch('/api/albums').then(r => handle<Album[]>(r)),
   adminAddAlbum: (title: string, month: string) => jpost('/api/admin/albums', { title, month }).then(r => handle<{ ok: boolean }>(r)),
   adminDeleteAlbum: (id: string) => fetch(`/api/admin/albums/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  // 相册共创：成员可建精选专辑（admin/创建者可删）
+  addAlbum: (title: string, month: string) => jpost('/api/albums', { title, month }).then(r => handle<{ ok: boolean; albums: Album[] }>(r)),
+  deleteAlbum: (id: string) => fetch(`/api/albums/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  // 照片互动：评论 + 表情回应
+  photoComments: (path: string) => fetch(`/api/photo/comments?path=${encodeURIComponent(path)}`).then(r => handle<{ comments: PhotoComment[] }>(r)),
+  addPhotoComment: (path: string, body: string) => jpost('/api/photo/comments', { path, body }).then(r => handle<{ ok: boolean; id: number }>(r)),
+  deletePhotoComment: (id: number) => fetch(`/api/photo/comments/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  photoReactions: (path: string) => fetch(`/api/photo/reactions?path=${encodeURIComponent(path)}`).then(r => handle<PhotoReactions>(r)),
+  togglePhotoReaction: (path: string, emoji: string) => jpost('/api/photo/reactions', { path, emoji }).then(r => handle<{ ok: boolean; on: boolean }>(r)),
+  // 数据导出（管理）：成员数据足迹 zip
+  exportMember: (username: string) => jpost('/api/admin/export', { username }).then(r => handle<{ ok: boolean; url: string; name: string; files: number; bytes: number }>(r)),
   logout: () => fetch('/api/logout', { method: 'POST' }).then(() => undefined),
   changeUsername: (new_username: string, password: string) =>
     jpost('/api/auth/username', { new_username, password }).then(r => handle<{ ok: boolean; username: string }>(r)),

@@ -96,6 +96,22 @@ function gbText(b: number): string {
 function openQuota(u: AdminUser) {
   quotaModal.value = { user: u, value: u.quota_bytes == null ? '' : gbText(u.quota_bytes) }
 }
+// 数据导出逃生门：打包成员私人空间+直传子树（含 manifest）
+async function exportUser(u: AdminUser) {
+  if (!(await confirmDlg(
+    `导出「${u.username}」的全部数据（私人空间 + 直传子树，zip 下载一次即失效）？`,
+    { title: '导出成员数据' }))) return
+  try {
+    const r = await api.exportMember(u.username)
+    const a = document.createElement('a')
+    a.href = r.url
+    a.download = r.name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    toast(`已导出 ${r.files} 个文件，开始下载`, 'ok')
+  } catch (e) { toast((e as Error).message, 'err') }
+}
 async function saveQuota() {
   const m = quotaModal.value
   if (!m) return
@@ -217,6 +233,7 @@ onMounted(async () => {
           <button v-if="u.username !== me?.username" class="btn ghost sm" title="以此成员的视角浏览（只读预览）" @click="viewAs(u.username)">👁 视角</button>
           <button class="btn ghost sm" title="修改用户名/重置密码/两步验证/WebDAV 密码" @click="credModal = u">✏️ 账号</button>
           <button class="btn ghost sm" title="设置私人空间配额" @click="openQuota(u)">📏 配额</button>
+          <button class="btn ghost sm" title="导出该成员数据（私人空间+直传子树 zip）" @click="exportUser(u)">📦 导出</button>
           <button class="btn ghost sm" @click="toggleActive(u)">{{ u.is_active ? '停用' : '启用' }}</button>
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
         </span>

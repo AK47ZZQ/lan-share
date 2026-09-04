@@ -36,6 +36,9 @@ dependencies:
                                  #  App 内传输完成复用系统能力需本插件）
   # ── v0.8.5 主题引擎 ────────────────────────────────────────
   dynamic_color: ^2.1.0          # 「跟随壁纸」主题色（Android 12+ Material You 动态取色，official）
+  # ── v0.11 家庭共创批次 ────────────────────────────────────
+  flutter_staggered_grid_view: ^0.7.0  # 照片墙瀑布流（SliverMasonryGrid 保留 Sliver 虚拟化，
+                                      #  官方维护、无传递依赖；方格 SliverGrid 换装不动分页逻辑）
 
 dev_dependencies:
   flutter_test:

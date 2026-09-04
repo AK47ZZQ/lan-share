@@ -46,3 +46,27 @@ class TransferNotifier {
     }
   }
 }
+
+/// 站内通知（通知中心）的系统通知封装（轮询起步版推送，v0.11）。
+/// 复用同一插件实例与图标；独立 channel 便于用户在系统设置里单独关闭。
+extension InboxNotifier on TransferNotifier {
+  Future<void> inbox({required String title, required String body}) async {
+    try {
+      await _ensure();
+      await _plugin.show(
+          _seq++,
+          title,
+          body,
+          const NotificationDetails(
+              android: AndroidNotificationDetails(
+                  'inbox', '站内通知',
+                  channelDescription: '定向分享、照片互动等站内事件提醒',
+                  importance: Importance.defaultImportance,
+                  priority: Priority.defaultPriority,
+                  icon: 'ic_notification',
+                  color: Color(0xFF5B6CFF))));
+    } catch (_) {
+      // 通知失败不影响业务
+    }
+  }
+}

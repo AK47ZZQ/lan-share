@@ -10,6 +10,7 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -65,6 +66,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }();
     _loadMore();
     _loadAlbums();
+    _ensureMonths();   // 年月快滚轴数据源（v0.11），失败静默
     _scroll.addListener(() {
       if (_scroll.position.extentAfter < 600) _loadMore();
     });
@@ -169,23 +171,28 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     _refresh();
   }
 
+  /// facets 月份分布拉取（快滚轴/按月快跳共用）；失败返回空表不炸 UI
+  Future<Map<String, int>> _ensureMonths() async {
+    var months = _months;
+    if (months != null) return months;
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/photos/facets');
+      months = {
+        for (final m in ((r.data['months'] as List?) ?? const []))
+          (m as Map)['month'] as String? ?? '':
+              (m['count'] as num?)?.toInt() ?? 0,
+      }..removeWhere((k, _) => k.isEmpty);
+      _months = months;
+      return months;
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// 按月快跳：facets 月份分布 → 选择后走服务端 month= 过滤
   Future<void> _pickMonth() async {
-    var months = _months;
-    if (months == null) {
-      try {
-        final dio = await ApiClient.I.dio();
-        final r = await dio.get('/api/photos/facets');
-        months = {
-          for (final m in ((r.data['months'] as List?) ?? const []))
-            (m as Map)['month'] as String? ?? '':
-                (m['count'] as num?)?.toInt() ?? 0,
-        }..removeWhere((k, _) => k.isEmpty);
-        _months = months;
-      } catch (_) {
-        months = {};
-      }
-    }
+    final months = await _ensureMonths();
     if (!mounted) return;
     final isAdmin = ref.read(sessionProvider).role == 'admin';
     // 闭包内无法提升可空局部变量：先物化成 final 列表再用
@@ -605,6 +612,54 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     return _buildTimeline(selecting);
   }
 
+  /// 年月快滚轴（v0.11）：右缘竖排月份，直点跳月；月份数 ≥2 且非多选时显示。
+  /// 只读 _months（initState 已静默预取），不自己发请求、不 setState 别人。
+  Widget? _monthRail(bool selecting) {
+    if (selecting) return null;
+    final months = _months;
+    if (months == null || months.length < 2) return null;
+    final entries = months.entries.toList()
+      ..sort((a, b) => b.key.compareTo(a.key));   // 新月份在顶
+    final cs = Theme.of(context).colorScheme;
+    Widget entry(String label, String? month, {int? count}) {
+      final on = _month == month;
+      return InkWell(
+          onTap: () => setState(() {
+                _month = month;
+                _refresh();
+              }),
+          child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+              decoration: BoxDecoration(
+                  color: on ? cs.primary.withValues(alpha: 0.18) : null,
+                  borderRadius: BorderRadius.circular(6)),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(label,
+                    style: TextStyle(
+                        fontSize: 9.5,
+                        height: 1.15,
+                        fontWeight: on ? FontWeight.w800 : FontWeight.w500,
+                        color: on ? cs.primary : cs.outline)),
+                if (count != null)
+                  Text('$count',
+                      style: TextStyle(
+                          fontSize: 8, height: 1.1, color: cs.outline)),
+              ])));
+    }
+
+    return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
+        decoration: BoxDecoration(
+            color: cs.surface.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(10)),
+        child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+          entry('全部', null),
+          for (final e in entries)
+            entry(e.key.substring(2), e.key, count: e.value),  // 2026-08 → 26-08
+        ])));
+  }
+
   Widget _selectionBar() {
     final multi = _selected.length > 1;
     // guest 只读：删除/分享必然失败（服务端会拒），不给出入口
@@ -655,7 +710,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         groups.add((day, [i]));
       }
     }
-    return CustomScrollView(
+    final body = CustomScrollView(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
@@ -682,19 +737,23 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                 color: Theme.of(context)
                                     .colorScheme
                                     .primary))))),
-            SliverGrid(
+            // 瀑布流（v0.11）：SliverMasonryGrid 保留 Sliver 虚拟化（0.4.4 教训
+            // 不回退），格子高度来自服务端探测的真实宽高比；未知的回退方格。
+            SliverMasonryGrid(
                 gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        mainAxisSpacing: 2,
-                        crossAxisSpacing: 2),
+                    const SliverSimpleGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3),
+                mainAxisSpacing: 2,
+                crossAxisSpacing: 2,
                 delegate: SliverChildBuilderDelegate(
                     addRepaintBoundaries: true,
                     (context, j) {
                       final flat = flatIdx[j];
                       final selected = _selected.contains(flat);
                       final item = _items[flat];
-                      return GestureDetector(
+                      return AspectRatio(
+                          aspectRatio: item.aspect,
+                          child: GestureDetector(
                         onTap: selecting
                             ? () => _toggleSelect(flat)
                             : () => _openViewer(flat),
@@ -744,7 +803,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                         ? const Icon(Icons.check,
                                             size: 15, color: Colors.white)
                                         : null)),
-                        ]),
+                        ])),
                       );
                     },
                     childCount: flatIdx.length)),
@@ -758,6 +817,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2))))),
         ]);
+    final rail = _monthRail(selecting);
+    return rail == null
+        ? body
+        : Stack(children: [
+            body,
+            Positioned(right: 2, top: 60, bottom: 90, child: rail),
+          ]);
   }
 
   static String _dayLabel(String iso) {

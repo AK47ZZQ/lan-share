@@ -1,3 +1,51 @@
+## 2026-09-04 — v0.11.0+43：可运营 + 家庭共创大批次（A2/A4/A5/A6 + B1-B6）
+
+经用户裁决的九件套（A2 健康日报、A4 视频可播性、A5 质量门禁、A6 设备管理；
+B1 相册共创、B2 照片互动、B3 数据导出、B4 PC 备份入口、B5 瀑布流+快滚轴、
+B6 站内通知轮询推送；A1 备份演练与 A3 流量守门待第二块盘/后续排期）：
+
+- **[服务端] 每日健康日报（A2）**：新模块 `app/api/healthreport.py`，每日定时
+  采集磁盘水位/备份产物新鲜度/证书剩余天数/公网隧道探活/成员照片统计推
+  Webhook；管理面板可配置+立即采集。按日去重防重启重发；探活是唯一出网
+  动作且与采集拆分（单测不出网）。
+- **[服务端] 视频可播性（A4）**：photos 表加 codec 列（三引擎迁移），ffprobe
+  补扫第一视频流编码（NSSM PATH 常缺 ffmpeg → 回退 C:/env/ffmpeg/bin）；
+  Web 查看器播放报错转"编码无法播放→下载兜底"卡片（小米 HEVC 场景）。
+- **[服务端] 质量门禁（A5）**：check.bat 增补 ruff/mypy/pip-audit 三段
+  （M0 欠账清偿）；pyproject.toml 务实规则集（FastAPI B008/裸 except
+  BLE001 豁免，风格留给 review）；存量 mypy 20 条归零——顺带修掉
+  resolve 返回注解缺失、share 局部变量撞 Form 参数名等真实瑕疵；
+  运行 venv 依赖漏洞清零（pip/tornado/cryptography 升级，cryptography
+  升级中断致 dist-info 损坏的坑已记录）。
+- **[Web] 设备管理（A6）**：账号设置补"登录设备"列表+按台吊销（API/App
+  端早已有，Web 缺位）；丢手机只吊销单台不再牵连全家（改密码仍全吊）。
+- **[服务端] 照片互动（B2）**：新模块 `app/api/social.py`——photo_comments /
+  photo_reactions 两表（三引擎，表情五枚白名单、UNIQUE 兜底 toggle 幂等）；
+  可见性复用 spaces.visible（能看见照片的人才互动得了，404 不暴露存在性）；
+  评论/回应触发拍摄者站内通知（自己互动自己不通知）。
+- **[服务端+Web] 相册共创（B1）**：精选专辑从管理员专属放开为家庭共创——
+  POST /api/albums 成员可建（记录 created_by），admin/创建者可删；
+  Web 照片页按钮对全员开放，专辑卡显示创建者。
+- **[服务端+Web] 数据导出逃生门（B3）**：POST /api/admin/export 打包成员
+  私人空间+直传子树 zip（arcname 保留空间前缀，恢复按原样落位）+ manifest
+  （账号/分享/设备/统计，边界声明：共享空间文件无归属元数据不在包内）；
+  管理面板成员行加"📦 导出"。走 /api/zip 同一套一次性票据。
+- **[文档+脚本] PC 备份入口（B4）**：docs/PC-BACKUP.md 三姿势指南（脚本/
+  WebDAV 挂载/网页直传）+ scripts/pc-sync.py 零依赖增量备份脚本
+  （PROPFIND 对账 + PUT，同路径同大小同 mtime 跳过，落位 照片/PC备份/<本机名>/）。
+- **[App] 瀑布流+年月快滚轴（B5）**：photos 表三引擎加 width/height，
+  _probe_image_sizes 每轮 200 张 PIL 读头补扫（与视频补扫分账不抢配额，
+  打不开写 0x0 占位防重扫）；/api/photos 返回宽高。照片墙 SliverGrid→
+  SliverMasonryGrid（保留 Sliver 虚拟化——0.4.4 shrinkWrap 风暴教训不回退；
+  新依赖 flutter_staggered_grid_view，pubspec 记录理由），真实宽高比出
+  瀑布流、未知/极端比例回退方格；右缘年月快滚轴（facets 预取+直点跳月）。
+- **[App] 站内通知轮询推送（B6）**：前台 60s 轮询 /api/notifications，
+  未读增量发系统通知（新 inbox channel 可单独关闭；一次事件一条不轰炸；
+  首轮只对齐基线不炸历史）。后台推送属厂商通道，阶段 2 评估。
+- 验证：服务端 pytest 158 项全绿（148+10），ruff/mypy/pip-audit 归零；
+  Web vue-tsc+构建通过；App analyze 零问题、Dart 93 全绿；
+  APK 0.11.0+43 分发（三件套齐）。
+
 ## 2026-09-03（深夜）— v0.10.4+42：审查补丁三件（并发反转/照片墙截断/上传调度时序）
 
 v0.10.0→0.10.3 批次代码审查发现的三个 P1/P2 缺陷修复：

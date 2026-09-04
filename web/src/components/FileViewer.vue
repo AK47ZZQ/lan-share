@@ -329,7 +329,6 @@ const videoEl = ref<HTMLVideoElement | null>(null)
 const videoSpeed = ref(1)
 const videoError = ref(false)   // 浏览器解不了的编码（HEVC/H.265 等）→ 下载兜底
 function onVideoError() { videoError.value = true }
-watch(() => item.value?.path, () => { videoError.value = false })
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 function setSpeed(s: number) {
   videoSpeed.value = s
@@ -342,6 +341,56 @@ async function pip() {
     else if (v?.requestPictureInPicture) await v.requestPictureInPicture()
   } catch { toast('画中画不可用', 'err') }
 }
+
+// ── 照片互动（评论 + 表情回应）──────────────────────────
+const rx = ref<import('../api').PhotoReactions | null>(null)
+const comments = ref<import('../api').PhotoComment[]>([])
+const commentText = ref('')
+const socialBusy = ref(false)
+
+async function loadSocial() {
+  if (kind.value !== 'image' || !item.value) { rx.value = null; comments.value = []; return }
+  const path = item.value.path
+  try {
+    const [r, c] = await Promise.all([
+      api.photoReactions(path),
+      api.photoComments(path),
+    ])
+    if (item.value?.path !== path) return   // 快速翻页竞态：过期响应丢弃
+    rx.value = r
+    comments.value = c.comments
+  } catch { /* 互动加载失败不影响预览主功能 */ }
+}
+
+async function toggleRx(emoji: string) {
+  if (!item.value || socialBusy.value) return
+  socialBusy.value = true
+  try {
+    await api.togglePhotoReaction(item.value.path, emoji)
+    await loadSocial()
+  } catch (e) { toast((e as Error).message, 'err') } finally { socialBusy.value = false }
+}
+
+async function addComment() {
+  if (!item.value || !commentText.value.trim()) return
+  socialBusy.value = true
+  try {
+    await api.addPhotoComment(item.value.path, commentText.value.trim())
+    commentText.value = ''
+    await loadSocial()
+  } catch (e) { toast((e as Error).message, 'err') } finally { socialBusy.value = false }
+}
+
+async function delComment(id: number) {
+  if (!item.value) return
+  if (!(await confirmDlg('删除这条评论？', { danger: true, title: '删除评论' }))) return
+  try {
+    await api.deletePhotoComment(id)
+    await loadSocial()
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+
+watch(() => item.value?.path, () => { videoError.value = false; void loadSocial() })
 
 // ── 导航 ─────────────────────────────────────────────────
 function go(delta: number) {
@@ -669,6 +718,38 @@ function iconOf(it: ViewerItem): string {
             <button class="btn danger sm" @click="doDelete">🗑️ 删除</button>
           </div>
           <p class="fv-hint">关闭预览后操作立即生效（重命名/删除会刷新列表）</p>
+
+          <!-- 家庭互动（仅照片） -->
+          <template v-if="kind === 'image' && rx">
+            <div style="height:1px;background:var(--line);margin:10px 0" />
+            <div style="display:grid;gap:8px">
+              <div style="font-size:13px;font-weight:600">💬 家庭互动</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button v-for="r in rx.reactions" :key="r.emoji"
+                        class="btn sm" :class="{ ghost: !rx.mine.includes(r.emoji) }"
+                        :disabled="socialBusy"
+                        :title="r.names.length ? r.names.join('、') : '还没有人回应'"
+                        style="padding:4px 10px"
+                        @click="toggleRx(r.emoji)">
+                  {{ r.emoji }}<span v-if="r.count" style="margin-left:4px;font-size:12px">{{ r.count }}</span>
+                </button>
+              </div>
+              <div v-if="comments.length" style="display:grid;gap:6px;max-height:200px;overflow:auto">
+                <div v-for="c in comments" :key="c.id"
+                     style="display:flex;gap:8px;align-items:baseline;background:var(--glass);border:1px solid var(--line);border-radius:8px;padding:6px 10px">
+                  <b style="font-size:12px;white-space:nowrap">{{ c.user }}</b>
+                  <span style="font-size:12.5px;flex:1;word-break:break-word">{{ c.body }}</span>
+                  <button v-if="c.mine || me.role === 'admin'" class="iconbtn danger"
+                          title="删除" @click="delComment(c.id)">✕</button>
+                </div>
+              </div>
+              <div style="display:flex;gap:6px">
+                <input v-model="commentText" placeholder="说点什么…（≤500 字）" style="flex:1;font-size:13px"
+                       maxlength="500" @keydown.enter="addComment" />
+                <button class="btn sm" :disabled="socialBusy || !commentText.trim()" @click="addComment">发送</button>
+              </div>
+            </div>
+          </template>
         </aside>
       </transition>
 

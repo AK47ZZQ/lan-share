@@ -212,13 +212,14 @@ def _ffprobe_meta(path: Path) -> tuple[float | None, str | None, str | None]:
 
 
 def _probe_video_durations(cap: int = 20):
-    """补扫视频行缺失的时长/编码。duration 语义：NULL=待补扫（仅视频），0=非视频/
-    已处理。图片行入库即写 0；存量 NULL 图片行在此收编，之后补扫查询不再被图片行
-    白拉全表。codec 是 v0.11 新列：存量视频行 duration 已有、codec 为 NULL 的也
-    一并纳入补扫（探到啥刷啥，互不阻塞）。两段式更新，PG 友好：CASE 里悬空 NULL
-    参数会让 psycopg 报 IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
-    rows = _db().execute("SELECT path, duration, codec FROM photos "
-                         "WHERE duration IS NULL OR codec IS NULL").fetchall()
+    """补扫照片行缺失的时长/编码/尺寸。duration 语义：NULL=待补扫（仅视频），
+    0=非视频/已处理。图片行入库即写 0；存量 NULL 图片行在此收编，之后补扫查询
+    不再被图片行白拉全表。codec/width/height 是 v0.11 新列：duration 已有而
+    codec 或尺寸缺失的行同样纳入补扫（探到啥刷啥，互不阻塞）；尺寸用 PIL 只
+    读文件头，约 1-5ms/张，视频行不探尺寸。两段式更新，PG 友好：CASE 里悬空
+    NULL 参数会让 psycopg 报 IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
+    rows = _db().execute("SELECT path, duration, codec, width FROM photos "
+                         "WHERE duration IS NULL OR codec IS NULL OR width IS NULL").fetchall()
     if not rows:
         return
     todo, others = [], []
@@ -226,7 +227,7 @@ def _probe_video_durations(cap: int = 20):
         if Path(r["path"]).suffix.lower() in VIDEO_EXTS:
             todo.append(r["path"])
         elif r["duration"] is None:
-            others.append(r["path"])   # codec IS NULL 的图片行不重扫，只收编 duration
+            others.append(r["path"])   # codec/尺寸 IS NULL 的图片行不占视频补扫配额
     updates = []
     for rel in todo[:cap]:
         f = SHARE_ROOT / rel
@@ -234,7 +235,7 @@ def _probe_video_durations(cap: int = 20):
             continue   # 留 NULL：下次全量扫描的 gone 清理会删行
         dur, taken, codec = _ffprobe_meta(f)
         if dur is not None or codec:
-            updates.append((dur, taken, codec, rel))
+            updates.append((dur, taken, codec, None, None, rel))
     if not others and not updates:
         return
     with _db_lock:
@@ -242,12 +243,46 @@ def _probe_video_durations(cap: int = 20):
             _db().executemany("UPDATE photos SET duration=0 WHERE path=?",
                               [(p,) for p in others])
         if updates:
-            _db().executemany("UPDATE photos SET duration=?, codec=? WHERE path=?",
-                              [(d, c, p) for (d, t, c, p) in updates])
-            taken_updates = [(t, p) for (d, t, c, p) in updates if t]
+            _db().executemany("UPDATE photos SET duration=?, codec=?, width=?, height=? WHERE path=?",
+                              [(d, c, w, h, p) for (d, t, c, w, h, p) in updates])
+            taken_updates = [(t, p) for (d, t, c, w, h, p) in updates if t]
             if taken_updates:
                 _db().executemany("UPDATE photos SET taken_at=? WHERE path=?",
                                   taken_updates)
+        _db().commit()
+
+
+def _probe_image_sizes(cap: int = 200):
+    """补扫图片尺寸（瀑布流需要真实宽高比；未知的格子 App 回退方格）。
+    PIL 只读文件头不解码像素，单张约 1-5ms；每轮 200 张，几千张存量图
+    十几分钟内自然收敛，不与视频补扫抢配额。"""
+    rows = _db().execute(
+        "SELECT path FROM photos WHERE width IS NULL AND duration=0 LIMIT ?",
+        (cap,)).fetchall()
+    if not rows:
+        return
+    from PIL import Image
+    updates = []
+    gone = []
+    for r in rows:
+        f = SHARE_ROOT / r["path"]
+        if not f.is_file():
+            gone.append((r["path"],))
+            continue
+        try:
+            with Image.open(f) as im:
+                updates.append((im.width, im.height, r["path"]))
+        except Exception:
+            # 打不开的图：写 0x0 占位，避免每轮重扫
+            updates.append((0, 0, r["path"]))
+    if not updates and not gone:
+        return
+    with _db_lock:
+        if updates:
+            _db().executemany("UPDATE photos SET width=?, height=? WHERE path=?",
+                              updates)
+        if gone:
+            _db().executemany("DELETE FROM photos WHERE path=?", gone)
         _db().commit()
 
 
@@ -324,6 +359,7 @@ def _scan_photos(force: bool = False):
         _last_force_scan = time.time()
     # 补扫放扫描锁外：ffprobe 批量最坏 20×15s，不占住扫描锁拖慢时间线刷新
     _probe_video_durations()
+    _probe_image_sizes()   # 瀑布流宽高补扫（PIL 读头，200 张/轮）
 
 
 def _known_users() -> set[str]:
@@ -362,7 +398,7 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
     _scan_photos(force=refresh)
     users = _known_users()
     all_rows = _db().execute(
-        "SELECT path, taken_at, duration, codec FROM photos ORDER BY taken_at DESC, path").fetchall()
+        "SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
@@ -383,6 +419,8 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
             "media_type": _media_type(r["path"]),
             "duration": r["duration"],
             "codec": r["codec"],
+            "width": r["width"],
+            "height": r["height"],
             "thumb": f"/thumb/{r['path']}",
         } for r in rows],
     }

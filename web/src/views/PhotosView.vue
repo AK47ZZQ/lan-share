@@ -89,14 +89,14 @@ async function featureMonth() {
   const title = await promptDlg(`给 ${selMonth.value} 的精选专辑起个名字：`, selMonth.value, { title: '设为精选专辑' })
   if (!title) return
   try {
-    await api.adminAddAlbum(title.trim(), selMonth.value)
+    await api.addAlbum(title.trim(), selMonth.value)
     albums.value = await api.albums()
     toast('已设为精选专辑', 'ok')
   } catch (e) { toast((e as Error).message, 'err') }
 }
 async function removeAlbum(a: Album) {
   try {
-    await api.adminDeleteAlbum(a.id)
+    await api.deleteAlbum(a.id)
     albums.value = albums.value.filter(x => x.id !== a.id)
     toast('已移除精选专辑', 'ok')
   } catch (e) { toast((e as Error).message, 'err') }
@@ -116,8 +116,8 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))   // 不移除
     <div class="page-head">
       <h1>照片</h1>
       <span class="badge" v-if="total">{{ total }} 张<template v-if="filterDesc"> · {{ filterDesc }}</template></span>
-      <button v-if="me.role === 'admin' && selMonth" class="btn ghost sm" style="margin-left:auto"
-              title="把当前月份保存为精选专辑" @click="featureMonth">⭐ 本月设为精选</button>
+      <button v-if="selMonth" class="btn ghost sm" style="margin-left:auto"
+              title="把当前月份保存为精选专辑（家庭共创，谁都能建）" @click="featureMonth">⭐ 本月设为精选</button>
     </div>
 
     <!-- 精选专辑 -->
@@ -126,7 +126,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))   // 不移除
            @click="pickAlbum(a)">
         <span class="album-title">⭐ {{ a.title }}</span>
         <span class="album-sub">{{ a.month }}</span>
-        <button v-if="me.role === 'admin'" class="album-del" title="移除专辑"
+        <button v-if="me.role === 'admin' || a.created_by === me.username" class="album-del" :title="a.created_by ? `${a.created_by} 创建` : '移除专辑'"
                 @click.stop="removeAlbum(a)">✕</button>
       </div>
     </div>
