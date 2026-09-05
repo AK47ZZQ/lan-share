@@ -22,6 +22,7 @@ import '../data/local/saved_credential.dart';
 import '../data/local/verifier_store.dart';
 import '../data/totp.dart';
 import '../state/session.dart';
+import 'invite_redeem_page.dart';
 import 'theme/app_theme.dart';
 import 'widgets/brand.dart';
 import 'widgets/server_picker.dart' show shortHost, showServerPicker;
@@ -404,6 +405,20 @@ class _LoginPageState extends ConsumerState<LoginPage>
                 },
           child: Text(_pairMode ? '使用账号密码登录' : '无法输密码？使用配对码登录',
               style: const TextStyle(fontSize: 12.5)),
+        ),
+        // v0.15.2：与网页版登录页同源的邀请码建号入口。传入当前地址栏
+        // 内容作提交底座（审查 P1：未登录时 ApiClient.dio() 会拿 prefs
+        // 里的默认/旧地址懒建缓存，code+password 不能发错服务器）
+        TextButton(
+          onPressed: session.checking
+              ? null
+              : () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          InviteRedeemPage(baseUrl: _server.text.trim()))),
+          child: const Text('有邀请码？使用邀请码加入',
+              style: TextStyle(fontSize: 12.5)),
         ),
       ]),
     );

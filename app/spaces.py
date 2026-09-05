@@ -30,7 +30,8 @@ from app.filetools import safe_path
 
 # 邀请建号拒绝的用户名（避免与空间保留段/系统目录冲突）
 RESERVED_USERNAMES = {"shared", "private", "incoming", "tmp",
-                      "admin", "administrator", "root", "system"}
+                      "admin", "administrator", "root", "system",
+                      ".", ".."}  # 纯点号：safe_path 会 403，建出来即废号（v0.15.2）
 
 
 def _normcase(s: str) -> str:

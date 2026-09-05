@@ -19,6 +19,7 @@ import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'activity_page.dart';
 import 'backup_settings_page.dart';
+import 'invite_redeem_page.dart';
 import 'notifications_page.dart';
 import 'recent_page.dart';
 import 'storage_detail_page.dart';
@@ -506,6 +507,33 @@ class _HomePageState extends ConsumerState<HomePage> {
                     }),
                     _quick(Icons.link_outlined, '我的分享', widget.onGoMe),
                   ])),
+          // v0.15.2：邀请码注册入口——新成员凭码自助建号，管理端建码
+          // 在管理面板 → 邀请码（服务端 /api/invites/redeem 匿名可用）
+          _card(
+              child: InkWell(
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const InviteRedeemPage())),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Row(children: [
+                    Icon(Icons.how_to_reg_outlined,
+                        size: 22, color: cs.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                          const Text('邀请码注册',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 2),
+                          Text('新成员凭邀请码自助建号，无需管理员代录',
+                              style: TextStyle(
+                                  fontSize: 12, color: cs.onSurfaceVariant)),
+                        ])),
+                    Text('去注册 ›',
+                        style:
+                            TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                  ]))),
             ])),
         ]));
   }

@@ -52,18 +52,28 @@ class TrustStore {
   }
 
   /// badCertificateCallback 用（同步）：已信任且指纹匹配 → 放行；
-  /// 否则记 pending 供 UI 确认，并拒绝。
+  /// 否则记 pending 供 UI 确认，并拒绝。known 存在但不匹配（服务器换
+  /// 证书）也要记 pending——不记的话 probe/确认框都拿不到指纹，且
+  /// revoke 无 UI 入口，该端点从此无自愈路径（v0.15.2 红队 P1）。
   bool allow(X509Certificate cert, String host, int port) {
     final key = '$host:$port';
     final fp = fingerprint(cert);
     final known = _trusted[key];
-    if (known != null) return known == fp; // 换证书 → 不放行，需重新确认
+    if (known != null) {
+      if (known == fp) return true;
+      _pending[key] = fp; // 换证书：留待重新确认（登录页/账号安全可裁决）
+      return false;
+    }
     _pending[key] = fp;
     return false;
   }
 
   /// 连接失败后 UI 读取待确认指纹（无则 null）
   String? pendingFor(String host, int port) => _pending['$host:$port'];
+
+  /// 该端点当前已信任的指纹（无则 null）。自动切换预信任用它做"同值
+  /// 跳过"，避免每 20s 重复写 SecureStore。
+  String? trustedFor(String host, int port) => _trusted['$host:$port'];
 
   /// 指纹是否与本机任一已信任地址的指纹同源。主/备隧道指向同一服务器 →
   /// 同一副证书密钥 → 指纹必然一致；新入口出示已知指纹可安全免确认信任，
@@ -78,8 +88,16 @@ class TrustStore {
   /// 本地存的是无冒号小写 hex——比对前必须归一）
   static String _normFp(String fp) => fp.replaceAll(':', '').toUpperCase();
 
-  Future<void> trust(String host, int port, String fp) async {
+  /// 入库格式归一：去冒号、统一小写 hex——与 fingerprint(X509) 产出对齐。
+  /// 服务端 /api/app/entries 下发的是冒号大写格式；调用方若原样入库，
+  /// allow() 的严格相等永远失败，且该端点因 known!=null 不再记 pending，
+  /// 信任记录从此既不能自动静默信任也无法走确认框，无自愈路径
+  /// （v0.15.2 预信任踩坑，收口到此让所有调用方免疫）。
+  static String normHex(String fp) => fp.replaceAll(':', '').toLowerCase();
+
+  Future<void> trust(String host, int port, String fpRaw) async {
     final key = '$host:$port';
+    final fp = normHex(fpRaw);
     _trusted[key] = fp;
     _pending.remove(key);
     await SecureStore.setString('trust_$key', fp);
