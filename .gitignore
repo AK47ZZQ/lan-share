@@ -59,3 +59,7 @@ web/dist/
 # ---- App release 签名（丢了就无法覆盖安装，只留本机 + <仓库外的私有备份位置>）----
 mobile/android/key.properties
 mobile/android/keys/
+
+# E2E 临时截图与 UI dump（AI 实测产物，不入库）
+/e2e
+/e2e-*.png

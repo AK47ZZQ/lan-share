@@ -10,7 +10,9 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import 'dart:ui' show ImageFilter;
+
+import 'package:waterfall_flow/waterfall_flow.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,6 +28,7 @@ import 'photo_models.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
 import 'widgets/auth_image.dart';
+import 'widgets/prompt_dialog.dart';
 
 class PhotosPage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -197,7 +200,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _pickMonth() async {
     final months = await _ensureMonths();
     if (!mounted) return;
-    final isAdmin = ref.read(sessionProvider).role == 'admin';
+    final canCreate = ref.read(sessionProvider).role != 'guest';
     // 闭包内无法提升可空局部变量：先物化成 final 列表再用
     final monthEntries = months.entries.toList();
     final sel = await showModalBottomSheet<String>(
@@ -208,7 +211,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                     const Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(child: Text('还没有照片'))),
-                    if (isAdmin)
+                    if (canCreate)
                       ListTile(
                           leading: const Icon(Icons.add),
                           title: const Text('新建精选专辑'),
@@ -230,7 +233,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                   color: Theme.of(ctx).colorScheme.outline)),
                           selected: _month == e.key,
                           onTap: () => Navigator.pop(ctx, e.key)),
-                    if (isAdmin)
+                    if (canCreate)
                       ListTile(
                           leading: const Icon(Icons.add),
                           title: const Text('新建精选专辑'),
@@ -266,25 +269,20 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 新建精选专辑（admin）：标题 + 从现有月份里选
   Future<void> _addAlbum() async {
     if (!mounted) return;
-    final c = TextEditingController();
+    // controller 生命周期由 PromptDialog 自持（v0.13：旧写法在退场动画中
+    // dispose 触发 framework 断言，点"下一步"必崩红屏——E2E 实测）
     final title = await showDialog<String>(
         context: context,
-        builder: (d) => AlertDialog(
-              title: const Text('新建精选专辑'),
-              content: TextField(controller: c,
-                  autofocus: true,
-                  decoration: const InputDecoration(
-                      labelText: '标题（如"暑假合集"）')),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(d),
-                    child: const Text('取消')),
-                FilledButton(
-                    onPressed: () => Navigator.pop(d, c.text.trim()),
-                    child: const Text('下一步')),
-              ]));
-    c.dispose();
-    if (title == null || title.isEmpty || !mounted) return;
+        builder: (d) => const PromptDialog(
+              title: '新建精选专辑',
+              label: '标题（如"暑假合集"）',
+              hint: '暑假合集',
+            ));
+    if (title == null || title.trim().isEmpty || !mounted) return;
+    // AppBar 直进本流程时不经过 _pickMonth，缓存可能为空（刚创建过专辑被
+    // 破缓存/首拉失败）——月份表会只剩表头的确定性死路，先确保就绪
+    await _ensureMonths();
+    if (!mounted) return;
     final month = await showModalBottomSheet<String>(
         context: context,
         builder: (ctx) => SafeArea(
@@ -297,14 +295,66 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (month == null || !mounted) return;
     try {
       final dio = await ApiClient.I.dio();
-      await dio.post('/api/admin/albums',
-          data: {'title': title, 'month': month});
+      // v0.11 起全家共创：成员可建（旧 /api/admin/albums 仅 admin，
+      // 成员端点且带月份查重 409——v0.13 App 端点对齐）
+      await dio.post('/api/albums', data: {'title': title, 'month': month});
       _toast('专辑已创建');
       _loadAlbums();
       setState(() => _months = null); // 破缓存让下次进来重新拉
     } catch (e) {
       _toast(errDetail(e));
     }
+  }
+
+  /// 专辑长按菜单：创建者信息 + 删除（admin 或创建者本人；服务端兜底 403）
+  Future<void> _albumSheet(_Album a) async {
+    final me = ref.read(sessionProvider).username ?? '';
+    final canDelete =
+        ref.read(sessionProvider).role == 'admin' || a.createdBy == me;
+    await showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(a.title,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(
+                                '月份合集 · ${_monthLabel(a.month)}'
+                                '${a.createdBy.isEmpty ? "" : " · 由 ${a.createdBy} 创建"}',
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey)),
+                          ]))),
+              const Divider(height: 1),
+              ListTile(
+                  leading: const Icon(Icons.calendar_view_month),
+                  title: const Text('查看这个月'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() => _month = a.month);
+                    _refresh();
+                  }),
+              if (canDelete)
+                ListTile(
+                    leading: const Icon(Icons.delete_outline),
+                    title: const Text('删除专辑'),
+                    iconColor: Theme.of(context).colorScheme.error,
+                    textColor: Theme.of(context).colorScheme.error,
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      // ignore: discarded_futures
+                      _deleteAlbum(a);
+                    }),
+              const SizedBox(height: 8),
+            ])));
   }
 
   Future<void> _deleteAlbum(_Album a) async {
@@ -324,7 +374,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (ok != true || !mounted) return;
     try {
       final dio = await ApiClient.I.dio();
-      await dio.delete('/api/admin/albums/${Uri.encodeComponent(a.id)}');
+      // v0.11 端点：admin 或创建者可删（403 由服务端兜底）
+      await dio.delete('/api/albums/${Uri.encodeComponent(a.id)}');
       if (!mounted) return;
       setState(() =>
           _albums = _albums?.where((x) => x.id != a.id).toList());
@@ -508,6 +559,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                     icon: const Icon(Icons.calendar_month_outlined),
                     onPressed: _pickMonth),
                 IconButton(
+                    tooltip: '新建精选专辑',
+                    icon: const Icon(Icons.auto_awesome_mosaic_outlined),
+                    onPressed: ref.read(sessionProvider).role == 'guest'
+                        ? null
+                        : () => _addAlbum()),
+                IconButton(
                     tooltip: '上传手机照片',
                     icon: const Icon(Icons.add_photo_alternate_outlined),
                     onPressed: _pickAndUpload),
@@ -535,12 +592,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                       padding:
                                           const EdgeInsets.only(right: 8),
                                       child: GestureDetector(
-                                          onLongPress: ref
-                                                      .read(sessionProvider)
-                                                      .role ==
-                                                  'admin'
-                                              ? () => _deleteAlbum(a)
-                                              : null,
+                                          onLongPress: () =>
+                                              _albumSheet(a),
                                           child: InputChip(
                                               visualDensity:
                                                   VisualDensity.compact,
@@ -656,17 +709,27 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               ])));
     }
 
-    return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 6),
-        decoration: BoxDecoration(
-            color: cs.surface.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(10)),
-        child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-          entry('全部', null),
-          for (final e in entries)
-            entry(e.key.substring(2), e.key, count: e.value),  // 2026-08 → 26-08
-        ])));
+    // 毛玻璃底（v0.13）：此前半透明色块直接叠在第三列照片上，遮挡且发闷；
+    // BackdropFilter 实时模糊透出底下内容，贴右缘窄条观感干净
+    return ClipRRect(
+        borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)),
+        child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+            child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+                decoration: BoxDecoration(
+                    color: cs.surface.withValues(alpha: 0.55),
+                    border: Border(
+                        left: BorderSide(
+                            color: cs.outline.withValues(alpha: 0.25),
+                            width: 0.5))),
+                child: SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  entry('全部', null),
+                  for (final e in entries)
+                    entry(e.key.substring(2), e.key, count: e.value),  // 2026-08 → 26-08
+                ])))));
   }
 
   Widget _selectionBar() {
@@ -746,14 +809,16 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                 color: Theme.of(context)
                                     .colorScheme
                                     .primary))))),
-            // 瀑布流（v0.11）：SliverMasonryGrid 保留 Sliver 虚拟化（0.4.4 教训
-            // 不回退），格子高度来自服务端探测的真实宽高比；未知的回退方格。
-            SliverMasonryGrid(
+            // 瀑布流：SliverWaterfallFlow 保留 Sliver 虚拟化（0.4.4 教训不回退），
+            // 格子高度来自服务端探测的真实宽高比；未知的回退方格。
+            // v0.11 用 flutter_staggered_grid_view 的 SliverMasonryGrid：
+            // 同一 CustomScrollView 里多个瀑布流 sliver 时滚动修正有致命 bug
+            // （上游 issue #265/#286/#338），按日分组=每天一个=真机必卡死，
+            // v0.13 换 waterfall_flow（该包即为此修复的社区版，API 同型）。
+            SliverWaterfallFlow(
                 gridDelegate:
-                    const SliverSimpleGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3),
-                mainAxisSpacing: 2,
-                crossAxisSpacing: 2,
+                    const SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3, mainAxisSpacing: 2, crossAxisSpacing: 2),
                 delegate: SliverChildBuilderDelegate(
                     addRepaintBoundaries: true,
                     (context, j) {
@@ -857,8 +922,10 @@ class _Album {
   final String id;
   final String title;
   final String month;
+  final String createdBy;
   _Album.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String? ?? '',
         title = j['title'] as String? ?? '',
-        month = j['month'] as String? ?? '';
+        month = j['month'] as String? ?? '',
+        createdBy = j['created_by'] as String? ?? '';
 }

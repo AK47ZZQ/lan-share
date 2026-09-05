@@ -1,3 +1,35 @@
+## 2026-09-05 — v0.13.0+45：照片墙滑动根修 + 专辑共创体验 + 传输闭环（模拟器全交互实测批次）
+
+用户实测反馈四问题（照片墙无法滑动/专辑逻辑乱且操作不便/传输页无法选择打开方式/
+不知道文件下载到哪），Agent 上安卓模拟器全页面交互实测后逐一根修，纯 App 批次
+（服务端零改动，专辑新端点 v0.11 已具备）：
+
+- **[P0] 照片墙滑动卡死根修**：v0.11 的 flutter_staggered_grid_view 有上游致命
+  bug——同一 CustomScrollView 存在多个 SliverMasonryGrid 时滚动修正失效
+  （issue #265/#286/#338），照片墙按日分组=每天一个=真机必卡死；E2E 复现
+  后换 waterfall_flow 的 SliverWaterfallFlow（API 同型、社区专为此修复），
+  24+ 次跨组连滑不再卡死；新增多组瀑布流滚动回归测试（batch071）。
+- **[P1] 精选专辑对齐 v0.11 共创语义**：端点从 /api/admin/albums（仅 admin）
+  迁到 /api/albums + /api/albums/{id}（成员可建、创建者/admin 可删）；
+  新建入口从"按月跳转弹窗最底部"提到照片页 AppBar；chip 长按改菜单
+  （查看这个月 / 创建者信息 / 删除）；_Album 带 created_by。
+- **[P1] 传输页下载闭环**：已下载任务点按弹操作单——打开（openLocalFile
+  统一校验）/ 保存到手机相册（新 MediaStoreBridge.saveToGallery 通道，
+  IS_PENDING 落 Pictures|Movies/LAN Share/，无需存储权限）/ 分享 /
+  查看保存位置 / 移除记录；空态文案说明下载去向。
+- **[P1] 传输记录重启失真修复**：入口拿不到大小的下载（查看器传 0）完成时
+  物化 size=实际字节；恢复逻辑不再对已完成下载按 .part 重算 receivedBytes
+  （文件已改名，会把 488.8 KB 打回 "0 B · 已下载"）。
+- **[P0] 输入对话框退场崩溃修复**：showDialog 后立即 dispose TextEditingController
+  在退场动画中触发 framework 断言 '_dependents.isEmpty' 红屏（E2E 点"下一步"
+  必崩，存量雷）；新 widgets/PromptDialog 自持 controller 生命周期，
+  photos_page/files_page 三处统一收口。
+- **[美化] 月份快滚轴毛玻璃**：BackdropFilter 实时模糊替代半透明色块，
+  贴右缘窄条，不再遮挡第三列照片观感。
+- 测试：Dart 99→101（batch071 多组瀑布流滚动回归）；dart analyze 零问题；
+  模拟器 E2E 实测滑动/专辑创建删除（服务端 created_by 落账）/传输操作单
+  （MediaStore 落库验证 Pictures/LAN Share/）全过。
+
 ## 2026-09-05 — v0.12.0+44：App 文件页 Web 同款双布局 + 缩略图 + 点进预览
 
 App 侧体验对齐 Web 文件页（用户指定：方形/横向双排布、Web 同款缩略图、

@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
+import '../ui/widgets/prompt_dialog.dart';
 import '../data/api/errors.dart';
 import '../state/session.dart';
 
@@ -188,26 +189,18 @@ class _AdminPageState extends ConsumerState<AdminPage>
       String? hint,
       String okText = '保存',
       bool allowEmpty = false}) async {
-    final c = TextEditingController(text: initial);
+    // controller 生命周期由 PromptDialog 自持（v0.13：dialog 退场动画中
+    // dispose 会触发 framework 断言红屏，与 photos/files 批量收口同款）
     final v = await showDialog<String>(
         context: context,
-        builder: (d) => AlertDialog(
-                title: Text(title),
-                content: TextField(
-                    controller: c,
-                    obscureText: obscure,
-                    autofocus: true,
-                    decoration: InputDecoration(
-                        labelText: label, hintText: hint)),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(d),
-                      child: const Text('取消')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(d, c.text.trim()),
-                      child: Text(okText)),
-                ]));
-    c.dispose();
+        builder: (d) => PromptDialog(
+            title: title,
+            label: label,
+            hint: hint ?? '',
+            initial: initial,
+            obscure: obscure,
+            okText: okText,
+            trimOnSubmit: true));
     if (v == null) return null; // 取消
     if (v.isEmpty) return allowEmpty ? '' : null; // 留空提交
     return v;

@@ -2,7 +2,7 @@ name: lanshare_app
 description: "LAN Share 家庭网盘 · 手机 App（Flutter，APP-DESIGN v0.1）"
 publish_to: 'none'
 
-version: 0.12.0+44
+version: 0.13.0+45
 
 environment:
   sdk: ^3.13.1
@@ -37,8 +37,11 @@ dependencies:
   # ── v0.8.5 主题引擎 ────────────────────────────────────────
   dynamic_color: ^2.1.0          # 「跟随壁纸」主题色（Android 12+ Material You 动态取色，official）
   # ── v0.11 家庭共创批次 ────────────────────────────────────
-  flutter_staggered_grid_view: ^0.7.0  # 照片墙瀑布流（SliverMasonryGrid 保留 Sliver 虚拟化，
-                                      #  官方维护、无传递依赖；方格 SliverGrid 换装不动分页逻辑）
+  # 照片墙瀑布流（SliverWaterfallFlow 保留 Sliver 虚拟化；v0.11 曾用
+  # flutter_staggered_grid_view，其 SliverMasonryGrid 在"同 CustomScrollView
+  # 多个瀑布流 sliver"下滚动修正有致命 bug（上游 issue #265/#286/#338，
+  # 时间线按日分组恰好每天一个=必卡死），v0.13 换 waterfall_flow 修复）
+  waterfall_flow: ^3.1.1
 
 dev_dependencies:
   flutter_test:

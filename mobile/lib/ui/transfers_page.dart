@@ -2,12 +2,17 @@
 // FR-5：应用被杀后重启，未完成队列自动恢复续传（恢复动作在引擎 onLogin）。
 // 0.6.0：状态筛选（全部/进行中/已完成/失败）、失败原因点按看全量、
 //        全部暂停/全部继续/重试全部失败（AppBar 菜单）。
-import 'package:flutter/material.dart';
-import 'widgets/brand.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
+
+import '../data/local/gallery_saver.dart';
+import 'widgets/brand.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'widgets/open_local.dart';
 
 enum _Filter { all, active, done, failed }
 
@@ -88,7 +93,7 @@ class _TransfersPageState extends ConsumerState<TransfersPage> {
           child: tasks.isEmpty
               ? const EmptyState(
                   title: '暂无传输任务',
-                  hint: '在「文件」页可上传，点按文件可下载')
+                  hint: '在「文件」页可上传，点按文件可下载；下载保存在 App 专属目录，完成任务点按可打开或存入手机相册')
               : visible.isEmpty
                   ? ListView(children: [
                       const SizedBox(height: 80),
@@ -198,11 +203,136 @@ class _Tile extends ConsumerWidget {
                 style: const TextStyle(fontSize: 12),
               ),
             ]),
-        // 失败任务点按看全量错误（单行截断排障不够用）
-        onTap: task.status == TransferStatus.error ? () => _showError(context) : null,
+        // 失败任务点按看全量错误（单行截断排障不够用）；
+        // 已下载任务点按弹操作单（打开/保存到相册/分享/位置，v0.13）
+        onTap: task.status == TransferStatus.error
+            ? () => _showError(context)
+            : (task.status == TransferStatus.done &&
+                    task.kind == TransferKind.download)
+                ? () => _doneSheet(context)
+                : null,
         trailing: _actions(context),
       ),
     );
+  }
+
+  static const _imgExts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
+      '.heic', '.heif'};
+  static const _vidExts = {'.mp4', '.mkv', '.mov', '.webm', '.avi', '.m4v'};
+
+  bool get _isMedia {
+    final ext = task.name.contains('.')
+        ? task.name.substring(task.name.lastIndexOf('.')).toLowerCase()
+        : '';
+    return _imgExts.contains(ext) || _vidExts.contains(ext);
+  }
+
+  bool get _isVideo {
+    final ext = task.name.contains('.')
+        ? task.name.substring(task.name.lastIndexOf('.')).toLowerCase()
+        : '';
+    return _vidExts.contains(ext);
+  }
+
+  /// 已下载任务操作单（v0.13 用户痛点：下载完点不动、不知道存哪了）。
+  /// 打开走 openLocalFile（存在性校验+失败 toast）；媒体可存入系统相册
+  /// （落 Pictures|Movies/LAN Share/）；位置明示 App 专属目录。
+  void _doneSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(task.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(
+                                '${humanSize(task.size)} · 已下载至 App 下载目录',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.grey)),
+                          ]))),
+              const Divider(height: 1),
+              ListTile(
+                  leading: const Icon(Icons.open_in_new),
+                  title: const Text('打开'),
+                  subtitle: const Text('用手机上能处理此文件的应用打开'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    // ignore: discarded_futures
+                    openLocalFile(context, task.localPath);
+                  }),
+              if (_isMedia)
+                ListTile(
+                    leading: const Icon(Icons.photo_library_outlined),
+                    title: const Text('保存到手机相册'),
+                    subtitle: const Text('在系统相册的 LAN Share 目录可见'),
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      final err = await GallerySaver.save(task.localPath,
+                          isVideo: _isVideo);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(err ?? '已保存到相册'),
+                            duration: const Duration(seconds: 2)));
+                      }
+                    }),
+              ListTile(
+                  leading: const Icon(Icons.share_outlined),
+                  title: const Text('分享 / 发送到其他应用'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    if (!File(task.localPath).existsSync()) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                          content: Text('本地文件已被清理，请重新下载'),
+                          duration: Duration(seconds: 2)));
+                      return;
+                    }
+                    // ignore: discarded_futures
+                    Share.shareXFiles([XFile(task.localPath)],
+                        subject: task.name);
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: const Text('查看保存位置'),
+                  subtitle: Text(task.localPath,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await showDialog<void>(
+                        context: context,
+                        builder: (dctx) => AlertDialog(
+                                title: const Text('保存位置',
+                                    style: TextStyle(fontSize: 16)),
+                                content: SelectableText(
+                                    'App 专属目录（其他应用不可见）：\n'
+                                    '${task.localPath}\n\n'
+                                    '另存到手机其他位置请用「保存到手机相册」或「分享」。',
+                                    style: const TextStyle(fontSize: 13)),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () => Navigator.pop(dctx),
+                                      child: const Text('关闭')),
+                                ]));
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.delete_outline),
+                  title: const Text('移除任务记录',
+                      style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    engine.removeTask(task);
+                  }),
+              const SizedBox(height: 8),
+            ])));
   }
 
   void _showError(BuildContext context) {

@@ -530,6 +530,9 @@ class TransferEngine extends ChangeNotifier {
 
   void _finishDownload(TransferTask t, File part) {
     t.receivedBytes = part.lengthSync();
+    // 入口拿不到大小的任务（照片墙/查看器传 size=0）：完成时用实际
+    // 字节数物化 size——否则重启恢复后总量仍是 0，界面显示 "0 B · 已下载"
+    if (t.size <= 0) t.size = t.receivedBytes;
     part.renameSync(t.localPath);
     t.status = TransferStatus.done;
     _speed[t.id] = 0;
@@ -635,9 +638,13 @@ class TransferEngine extends ChangeNotifier {
         final t = TransferTask.fromJson(Map<String, dynamic>.from(j));
         // 进程被杀遗留的"在途"状态统一转 paused（登录后自动续传）
         if (t.isActive) t.status = TransferStatus.paused;
-        if (t.kind == TransferKind.download) {
+        if (t.kind == TransferKind.download && !t.finished) {
           final p = File('${t.localPath}.part');
           t.receivedBytes = p.existsSync() ? p.lengthSync() : 0;
+        } else if (t.kind == TransferKind.download && t.finished) {
+          // 已完成任务：done 时 size 已物化为实际字节（即便入口传 0），
+          // 不再按 .part 重算——文件改名后 .part 不存在会把进度打回 0
+          if (t.size <= 0) t.size = t.receivedBytes;
         } else if (!t.finished && !File(t.localPath).existsSync()) {
           // 只纠"未完成"的：已完成任务本地副本被清（如分享接收的 cache 拷贝）
           // 不改判 error，免得重启后满屏假错误

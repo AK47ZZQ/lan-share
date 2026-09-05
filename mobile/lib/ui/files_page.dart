@@ -22,6 +22,7 @@ import '../data/net.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
 import 'widgets/open_local.dart';
+import 'widgets/prompt_dialog.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import '../transfer/transfer_engine.dart';
@@ -333,25 +334,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   Future<String?> _promptText(String title, String label, String hint,
       {String? initial}) async {
-    final ctrl = TextEditingController(text: initial ?? '');
-    final value = await showDialog<String>(
+    // controller 生命周期由 PromptDialog 自持（同 photos_page 新建专辑的
+    // 退场动画 dispose 崩溃雷，v0.13 统一收口）
+    return showDialog<String>(
         context: context,
-        builder: (dctx) => AlertDialog(
-                title: Text(title),
-                content: TextField(
-                    controller: ctrl,
-                    autofocus: true,
-                    decoration: InputDecoration(labelText: label, hintText: hint)),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(dctx),
-                      child: const Text('取消')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(dctx, ctrl.text),
-                      child: const Text('确定')),
-                ]));
-    ctrl.dispose();
-    return value;
+        builder: (dctx) => PromptDialog(
+            title: title, label: label, hint: hint, initial: initial));
   }
 
   void _toast(String msg) {

@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -32,6 +33,7 @@ object MediaStoreBridge {
                     "query" -> query(ctx, call.arguments as? Map<*, *>)
                     "buckets" -> buckets(ctx)
                     "open" -> open(ctx, call.arguments as? Map<*, *>)
+                    "saveToGallery" -> saveToGallery(ctx, call.arguments as? Map<*, *>)
                     else -> err("unknown_method")
                 }
             } catch (e: Exception) {
@@ -42,6 +44,63 @@ object MediaStoreBridge {
     }
 
     private fun err(msg: String) = JSONObject().put("error", msg).toString()
+
+    private val videoExts = setOf("mp4", "mov", "webm", "avi", "mkv", "m4v")
+
+    private fun mimeFor(ext: String, video: Boolean): String {
+        val e = ext.lowercase()
+        return if (video) when (e) {
+            "mov" -> "video/quicktime"
+            "webm" -> "video/webm"
+            "avi" -> "video/x-msvideo"
+            "mkv", "m4v" -> "video/x-matroska"
+            else -> "video/mp4"
+        } else when (e) {
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            "heic", "heif" -> "image/heic"
+            "bmp" -> "image/bmp"
+            else -> "image/jpeg"
+        }
+    }
+
+    /// 已下载文件保存进系统相册（v0.13 传输页"保存到手机相册"）。
+    /// API 29+ 走 IS_PENDING 无需存储权限；26-28 需运行时 WRITE 权限，
+    /// App 未申请——直接报错引导（目标机型基本 29+）。
+    private fun saveToGallery(ctx: Context, args: Map<*, *>?): String {
+        val path = args?.get("path") as? String ?: return err("missing_path")
+        val video = args["isVideo"] as? Boolean ?: false
+        val f = File(path)
+        if (!f.exists()) return err("file_missing")
+        if (Build.VERSION.SDK_INT < 29) return err("requires_android_10")
+        val collection =
+            if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val values = android.content.ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeFor(f.extension, video))
+            put(MediaStore.MediaColumns.RELATIVE_PATH,
+                if (video) "Movies/LAN Share" else "Pictures/LAN Share")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val resolver = ctx.contentResolver
+        val uri = resolver.insert(collection, values) ?: return err("insert_failed")
+        try {
+            resolver.openOutputStream(uri)?.use { out ->
+                f.inputStream().use { it.copyTo(out) }
+            } ?: return err("open_output_failed")
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)   // 残留 pending 记录清掉
+            return err(e.message ?: "copy_failed")
+        }
+        val done = android.content.ContentValues().apply {
+            put(MediaStore.MediaColumns.IS_PENDING, 0)
+        }
+        // 发布失败（罕见）：记录会滞留 pending 相册不可见，必须如实报错
+        if (resolver.update(uri, done, null, null) == 0) return err("publish_failed")
+        return JSONObject().put("ok", true).toString()
+    }
 
     private fun query(ctx: Context, args: Map<*, *>?): String {
         val includeVideos = args?.get("videos") as? Boolean ?: false
