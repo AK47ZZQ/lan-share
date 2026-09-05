@@ -11,6 +11,7 @@ import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
 import '../backup/backup_round.dart';
 import '../backup/media_source.dart';
+import '../data/api/purge.dart' show purgeServerFiles;
 import '../state/session.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 
@@ -138,12 +139,243 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     if (cfg.enabled) await BackupBridge.runOnce();
   }
 
+  // ── 危险区：清空服务端备份（v0.16.1）────────────────────
+  // 服务端没有"按用户清空"端点，客户端两刀解决：整目录 DELETE
+  // /api/files/照片|视频/<用户名>（服务端 move_to_trash 支持目录，一次
+  // 进回收站）→ 按回收站快照差集找到本次条目彻底删除。防呆四层：
+  // ① 两步确认（模式/账本选择 → 输入用户名）；② 执行期间临时关停自动
+  // 备份（防新调度把刚删的又传回来，完毕恢复原状）；③ 账本默认保留
+  // （"释放空间"意图下已备份记录防止重传），勾选才清（"重置备份"意图）；
+  // ④ 目录不存在按成功计（视频树常缺）。
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
+  /// 第一步：选模式 + 账本选项。返回 null=取消。
+  Future<(bool purge, bool clearLedger)?> _wipeOptions() async {
+    var purge = true; // 默认彻底删除：清备份的主诉求就是释放空间
+    var clearLedger = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => StatefulBuilder(
+        builder: (dctx, setD) {
+          final cs = Theme.of(dctx).colorScheme;
+          return AlertDialog(
+            title: const Text('清空服务端备份'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '将删除备份位置里的全部内容：\n'
+                    '照片/<我的用户名>/ 与 视频/<我的用户名>/\n\n'
+                    '手机里的原照片不受影响。',
+                    style: TextStyle(fontSize: 13)),
+                  const SizedBox(height: 10),
+                  RadioGroup<bool>(
+                    groupValue: purge,
+                    onChanged: (v) => setD(() => purge = v ?? true),
+                    child: Column(children: [
+                      RadioListTile<bool>(
+                        value: true,
+                        title: const Text('彻底删除'),
+                        subtitle: const Text(
+                            '立即释放服务端空间，不进回收站、无法恢复',
+                            style: TextStyle(fontSize: 12)),
+                        contentPadding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact),
+                      RadioListTile<bool>(
+                        value: false,
+                        title: const Text('移入回收站'),
+                        subtitle: const Text(
+                            '不立即释放空间，30 天内可到网页端恢复',
+                            style: TextStyle(fontSize: 12)),
+                        contentPadding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact),
+                    ]),
+                  ),
+                  CheckboxListTile(
+                    value: clearLedger,
+                    onChanged: (v) => setD(() => clearLedger = v ?? false),
+                    title: const Text('同时清空备份账本'),
+                    subtitle: const Text(
+                        '默认保留（删除后不会自动重传）；勾选后下次备份会把'
+                        '手机里的照片全部重新上传',
+                        style: TextStyle(fontSize: 12)),
+                    contentPadding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact),
+                  Text(
+                      purge ? '确定要彻底删除吗？此操作不可恢复。' : '文件将进入服务端回收站。',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          color: purge ? cs.error : null)),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dctx, false),
+                child: const Text('取消')),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                    backgroundColor: purge ? cs.error : null),
+                onPressed: () => Navigator.pop(dctx, true),
+                child: const Text('下一步')),
+            ],
+          );
+        },
+      ),
+    );
+    if (ok != true) return null;
+    return (purge, clearLedger);
+  }
+
+  /// 第二步：输入用户名确认（type-to-confirm，防手滑+防误入）。
+  Future<bool> _wipeConfirm(String username) async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: const Text('确认执行'),
+        content: TextField(
+          controller: ctrl,
+          autocorrect: false,
+          decoration: const InputDecoration(
+            hintText: '输入用户名以确认',
+            helperText: '输入与用户名完全一致时才能继续')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('取消')),
+          ListenableBuilder(
+            listenable: ctrl,
+            builder: (dctx, _) => FilledButton(
+              style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(dctx).colorScheme.error),
+              onPressed: ctrl.text.trim() == username
+                  ? () => Navigator.pop(dctx, true)
+                  : null,
+              child: const Text('确认清空')),
+          ),
+        ],
+      ),
+    );
+    // 不能在这里 ctrl.dispose()：对话框退场动画期间 TextField 与
+    // ListenableBuilder 仍在使用控制器（E2E 红屏复现），交给 GC 即可。
+    return ok == true;
+  }
+
+  Future<void> _wipeServerBackup(BackupConfig cfg) async {
+    final username = ref.read(sessionProvider).username ?? '';
+    if (username.isEmpty) {
+      _toast('未取到当前用户名，无法执行');
+      return;
+    }
+    final opts = await _wipeOptions();
+    if (opts == null || !mounted) return;
+    final (purge, clearLedger) = opts;
+    if (!await _wipeConfirm(username) || !mounted) return;
+    // 身份复核（红队 P2）：确认框打开期间可能顶号/换号，执行身份必须
+    // 与确认时一致；用户名是拼服务端路径的原料，字符集与备份引擎同口径
+    if ((ref.read(sessionProvider).username ?? '') != username ||
+        username.contains('/') ||
+        username.contains('\\') ||
+        username == '..') {
+      _toast('登录身份已变化，请重新进入本页操作');
+      return;
+    }
+    // 在途备份轮次拦截（红队 P2）：已开始的那一个文件拦不住，会横跨整个
+    // 清空窗口（finish 先到=随树误删，后到=清空后长出残留）。轮次进行中
+    // 先拒了，等本轮结束再来；引擎被杀残留的 total>0 由"重启 App"兜底
+    final sp = await SharedPreferences.getInstance();
+    final inFlight = (sp.getInt('backup_progress_total') ?? 0) -
+        (sp.getInt('backup_progress_done') ?? 0);
+    if (inFlight > 0) {
+      if (!mounted) return;
+      _toast('正在备份中（约 $inFlight 项），请等本轮完成后再清空；'
+          '若长时间不结束请重启 App 后重试');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = true);
+    final messenger = ScaffoldMessenger.of(context);
+    // 执行期间关停自动备份（防新调度把刚删的又传回来），完毕恢复。
+    // 落 prefs 标记：若恢复前进程被杀，下次登录 _recoverWipePause 会把
+    // 备份开关拉回来——否则自动备份会静默停摆（审查 P1）。标记先落盘
+    // 再关开关（两步之间被杀时方向才是失败安全的，红队 P3）
+    final wasEnabled = cfg.enabled;
+    try {
+      if (wasEnabled) {
+        final off = cfg.copyWith(enabled: false);
+        await sp.setString('wipe_backup_paused', '1');
+        await off.save();
+        await BackupBridge.applySchedule(off);
+      }
+      final res = await purgeServerFiles(
+          ['照片/$username', '视频/$username'],
+          trashOnly: !purge,
+          absentOk: true);
+      var ledgerNote = '';
+      if (clearLedger) {
+        try {
+          await BackupLedger.I.clearAll();
+          ledgerNote = '；备份账本已清空（下次备份将全部重传）';
+        } catch (_) {
+          // 服务端已删完才走到这：不能谎报整体失败，账本可稍后手动处理
+          ledgerNote = '；本地备份账本清空失败，可稍后在账本页处理';
+        }
+      }
+      final absentNote =
+          res.absent > 0 ? '，${res.absent} 项目标本就不存在' : '';
+      final body = purge
+          ? (res.failed == 0 && res.staged == 0
+              ? '已彻底清空（服务端空间已释放）$absentNote'
+              : res.report)
+          : (res.failed == 0
+              ? '已移入回收站（30 天内可恢复）$absentNote'
+              : res.report);
+      messenger.showSnackBar(SnackBar(
+          content: Text('$body$ledgerNote'),
+          duration: const Duration(seconds: 4)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text('清空失败：服务器不可达或权限不足'),
+          duration: Duration(seconds: 3)));
+    } finally {
+      if (wasEnabled) {
+        try {
+          await cfg.save();
+          await sp.remove('wipe_backup_paused');
+          await BackupBridge.applySchedule(cfg);
+        } catch (_) {
+          // 恢复失败不静默：标记还留着，下次登录 _recoverWipePause 会兜底
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('自动备份未能恢复开启，请到本页手动打开开关'),
+                duration: Duration(seconds: 4)));
+          }
+        }
+      }
+      if (mounted) {
+        setState(() => _busy = false);
+        await _reload();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = _cfg;
     final stats = _stats;
     final username = ref.watch(sessionProvider).username ?? '';
     final cs = Theme.of(context).colorScheme;
+    // 清空服务端备份执行中：全部会改配置/触发备份的控件一并锁住，
+    // 防中途 _set 抢跑触发重传并被 finally 的旧 cfg 回滚（审查 P2）
+    final locked = _busy;
     return Scaffold(
       appBar: AppBar(title: const Text('自动备份')),
       body: cfg == null
@@ -156,7 +388,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 title: const Text('自动备份手机相册'),
                 subtitle: const Text('连 Wi-Fi 后自动把新照片存进网盘'),
                 value: cfg.enabled,
-                onChanged: (v) => _toggle(v),
+                onChanged: locked ? null : (v) => _toggle(v),
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -269,20 +501,20 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   title: const Text('仅 Wi-Fi'),
                   subtitle: const Text('流量下不备份（推荐）'),
                   value: cfg.wifiOnly,
-                  onChanged: cfg.enabled
+                  onChanged: !locked && cfg.enabled
                       ? (v) => _set(cfg.copyWith(wifiOnly: v))
                       : null),
               SwitchListTile(
                   title: const Text('仅充电时'),
                   value: cfg.chargingOnly,
-                  onChanged: cfg.enabled
+                  onChanged: !locked && cfg.enabled
                       ? (v) => _set(cfg.copyWith(chargingOnly: v))
                       : null),
               SwitchListTile(
                   title: const Text('包含视频'),
                   subtitle: const Text('默认关闭：视频大、耗流量'),
                   value: cfg.includeVideos,
-                  onChanged: (v) => _set(cfg.copyWith(includeVideos: v))),
+                  onChanged: locked ? null : (v) => _set(cfg.copyWith(includeVideos: v))),
               ListTile(
                   leading: const Icon(Icons.photo_library_outlined),
                   title: const Text('选择备份相册'),
@@ -294,7 +526,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                       : '只备份勾选的 ${cfg.selectedBuckets.length} 个'
                           '：${cfg.selectedBuckets.take(3).join("、")}'
                           '${cfg.selectedBuckets.length > 3 ? "…" : ""}'),
-                  onTap: () async {
+                  onTap: locked
+                      ? null
+                      : () async {
                     await Navigator.push(context, MaterialPageRoute(
                         builder: (_) => BackupBucketsPage(cfg: cfg)));
                     await _reload();
@@ -302,12 +536,12 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
               SwitchListTile(
                   title: const Text('备份完成提醒'),
                   value: cfg.notifyDone,
-                  onChanged: (v) => _set(cfg.copyWith(notifyDone: v))),
+                  onChanged: locked ? null : (v) => _set(cfg.copyWith(notifyDone: v))),
               SwitchListTile(
                   title: const Text('公网地址也备份'),
                   subtitle: const Text('默认关闭：走公网流量，注意资费'),
                   value: cfg.allowPublicServer,
-                  onChanged: (v) => _set(cfg.copyWith(allowPublicServer: v))),
+                  onChanged: locked ? null : (v) => _set(cfg.copyWith(allowPublicServer: v))),
               const Divider(height: 24),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -345,6 +579,34 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                         label: const Text('备份账本')),
                   ),
                 ]),
+              ),
+              const Divider(height: 24),
+              // 危险区（v0.16.1）：清空服务端备份（释放空间/重置备份）。
+              // guest 只读：me 页宫格挡了本页，这里再挡卡片本身（红队 P2）
+              if (ref.watch(sessionProvider).role != 'guest')
+                Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                child: Card(
+                  elevation: 0,
+                  margin: EdgeInsets.zero,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: BorderSide(
+                          color: cs.error.withValues(alpha: 0.45),
+                          width: 1)),
+                  child: ListTile(
+                    leading: Icon(Icons.delete_forever, color: cs.error),
+                    title: Text('清空服务端备份',
+                        style: TextStyle(
+                            color: cs.error,
+                            fontWeight: FontWeight.w600)),
+                    subtitle: const Text(
+                        '删除 照片、视频/<我的用户名>/ 下的全部内容，'
+                        '手机原照片不受影响；两步确认，可选是否清空备份账本',
+                        style: TextStyle(fontSize: 12)),
+                    onTap: _busy ? null : () => _wipeServerBackup(cfg),
+                  ),
+                ),
               ),
               const Padding(
                 padding: EdgeInsets.all(16),

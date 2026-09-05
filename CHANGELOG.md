@@ -1,3 +1,33 @@
+## 2026-09-06 — v0.16.1+52：开屏圆角回退 + 启动深浅色跟随设置 + 清空服务端备份
+
+用户反馈三件（1 轮审查 + 1 轮对抗审查，P1×3/P2×6 全闭环；E2E 踩中并根修
+一个对话框过早 dispose 引发的框架断言红屏）：
+
+- **[回退] 开屏图标改回圆角方块**：v0.16.0 的全圆盘不合口味，恢复渐变
+  圆角方块（PNG 四角透明，make-splash.py 撤掉圆形裁切）。
+- **[新功能] 启动深浅色跟随 App 设置**：MainActivity.attachBaseContext 读
+  shared_preferences（flutter.ui_theme_mode），用户固定 light/dark 时用
+  createConfigurationContext 覆写 uiMode，values-night 资源按用户选择解析；
+  NormalTheme windowBackground 改用新增 @color/launch_bg（浅 #FFFFFF /
+  深 #0B1020，与 flutter_native_splash 底色一致）。边界：Android 12+ 系统
+  开屏段（背景+图标）在进程启动前由系统绘制，只能跟随系统深浅色；进程
+  起来后（窗口底色→App 首帧）即按用户设置。E2E 实测：系统浅色+App 固定
+  深色 → 首帧即深；系统深色 → 开屏深底。
+- **[新功能] 清空服务端备份**（备份设置页危险区）：两刀删除
+  照片|视频/<用户名>/ 整目录（DELETE /api/files 支持目录，一次进回收站）
+  → 回收站快照差集彻底删除（purgeServerFiles 新增 absentOk：404 目录计
+  absent 不算失败）。防呆：两步确认（模式/账本选择 → 输入用户名）、执行
+  期间临时关停自动备份并落 prefs 标记（进程被杀后登录时 _recoverWipePause
+  兜底恢复，标记先于关停落盘）、账本默认保留（防止重传），勾选才清
+  （重置备份）、在途备份轮次拦截、执行期间页面全部配置控件锁定。
+- **[修复] E2E 红屏根修**：_wipeConfirm 在对话框退场动画未结束时就
+  dispose TextEditingController，ListenableBuilder/TextField 仍在使用 →
+  InheritedElement `_dependents.isEmpty` 断言红屏。对话框整体重构（不再
+  提前 dispose；这是"多轮 python 编辑+heredoc 转义降级"把块改坏后的
+  整体重写，教训：改 Dart 字符串转义别走 bash heredoc）。
+- 质量：analyze 0 / Dart 136 / pytest 161；模拟器 E2E（真实测试号全链路：
+  建号授权→备份→两步确认清空→服务端三重验证→账号清理）。
+
 ## 2026-09-05 — v0.16.0+51：清理与本地文件管理大批次
 
 用户需求包：开屏图标四角露色；删除备份照片要能物理删除；传输界面太简陋

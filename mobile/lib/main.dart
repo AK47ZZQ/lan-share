@@ -2,6 +2,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'backup/backup_bridge.dart';
 import 'backup/backup_config.dart';
@@ -33,6 +34,8 @@ void main() {
       // 残留在沙盒会永久堆积，登录后顺手清掉（本地操作，静默失败无妨）
       // ignore: discarded_futures
       UpdateService.purgeInstallers();
+      // ignore: discarded_futures
+      _recoverWipePause();
       // 自动备份：登录后确保周期任务就位（覆盖升级/重装后 JobScheduler 状态漂移），
       // 并顺手跑一轮（账本 diff 秒级，已备份过的照片直接跳过）
       // ignore: discarded_futures
@@ -51,6 +54,22 @@ Future<void> _rescheduleBackup() async {
   if (!cfg.enabled) return;
   await BackupBridge.applySchedule(cfg);
   await BackupBridge.runOnce();
+}
+
+/// "清空服务端备份"中断恢复（v0.16.1）：清空期间会临时关停自动备份并落
+/// prefs 标记；若恢复开关前进程被杀，标记残留——登录后把备份拉回开启，
+/// 否则自动备份静默停摆（审查 P1）。标记只在清空流程内置位，原状态必为
+/// 开启，直接恢复是安全的。
+Future<void> _recoverWipePause() async {
+  try {
+    final sp = await SharedPreferences.getInstance();
+    if (sp.getString('wipe_backup_paused') != '1') return;
+    final cfg = await BackupConfig.load();
+    final fixed = cfg.copyWith(enabled: true);
+    await fixed.save();
+    await BackupBridge.applySchedule(fixed);
+    await sp.remove('wipe_backup_paused');
+  } catch (_) {}
 }
 
 /// WorkManager Worker 的后台 isolate 入口（APP-DESIGN §4）：

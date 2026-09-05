@@ -17,6 +17,40 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
 
     private var pendingPermission: MethodChannel.Result? = null
 
+    /**
+     * 启动窗口深浅色跟随 App 内"深色模式"设置（v0.16.1）。
+     * 系统级开屏（Android 12+ windowSplashScreenBackground/AnimatedIcon）由
+     * system 在进程启动前按系统深浅色画好，App 代码无法介入——那一段只能
+     * 跟随系统；进程一起来（Activity 资源解析起），若用户在设置里固定了
+     * 浅色/深色，这里覆写 uiMode 让 values-night 资源（NormalTheme 窗口底色
+     * launch_bg、API<31 的 launch_background）按用户选择解析，消除
+     * "系统浅色 + App 固定深色"时启动窗口闪白。
+     * shared_preferences 的 String 值落盘在 FlutterSharedPreferences.xml，
+     * 键名带 flutter. 前缀；读不到/异常一律回退跟随系统。
+     */
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(applyLaunchNightMode(newBase))
+    }
+
+    private fun applyLaunchNightMode(base: android.content.Context): android.content.Context {
+        return try {
+            val sp = base.getSharedPreferences(
+                "FlutterSharedPreferences", android.content.Context.MODE_PRIVATE)
+            val mode = sp.getString("flutter.ui_theme_mode", "system") ?: "system"
+            if (mode == "light" || mode == "dark") {
+                val cfg = android.content.res.Configuration(base.resources.configuration)
+                val want = if (mode == "dark") android.content.res.Configuration.UI_MODE_NIGHT_YES
+                           else android.content.res.Configuration.UI_MODE_NIGHT_NO
+                if (cfg.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK != want) {
+                    cfg.uiMode = (cfg.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or want
+                    base.createConfigurationContext(cfg)
+                } else base
+            } else base
+        } catch (_: Exception) {
+            base // prefs 读不到（首次启动/损坏）：跟随系统，不阻断启动
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         // 系统分享接收（M-A4）：Dart 主动 takePending；引擎活着时 Kotlin 推 incoming
