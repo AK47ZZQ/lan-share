@@ -42,6 +42,20 @@ class _Semaphore {
     return c.future;
   }
 
+  /// 占坑/释放分离（R2-P2-2）：正文传输阶段也要占坑——此前 run 只覆盖
+  /// "发请求+等响应头"，几十路并发流照样抢带宽，公网限流形同虚设
+  Future<void> acquire() {
+    final c = Completer<void>();
+    _queue.add(() async { c.complete(); });
+    _pump();
+    return c.future;
+  }
+
+  void release() {
+    _running--;
+    _pump();
+  }
+
   void _pump() {
     if (_running < max && _queue.isNotEmpty) {
       _running++;
@@ -99,26 +113,84 @@ class AuthFileService extends FileService {
     final h = Map<String, String>.from(headers ?? {})
       ..remove('if-none-match')
       ..remove('If-None-Match');
-    var resp = await _semaphore.run(() => _send(url, headers: h));
+
+    // 占坑持续到响应体读完（R2-P2-2）：acquire 后拿到头即包成 Scoped 响应，
+    // body 流 done/取消/出错时才释放并发闸
+    Future<HttpGetResponse> send() async {
+      await _semaphore.acquire();
+      http.StreamedResponse r;
+      try {
+        r = await _send(url, headers: h);
+      } catch (_) {
+        _semaphore.release();
+        rethrow;
+      }
+      return _ScopedGetResponse(r, _semaphore.release);
+    }
+
+    var resp = await send();
     // 非 2xx 绝不入缓存（否则 401 错误页会被当图片缓存住）
     if (resp.statusCode == 401) {
       // Token 可能被并发读坏或已轮换：清缓存强读一次再试
-      await resp.stream.drain<void>();
+      await resp.content.drain<void>();
       _cachedToken = null;
-      resp = await _semaphore.run(() => _send(url, headers: h));
+      resp = await send();
     }
     // 公网弱网加固（v0.10.1）：5xx/429 是瞬时扰动，等 1.5s 重试一次
     // 再判死；304 剥离在上游（不依赖条件请求）——重试不重复扣缓存。
     if (resp.statusCode >= 500 || resp.statusCode == 429) {
-      await resp.stream.drain<void>();
+      await resp.content.drain<void>();
       await Future.delayed(const Duration(milliseconds: 1500));
-      resp = await _semaphore.run(() => _send(url, headers: h));
+      resp = await send();
     }
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      await resp.stream.drain<void>();
+      await resp.content.drain<void>();
       throw ImageFetchException(resp.statusCode);
     }
-    return HttpGetResponse(resp);
+    return resp;
+  }
+}
+
+/// 包住 HttpGetResponse：底层 body 流结束/出错/被取消时释放一次并发闸。
+class _ScopedGetResponse extends HttpGetResponse {
+  _ScopedGetResponse(super.resp, this._release);
+
+  final void Function() _release;
+  bool _released = false;
+  Stream<List<int>>? _wrapped;
+
+  void _releaseOnce() {
+    if (!_released) {
+      _released = true;
+      _release();
+    }
+  }
+
+  @override
+  Stream<List<int>> get content {
+    // content 可能被读多次的防御：包装只挂一次；显式订阅以便覆盖
+    // "管理器中途取消订阅"（图片划出屏幕）的释放路径
+    return _wrapped ??= () {
+      late StreamController<List<int>> ctrl;
+      StreamSubscription<List<int>>? sub;
+      ctrl = StreamController<List<int>>(
+        onListen: () {
+          sub ??= super.content.listen(ctrl.add, onError: ctrl.addError,
+              onDone: () {
+                _releaseOnce();
+                ctrl.close();
+              },
+              cancelOnError: true);
+        },
+        onPause: () => sub?.pause(),
+        onResume: () => sub?.resume(),
+        onCancel: () {
+          _releaseOnce();
+          return sub?.cancel();
+        },
+      );
+      return ctrl.stream;
+    }();
   }
 }
 
@@ -130,8 +202,10 @@ class AuthCacheManager extends CacheManager {
 
   /// 本会话已解析过的 url → 本地文件（进程内记忆）：滚动往返时绕过异步
   /// 缓存查询，直接同步给 File——网格重建零转圈。文件可能被磁盘缓存淘汰，
-  /// 命中前先 existsSync 校验（stat 开销可忽略）
+  /// 命中前先 existsSync 校验（stat 开销可忽略）。上限 4000 按 FIFO 淘汰
+  /// （R2-P3-6）：长会话刷上千张图后无界增长
   final _resolved = <String, File>{};
+  static const _resolvedMax = 4000;
 
   File? peekResolved(String url) {
     final f = _resolved[url];
@@ -139,7 +213,12 @@ class AuthCacheManager extends CacheManager {
     return f.existsSync() ? f : (_resolved.remove(url), null).$2;
   }
 
-  void rememberResolved(String url, File f) => _resolved[url] = f;
+  void rememberResolved(String url, File f) {
+    while (_resolved.length >= _resolvedMax) {
+      _resolved.remove(_resolved.keys.first);   // FIFO 淘汰（R2-P3-6）
+    }
+    _resolved[url] = f;
+  }
 
   // ── 会话级失败负缓存（0.12.0 文件页缩略图扩面后引入）──────────
   // 服务端对损坏媒体/缺解码器（如 HEIC 无 heif 插件）会稳定 404/500，

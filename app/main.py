@@ -61,6 +61,14 @@ async def security_middleware(request: Request, call_next):
     #（漏配 public_base_url 时 healthz 也不会裸奔到公网域名上）
     if path == "/healthz" and (is_public_entry(request) or _healthz_blocked(request)):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # 请求体大小上限（R2-P1）：Caddy 放行 25GB 且 starlette 会把 body 全量
+    # 缓冲进内存后才交给端点校验——未认证端点（login/pair/prepare）灌巨包
+    # 即内存 DoS。大体积白名单：分片/直传（/api/upload/*）与 DAV PUT（/dav）
+    if request.method in ("POST", "PUT", "PATCH") and \
+            not path.startswith(("/api/upload", "/dav")):
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > 1024 * 1024:
+            return JSONResponse({"detail": "Payload too large"}, status_code=413)
     if path == "/api/login":
         # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）。
         # 公网侧全体共享一个 IP 桶，阈值放大防单人刷满卡死全家（R1-P2-3）

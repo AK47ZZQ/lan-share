@@ -264,7 +264,7 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
 def _destroy_upload_session(sid: str, d: Path):
     """销毁分片会话：分片目录 + DB 记录一并清除（finish 校验失败强制客户端
     重新 init，重缴会话数/总量/配额三道闸，R1-P2-6）。"""
-    shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(d, ignore_errors=True)   # 1024 分片上限，亚秒级；调用方异步上下文
     with _db_lock:
         _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
         _db().commit()

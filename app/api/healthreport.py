@@ -34,6 +34,7 @@ _HR_ENABLED = "health_report_enabled"
 _HR_TIME = "health_report_time"
 _DEFAULT_TIME = "09:00"
 _last_sent_date = None   # 内存态：进程级按日去重（重启后补发当天的，无重复风险）
+_daily_task = None       # 日报任务引用：未保存引用的 create_task 可能被 GC 回收（R2-P3-8）
 
 
 def _setting(key: str, default: str = "") -> str:
@@ -239,4 +240,7 @@ async def start_healthreport():
         push_webhook("🩺 LAN Share 每日健康日报", body)
         _last_sent_date = today
 
-    asyncio.create_task(loop())
+    # 持有引用防 GC（R2-P3-8）：asyncio.create_task 未保存引用的任务可能
+    # 被事件循环回收，日报静默停发
+    global _daily_task
+    _daily_task = asyncio.create_task(loop())

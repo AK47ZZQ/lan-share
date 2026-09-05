@@ -730,9 +730,12 @@ class TransferEngine extends ChangeNotifier {
     _persistTimer?.cancel();
     if (_queueFile == null || !_loaded) return;
     try {
-      await _queueFile!
-          .writeAsString(jsonEncode(tasks.map((t) => t.toJson()).toList()),
-              flush: true);
+      // 原子写（R2-P3-8）：写盘中途被杀会让 JSON 截断、下次整队丢弃（含全部
+      // 断点任务）——先写 .tmp 再 rename
+      final tmp = File('${_queueFile!.path}.tmp');
+      await tmp.writeAsString(jsonEncode(tasks.map((t) => t.toJson()).toList()),
+          flush: true);
+      await tmp.rename(_queueFile!.path);
     } catch (_) {}
   }
 }

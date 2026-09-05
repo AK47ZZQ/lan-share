@@ -524,6 +524,20 @@ def _save_albums(albums: list[dict]):
         _db().commit()
 
 
+def rename_album_owner(old: str, new: str):
+    """用户名变更后同步精选专辑归属（R2-P2-3）：否则改名者丢失自己专辑的
+    编辑/删除权（created_by 比对落空）。注意须在 _db_lock 之外调用
+    （_save_albums 内部取锁，threading.Lock 不可重入）。"""
+    albums = _load_albums()
+    changed = False
+    for a in albums:
+        if a.get("created_by") == old:
+            a["created_by"] = new
+            changed = True
+    if changed:
+        _save_albums(albums)
+
+
 def _mutate_albums(mutator) -> bool:
     """精选专辑整表"读-改-写"原子化（v0.14 审查 P2）。
 

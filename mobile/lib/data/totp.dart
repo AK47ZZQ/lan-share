@@ -108,6 +108,10 @@ TotpEntry? parseOtpauthUri(String raw) {
     final uri = Uri.parse(trimmed);
     final secret = uri.queryParameters['secret'];
     if (secret == null || secret.isEmpty) return null;
+    // 入库前必须可解码（R2-P1）：hex secret 或被截断/伪造的 QR 会产生非法
+    // Base32 字符——脏数据入库后每次 code() 都抛 FormatException，验证器页
+    // 与登录页整页红屏且无法自愈
+    base32Decode(secret.toUpperCase());
     // 路径形如 "/LAN%20Share:rcui" 或 "/alice"（注意前导斜杠）
     final rawPath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
     final pathLabel = Uri.decodeComponent(rawPath);

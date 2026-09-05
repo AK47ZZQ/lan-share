@@ -11,6 +11,7 @@
 """
 import re
 import time
+from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -122,6 +123,7 @@ def toggle_reaction(body: ReactionBody, request: Request, _user=Depends(require_
     if body.emoji not in EMOJIS:
         raise HTTPException(status_code=400, detail="不支持的表情")
     norm = _visible_photo(_user, body.path)
+    dup = False
     with _db_lock:
         hit = _db().execute(
             "SELECT id FROM photo_reactions WHERE photo_path=? AND user_id=? AND emoji=?",
@@ -140,12 +142,14 @@ def toggle_reaction(body: ReactionBody, request: Request, _user=Depends(require_
                 # 只吞唯一约束冲突——其它 DB 故障照常上抛，静默丢写入。
                 if is_unique_violation(e):
                     on = True
+                    dup = True   # 并发已插入：归属人已收到另一路的通知，跳过（R2-P3-7）
                 else:
+                    _db().rollback()   # 锁内 raise 残留未决写事务会锁死后续写（R2-P2-4）
                     raise
         _db().commit()
     audit("photo_react", f"{'on' if on else 'off'} {body.emoji} {norm[:100]}",
           ip=client_ip(request))
-    if on:
+    if on and not dup:
         _notify_owner(norm, _user["username"], f"{body.emoji} 回应了你的照片")
     return {"ok": True, "on": on}
 
@@ -168,7 +172,7 @@ def _notify_owner(photo_path: str, actor: str, text: str) -> None:
             "INSERT INTO notifications(user_id, type, title, body, link, created_at) "
             "VALUES(?,?,?,?,?,?)",
             (row["id"], "photo", f"{actor} 与照片互动", text,
-             f"/photos?path={photo_path}", time.time()))
+             f"/photos?path={quote(photo_path, safe='')}", time.time()))
         _db().commit()
 
 
@@ -220,16 +224,25 @@ def create_album(body: AlbumBody, request: Request, _user=Depends(require_user))
         norm = _visible_photo(_user, p)
         if norm not in items:
             items.append(norm)
-    if len(_load_albums()) >= 50:
-        # v0.14 审查 P2：专辑承载策展条目，静默截断=无提示销毁最旧一本，
-        # 改为显式拒绝（旧 [:50] 截断只删月份书签尚可容忍）
-        raise HTTPException(status_code=400, detail="专辑数量已达上限（50），请先清理不用的")
     album = {"id": f"al-{time.time_ns()}", "title": title,
              "created_by": _user["username"], "created_at": time.time(),
              "items": items}
     if body.month:
         album["month"] = body.month
-    if not _mutate_albums(lambda albums: (albums.insert(0, album) or True)):
+    limit_err = []
+    def _do(albums: list) -> bool:
+        # 上限检查挪进 mutator（R2-P3-5）：锁外 check-then-act 并发可超限。
+        # v0.14 审查 P2：专辑承载策展条目，静默截断=无提示销毁最旧一本，
+        # 改为显式拒绝
+        if len(albums) >= 50:
+            limit_err.append(True)
+            return False
+        albums.insert(0, album)
+        return True
+    if not _mutate_albums(_do):
+        if limit_err:
+            raise HTTPException(status_code=400,
+                                detail="专辑数量已达上限（50），请先清理不用的")
         raise HTTPException(status_code=500, detail="创建失败")
     audit("album_create", f"{title} ({len(items)} 项)", ip=client_ip(request))
     return {"ok": True, "id": album["id"]}

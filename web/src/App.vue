@@ -66,8 +66,9 @@ watchEffect(() => {
         <input v-if="dlg.kind === 'prompt'" v-model="dlg.value" :placeholder="dlg.placeholder"
                style="width:100%" @keydown.enter="dlgOk" autofocus />
         <div class="actions">
-          <button class="btn ghost sm" @click="dlgCancel">取消</button>
-          <button class="btn sm" :class="{ danger: dlg.danger }" @click="dlgOk">
+          <!-- .stop：焦点在取消钮上按 Enter 不得冒泡成 dlgOk（R2-P2 键盘误确认） -->
+          <button class="btn ghost sm" @click="dlgCancel" @keydown.enter.stop>取消</button>
+          <button class="btn sm" :class="{ danger: dlg.danger }" @click="dlgOk" autofocus>
             {{ dlg.okText || (dlg.kind === 'prompt' ? '确定' : dlg.danger ? '确认删除' : '确认') }}
           </button>
         </div>

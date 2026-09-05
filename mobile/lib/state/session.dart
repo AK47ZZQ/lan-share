@@ -166,6 +166,9 @@ class SessionController extends StateNotifier<SessionState> {
         options: Options(headers: {'x-login-flow': '1'}));
     final name = me.data['username'] as String?;
     await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
+    // Token 已签发：立即清内存明文密码（R2-P3-7）。TOTP 二步路径（110 行）
+    // 未走此处之前还需要密码重试，语义不受影响
+    _password = '';
     state = SessionState(
         loggedIn: true,
         username: name,

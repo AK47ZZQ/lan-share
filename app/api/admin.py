@@ -74,14 +74,20 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
     row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="用户不存在")
-    # 最后管理员守卫提到写事务之前：锁内"先 UPDATE 后 raise"会把连接留在
-    # 持有 RESERVED 锁的未决事务里，锁死全库所有后续写操作（与 R1-P0-1 同类）
+    # 最后管理员守卫与负配额校验都提到写事务之前（R1-P0-1 / R2-P1 同类）：
+    # 锁内"先 UPDATE 后 raise"会把连接留在持有 RESERVED 锁的未决事务里
     if (body.role is not None and body.role != "admin") or body.is_active is False:
         _last_admin_guard(_db(), uid)
+    if body.quota_bytes is not None and body.quota_bytes < 0:
+        raise HTTPException(status_code=400, detail="配额不能为负数")
     with _db_lock:
         if body.role is not None:
             if body.role not in ("admin", "member", "guest"):
                 raise HTTPException(status_code=400, detail="非法角色")
+            # 锁内复查守卫（R2-P2）：两个并发 PATCH 降级最后两名 admin 可同时
+            # 通过锁外检查，双双提交后 0 admin
+            if body.role != "admin":
+                _last_admin_guard(_db(), uid)
             _db().execute("UPDATE users SET role=? WHERE id=?", (body.role, uid))
         if body.is_active is not None:
             if not body.is_active:
@@ -93,8 +99,6 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
             _db().execute("UPDATE users SET is_active=? WHERE id=?",
                           (1 if body.is_active else 0, uid))
         if body.quota_bytes is not None:
-            if body.quota_bytes < 0:
-                raise HTTPException(status_code=400, detail="配额不能为负数")
             _db().execute("UPDATE users SET quota_bytes=? WHERE id=?",
                           (body.quota_bytes or None, uid))
         _db().commit()
@@ -125,6 +129,8 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
             raise HTTPException(status_code=409, detail="该用户名已被占用")
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, uid))
         _db().commit()
+    from app.api.system import rename_album_owner
+    rename_album_owner(row["username"], new_name)   # 精选专辑归属跟随（R2-P2-3）
     old_dir = SHARE_ROOT / "private" / row["username"]
     new_dir = SHARE_ROOT / "private" / new_name
     import os

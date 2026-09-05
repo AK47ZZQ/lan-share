@@ -48,7 +48,9 @@ def _load_version() -> dict:
 def _apk_path(data: dict):
     dist = (SHARE_ROOT / DIST_DIR).resolve()
     apk = (dist / data["filename"]).resolve()
-    if not str(apk).startswith(str(dist)):
+    try:
+        apk.relative_to(dist)   # 带路径分隔符的前缀判定（R2-P3-9，防同前缀目录绕过）
+    except ValueError:
         raise HTTPException(status_code=400, detail="非法的 APK 文件名")
     return apk
 

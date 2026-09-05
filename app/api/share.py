@@ -201,7 +201,7 @@ def share_prepare(request: Request, token: str, body: SharePrepareBody):
         now = time.time()
         for k in [k for k, v in _tickets.items() if v["exp"] < now]:
             del _tickets[k]
-        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL, "counted": True}
+        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL}
     return {"ok": True, "url": f"/api/share/{token}/dl?tkt={tkt}",
             "name": s["name"], "expires": TICKET_TTL}
 

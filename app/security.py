@@ -25,12 +25,18 @@ def set_audit_user(username: str):
 
 def audit(action: str, target: str = "", detail: str = "", ip: str = ""):
     with _db_lock:
-        _db().execute(
-            "INSERT INTO audit_log(ts, ip, action, target, detail, username) VALUES(?,?,?,?,?,?)",
-            (time.time(), ip, action, target, detail, _audit_user.get()))
-        _db().execute(
-            "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", (AUDIT_KEEP,))
-        _db().commit()
+        try:
+            _db().execute(
+                "INSERT INTO audit_log(ts, ip, action, target, detail, username) VALUES(?,?,?,?,?,?)",
+                (time.time(), ip, action, target, detail, _audit_user.get()))
+            _db().execute(
+                "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", (AUDIT_KEEP,))
+            _db().commit()
+        except Exception:
+            # 失败时回滚（R2-P2-4）：锁内带着未决写事务逸出会锁死该连接上的
+            # 后续写操作（实测持有 SQLite RESERVED 锁，其它连接 database is locked）
+            _db().rollback()
+            raise
 
 
 # ─── 密码与会话 ───────────────────────────────────────────
@@ -271,7 +277,15 @@ def login_locked_remaining(username: str, public: bool = False) -> int:
 
 def record_login_fail(username: str, public: bool = False):
     with _rate_lock:
-        _login_fails.setdefault(_lock_key(username, public), []).append(time.time())
+        key = _lock_key(username, public)
+        now = time.time()
+        _login_fails.setdefault(key, []).append(now)
+        # 无界膨胀清扫（R2-P2）：随机用户名刷失败会产生无数新键且键本身
+        # 永不清除，超阈值时按末次失败时间回收过期键（与 _rate 同款策略）
+        if len(_login_fails) > 4096:
+            for k in [k for k, v in _login_fails.items()
+                      if not v or v[-1] <= now - LOGIN_LOCK_SECONDS]:
+                _login_fails.pop(k, None)
 
 
 def clear_login_fails(username: str, public: bool = False):

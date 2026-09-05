@@ -229,7 +229,7 @@ _PG_SCHEMA = """
     CREATE INDEX IF NOT EXISTS idx_pr_photo ON photo_reactions(photo_path);
 """
 
-_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "photo_comments")
+_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "photo_comments", "photo_reactions", "device_tokens")
 
 
 def pg_setval_sequences(conn: _PgConn):
@@ -417,6 +417,9 @@ def _migrate_v3():
             conn.execute("ALTER TABLE shares ADD COLUMN owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
         if "password_plain" not in scols:
             conn.execute("ALTER TABLE shares ADD COLUMN password_plain TEXT")
+        # 提取码明文停存（R1-P2-5 + R2-P2）：一次性清洗存量值——列保留是为了
+        # 兼容旧 schema 迁移路径，但值不再留存（一次 dump 全泄露的根源）
+        conn.execute("UPDATE shares SET password_plain=NULL WHERE password_plain IS NOT NULL")
         if "target_user_id" not in scols:
             conn.execute("ALTER TABLE shares ADD COLUMN target_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
         acols = {r["name"] for r in conn.execute("PRAGMA table_info(audit_log)").fetchall()}

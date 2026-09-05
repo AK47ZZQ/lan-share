@@ -35,8 +35,10 @@ class MediaProxy {
 
   Future<void> _doEnsure() async {
     try {
-      // 路径秘钥：同机其它 App 理论上可访问 loopback，随机秘钥防枚举拉流
-      _secret = _randomToken();
+      // 路径秘钥：同机其它 App 理论上可访问 loopback，随机秘钥防枚举拉流。
+      // 只在为空时生成（R2-P2-4）：reset() 重建代理时重新生成会作废所有
+      // 已发 URL（含正在播放的视频），且是全局杀伤
+      if (_secret.isEmpty) _secret = _randomToken();
       _client = TrustStore.createHttpClient()..autoUncompress = false;
       _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       _server!.listen(_handle, onError: (Object _) {});

@@ -265,6 +265,9 @@ def sync_grants_on_move(old_rel: str, new_rel: str):
                 _db().execute("UPDATE grants SET path=? WHERE id=?",
                               (new_vkey + r["path"][len(old_vkey):], r["id"]))
         _db().commit()
+    # 路径改写后失效 grants 缓存（R2-P3-8）：否则 guest 对改名后目录最长
+    # 30s 内 403（fail-closed 不越权，但功能受损）
+    invalidate_grants_cache(None)
 
 
 def visible(user, rel_parts) -> bool:

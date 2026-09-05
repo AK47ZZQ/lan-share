@@ -27,14 +27,15 @@ class ApiClient {
   Dio? _dio;
   Future<Dio>? _building; // 并发首调复用同一次构建（R1-P3），落选实例的连接池滞留到 GC
   int _gen = 0; // switchServer 代际：在途 _build 完成时地址可能已再次切换（红队 P2）
+  int _buildSeq = 0; // 构建序号（R2-P3-5）：旧代 build 完成时不得清掉新代的 _building
 
   Future<Dio> dio() async {
     final d = _dio;
     if (d != null) return d;
-    return _building ??= _build();
+    return _building ??= _build(++_buildSeq);
   }
 
-  Future<Dio> _build() async {
+  Future<Dio> _build(int seq) async {
     final gen = _gen;
     final base = await Prefs.lastAddress();
     final fresh = Dio(BaseOptions(
@@ -73,7 +74,10 @@ class ApiClient {
               sent != null && sent.startsWith('Bearer ') ? sent.substring(7).trim() : null;
           final cur = await SecureStore.token();
           final inLogin = e.requestOptions.headers['x-login-flow'] == '1';
-          if (!inLogin && cur != null && (sentTok == null || sentTok == cur)) {
+          // 收紧为 sentTok == cur（R2-P2-3）：无凭据请求（sentTok==null）的 401
+          // 可能是登出瞬间在途请求——误清刚重新登录保存的新 Token，形成
+          // "登录→401→再踢"循环
+          if (!inLogin && cur != null && sentTok != null && sentTok == cur) {
             await SecureStore.clearToken();
             onUnauthorized?.call();
           }
@@ -85,7 +89,9 @@ class ApiClient {
     // Bearer 打向刚离开的服务器），关闭并按新地址重建
     if (gen != _gen) {
       fresh.close(force: true);
-      _building = null;
+      // 只清自己那一代的构建条目（R2-P3-5）：旧代完成时无条件置空可能
+      // 清掉新一代正在进行的构建，再起一路重复构建
+      if (seq == _buildSeq) _building = null;
       return dio();
     }
     _dio = fresh;
