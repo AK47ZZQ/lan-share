@@ -26,22 +26,6 @@ class _Semaphore {
     max = m;
   }
 
-  Future<T> run<T>(Future<T> Function() body) {
-    final c = Completer<T>();
-    _queue.add(() async {
-      try {
-        c.complete(await body());
-      } catch (e, st) {
-        c.completeError(e, st);
-      } finally {
-        _running--;
-        _pump();
-      }
-    });
-    _pump();
-    return c.future;
-  }
-
   /// 占坑/释放分离（R2-P2-2）：正文传输阶段也要占坑——此前 run 只覆盖
   /// "发请求+等响应头"，几十路并发流照样抢带宽，公网限流形同虚设
   Future<void> acquire() {
@@ -143,7 +127,9 @@ class AuthFileService extends FileService {
       await Future.delayed(const Duration(milliseconds: 1500));
       resp = await send();
     }
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+    // 只放行 200（R3-P2-4）：服务端 /thumb、/preview 只回 200；其余状态码
+    // 管理器不会订阅 content（或非完整 200 语义），scoped 槽会永久泄漏
+    if (resp.statusCode != 200) {
       await resp.content.drain<void>();
       throw ImageFetchException(resp.statusCode);
     }

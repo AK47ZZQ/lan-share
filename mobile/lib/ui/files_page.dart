@@ -798,7 +798,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     return PopScope(
       canPop: _stack.length <= 1,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _stack.length > 1) setState(() => _popTo(_stack.length - 2));
+        // 在途 _push 期间返回会与完成回写出栈竞态，被重新压回目标目录（R3-P3-3）
+        if (!didPop && !_loading && _stack.length > 1) {
+          setState(() => _popTo(_stack.length - 2));
+        }
       },
       child: Scaffold(
       appBar: AppBar(

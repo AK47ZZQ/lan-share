@@ -726,17 +726,34 @@ class TransferEngine extends ChangeNotifier {
     });
   }
 
+  bool _persisting = false;
+  bool _persistQueued = false;
+
   Future<void> _persistNow() async {
     _persistTimer?.cancel();
     if (_queueFile == null || !_loaded) return;
+    // 单飞（R3-P3-8）：定时器回调与直接 await 可并发写同一个 .tmp，交错写
+    // 仍能产出损坏 JSON 并被 rename 落地
+    if (_persisting) {
+      _persistQueued = true;
+      return;
+    }
+    _persisting = true;
     try {
-      // 原子写（R2-P3-8）：写盘中途被杀会让 JSON 截断、下次整队丢弃（含全部
-      // 断点任务）——先写 .tmp 再 rename
-      final tmp = File('${_queueFile!.path}.tmp');
-      await tmp.writeAsString(jsonEncode(tasks.map((t) => t.toJson()).toList()),
-          flush: true);
-      await tmp.rename(_queueFile!.path);
-    } catch (_) {}
+      do {
+        _persistQueued = false;
+        try {
+          // 原子写（R2-P3-8）：写盘中途被杀会让 JSON 截断、下次整队丢弃（含全部
+          // 断点任务）——先写 .tmp 再 rename
+          final tmp = File('${_queueFile!.path}.tmp');
+          await tmp.writeAsString(jsonEncode(tasks.map((t) => t.toJson()).toList()),
+              flush: true);
+          await tmp.rename(_queueFile!.path);
+        } catch (_) {}
+      } while (_persistQueued);
+    } finally {
+      _persisting = false;
+    }
   }
 }
 

@@ -100,10 +100,10 @@ onMounted(async () => {
           <template v-if="s.owner && s.owner !== '我'"> · {{ s.owner }}</template></div>
         <div class="bottom">
           <span class="dl-bar" v-if="s.max_downloads">
-            <span style="font-size:12px;color:var(--text-3)">已下载 {{ s.downloads }}/{{ s.max_downloads }} 次</span>
+            <span style="font-size:12px;color:var(--text-3)">已取件 {{ s.downloads }}/{{ s.max_downloads }} 次</span>
             <div class="bar"><i :style="{ width: Math.min(100, Math.round(s.downloads / s.max_downloads * 100)) + '%' }" /></div>
           </span>
-          <span v-else style="font-size:12px;color:var(--text-3)">已下载 {{ s.downloads }} 次 · 不限次数</span>
+          <span v-else style="font-size:12px;color:var(--text-3)">已取件 {{ s.downloads }} 次 · 不限次数</span>
           <span style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">
             <button class="btn ghost sm" @click="copy(s)">📋 复制链接</button>
             <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + s.token)">🌐 公网链接</button>

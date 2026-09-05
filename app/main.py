@@ -66,8 +66,18 @@ async def security_middleware(request: Request, call_next):
     # 即内存 DoS。大体积白名单：分片/直传（/api/upload/*）与 DAV PUT（/dav）
     if request.method in ("POST", "PUT", "PATCH") and \
             not path.startswith(("/api/upload", "/dav")):
+        # chunked 请求无 Content-Length（R3-P1）：正常 JSON API 客户端从不
+        # 使用，直接拒绝，堵住"缺 CL 头绕过 1MB 检查"的口子
+        if request.headers.get("transfer-encoding"):
+            return JSONResponse({"detail": "Transfer-Encoding not allowed"},
+                                status_code=413)
         cl = request.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > 1024 * 1024:
+        if not cl or not cl.isdigit():
+            # 缺 Content-Length 一律 411（R3-P1）：无法预判体积就必须收完
+            # body 才能校验，等于没有上限
+            return JSONResponse({"detail": "Content-Length required"},
+                                status_code=411)
+        if int(cl) > 1024 * 1024:
             return JSONResponse({"detail": "Payload too large"}, status_code=413)
     if path == "/api/login":
         # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）。

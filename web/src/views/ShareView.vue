@@ -14,6 +14,7 @@ const limitReached = ref(false)
 const gone = ref('')   // ''=存在；revoked=不存在/已撤销；expired=已过期；targeted=定向分享需登录
 
 async function prepare() {
+  if (busy.value) return   // 回车无 disabled 闸（R3-P3-1）：连按烧掉 2 次下载配额
   busy.value = true
   err.value = ''
   try {

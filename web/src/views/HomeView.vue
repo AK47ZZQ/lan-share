@@ -287,13 +287,19 @@ async function runSearch() {
     searchResults.value = r
     shownLimit.value = 500
     view.value = 'browse'
-  } catch (e) { toast((e as Error).message, 'err') }
+  } catch (e) {
+    if (my !== loadSeq) return
+    toast((e as Error).message, 'err')
+  }
 }
 async function showRecent() {
   try {
     recentItems.value = await api.recent(40)
     searchResults.value = null
     view.value = view.value === 'recent' ? 'browse' : 'recent'
+    // 切换视图数据源不同，旧选区悬在别的列表上会误删（R3-P3-5）
+    selected.value.clear()
+    selectMode.value = false
   } catch (e) { toast((e as Error).message, 'err') }
 }
 
@@ -345,11 +351,11 @@ const shownTotal = computed(() => {
 const hasMore = computed(() => shownTotal.value > shownItems.value.length)
 // 多选操作条显示已选总大小（体验优化）
 const selectedBytes = computed(() =>
-  items.value.filter(i => selected.value.has(i.path))
+  shownItems.value.filter(i => selected.value.has(i.path))
     .reduce((s, i) => s + (i.size ?? 0), 0))
 function humanBytes(n: number): string {
   let u = 'B'
-  while (n >= 1024) { n /= 1024; u = u === 'KB' ? 'MB' : u === 'MB' ? 'GB' : 'TB' }
+  while (n >= 1024) { n /= 1024; u = u === 'B' ? 'KB' : u === 'KB' ? 'MB' : u === 'MB' ? 'GB' : 'TB' }
   return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${u}`
 }
 

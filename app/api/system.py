@@ -419,7 +419,12 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     # 完整表达——shared 全可见、private/incoming 仅本人子树；点前缀隐藏段
     # 一并排除（与 visible() 对齐）。guest 仍走 Python 过滤（grants 已有缓存）
     role = user["role"] if "role" in user.keys() else "member"
-    if role in ("admin", "member"):
+    pushdown = False
+    # 非 ASCII 用户名不做下推（R3-P3-4）：SQLite LIKE 只折叠 ASCII 大小写，
+    # 与 _normcase 的全 Unicode 折叠在改名（Windows 保留旧大小写）场景下
+    # 会分叉——本人照片 fail-closed 消失；退回 Python 过滤
+    if role in ("admin", "member") and user["username"].isascii():
+        pushdown = True
         esc = (user["username"].replace("\\", "\\\\")
                .replace("%", r"\%").replace("_", r"\_"))
         own_priv = f"private/{esc}/%"
@@ -439,7 +444,7 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
         all_rows = _db().execute(
             "SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY taken_at DESC, path").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))] \
-        if role not in ("admin", "member") else list(all_rows)
+        if not pushdown else list(all_rows)
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
     if uploader:
@@ -526,16 +531,18 @@ def _save_albums(albums: list[dict]):
 
 def rename_album_owner(old: str, new: str):
     """用户名变更后同步精选专辑归属（R2-P2-3）：否则改名者丢失自己专辑的
-    编辑/删除权（created_by 比对落空）。注意须在 _db_lock 之外调用
-    （_save_albums 内部取锁，threading.Lock 不可重入）。"""
-    albums = _load_albums()
-    changed = False
-    for a in albums:
-        if a.get("created_by") == old:
-            a["created_by"] = new
-            changed = True
-    if changed:
-        _save_albums(albums)
+    编辑/删除权（created_by 比对落空）。走 _mutate_albums 的锁内读-改-写，
+    消灭与并发编辑专辑的丢更新竞态（R2-P2-5）。"""
+    changed = []
+
+    def _do(albums: list[dict]) -> bool:
+        for a in albums:
+            if a.get("created_by") == old:
+                a["created_by"] = new
+                changed.append(True)
+        return bool(changed)
+
+    _mutate_albums(_do)
 
 
 def _mutate_albums(mutator) -> bool:

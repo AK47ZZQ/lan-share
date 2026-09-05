@@ -435,11 +435,13 @@ async def change_username(request: Request, body: UsernameBody,
             old_dir.rename(new_dir)
         except OSError:
             # 目录改名失败时回滚用户名：否则 username 与私人目录永久错位、
-            # 本人数据"消失"（R1-P2-4）
+            # 本人数据"消失"（R1-P2-4）。专辑归属也要改回去（R3-P1：已在
+            # rename 尝试前翻成新名，不回滚则创建者失去编辑权）
             with _db_lock:
                 _db().execute("UPDATE users SET username=? WHERE id=?",
                               (row["username"], row["id"]))
                 _db().commit()
+            rename_album_owner(new_name, row["username"])
             audit("username_dir_rename_fail", f"{row['username']} → {new_name}",
                   ip=client_ip(request))
             raise HTTPException(status_code=500,

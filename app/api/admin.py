@@ -141,9 +141,12 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
         except OSError:
             # 目录改名失败时回滚用户名：否则 users.username 与私人目录永久错位，
             # 用户私人数据"消失"（P2 边界）。DB 已提交但目录占用可重试整个改名。
+            # 专辑归属同步翻回（R3-P1：rename_album_owner 已在尝试前执行）
             with _db_lock:
                 _db().execute("UPDATE users SET username=? WHERE id=?", (row["username"], uid))
                 _db().commit()
+            from app.api.system import rename_album_owner
+            rename_album_owner(new_name, row["username"])
             audit("admin_dir_rename_fail", f"{row['username']} → {new_name}", ip=client_ip(request))
             raise HTTPException(status_code=500,
                                 detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")

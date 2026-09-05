@@ -312,6 +312,8 @@ def init_db():
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS codec TEXT")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS width INTEGER")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS height INTEGER")
+        # 提取码明文停存（R1-P2-5 + R2-P2）：PG 分支同样清洗存量值（幂等）
+        _db().execute("UPDATE shares SET password_plain=NULL WHERE password_plain IS NOT NULL")
         _backfill_audit_usernames()
         return
     conn = _db()
