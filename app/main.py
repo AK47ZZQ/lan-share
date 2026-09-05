@@ -63,22 +63,30 @@ async def security_middleware(request: Request, call_next):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     # 请求体大小上限（R2-P1）：Caddy 放行 25GB 且 starlette 会把 body 全量
     # 缓冲进内存后才交给端点校验——未认证端点（login/pair/prepare）灌巨包
-    # 即内存 DoS。大体积白名单：分片/直传（/api/upload/*）与 DAV PUT（/dav）
-    if request.method in ("POST", "PUT", "PATCH") and \
-            not path.startswith(("/api/upload", "/dav")):
-        # chunked 请求无 Content-Length（R3-P1）：正常 JSON API 客户端从不
-        # 使用，直接拒绝，堵住"缺 CL 头绕过 1MB 检查"的口子
-        if request.headers.get("transfer-encoding"):
-            return JSONResponse({"detail": "Transfer-Encoding not allowed"},
-                                status_code=413)
-        cl = request.headers.get("content-length")
-        if not cl or not cl.isdigit():
-            # 缺 Content-Length 一律 411（R3-P1）：无法预判体积就必须收完
-            # body 才能校验，等于没有上限
-            return JSONResponse({"detail": "Content-Length required"},
-                                status_code=411)
-        if int(cl) > 1024 * 1024:
-            return JSONResponse({"detail": "Payload too large"}, status_code=413)
+    # 即内存 DoS。大体积白名单（R4-P0 收紧）：DAV 全部、分片收块
+    # /api/upload/chunk/、直传 multipart（/api/upload 与 /api/upload/<文件名>）。
+    # /api/upload/init、/state、/finish 是小 JSON 端点，必须留在检查内
+    #（此前按 /api/upload 前缀整条豁免，init 被未认证灌 20GB body 在鉴权前
+    # 全量缓冲——FastAPI 先读 body 后做依赖鉴权，单请求即 OOM）
+    if request.method in ("POST", "PUT", "PATCH") and not path.startswith("/dav"):
+        big_body = path == "/api/upload" or path.startswith("/api/upload/chunk/")
+        if not big_body and path.startswith("/api/upload/"):
+            first = path[len("/api/upload/"):].split("/", 1)[0]
+            big_body = first not in ("init", "state", "finish")
+        if not big_body:
+            # chunked 请求无 Content-Length（R3-P1）：正常 JSON API 客户端从不
+            # 使用，直接拒绝，堵住"缺 CL 头绕过 1MB 检查"的口子
+            if request.headers.get("transfer-encoding"):
+                return JSONResponse({"detail": "Transfer-Encoding not allowed"},
+                                    status_code=413)
+            cl = request.headers.get("content-length")
+            if not cl or not cl.isdigit():
+                # 缺 Content-Length 一律 411（R3-P1）：无法预判体积就必须收完
+                # body 才能校验，等于没有上限
+                return JSONResponse({"detail": "Content-Length required"},
+                                    status_code=411)
+            if int(cl) > 1024 * 1024:
+                return JSONResponse({"detail": "Payload too large"}, status_code=413)
     if path == "/api/login":
         # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）。
         # 公网侧全体共享一个 IP 桶，阈值放大防单人刷满卡死全家（R1-P2-3）

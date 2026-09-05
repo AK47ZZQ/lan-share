@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/api/api_client.dart';
 import '../data/auto_switch.dart';
 import '../data/api/trust.dart';
+import '../data/api/trust_flow.dart';
 import '../data/local/biometric.dart';
 import '../data/local/prefs.dart';
 import '../data/local/saved_credential.dart';
@@ -102,7 +103,8 @@ class _LoginPageState extends ConsumerState<LoginPage>
   /// 独立 Dio 实例：不带本机凭据、不影响 ApiClient 的服务器切换状态。
   Future<void> _runProbe() async {
     final addr = _server.text.trim();
-    if (!addr.startsWith('http')) {
+    if (!addr.startsWith('https://')) {
+      // 只认 https（红队 P2-1）：http 地址在提交闸与探针两处都会被拒
       if (mounted) setState(() => _probe = _Probe.idle);
       return;
     }
@@ -153,7 +155,13 @@ class _LoginPageState extends ConsumerState<LoginPage>
   Future<void> _applyAddress(String url) async {
     _server.text = url;
     await Prefs.rememberAddress(url);
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    // 信任闸（红队 P1-1）：选择器里的"公网入口"可能被链路内攻击者注入。
+    // 切换前对真实证书做同源裁决：已信任直通 / 同源指纹静默信任 /
+    // 陌生指纹弹 TOFU。探测失败（不可达）不阻断——后续 _runProbe 与登录
+    // 提交路径仍会如实呈现连接结果
+    await ensureAddressTrusted(context, url);
     _runProbe();
   }
 
@@ -526,6 +534,13 @@ class _LoginPageState extends ConsumerState<LoginPage>
   }
 
   void _submit() {
+    // 明文 http 拒绝（红队 P2-1）：本部署无合法 http 入口（LAN= Caddy https），
+    // 恶意二维码/诱导手输 http 地址会让账密全明文上送且无任何 TLS 层告警
+    if (!_server.text.trim().startsWith('https://')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('地址必须以 https:// 开头（明文 http 会泄露密码）')));
+      return;
+    }
     final s = ref.read(sessionProvider);
     if (_pairMode) {
       if (_lastCode.length == 6) {

@@ -245,8 +245,12 @@ def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin))
     if row["role"] == "admin":
         _last_admin_guard(_db(), uid)
     with _db_lock:
+        # sessions 显式清理（红队 P3-1）：SQLite 该表未声明 CASCADE，残留行
+        # 只能等过期清理（JOIN users 使其本就不可用，但占库）
+        _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         _db().execute("DELETE FROM users WHERE id=?", (uid,))
         _db().commit()
+    invalidate_grants_cache(uid)
     private_dir = SHARE_ROOT / "private" / row["username"]
     if private_dir.exists():
         orphan_root = SHARE_ROOT / ".orphaned"

@@ -4,6 +4,7 @@
 // 连通性预检与信任决策留在调用方（两处语义不同）。
 import 'package:flutter/material.dart';
 
+import '../../data/api/trust.dart';
 import '../../data/entries_service.dart';
 import '../../data/local/prefs.dart';
 import '../scan_page.dart';
@@ -32,6 +33,10 @@ Future<void> showServerPicker(
   final addrs = await Prefs.addresses();
   // 公网入口清单：服务器不可达/旧版服务端 → 静默隐藏该区（历史地址照用）
   final entries = await EntriesService.fetch(current);
+  // 指纹未入过本机信任库 → 入口标注「证书未验证」（红队 P1-1）：清单可能
+  // 被链路内攻击者篡改，自报指纹只是提示——真正的裁决在选中后的
+  // ensureAddressTrusted 探测（对真实证书做同源比对/TOFU）
+  final fpKnown = TrustStore.I.knowsFingerprint(entries?.certSha256 ?? '');
   if (!context.mounted) {
     controller.dispose();
     return;
@@ -72,8 +77,14 @@ Future<void> showServerPicker(
                 leading: const Icon(Icons.cloud_outlined, size: 22),
                 title: Text(shortHost(a),
                     style: const TextStyle(fontSize: 14)),
-                subtitle: Text(a == entries?.pub ? '主隧道 · 公网' : '备用隧道 · 公网',
-                    style: const TextStyle(fontSize: 11.5)),
+                subtitle: Text(
+                    '${a == entries?.pub ? '主隧道 · 公网' : '备用隧道 · 公网'}'
+                    '${fpKnown ? '' : ' · 证书未验证'}',
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: fpKnown
+                            ? null
+                            : Theme.of(ctx).colorScheme.error)),
                 onTap: () {
                   Navigator.pop(ctx);
                   onPick(a);

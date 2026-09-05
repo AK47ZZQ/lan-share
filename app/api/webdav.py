@@ -20,7 +20,7 @@ from app.db import _db
 from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail, verify_password)
 from app.filetools import _RESERVED_NAME, clean_filename, human_size
-from app.spaces import enforce_quota, resolve
+from app.spaces import enforce_quota, resolve, sync_grants_on_move
 from app.api.files import _cross_space_guard, _is_own_private_root, _move_to_trash
 from app.main import app
 
@@ -285,6 +285,10 @@ async def dav_handler(request: Request, path: str = ""):
                 _move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
             if method == "MOVE":
                 shutil.move(str(target), str(dest))
+                # 与界面 /api/move 同步授权路径（红队 P2-4）：挂载盘改名已授权
+                # 共享目录后 grants.path 悬空，guest 静默 403
+                sync_grants_on_move(str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                                    str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
                 audit("dav_move", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
             else:
                 if target.is_dir():

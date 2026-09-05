@@ -169,6 +169,11 @@ def resolve(user, path: str, need: str = "read") -> Path:
     # ── shared 空间 ──
     # 特殊段判定必须 normcase（Windows 大小写不敏感）："Private/" 在 NTFS 上就是
     # private/，精确比较会让它落进 shared 默认可读分支 → 跨用户越权（review 2026-09-02 P0-2）
+    # App 分发目录写保护（红队 P2-2）：version.json/APK 落在 shared 普通目录，
+    # 持写 grant 的成员可植入带"自洽 sha256"的恶意 APK 推给全体客户端升级
+    # = RCE。写操作 admin-only（读保持原权限，全员检查更新需要）。
+    if parts and _normcase_eq(parts[0], "App安装包") and need == "write" and role != "admin":
+        raise HTTPException(status_code=403, detail="安装包目录仅管理员可写")
     if parts and _normcase_eq(parts[0], "private"):
         # 旧 UI 入口：shared:private/... 永远映射到请求者本人 private（防跨用户）。
         # 兼容虚拟/物理两种路径形态（目录列表返回物理形态 private/<用户名>/...）

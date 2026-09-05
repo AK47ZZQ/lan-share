@@ -9,6 +9,8 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 
+import 'api/trust.dart';
+
 class AppEntries {
   final String? pub; // 主公网入口（如 https://your-frp-domain.com:xxxxx），未配置为 null
   final String? pubAlt; // 备用公网入口
@@ -36,14 +38,26 @@ class EntriesService {
 
   /// 拉取入口清单；服务器不可达/非本系统服务端返回 null（调用方静默降级）
   static Future<AppEntries?> fetch(String base) async {
+    // 已信任的服务器走指纹校验客户端（红队 P1-1）：对已 pin 的地址仍无条件
+    // 放行证书，链路内攻击者可终止 TLS 注入假 entries（诱导切换到假服务器）。
+    // 未信任的新地址保持放行——清单要在信任建立之前拿到，这正是本端点的用途
+    final uri = Uri.tryParse(base.trim());
+    final host = uri?.host ?? '';
+    final port = (uri != null && uri.port != 0) ? uri.port : 443;
+    final pinned = host.isNotEmpty && TrustStore.I.trustedFor(host, port) != null;
     final dio = Dio(BaseOptions(
         connectTimeout: const Duration(milliseconds: 4000),
         receiveTimeout: const Duration(milliseconds: 4000),
         validateStatus: (_) => true))
       ..httpClientAdapter = IOHttpClientAdapter(createHttpClient: () {
         final hc = HttpClient()
-          ..connectionTimeout = const Duration(milliseconds: 4000)
-          ..badCertificateCallback = ((cert, host, port) => true);
+          ..connectionTimeout = const Duration(milliseconds: 4000);
+        if (pinned) {
+          hc.badCertificateCallback =
+              (cert, h, p) => TrustStore.I.allow(cert, h, p);
+          return hc;
+        }
+        hc.badCertificateCallback = ((cert, h, p) => true);
         return hc;
       });
     try {

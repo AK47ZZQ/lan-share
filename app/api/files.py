@@ -176,6 +176,10 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             readable = sample.is_file() and sample_readable(_user, sample)
             if readable:
                 try:
+                    if dest.is_dir():
+                        # 与直传/finish 同款守卫（红队 P2-1）：缺了它，秒传会把
+                        # 整个同名目录树静默移进回收站再用 1 字节文件顶位
+                        raise HTTPException(status_code=409, detail="同名目录已存在")
                     if dest.exists():
                         try:
                             # 同目录重传同名文件：sample 即 dest 本身，挪进回收站
@@ -643,6 +647,16 @@ async def empty_trash(request: Request, _admin=Depends(require_admin)):
 # 中图档宽度阶梯：?w= 量化到最近的档位，防止任意 w 值撑爆缩略图缓存
 PREVIEW_W_LADDER = (320, 480, 640, 960, 1280, 1600, 2048, 2560, 3200, 3840)
 
+# 像素数上限（红队 P1-2 解压炸弹）：PIL 默认只在 >358MP 时才抛错，
+# 178-358MP 区间全量解码进内存（330MP RGBA ≈ 1.3GB）——一张 PNG 可打瘫
+# 服务端。Image.open 只读 header，宽高检查不触发解码
+_IMG_PIXEL_CAP = 60 * 1024 * 1024
+
+
+def _reject_pixel_bomb(img) -> None:
+    if (img.width or 0) * (img.height or 0) > _IMG_PIXEL_CAP:
+        raise HTTPException(status_code=415, detail="图片尺寸过大，无法生成预览")
+
 
 def _snap_w(w: int) -> int:
     for step in PREVIEW_W_LADDER:
@@ -676,10 +690,15 @@ async def preview_file(path: str, w: int | None = Query(default=None),
                 from PIL import Image, ImageOps
                 tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
                 try:
-                    img = ImageOps.exif_transpose(Image.open(target))   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
+                    img = Image.open(target)
+                    _reject_pixel_bomb(img)
+                    img = ImageOps.exif_transpose(img)   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
                     img.thumbnail((w, w))
                     img.convert("RGB").save(tmp, "JPEG", quality=82)
                     os.replace(tmp, cached)
+                except HTTPException:
+                    tmp.unlink(missing_ok=True)
+                    raise   # 415 炸弹拦截要保留原状态码，不被吞成 500
                 except Exception:
                     tmp.unlink(missing_ok=True)
                     raise HTTPException(status_code=500, detail="Preview error")
@@ -715,6 +734,24 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
         for t in targets:
             if not t.exists():
                 raise HTTPException(status_code=404, detail=f"Not found: {t.name}")
+
+        # 磁盘余量预计价（红队 P2-2）：打包是整树复制且 .zips 不在配额视野内，
+        # 串行循环可把磁盘打满；拒绝"预计打包量 > 剩余空间 - 5GB 余量"的请求
+        total_in = 0
+        for t in targets:
+            if t.is_dir():
+                for f in t.rglob("*"):
+                    try:
+                        if f.is_file():
+                            total_in += f.stat().st_size
+                    except OSError:
+                        continue
+            else:
+                total_in += t.stat().st_size
+        free = shutil.disk_usage(str(SHARE_ROOT)).free
+        if total_in > free - 5 * 1024 ** 3:
+            raise HTTPException(status_code=507,
+                                detail="磁盘剩余空间不足，无法打包（需为系统保留 5GB 余量）")
 
         zdir = SHARE_ROOT / ".zips"
         zdir.mkdir(exist_ok=True)
@@ -833,6 +870,7 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
         if ext in IMG_EXTS:
             from PIL import Image, ImageOps
             img = Image.open(target)
+            _reject_pixel_bomb(img)   # 同 preview：解压炸弹拦截（红队 P1-2）
             # JPEG draft 解码：直接按 1/2、1/4… 尺寸解码再缩放，大图首生成快数倍
             try:
                 img.draft("JPEG", (320, 320))

@@ -22,7 +22,8 @@ class _ScanPageState extends State<ScanPage> {
 
   bool _accept(String v) {
     if (widget.mode == ScanMode.otpauth) return v.startsWith('otpauth://totp/');
-    return v.startsWith('https://') || v.startsWith('http://');
+    // 只收 https（红队 P2-1）：http 二维码 = 明文上送账密，无任何告警
+    return v.startsWith('https://');
   }
 
   String get _hint => widget.mode == ScanMode.otpauth

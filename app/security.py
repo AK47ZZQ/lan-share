@@ -233,9 +233,17 @@ def is_public_entry(request: Request) -> bool:
     公网侧的失败只锁公网侧，LAN 家人登录永不因公网攻击被锁（DoS 隔离）。
     Caddy 在隧道端口（8767/443/8801）注入 X-LanShare-Entry: public、在 LAN 端口
     （8765）剥离同名头——Host 头是客户端可伪造的（红队 P1：伪造私网 Host 即可
-    把爆破失败记进 LAN 锁键远程锁死全家登录），物理端口标记才是可信信号。"""
+    把爆破失败记进 LAN 锁键远程锁死全家登录），物理端口标记才是可信信号。
+
+    源地址复核（红队 P2-3）：Caddy 监听 0.0.0.0，LAN 设备可直连隧道端口拿到
+    "公网"标记（放大限速/只锁公网路径）。frpc 本机转发到 Caddy 的客户端恒为
+    127.0.0.1（client_ip 取 XFF 末值 = 我们自己的 Caddy 追加的，不可伪造）；
+    直连者的 client_ip 是真实内网 IP——按 LAN 处理。"""
     if (request.headers.get("x-lanshare-entry") or "").lower() == "public":
-        return True
+        ip = client_ip(request)
+        if ip in ("127.0.0.1", "::1", "localhost"):
+            return True
+        return False
     host = (request.headers.get("host") or "").lower()
     return bool(host) and host in public_netlocs()
 
