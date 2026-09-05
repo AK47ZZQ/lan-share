@@ -11,6 +11,7 @@ import '../backup/backup_bridge.dart';
 import '../backup/backup_round.dart';
 import '../data/activity.dart';
 import '../data/api/api_client.dart';
+import '../data/auto_switch.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../state/session.dart';
@@ -20,6 +21,7 @@ import 'activity_page.dart';
 import 'backup_settings_page.dart';
 import 'notifications_page.dart';
 import 'recent_page.dart';
+import 'storage_detail_page.dart';
 import 'trash_page.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
@@ -61,6 +63,12 @@ class _HomePageState extends ConsumerState<HomePage> {
       final b = await Prefs.lastAddress();
       if (mounted) setState(() => _base = b);
     }();
+    // 自动切换（v0.15）会改地址：徽标与最近上传缩略图必须跟随，
+    // 否则切换后整页仍打死地址（红队 P2-4）
+    Prefs.addressNotifier.addListener(_onAddressChanged);
+    // 自动切换服务（v0.15）：HomePage 在 IndexedStack 常驻=登录态全周期，
+    // 在这里启停最稳（幂等；登出时由服务 stop）
+    AutoSwitch.I.start();
     _loadLocal();
     _loadDisk();
     _loadRecent();
@@ -83,10 +91,17 @@ class _HomePageState extends ConsumerState<HomePage> {
     await _loadActivity();
   }
 
+  void _onAddressChanged() {
+    final b = Prefs.addressNotifier.value;
+    if (mounted && b.isNotEmpty && b != _base) setState(() => _base = b);
+  }
+
   @override
   void dispose() {
+    Prefs.addressNotifier.removeListener(_onAddressChanged);
     _tick?.cancel();
     _diskTick?.cancel();
+    AutoSwitch.I.stop(); // HomePage 销毁=登出/关 App：探测定停
     super.dispose();
   }
 
@@ -203,12 +218,16 @@ class _HomePageState extends ConsumerState<HomePage> {
                           fontSize: 19,
                           fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
-                  Text(_serverPublic == null
-                      ? '家庭网盘概览 · 下拉刷新'
-                      : '家庭网盘概览 · 下拉刷新 · ${_serverPublic!}入口',
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.92),
-                          fontSize: 12)),
+                  ValueListenableBuilder<String>(
+                      valueListenable: AutoSwitch.I.lastEvent,
+                      builder: (_, ev, _) {
+                        final auto = ev.isNotEmpty ? ' · 自动切换已生效' : '';
+                        return Text(
+                            '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.92),
+                                fontSize: 12));
+                      }),
                 ]),
           ),
           Padding(
@@ -447,15 +466,19 @@ class _HomePageState extends ConsumerState<HomePage> {
                         ],
                       ]))),
           _card(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+              child: InkWell(
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const StorageDetailPage())),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                     _cardTitle('服务端存储',
                         icon: Icons.dns_outlined,
-                        trailing: _shareSize.isEmpty
-                            ? null
-                            : Text('文件库 $_shareSize',
-                                style: TextStyle(
-                                    fontSize: 12, color: cs.onSurfaceVariant))),
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Text('详情 ›',
+                              style: TextStyle(
+                                  fontSize: 12, color: cs.onSurfaceVariant)),
+                        ])),
                     const SizedBox(height: 10),
                     LinearProgressIndicator(
                         value: _diskTotal > 0 && _diskUsed <= _diskTotal
@@ -467,9 +490,11 @@ class _HomePageState extends ConsumerState<HomePage> {
                     Text(
                         _diskTotal > 0
                             ? '已用 ${humanSize(_diskUsed)} / ${humanSize(_diskTotal)}'
+                                '${_shareSize.isEmpty ? "" : " · 文件库 $_shareSize"}'
+                                '（点按看构成）'
                             : '磁盘信息加载中…',
                         style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-                  ])),
+                  ]))),
           _card(
               child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [

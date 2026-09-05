@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
+import '../data/auto_switch.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/cookies.dart';
 import '../data/local/prefs.dart';
@@ -75,6 +76,7 @@ class SessionController extends StateNotifier<SessionState> {
     state = const SessionState(checking: true);
     try {
       await ApiClient.I.switchServer(server);
+      AutoSwitch.I.noteManualPick(); // 登录时选的入口粘性 10 分钟（防自动切回）
       final dio = await ApiClient.I.dio();
       final r = await dio.post('/api/login',
           options: Options(headers: {'x-login-flow': '1'}),
@@ -101,6 +103,7 @@ class SessionController extends StateNotifier<SessionState> {
     state = const SessionState(checking: true, needTotp: true);
     try {
       await ApiClient.I.switchServer(server);
+      AutoSwitch.I.noteManualPick();
       final dio = await ApiClient.I.dio();
       final r = await dio.post('/api/login/totp',
           options: Options(headers: {'x-login-flow': '1'}),
@@ -206,6 +209,7 @@ class SessionController extends StateNotifier<SessionState> {
     await SavedCredentialStore.clear();
     // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
     await AuthCacheManager.I.emptyCache();
+    await AutoSwitch.I.reset(); // 上一会话的自动切换痕迹一并清掉
     // 失败负缓存同上：账号 A 无权看被记 404 的 URL，B 可能有权
     AuthCacheManager.I.clearFailureCache();
     state = const SessionState();

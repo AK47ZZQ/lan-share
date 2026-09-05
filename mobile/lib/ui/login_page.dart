@@ -14,6 +14,7 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
+import '../data/auto_switch.dart';
 import '../data/api/trust.dart';
 import '../data/local/biometric.dart';
 import '../data/local/prefs.dart';
@@ -124,6 +125,22 @@ class _LoginPageState extends ConsumerState<LoginPage>
       dio.close(force: true); // 释放 HttpClient/Socket 池，频繁改地址不积压
     }
     if (!mounted || _server.text.trim() != addr) return; // 地址已被改，丢弃过期结果
+    if (!ok) {
+      // 公网兜底（v0.15）：局域网地址连不上时试缓存的公网入口——
+      // "出门冷启动 App"是这个功能最典型场景，不能让用户自己想起来换地址
+      final fallback = await AutoSwitch.cachedPublicFallback(exclude: addr);
+      if (!mounted || _server.text.trim() != addr) return;
+      if (fallback != null) {
+        _server.text = fallback; // 只改输入框不落盘：用户仍可改回自己的地址
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('局域网不可达，已自动换用公网入口 '
+                  '${shortHost(fallback)}'),
+              duration: const Duration(seconds: 3)));
+        }
+        return _runProbe();
+      }
+    }
     setState(() => _probe = ok ? _Probe.ok : _Probe.fail);
   }
 

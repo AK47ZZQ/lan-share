@@ -17,6 +17,7 @@ import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
 import '../data/api/trust_flow.dart';
+import '../data/auto_switch.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../state/session.dart';
@@ -48,6 +49,21 @@ class _MePageState extends ConsumerState<MePage> {
   void initState() {
     super.initState();
     _load();
+    // 自动切换会改地址（红队 P2-4）：当前入口卡不跟随就会显示陈旧入口
+    Prefs.addressNotifier.addListener(_onAddressChanged);
+  }
+
+  void _onAddressChanged() {
+    final b = Prefs.addressNotifier.value;
+    if (mounted && b.isNotEmpty && b != _server) {
+      setState(() => _server = b);
+    }
+  }
+
+  @override
+  void dispose() {
+    Prefs.addressNotifier.removeListener(_onAddressChanged);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -600,6 +616,7 @@ class _MePageState extends ConsumerState<MePage> {
       if (!ok || !mounted) return;
       await ApiClient.I.switchServer(url);
       await Prefs.rememberAddress(url);
+      AutoSwitch.I.noteManualPick(); // 手动选择后 10 分钟内自动切换不干预
       if (!mounted) return;
       setState(() => _server = url);
       _toast('已切换到 ${shortHost(url)}');
@@ -621,207 +638,209 @@ class _MePageState extends ConsumerState<MePage> {
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final settings = ref.watch(settingsProvider);
+    final cs = Theme.of(context).colorScheme;
+    final isGuest = session.role == 'guest';
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
-      body: ListView(children: [
-        const SizedBox(height: 8),
-        ListTile(
-          leading: CircleAvatar(child: Text((session.username ?? '?').isNotEmpty
-              ? session.username![0].toUpperCase() : '?')),
-          title: Text(session.username ?? ''),
-          subtitle: Text(session.role == 'admin' ? '管理员'
-              : session.role == 'guest' ? '访客' : '成员'),
+      body: ListView(padding: const EdgeInsets.only(bottom: 24), children: [
+        // ── 身份 + 连接（重点置顶）────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Column(children: [
+                    ListTile(
+                      leading: CircleAvatar(
+                          child: Text((session.username ?? '?').isNotEmpty
+                              ? session.username![0].toUpperCase()
+                              : '?')),
+                      title: Text(session.username ?? ''),
+                      subtitle: Text(session.role == 'admin'
+                          ? '管理员'
+                          : isGuest
+                              ? '访客（只读）'
+                              : '成员'),
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.dns_outlined),
+                      title: Text(_server != null ? shortHost(_server!) : ''),
+                      subtitle: Text(_server != null && isPublicAddress(_server!)
+                          ? '当前入口 · 公网（点按切换 主/备隧道/局域网）'
+                          : '当前入口 · 局域网（点按切换 公网隧道）'),
+                      trailing: _server != null && isPublicAddress(_server!)
+                          ? _netBadge(context)
+                          : null,
+                      onTap: _pickServer,
+                    ),
+                    // 自动切换（v0.15）：在家直连、出门走隧道的自动化
+                    SwitchListTile(
+                      secondary: const Icon(Icons.swap_horiz_outlined),
+                      title: const Text('自动切换局域网/公网'),
+                      subtitle: Text(settings.autoSwitch
+                          ? '开启：局域网不可达自动走公网，回家自动切回直连'
+                          : '关闭：始终使用上面手动选择的入口'),
+                      value: settings.autoSwitch,
+                      onChanged: (v) async {
+                        await ref
+                            .read(settingsProvider.notifier)
+                            .setAutoSwitch(v);
+                        if (mounted) _toast(v ? '已开启自动切换' : '已关闭自动切换');
+                      },
+                    ),
+                  ]))),
         ),
-        ListTile(
-          leading: const Icon(Icons.dns_outlined),
-          title: Text(_server != null ? shortHost(_server!) : ''),
-          subtitle: Text(_server != null && isPublicAddress(_server!)
-              ? '当前入口 · 公网（点按切换 主/备隧道/局域网）'
-              : '当前入口 · 局域网（点按切换 公网隧道）'),
-          trailing: _server != null && isPublicAddress(_server!)
-              ? _netBadge(context)
-              : null,
-          onTap: _pickServer,
+        // ── 功能宫格（高频重点，大图标）──────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        if (!isGuest)
+                          _quickTile(Icons.backup_outlined, '自动备份', () =>
+                              Navigator.push(context, MaterialPageRoute(
+                                  builder: (_) => const BackupSettingsPage()))),
+                        if (!isGuest)
+                          _quickTile(Icons.share_outlined, '我的分享', () =>
+                              Navigator.push(context, MaterialPageRoute(
+                                  builder: (_) => const SharesPage()))),
+                        _quickTile(Icons.delete_outline, '回收站', () =>
+                            Navigator.push(context, MaterialPageRoute(
+                                builder: (_) => const TrashPage()))),
+                        if (session.role == 'admin')
+                          _quickTile(Icons.admin_panel_settings_outlined,
+                              '管理面板', () => Navigator.push(context,
+                                  MaterialPageRoute(
+                                      builder: (_) => const AdminPage()))),
+                      ]))),
         ),
-        const Divider(),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Text('设置', style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        // 管理面板（0.8.0 对齐 Web AdminView）：仅管理员可见
-        if (session.role == 'admin')
+        // ── 外观与通知 ────────────────────────────────────────
+        _group(context, '外观与通知', [
           ListTile(
-            leading: const Icon(Icons.admin_panel_settings_outlined),
-            title: const Text('管理面板'),
-            subtitle: const Text('成员 / 邀请码 / 授权 / 事件推送 / 公网地址'),
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const AdminPage())),
+            leading: const Icon(Icons.dark_mode_outlined),
+            title: const Text('深色模式'),
+            subtitle: Text(switch (settings.themeMode) {
+              ThemeMode.system => '跟随系统',
+              ThemeMode.light => '浅色',
+              ThemeMode.dark => '深色',
+            }),
+            onTap: _pickThemeMode,
           ),
-        ListTile(
-          leading: const Icon(Icons.dark_mode_outlined),
-          title: const Text('深色模式'),
-          subtitle: Text(switch (settings.themeMode) {
-            ThemeMode.system => '跟随系统',
-            ThemeMode.light => '浅色',
-            ThemeMode.dark => '深色',
+          // 0.8.5 主题引擎：预置色板 / 跟随壁纸（Material You）
+          Builder(builder: (context) {
+            final isAuto = settings.accent == Palettes.auto;
+            final cur = paletteById(settings.accent);
+            return ListTile(
+              leading: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient:
+                          isAuto ? null : LinearGradient(colors: cur.gradient),
+                      color: isAuto ? cs.surfaceContainerHighest : null),
+                  child:
+                      isAuto ? const Icon(Icons.wallpaper, size: 16) : null),
+              title: const Text('主题色'),
+              subtitle: Text(isAuto ? '跟随壁纸' : cur.name),
+              onTap: _pickAccent,
+            );
           }),
-          onTap: _pickThemeMode,
-        ),
-        // 0.8.5 主题引擎：预置色板 / 跟随壁纸（Material You）
-        Builder(builder: (context) {
-          final isAuto = settings.accent == Palettes.auto;
-          final cur = paletteById(settings.accent);
-          return ListTile(
-            leading: Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient:
-                        isAuto ? null : LinearGradient(colors: cur.gradient),
-                    color: isAuto
-                        ? Theme.of(context).colorScheme.surfaceContainerHighest
-                        : null),
-                child:
-                    isAuto ? const Icon(Icons.wallpaper, size: 16) : null),
-            title: const Text('主题色'),
-            subtitle: Text(isAuto ? '跟随壁纸' : cur.name),
-            onTap: _pickAccent,
-          );
-        }),
-        // 0.8.4 暗色增强：AMOLED 纯黑底（OLED 屏省电 + 夜间观影友好）
-        SwitchListTile(
-          secondary: const Icon(Icons.nights_stay_outlined),
-          title: const Text('AMOLED 纯黑暗色'),
-          subtitle: const Text('暗色模式下使用纯黑背景（OLED 屏更省电）'),
-          value: settings.amoledDark,
-          onChanged: (v) =>
-              ref.read(settingsProvider.notifier).setAmoledDark(v),
-        ),
-        const Divider(),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Text('账号与安全',
-              style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        ListTile(
-          leading: const Icon(Icons.lock_outline),
-          title: const Text('修改密码'),
-          onTap: _changePassword,
-        ),
-        ListTile(
-          leading: const Icon(Icons.badge_outlined),
-          title: const Text('修改用户名'),
-          subtitle: const Text('私人目录同步改名，需密码确认'),
-          onTap: _changeUsername,
-        ),
-        ListTile(
-          leading: const Icon(Icons.storage_outlined),
-          title: const Text('WebDAV 独立密码'),
-          subtitle: Text(_webdavSet == null
-              ? '读取中…'
-              : _webdavSet!
-                  ? '已启用：挂载只认独立密码'
-                  : '未设置：挂载目前用登录密码'),
-          onTap: _webdavDialog,
-        ),
-        ListTile(
-          leading: const Icon(Icons.qr_code_2),
-          title: const Text('生成配对码'),
-          subtitle: const Text('另一台设备免密登录本账号（3 分钟有效）'),
-          onTap: _showPairCode,
-        ),
-        ListTile(
-          leading: const Icon(Icons.restore),
-          title: const Text('重新生成恢复码'),
-          subtitle: const Text('两步验证丢失认证器时的备用码，需密码确认'),
-          onTap: _regenRecoveryCodes,
-        ),
-        SwitchListTile(
-          secondary: const Icon(Icons.notifications_outlined),
-          title: const Text('传输完成通知'),
-          subtitle: const Text('上传/下载完成时系统提醒'),
-          value: settings.notifyTransferDone,
-          onChanged: (v) =>
-              ref.read(settingsProvider.notifier).setNotifyTransferDone(v),
-        ),
-        SwitchListTile(
-          secondary: const Icon(Icons.fingerprint),
-          title: const Text('应用锁'),
-          subtitle: const Text('打开或切回 App 需指纹/面部解锁'),
-          value: settings.appLock,
-          onChanged: _toggleAppLock,
-        ),
-        ListTile(
-          leading: const Icon(Icons.image_outlined),
-          title: const Text('清理缩略图缓存'),
-          subtitle: Text(_cacheSize.isEmpty ? '统计中…' : '占用 $_cacheSize'),
-          onTap: _clearCache,
-        ),
-        ListTile(
-          leading: const Icon(Icons.info_outline),
-          title: const Text('关于与检查更新'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const AboutPage())),
-        ),
-        // 访客只读：无备份（APP-REQUIREMENTS §2）
-        if (session.role != 'guest')
-          ListTile(
-            leading: const Icon(Icons.backup_outlined),
-            title: const Text('自动备份'),
-            subtitle: const Text('手机相册自动存进网盘'),
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const BackupSettingsPage())),
+          SwitchListTile(
+            secondary: const Icon(Icons.nights_stay_outlined),
+            title: const Text('AMOLED 纯黑暗色'),
+            subtitle: const Text('暗色模式下使用纯黑背景（OLED 屏更省电）'),
+            value: settings.amoledDark,
+            onChanged: (v) =>
+                ref.read(settingsProvider.notifier).setAmoledDark(v),
           ),
-        // 分享管理（M-A4 FR-7）：访客无分享创建，入口一并隐藏
-        if (session.role != 'guest')
-          ListTile(
-            leading: const Icon(Icons.share_outlined),
-            title: const Text('我的分享'),
-            subtitle: const Text('管理分享链接：复制/二维码/编辑/撤销'),
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SharesPage())),
+          SwitchListTile(
+            secondary: const Icon(Icons.notifications_outlined),
+            title: const Text('传输完成通知'),
+            subtitle: const Text('上传/下载完成时系统提醒'),
+            value: settings.notifyTransferDone,
+            onChanged: (v) =>
+                ref.read(settingsProvider.notifier).setNotifyTransferDone(v),
           ),
-        ListTile(
-          leading: const Icon(Icons.delete_outline),
-          title: const Text('回收站'),
-          subtitle: const Text('恢复或彻底删除已删文件'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const TrashPage())),
-        ),
-        // App 内置验证器（v0.5.2）：两步验证动态码本机生成，免装第三方验证器
-        ListTile(
-          leading: const Icon(Icons.phonelink_lock_outlined),
-          title: const Text('验证器'),
-          subtitle: const Text('两步验证动态码，扫码绑定后本机直接显示'),
-          onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const VerifierPage())),
-        ),
+        ]),
+        // ── 账号与安全（低频但重要，收进一组）─────────────────
+        _group(context, '账号与安全', [
+          ListTile(
+            leading: const Icon(Icons.lock_outline),
+            title: const Text('修改密码'),
+            onTap: _changePassword,
+          ),
+          ListTile(
+            leading: const Icon(Icons.badge_outlined),
+            title: const Text('修改用户名'),
+            subtitle: const Text('私人目录同步改名，需密码确认'),
+            onTap: _changeUsername,
+          ),
+          ListTile(
+            leading: const Icon(Icons.storage_outlined),
+            title: const Text('WebDAV 独立密码'),
+            subtitle: Text(_webdavSet == null
+                ? '读取中…'
+                : _webdavSet!
+                    ? '已启用：挂载只认独立密码'
+                    : '未设置：挂载目前用登录密码'),
+            onTap: _webdavDialog,
+          ),
+          ListTile(
+            leading: const Icon(Icons.qr_code_2),
+            title: const Text('生成配对码'),
+            subtitle: const Text('另一台设备免密登录本账号（3 分钟有效）'),
+            onTap: _showPairCode,
+          ),
+          ListTile(
+            leading: const Icon(Icons.restore),
+            title: const Text('重新生成恢复码'),
+            subtitle: const Text('两步验证丢失认证器时的备用码，需密码确认'),
+            onTap: _regenRecoveryCodes,
+          ),
+          ListTile(
+            leading: const Icon(Icons.phonelink_lock_outlined),
+            title: const Text('验证器'),
+            subtitle: const Text('两步验证动态码，扫码绑定后本机直接显示'),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const VerifierPage())),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.fingerprint),
+            title: const Text('应用锁'),
+            subtitle: const Text('打开或切回 App 需指纹/面部解锁'),
+            value: settings.appLock,
+            onChanged: _toggleAppLock,
+          ),
+          // 已登录设备收进安全组（吊销入口保留）
+          _devicesSection(),
+        ]),
+        // ── 通用 ──────────────────────────────────────────────
+        _group(context, '通用', [
+          ListTile(
+            leading: const Icon(Icons.image_outlined),
+            title: const Text('清理缩略图缓存'),
+            subtitle: Text(_cacheSize.isEmpty ? '统计中…' : '占用 $_cacheSize'),
+            onTap: _clearCache,
+          ),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于与检查更新'),
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const AboutPage())),
+          ),
+        ]),
         const Divider(),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Text('已登录设备', style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        if (_loadingDevices)
-          const Padding(padding: EdgeInsets.all(24),
-              child: Center(child: CircularProgressIndicator())),
-        if (!_loadingDevices)
-          for (final d in _devices)
-            ListTile(
-              leading: Icon(d.current ? Icons.phone_android : Icons.devices_other),
-              title: Text(d.name),
-              subtitle: Text(d.current
-                  ? '本设备（当前登录）'
-                  : '最近活跃：${d.lastSeen == null ? '-' : DateTime.fromMillisecondsSinceEpoch((d.lastSeen! * 1000).toInt()).toString().split('.').first}'),
-              trailing: d.current
-                  ? null
-                  : TextButton(onPressed: () => _revoke(d), child: const Text('吊销')),
-              onTap: d.current ? null : () => _revoke(d),
-            ),
-        const Divider(),
         ListTile(
-          leading: const Icon(Icons.logout),
-          title: const Text('退出登录'),
+          leading: Icon(Icons.logout, color: cs.error),
+          title: Text('退出登录',
+              style: TextStyle(color: cs.error)),
           onTap: () => ref.read(sessionProvider.notifier).logout(),
         ),
         const SizedBox(height: 12),
@@ -830,6 +849,74 @@ class _MePageState extends ConsumerState<MePage> {
         const SizedBox(height: 24),
       ]),
     );
+  }
+
+  /// 分组卡：小标题 + 圆角卡包裹的条目列表（v0.15 重组）
+  Widget _group(BuildContext context, String title, List<Widget> children) =>
+      Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+            Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 0, 6),
+                child: Text(title,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant))),
+            Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(children: children))),
+          ]));
+
+  /// 功能宫格单元（大图标 + 标签，与首页快捷区同风格）
+  Widget _quickTile(IconData icon, String label, VoidCallback onTap) =>
+      InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14)),
+                    child: Icon(icon,
+                        size: 22,
+                        color: Theme.of(context).colorScheme.primary)),
+                const SizedBox(height: 5),
+                Text(label, style: const TextStyle(fontSize: 12)),
+              ])));
+
+  /// 已登录设备（收进账号与安全组；原独立分区内容不变）
+  Widget _devicesSection() {
+    if (_loadingDevices) {
+      return const Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: CircularProgressIndicator()));
+    }
+    return Column(children: [
+      for (final d in _devices)
+        ListTile(
+          leading: Icon(d.current ? Icons.phone_android : Icons.devices_other),
+          title: Text(d.name),
+          subtitle: Text(d.current
+              ? '本设备（当前登录）'
+              : '最近活跃：${d.lastSeen == null ? '-' : DateTime.fromMillisecondsSinceEpoch((d.lastSeen! * 1000).toInt()).toString().split('.').first}'),
+          trailing: d.current
+              ? null
+              : TextButton(onPressed: () => _revoke(d), child: const Text('吊销')),
+          onTap: d.current ? null : () => _revoke(d),
+        ),
+    ]);
   }
 }
 

@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/auto_switch.dart';
+
 class AppSettings {
   final ThemeMode themeMode;
   final bool amoledDark; // 暗色增强：AMOLED 纯黑底（0.8.4 起，独立于三档）
@@ -15,6 +17,7 @@ class AppSettings {
   final bool filesAsc;
   final bool filesGrid; // 文件页布局：true=方形网格 / false=横向列表（v0.12，Web 同款）
   final List<String> pinnedDirs; // 常用目录（相对路径，'' 根不可钉）
+  final bool autoSwitch; // 局域网/公网自动切换（v0.15；默认开）
 
   const AppSettings({
     this.themeMode = ThemeMode.system,
@@ -26,6 +29,7 @@ class AppSettings {
     this.filesAsc = true,
     this.filesGrid = false,
     this.pinnedDirs = const [],
+    this.autoSwitch = true,
   });
 }
 
@@ -48,6 +52,7 @@ class SettingsController extends StateNotifier<AppSettings> {
       filesAsc: sp.getBool('files_asc') ?? true,
       filesGrid: sp.getBool('files_grid') ?? false,
       pinnedDirs: sp.getStringList('files_pinned_dirs') ?? const [],
+      autoSwitch: sp.getBool('autoswitch_enabled') ?? true,
     );
   }
 
@@ -96,6 +101,13 @@ class SettingsController extends StateNotifier<AppSettings> {
     await sp.setBool('files_grid', v);
   }
 
+  /// 自动切换开关（v0.15）：与 AutoSwitch 服务共用 autoswitch_enabled 键，
+  /// setter 里顺带启停服务，避免两处状态漂移
+  Future<void> setAutoSwitch(bool v) async {
+    state = _copy(autoSwitch: v);
+    await AutoSwitch.I.setEnabled(v);
+  }
+
   Future<void> togglePinnedDir(String path) async {
     final cur = List<String>.of(state.pinnedDirs);
     cur.contains(path) ? cur.remove(path) : cur.add(path);
@@ -106,7 +118,7 @@ class SettingsController extends StateNotifier<AppSettings> {
 
   AppSettings _copy({ThemeMode? themeMode, bool? amoledDark, String? accent,
       bool? appLock, bool? notifyTransferDone, String? filesSort, bool? filesAsc,
-      bool? filesGrid, List<String>? pinnedDirs}) =>
+      bool? filesGrid, List<String>? pinnedDirs, bool? autoSwitch}) =>
       AppSettings(
           themeMode: themeMode ?? state.themeMode,
           amoledDark: amoledDark ?? state.amoledDark,
@@ -116,7 +128,8 @@ class SettingsController extends StateNotifier<AppSettings> {
           filesSort: filesSort ?? state.filesSort,
           filesAsc: filesAsc ?? state.filesAsc,
           filesGrid: filesGrid ?? state.filesGrid,
-          pinnedDirs: pinnedDirs ?? state.pinnedDirs);
+          pinnedDirs: pinnedDirs ?? state.pinnedDirs,
+          autoSwitch: autoSwitch ?? state.autoSwitch);
 }
 
 final settingsProvider =
