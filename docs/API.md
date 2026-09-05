@@ -78,7 +78,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| POST | `/api/share` | 🔑 | form：`path, expires_hours, password?, max_downloads?` → `{token}` |
+| POST | `/api/share` | 🔑 | form：`path, expires_hours, password?, max_downloads?` → `{token, password?}`（提取码明文仅创建响应一次性返回，不再落库回显） |
 | GET | `/api/share/meta/{token}` | 🔓 | `{name, size_human, expires_in, needs_password, max_downloads, downloads}` |
 | POST | `/api/share/{token}/prepare` | 🔓 | JSON `{password?}` → 校验（错 5 次锁 15 分钟）→ `{url:"/api/share/{t}/dl?tkt=..."}`；票据 10 分钟内可复用；达次数上限 410 |
 | GET | `/api/share/{token}/dl?tkt=` | 🎫 | 流式下载（支持 Range 续传）；计数在响应完成后 +1 |

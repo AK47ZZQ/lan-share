@@ -1,3 +1,64 @@
+## 2026-09-06 — v0.16.3+54：资深 Reviewer 三轮审查 + 对抗审查（安全大版本）
+
+四路并发审查（后端边界/异常、后端安全/性能、Web 前端、Flutter App）× 3 轮 +
+对抗性红队 2 线（服务端攻击面 / 客户端与分发链），全部高中低风险项闭环；
+pytest 161 / Dart 136 / analyze 0 全绿；Caddy validate 通过 + 线上冒烟
+（chunked 413 / 未认证 init 401 / healthz OK）。
+
+**服务端（P0×2 全修）**
+- [P0] invite_redeem 在 `_db_lock` 内调 audit() 自死锁（不可重入锁）——两人
+  并发核销同一邀请码即全站写操作挂死；同类"锁内 raise 残留未提交写事务"
+  全仓收口（admin_patch_user 守卫前移、share_prepare commit 前移、audit/
+  social 失败回滚）。
+- [P0] 自助改用户名缺路径分隔符校验——`a/../../b` 可把私人目录 rename 出
+  数据根（本机实验证实）；setup/邀请核销/自助改名三入口统一 `_clean_username`
+  （补 Windows 设备保留名）；改名失败回滚用户名+专辑归属（此前静默 200）。
+- [红队 P0] `/api/upload/init` 未认证内存 DoS：FastAPI 先读 body 后鉴权，
+  按 `/api/upload` 前缀豁免请求体上限时 init 被整条放行——大 body 白名单
+  精确到 chunk/直传，init/state/finish 恢复 1MB 闸；chunked/缺 Content-Length
+  一律 413/411。
+- [红队 P2] 秒传分支补同名目录 409（一次 init 把整棵目录树移进回收站的构造）；
+  zip 打包加磁盘余量预计价（507）；App安装包目录写操作 admin-only（恶意 APK
+  供应链 RCE 收口）；is_public_entry 源地址复核（LAN 直连隧道端口不再按公网
+  分账）；DAV MOVE 同步 grants；删号补清 sessions；HSTS 1 年。
+- [P1/P2] 分享下载计数挪到 prepare 原子递增（并发取票绕过 max_downloads）；
+  提取码停存明文+存量一次性清洗（创建响应一次性下发）；直传配额改按落位前
+  真实占用（starlette file.size 恒 0，配额 <2GB 成员直传必 409）；WebDAV
+  Basic 失败 IP 级限速；authcheck 600/min；公网共享限速桶放大（30/600，防
+  单人占满卡死全家）；`_login_fails` 键清扫；grants 30s TTL 缓存（guest N+1）；
+  photos 可见性 SQL 下推（非 ASCII 用户名自动降级 Python 过滤）；disk 全树
+  扫描 5min TTL 缓存；list_files 等 async 端点同步 DB 全量线程池化；PIL 解压
+  炸弹 60MP 钳制（thumb/preview）；upload_finish 校验失败销会话+分片；
+  dir_tree/PROPFIND/清理循环竞态防御；rmtree 线程池化；audit 记物理路径；
+  登录时序哑哈希；迁移仅在无 admin 时晋升；/api/recent limit ge=0。
+
+**Web 前端**
+- [P1] 邀请码建号页双表单同屏（v-else 挂错链）；上传队列泵暂停后新批次永久
+  卡"排队"（finally 补跑）。
+- [P2] 目录/搜索请求序号守卫（旧响应覆盖新结果）；分享下载改 location.href
+  （手势外 window.open 被浏览器拦截）；撤销邀请码/授权/精选专辑补确认框；
+  全局确认框 Enter 误确认修复+Esc 取消；列表行/照片格键盘可达；大目录截断
+  500 条+显示更多+排序控件。
+- [体验] 失败 toast 6s、上传队列"↻ 重试全部"、多选显示已选总大小、错误清空
+  旧列表、input 先复位再上传、取件计数文案对齐。
+
+**Flutter App**
+- [红队 P1] 服务器选择器信任链收口：已 pin 地址的 entries 拉取走指纹校验
+  （不再无条件放行证书）；自报指纹未入库的入口标注「证书未验证」；登录页
+  _applyAddress 统一过 ensureAddressTrusted。
+- [红队 P1] PIL 无关——App 侧：TOTP 脏 secret 入库前 Base32 校验（hex 二维码
+  让验证器/登录页永久红屏且无法自愈）；http 明文地址提交与扫码双闸拒绝。
+- [P2] 传输引擎失败任务重新入队假成功（重试高频路径）；照片墙/首页退后台
+  生命周期闸门（10s/20s/2s/30s 轮询全停）；视频页退后台暂停；退出登录二次
+  确认；缩略图并发闸持续到响应体读完（公网 3 路形同虚设）；401 清 Token
+  竞态收紧（刚登录就被踢）；media_proxy 秘钥跨 reset 保留（一个视频失败
+  打断全部播放）。
+- [P3] 退避 sleep 1s 分片（暂停即时生效）；文件页返回键回上级（PopScope）+
+  在途 _push 竞态守卫；本地文件视图自动刷新；查看器缩放/翻页手势仲裁；
+  队列落盘原子写+单飞；内存明文密码即清；_resolved FIFO 上限。
+
+**文档**：CHANGELOG / STATUS-v3 / SECURITY / 项目记忆（里程碑/踩坑）同步。
+
 ## 2026-09-06 — v0.16.2+53：全仓四维审查 2 轮 + 对抗审查（安全加固批次）
 
 资深 Reviewer 按边界条件/异常处理/性能瓶颈/安全风险四维做 2 轮审查 + 1 轮

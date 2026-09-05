@@ -209,3 +209,20 @@
   直传页未登录显示页内引导（登录后带 next 回跳，Cookie 30 天内免重复登录）。
 - **访问地址**：Caddy 监听 :80（跳 HTTPS）、:443/:8765/:8767；分享双地址
   （局域网/公网）由前端拼装，公网地址存 settings 表（全员可读，非敏感）。
+
+## v0.16.3 新增防线（2026-09-06，三轮审查+对抗审查）
+
+- **请求体大小上限**：非大文件端点（POST/PUT/PATCH）要求 Content-Length ≤ 1MB，
+  缺 CL 一律 411、chunked 一律 413；大体积白名单精确到分片收块 `/api/upload/chunk/`
+  与直传 multipart `/api/upload`（`/api/upload/init|state|finish` 仍在闸内）。
+- **App 分发目录写保护**：`App安装包/` 写操作仅 admin（防持写 grant 的成员植入
+  带"自洽 sha256"的恶意 APK 推送全体客户端升级）。
+- **分享提取码不再落库**：只存加盐哈希，明文在创建响应中一次性下发；存量列已
+  一次性清洗；分享计数在 prepare 发票时原子递增（防并发取票绕过 max_downloads）。
+- **公网入口判定加源地址复核**：`X-LanShare-Entry: public` 且 client_ip 为
+  127.0.0.1（frpc 本机转发）才按公网分账——LAN 设备直连隧道端口不再放大限速。
+- **解析面**：PIL 解码前像素钳制 60MP（thumb/preview，防解压炸弹 DoS）；
+  zip 打包前按磁盘余量预计价（保留 5GB）。
+- **命名/改名链**：用户名三入口统一校验（路径分隔符/Windows 设备保留名）；
+  改名失败回滚用户名与精选专辑归属；`App安装包` 外的 DAV MOVE 也同步 grants。
+- **HSTS** max-age 提升至 1 年。
