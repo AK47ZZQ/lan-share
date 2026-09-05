@@ -195,6 +195,15 @@ class TransferEngine extends ChangeNotifier {
     return p;
   }
 
+  /// 下载沙盒目录（documents/Downloads）：传输页"本地文件"视图、更新安装
+  /// 包清理共用。不存在则建（目录缺席时 list 会抛）。
+  Future<Directory> downloadsDir() async {
+    await _ensureDocs();
+    final d = Directory('$_docsPath/Downloads');
+    if (!d.existsSync()) d.createSync(recursive: true);
+    return d;
+  }
+
   // ── 队列操作 ──────────────────────────────────────────────
   void pauseTask(TransferTask t) {
     if (t.finished) return;

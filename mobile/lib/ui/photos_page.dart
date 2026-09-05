@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../backup/backup_dest.dart';
 import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
+import '../data/api/purge.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../state/session.dart';
@@ -517,6 +518,44 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     await _refresh();
   }
 
+  /// 彻底删除（v0.16.0 用户需求：物理删除，当场释放服务端磁盘）：
+  /// 两段式——DELETE /api/files 进回收站，再按 orig_path 匹配本次产生的
+  /// 回收条目逐个 DELETE /api/trash/{id}。手机上的原照片不受影响。
+  Future<void> _purgeSelected() async {
+    final paths = _selected.map((i) => _items[i]).toList();
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+                title: Text('彻底删除 ${paths.length} 张照片？'),
+                content: const Text(
+                    '不经过回收站，直接从服务端磁盘删除，无法恢复。\n\n'
+                    '手机上已备份的原照片不受影响；删除后服务端空间立即释放。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor:
+                              Theme.of(dctx).colorScheme.error),
+                      onPressed: () => Navigator.pop(dctx, true),
+                      child: const Text('彻底删除')),
+                ]));
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    try {
+      final res = await purgeServerFiles(paths.map((it) => it.path));
+      if (!mounted) return;
+      _exitSelection();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res.report), duration: const Duration(seconds: 3)));
+    } finally {
+      // 编排层任何异常都不能把底栏永久藏掉
+      if (mounted) setState(() => _deleting = false);
+    }
+    await _refresh();
+  }
+
   void _shareSingle() {
     final it = _items[_selected.first];
     _exitSelection();
@@ -684,7 +723,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             ])),
                     Expanded(child: _gridOrEmpty(selecting)),
                   ])),
-      bottomNavigationBar: selecting ? _selectionBar() : null,
+      bottomNavigationBar: selecting && !_deleting ? _selectionBar() : null,
     );
   }
 
@@ -777,6 +816,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                     _op(Icons.link_outlined, '分享', _shareSingle),
                   if (canManage)
                     _op(Icons.delete_outline, '删除', _deleteSelected),
+                  if (canManage)
+                    _op(Icons.delete_forever_outlined, '彻底删除',
+                        _purgeSelected),
                 ])));
   }
 

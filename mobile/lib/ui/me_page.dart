@@ -42,6 +42,7 @@ class _MePageState extends ConsumerState<MePage> {
   bool _loadingDevices = true;
   String? _server;
   String _cacheSize = '';
+  String _appCacheSize = '';
   String _version = '';
   bool? _webdavSet; // WebDAV 独立密码是否已设置（0.8.0）
 
@@ -99,6 +100,9 @@ class _MePageState extends ConsumerState<MePage> {
       if (mounted) setState(() => _loadingDevices = false);
     }
     await _loadCacheSize();
+    // 独立调用而非串在 _loadCacheSize 末尾：缩略图目录不存在的早退路径
+    // 会把它吞掉（新装/清完缓存后"统计中…"永不消失，二轮审查 P1）
+    _loadAppCacheSize();
   }
 
   /// 缩略图缓存占用（flutter_cache_manager 自定义 key 落在临时目录同名子目录）
@@ -122,6 +126,80 @@ class _MePageState extends ConsumerState<MePage> {
     } catch (_) {
       if (mounted) setState(() => _cacheSize = '');
     }
+  }
+
+  /// 应用缓存目录（v0.16.0）：临时目录 + 系统 cache 目录（Android 上两者
+  /// 常是同一路径，按路径去重）。下载文件（documents/Downloads）、账本
+  /// （databases 目录）、队列 JSON 都不在 temp/cache，不受影响。
+  Future<List<Directory>> _appCacheDirs() async {
+    final found = <String, Directory>{};
+    for (final get in [getTemporaryDirectory, getApplicationCacheDirectory]) {
+      try {
+        final d = await get();
+        found[d.path] = d;
+      } catch (_) {}
+    }
+    return found.values.toList();
+  }
+
+  Future<void> _loadAppCacheSize() async {
+    try {
+      var total = 0;
+      for (final d in await _appCacheDirs()) {
+        if (!d.existsSync()) continue;
+        await for (final e in d.list(recursive: true, followLinks: false)) {
+          if (e is File) {
+            try {
+              total += e.lengthSync();
+            } catch (_) {}
+          }
+        }
+      }
+      if (mounted) setState(() => _appCacheSize = humanSize(total));
+    } catch (_) {
+      if (mounted) setState(() => _appCacheSize = '');
+    }
+  }
+
+  /// 清理应用缓存（v0.16.0，位于"清理缩略图缓存"下方）：清空临时/cache
+  /// 目录全部内容。缩略图缓存本就落在临时目录里，这里一并带走；清完刷新
+  /// 两项统计。
+  Future<void> _clearAppCache() async {
+    final size = _appCacheSize;
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+                title: const Text('清理应用缓存？'),
+                content: Text(
+                    '当前占用 ${size.isEmpty ? "统计中" : size}。将清空临时文件、'
+                    '网络与图片缓存（含缩略图缓存），不影响下载的文件和账号数据。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('清理')),
+                ]));
+    if (ok != true) return;
+    for (final d in await _appCacheDirs()) {
+      if (!d.existsSync()) continue;
+      try {
+        await for (final e in d.list(followLinks: false)) {
+          try {
+            await e.delete(recursive: true);
+          } catch (_) {}
+        }
+      } catch (_) {
+        // 目录流中途被并发删改：吞掉，能清多少清多少
+      }
+    }
+    AuthCacheManager.I.clearFailureCache();
+    // 两个统计都刷：清理应用缓存把缩略图缓存一并带走（同在临时目录），
+    // 只刷缩略图一项会让本项显示清理前的陈旧占用（E2E 实测踩中）
+    await _loadCacheSize();
+    _loadAppCacheSize();
+    _toast('已清理');
   }
 
   Future<void> _revoke(_Device d) async {
@@ -592,7 +670,9 @@ class _MePageState extends ConsumerState<MePage> {
     // 负缓存一并放行：否则已记失败的缩略图 10 分钟内仍是坏图图标，
     // 与"清理后重新下载缩略图"的承诺不符（review 0.12.0 P3）
     AuthCacheManager.I.clearFailureCache();
+    // 缩略图也占着临时目录：应用缓存统计连带刷新（E2E 实测踩中陈旧值）
     await _loadCacheSize();
+    _loadAppCacheSize();
     _toast('已清理');
   }
 
@@ -828,6 +908,14 @@ class _MePageState extends ConsumerState<MePage> {
             title: const Text('清理缩略图缓存'),
             subtitle: Text(_cacheSize.isEmpty ? '统计中…' : '占用 $_cacheSize'),
             onTap: _clearCache,
+          ),
+          ListTile(
+            leading: const Icon(Icons.cleaning_services_outlined),
+            title: const Text('清理应用缓存'),
+            subtitle: Text(_appCacheSize.isEmpty
+                ? '统计中…'
+                : '临时文件与网络缓存，占用 $_appCacheSize'),
+            onTap: _clearAppCache,
           ),
           ListTile(
             leading: const Icon(Icons.info_outline),

@@ -80,18 +80,60 @@ class UpdateService {
   static bool isNewer(UpdateInfo remote, int localBuild) =>
       remote.build > localBuild;
 
-  /// 下载到沙盒下载目录（覆盖旧更新包），返回落盘路径
+  /// 更新包落盘目录：Downloads 下的独立 updates 子目录（v0.16.0 二轮
+  /// 审查 P2）。共享空间里任何人都可能上传名叫 lanshare-x.y.z.apk 的普通
+  /// 文件——更新包与用户下载混放会让 purgeInstallers 把用户特意下载留存
+  /// 的安装包静默清掉；隔离子目录后 purge 只扫自家地盘。
+  static Future<Directory> _updateDir() async {
+    final dl = Directory(
+        '${(await getApplicationDocumentsDirectory()).path}/Downloads');
+    final dir = Directory('${dl.path}/updates');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir;
+  }
+
+  /// 下载到沙盒下载目录的 updates 子目录（覆盖旧更新包），返回落盘路径
   static Future<String> download(UpdateInfo info,
       {void Function(int received, int total)? onProgress}) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final dlDir = Directory('${dir.path}/Downloads');
-    if (!dlDir.existsSync()) dlDir.createSync(recursive: true);
-    final path = '${dlDir.path}/lanshare-${info.version}.apk';
+    final dir = await _updateDir();
+    final path = '${dir.path}/lanshare-${info.version}.apk';
     final dio = await ApiClient.I.dio();
     await dio.download('/api/app/download', path,
         onReceiveProgress: onProgress,
         options: Options(receiveTimeout: const Duration(minutes: 30)));
     return path;
+  }
+
+  /// 安装包文件名判定（纯函数，单测锚点）：分发约定 lanshare-<版本>.apk
+  static bool isInstallerName(String name) {
+    final n = name.toLowerCase();
+    return n.startsWith('lanshare-') && n.endsWith('.apk');
+  }
+
+  /// 清理 updates 子目录里的历史安装包（v0.16.0 用户需求：更新安装完成
+  /// 后包已无用，85MB 级会在沙盒里永久堆积）。返回释放的字节数。
+  /// 调用时机：登录启动后 / 进入关于页 / 再次下载前。minAge 内的新文件
+  /// 跳过——刚下载完正交给系统安装器的包（安装器点"安装"时才流式读源
+  /// 文件）不能被同会话内的重进关于页/重登清掉（审查 P1）。
+  static Future<int> purgeInstallers(
+      {Duration minAge = const Duration(hours: 1)}) async {
+    try {
+      final dir = await _updateDir();
+      final now = DateTime.now();
+      var freed = 0;
+      await for (final e in dir.list(followLinks: false)) {
+        if (e is! File) continue;
+        if (!isInstallerName(e.uri.pathSegments.last)) continue;
+        try {
+          if (now.difference(e.statSync().modified) < minAge) continue;
+          freed += e.lengthSync();
+          await e.delete();
+        } catch (_) {}
+      }
+      return freed;
+    } catch (_) {
+      return 0;
+    }
   }
 
   static Future<void> install(String apkPath) async {

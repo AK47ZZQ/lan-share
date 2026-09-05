@@ -10,9 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
-import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/media_proxy.dart';
+import '../data/api/purge.dart';
 import '../data/net.dart';
 import '../state/session.dart' show sessionProvider;
 import '../transfer/transfer_engine.dart';
@@ -85,33 +85,65 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
     final it = widget.items[_index];
     final canManage = ref.read(sessionProvider).role != 'guest';
     if (!canManage) return;
-    final ok = await showDialog<bool>(
+    // 三选（v0.16.0）：删除进回收站可恢复；彻底删除两段式当场释放磁盘
+    final how = await showDialog<String>(
         context: context,
         builder: (dctx) => AlertDialog(
                 title: Text('删除「${it.name}」？'),
-                content: const Text('将进入服务端回收站，可随时恢复。'),
+                content: const Text('删除后进服务端回收站，可随时恢复；'
+                    '彻底删除直接清出服务端磁盘，无法恢复。'),
                 actions: [
                   TextButton(
-                      onPressed: () => Navigator.pop(dctx, false),
+                      onPressed: () => Navigator.pop(dctx, 'cancel'),
                       child: const Text('取消')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx, 'purge'),
+                      child: Text('彻底删除',
+                          style: TextStyle(
+                              color: Theme.of(dctx).colorScheme.error))),
                   FilledButton(
-                      onPressed: () => Navigator.pop(dctx, true),
+                      onPressed: () => Navigator.pop(dctx, 'trash'),
                       child: const Text('删除')),
                 ]));
-    if (ok != true) return;
+    if (how == null || how == 'cancel' || !mounted) return;
+    // 彻底删除不可逆：与照片墙批量路径同级别，再要一次独立确认
+    if (how == 'purge') {
+      final sure = await showDialog<bool>(
+          context: context,
+          builder: (dctx) => AlertDialog(
+                  title: const Text('确认彻底删除？'),
+                  content: Text('「${it.name}」将从服务端磁盘直接清除，'
+                      '无法恢复、不进回收站。'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(dctx, false),
+                        child: const Text('取消')),
+                    FilledButton(
+                        style: FilledButton.styleFrom(
+                            backgroundColor:
+                                Theme.of(dctx).colorScheme.error),
+                        onPressed: () => Navigator.pop(dctx, true),
+                        child: const Text('彻底删除')),
+                  ]));
+      if (sure != true || !mounted) return;
+    }
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.delete('/api/files/${encPath(it.path)}');
+      final res =
+          await purgeServerFiles([it.path], trashOnly: how == 'trash');
+      if (!mounted) return;
+      if (res.purged == 0 && res.staged == 0) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('删除失败')));
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(res.report), duration: const Duration(seconds: 2)));
+      Navigator.pop(context, true);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('删除失败')));
-      return;
     }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('已删除'), duration: Duration(seconds: 2)));
-    Navigator.pop(context, true);
   }
 
   void _showInfo() {

@@ -2,6 +2,9 @@
 // FR-5：应用被杀后重启，未完成队列自动恢复续传（恢复动作在引擎 onLogin）。
 // 0.6.0：状态筛选（全部/进行中/已完成/失败）、失败原因点按看全量、
 //        全部暂停/全部继续/重试全部失败（AppBar 菜单）。
+// 0.16.0：顶部汇总条（进行中/总速度/暂停/失败）+ 上传任务展示目标目录 +
+//        "本地文件"视图（浏览/打开/分享/删除 Downloads 落盘文件、清空全部、
+//        清理任务已移除后残留的 .part 分片）。
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,6 +13,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/local/gallery_saver.dart';
 import 'widgets/brand.dart';
+import '../transfer/local_files.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'widgets/open_local.dart';
@@ -25,6 +29,7 @@ class TransfersPage extends ConsumerStatefulWidget {
 
 class _TransfersPageState extends ConsumerState<TransfersPage> {
   _Filter _filter = _Filter.all;
+  bool _local = false; // false=任务队列视图 / true=本地文件视图
 
   @override
   Widget build(BuildContext context) {
@@ -47,68 +52,76 @@ class _TransfersPageState extends ConsumerState<TransfersPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('传输'),
+        title: Text(_local ? '本地文件' : '传输'),
         actions: [
-          if (engine.pausedCount > 0)
+          if (!_local && engine.pausedCount > 0)
             TextButton(
                 onPressed: engine.resumeAll, child: Text('继续(${engine.pausedCount})')),
-          PopupMenuButton<String>(
-              onSelected: (v) {
-                if (v == 'pauseAll') engine.pauseAll();
-                if (v == 'resumeAll') engine.resumeAll();
-                if (v == 'retryFailed') engine.retryAllFailed();
-              },
-              itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'pauseAll', child: Text('全部暂停')),
-                    const PopupMenuItem(value: 'resumeAll', child: Text('全部继续')),
-                    PopupMenuItem(
-                        value: 'retryFailed',
-                        enabled: engine.failedCount > 0,
-                        child: Text('重试全部失败(${engine.failedCount})')),
-                  ]),
-          if (doneCount > 0)
+          if (!_local)
+            PopupMenuButton<String>(
+                onSelected: (v) {
+                  if (v == 'pauseAll') engine.pauseAll();
+                  if (v == 'resumeAll') engine.resumeAll();
+                  if (v == 'retryFailed') engine.retryAllFailed();
+                },
+                itemBuilder: (_) => [
+                      const PopupMenuItem(value: 'pauseAll', child: Text('全部暂停')),
+                      const PopupMenuItem(value: 'resumeAll', child: Text('全部继续')),
+                      PopupMenuItem(
+                          value: 'retryFailed',
+                          enabled: engine.failedCount > 0,
+                          child: Text('重试全部失败(${engine.failedCount})')),
+                    ]),
+          if (!_local && doneCount > 0)
             TextButton(
                 onPressed: engine.clearFinished,
                 child: Text('清空已完成($doneCount)')),
+          IconButton(
+              tooltip: _local ? '传输任务' : '本地文件',
+              icon: Icon(_local ? Icons.swap_vert : Icons.folder_outlined),
+              onPressed: () => setState(() => _local = !_local)),
         ],
       ),
-      body: Column(children: [
-        // 状态筛选：一行 chips，紧凑不挤列表
-        SizedBox(
-          height: 44,
-          child: ListView(scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              children: [
-                for (final f in _Filter.values)
-                  Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                          label: Text(_filterLabel(f, engine)),
-                          selected: _filter == f,
-                          visualDensity: VisualDensity.compact,
-                          onSelected: (_) => setState(() => _filter = f))),
-              ]),
-        ),
-        Expanded(
-          child: tasks.isEmpty
-              ? const EmptyState(
-                  title: '暂无传输任务',
-                  hint: '在「文件」页可上传，点按文件可下载；下载保存在 App 专属目录，完成任务点按可打开或存入手机相册')
-              : visible.isEmpty
-                  ? ListView(children: [
-                      const SizedBox(height: 80),
-                      Center(
-                          child: Text('该状态下没有任务',
-                              style: TextStyle(
-                                  color: Theme.of(context).colorScheme.outline))),
-                    ])
-                  : ListView.builder(
-                      itemCount: visible.length,
-                      itemBuilder: (context, i) =>
-                          _Tile(task: visible[i], engine: engine),
-                    ),
-        ),
-      ]),
+      body: _local
+          ? const _LocalFilesView()
+          : Column(children: [
+              if (tasks.isNotEmpty) _SummaryBar(engine: engine),
+              // 状态筛选：一行 chips，紧凑不挤列表
+              SizedBox(
+                height: 44,
+                child: ListView(scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    children: [
+                      for (final f in _Filter.values)
+                        Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: ChoiceChip(
+                                label: Text(_filterLabel(f, engine)),
+                                selected: _filter == f,
+                                visualDensity: VisualDensity.compact,
+                                onSelected: (_) => setState(() => _filter = f))),
+                    ]),
+              ),
+              Expanded(
+                child: tasks.isEmpty
+                    ? const EmptyState(
+                        title: '暂无传输任务',
+                        hint: '在「文件」页可上传，点按文件可下载；下载保存在 App 专属目录，完成任务点按可打开或存入手机相册')
+                    : visible.isEmpty
+                        ? ListView(children: [
+                            const SizedBox(height: 80),
+                            Center(
+                                child: Text('该状态下没有任务',
+                                    style: TextStyle(
+                                        color: Theme.of(context).colorScheme.outline))),
+                          ])
+                        : ListView.builder(
+                            itemCount: visible.length,
+                            itemBuilder: (context, i) =>
+                                _Tile(task: visible[i], engine: engine),
+                          ),
+              ),
+            ]),
     );
   }
 
@@ -123,6 +136,49 @@ class _TransfersPageState extends ConsumerState<TransfersPage> {
       case _Filter.failed:
         return '失败(${e.failedCount})';
     }
+  }
+}
+
+/// 队列汇总条（v0.16.0）：进行中/总速度/暂停/失败一眼可见——此前只能逐
+/// 条扫列表或在筛选 chips 里数数。
+class _SummaryBar extends StatelessWidget {
+  final TransferEngine engine;
+  const _SummaryBar({required this.engine});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    var speed = 0;
+    for (final t in engine.tasks) {
+      if (t.isActive) speed += engine.speedOf(t);
+    }
+    Widget stat(String label, String value, {Color? color}) => Expanded(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                  color: color ?? cs.onSurface)),
+          const SizedBox(height: 1),
+          Text(label, style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+        ]));
+    return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+            border: Border(
+                bottom: BorderSide(color: cs.outlineVariant, width: 0.5))),
+        child: Row(children: [
+          stat('进行中', '${engine.activeCount}',
+              color: engine.activeCount > 0 ? cs.primary : null),
+          stat('总速度', '${humanSize(speed)}/s'),
+          stat('暂停', '${engine.pausedCount}'),
+          stat('失败', '${engine.failedCount}',
+              color: engine.failedCount > 0 ? cs.error : null),
+        ]));
   }
 }
 
@@ -202,6 +258,15 @@ class _Tile extends ConsumerWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 12),
               ),
+              // 上传任务补目标目录（v0.16.0）：只看文件名不知道传到网盘哪里
+              if (task.kind == TransferKind.upload &&
+                  (task.destDir?.isNotEmpty ?? false))
+                Text('→ ${task.destDir}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
             ]),
         // 失败任务点按看全量错误（单行截断排障不够用）；
         // 已下载任务点按弹操作单（打开/保存到相册/分享/位置，v0.13）
@@ -431,6 +496,285 @@ class _Tile extends ConsumerWidget {
             icon: const Icon(Icons.pause),
             onPressed: () => engine.pauseTask(task));
     }
+  }
+}
+
+/// 本地文件视图（v0.16.0）：浏览 App 下载目录的落盘文件。此前"移除记录
+/// 不删文件"导致文件只进不出、缓存越滚越大，用户却没有盘点/清理的入口。
+/// .part 分片是未完成下载的续传锚，列表隐藏；任务已移除的孤儿 .part 可
+/// 由"清理残留分片"回收。
+class _LocalFileItem {
+  final String path;
+  final String name;
+  final int size;
+  final DateTime modified;
+  _LocalFileItem(this.path, this.name, this.size, this.modified);
+}
+
+class _LocalFilesView extends StatefulWidget {
+  const _LocalFilesView();
+
+  @override
+  State<_LocalFilesView> createState() => _LocalFilesViewState();
+}
+
+class _LocalFilesViewState extends State<_LocalFilesView> {
+  List<_LocalFileItem> _files = [];
+  int _orphanParts = 0;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final items = <_LocalFileItem>[];
+    var orphans = 0;
+    try {
+      final dir = await TransferEngine.I.downloadsDir();
+      for (final e in dir.listSync(followLinks: false)) {
+        if (e is! File) continue;
+        final name = e.uri.pathSegments.last;
+        if (isHiddenLocalEntry(name)) {
+          if (isOrphanPart(e.path, TransferEngine.I.tasks)) orphans++;
+          continue;
+        }
+        try {
+          final st = e.statSync();
+          items.add(_LocalFileItem(e.path, name, st.size, st.modified));
+        } catch (_) {}
+      }
+      items.sort((a, b) => b.modified.compareTo(a.modified));
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _files = items;
+      _orphanParts = orphans;
+      _loading = false;
+    });
+  }
+
+  int get _totalSize =>
+      _files.fold(0, (sum, f) => sum + f.size);
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+  }
+
+  Future<void> _clearAll() async {
+    if (_files.isEmpty) return;
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text('清空全部本地文件（${_files.length} 个）？'),
+                content: Text(
+                    '删除 App 下载目录里的全部文件，共 ${humanSize(_totalSize)}。'
+                    '服务端原件不受影响；未完成任务的分片数据保留。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(d).colorScheme.error),
+                      onPressed: () => Navigator.pop(d, true),
+                      child: const Text('清空')),
+                ]));
+    if (ok != true) return;
+    var n = 0;
+    for (final f in _files) {
+      try {
+        await File(f.path).delete();
+        n++;
+      } catch (_) {}
+    }
+    _toast(n == _files.length ? '已清空 $n 个文件' : '已清空 $n 个，部分文件被占用');
+    _load();
+  }
+
+  Future<void> _cleanOrphanParts() async {
+    var n = 0;
+    try {
+      final dir = await TransferEngine.I.downloadsDir();
+      for (final e in dir.listSync(followLinks: false)) {
+        if (e is! File || !e.path.endsWith('.part')) continue;
+        if (!isOrphanPart(e.path, TransferEngine.I.tasks)) continue;
+        try {
+          await e.delete();
+          n++;
+        } catch (_) {}
+      }
+    } catch (_) {}
+    _toast(n > 0 ? '已清理 $n 个残留分片' : '没有可清理的残留分片');
+    _load();
+  }
+
+  Future<void> _deleteOne(_LocalFileItem f) async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text('删除「${f.name}」？'),
+                content: const Text('删除手机 App 目录里的这份文件，服务端原件不受影响。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(d).colorScheme.error),
+                      onPressed: () => Navigator.pop(d, true),
+                      child: const Text('删除')),
+                ]));
+    if (ok != true) return;
+    try {
+      await File(f.path).delete();
+      _toast('已删除');
+    } catch (_) {
+      _toast('删除失败（文件可能被占用）');
+    }
+    _load();
+  }
+
+  void _sheet(_LocalFileItem f) {
+    final kind = localFileKind(f.name);
+    showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(f.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(
+                                '${humanSize(f.size)} · '
+                                '${f.modified.toString().substring(0, 16)}'
+                                ' · App 下载目录',
+                                style: const TextStyle(
+                                    fontSize: 12, color: Colors.grey)),
+                          ]))),
+              const Divider(height: 1),
+              ListTile(
+                  leading: const Icon(Icons.open_in_new),
+                  title: const Text('打开'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    // ignore: discarded_futures
+                    openLocalFile(context, f.path);
+                  }),
+              if (kind == 'image' || kind == 'video')
+                ListTile(
+                    leading: const Icon(Icons.photo_library_outlined),
+                    title: const Text('保存到手机相册'),
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      final err = await GallerySaver.save(f.path,
+                          isVideo: kind == 'video');
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(err ?? '已保存到相册'),
+                          duration: const Duration(seconds: 2)));
+                    }),
+              ListTile(
+                  leading: const Icon(Icons.share_outlined),
+                  title: const Text('分享 / 发送到其他应用'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    // ignore: discarded_futures
+                    Share.shareXFiles([XFile(f.path)], subject: f.name);
+                  }),
+              ListTile(
+                  leading: Icon(Icons.delete_outline,
+                      color: Theme.of(ctx).colorScheme.error),
+                  title: Text('删除本地文件',
+                      style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _deleteOne(f);
+                  }),
+              const SizedBox(height: 8),
+            ])));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_files.isEmpty) {
+      return const EmptyState(
+          title: '下载目录是空的',
+          hint: '在「文件」页或照片墙点按下载的文件都落在这里，可随时打开、分享或清理');
+    }
+    return Column(children: [
+      Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+          decoration: BoxDecoration(
+              color: Theme.of(context)
+                  .colorScheme
+                  .surfaceContainerHighest
+                  .withValues(alpha: 0.4),
+              border: Border(
+                  bottom: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                      width: 0.5))),
+          child: Row(children: [
+            Expanded(
+                child: Text(
+                    '共 ${_files.length} 个文件 · 占用 ${humanSize(_totalSize)}',
+                    style: const TextStyle(fontSize: 13))),
+            if (_orphanParts > 0)
+              TextButton(
+                  onPressed: _cleanOrphanParts,
+                  child: Text('清理残留分片($_orphanParts)')),
+            TextButton(
+                onPressed: _clearAll,
+                child: Text('清空全部',
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.error))),
+          ])),
+      Expanded(
+          child: ListView.builder(
+              itemCount: _files.length,
+              itemBuilder: (context, i) {
+                final f = _files[i];
+                final kind = localFileKind(f.name);
+                final icon = switch (kind) {
+                  'image' => Icons.image_outlined,
+                  'video' => Icons.movie_outlined,
+                  'audio' => Icons.music_note_outlined,
+                  'archive' => Icons.folder_zip_outlined,
+                  'doc' => Icons.description_outlined,
+                  _ => Icons.insert_drive_file_outlined,
+                };
+                return ListTile(
+                    leading: Icon(icon,
+                        color: Theme.of(context).colorScheme.primary),
+                    title: Text(f.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(
+                        '${humanSize(f.size)} · ${f.modified.toString().substring(0, 16)}',
+                        style: const TextStyle(fontSize: 12)),
+                    trailing: IconButton(
+                        tooltip: '删除本地文件',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => _deleteOne(f)),
+                    onTap: () => _sheet(f));
+              })),
+    ]);
   }
 }
 

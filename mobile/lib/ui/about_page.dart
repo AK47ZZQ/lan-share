@@ -29,6 +29,9 @@ class _AboutPageState extends State<AboutPage> {
   @override
   void initState() {
     super.initState();
+    // 历史安装包清运（v0.16.0）：上一轮装完/放弃的 lanshare-*.apk 静默回收
+    // ignore: discarded_futures
+    UpdateService.purgeInstallers();
     () async {
       final info = await PackageInfo.fromPlatform();
       final server = await Prefs.lastAddress();
@@ -102,6 +105,8 @@ class _AboutPageState extends State<AboutPage> {
     }
     setState(() => _progress = 0);
     try {
+      // 下载前先清历史安装包：省出 85MB 级空间，也给本次下载留余量
+      await UpdateService.purgeInstallers();
       final path = await UpdateService.download(remote,
           onProgress: (received, total) {
         if (!mounted || total <= 0) return;

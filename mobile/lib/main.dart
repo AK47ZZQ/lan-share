@@ -7,6 +7,7 @@ import 'backup/backup_bridge.dart';
 import 'backup/backup_config.dart';
 import 'backup/backup_engine.dart';
 import 'data/api/api_client.dart';
+import 'data/update_service.dart';
 import 'state/session.dart';
 import 'state/settings.dart';
 import 'transfer/transfer_engine.dart';
@@ -28,6 +29,10 @@ void main() {
     if (next.loggedIn && prev?.loggedIn != true) {
       // ignore: discarded_futures
       engine.onLogin();
+      // 更新安装包清运（v0.16.0）：上一轮会话装完/放弃的 lanshare-*.apk
+      // 残留在沙盒会永久堆积，登录后顺手清掉（本地操作，静默失败无妨）
+      // ignore: discarded_futures
+      UpdateService.purgeInstallers();
       // 自动备份：登录后确保周期任务就位（覆盖升级/重装后 JobScheduler 状态漂移），
       // 并顺手跑一轮（账本 diff 秒级，已备份过的照片直接跳过）
       // ignore: discarded_futures
