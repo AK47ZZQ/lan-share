@@ -80,7 +80,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     try {
       final s = await BackupLedger.I.stats(
           excluded: _cfg?.excludedBuckets ?? const [],
-          included: _cfg?.selectedBuckets ?? const []);
+          included: _cfg?.selectedBuckets);
       if (mounted) setState(() => _stats = s);
     } catch (_) {
       // 与后台引擎 isolate 并发开库时可能短暂失败（迁移竞态/库锁）。
@@ -107,7 +107,16 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     await cfg.save();
     setState(() => _cfg = cfg);
     await BackupBridge.applySchedule(cfg);
-    if (on) await BackupBridge.runOnce();
+    if (on) {
+      // 白名单空 = 全部不备份（0.14.1 语义）：开了开关但什么都不会传，
+      // 当场点名，免得用户以为坏了
+      if (cfg.selectedBuckets.isEmpty && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('还没有勾选要备份的相册，暂不会备份；请到「选择备份相册」勾选'),
+            duration: Duration(seconds: 4)));
+      }
+      await BackupBridge.runOnce();
+    }
   }
 
   Future<void> _set(BackupConfig cfg) async {
@@ -279,9 +288,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   title: const Text('选择备份相册'),
                   subtitle: Text(cfg.selectedBuckets.isEmpty
                       ? (cfg.excludedBuckets.isEmpty
-                          ? '全部相册都备份（点此可只备份勾选的相册）'
-                          : '此前排除了 ${cfg.excludedBuckets.length} 个相册，'
-                              '点此改用勾选白名单')
+                          ? '尚未勾选任何相册，暂不备份（点此选择）'
+                          : '尚未勾选任何相册，暂不备份（旧排除 '
+                              '${cfg.excludedBuckets.length} 个将随保存清除）')
                       : '只备份勾选的 ${cfg.selectedBuckets.length} 个'
                           '：${cfg.selectedBuckets.take(3).join("、")}'
                           '${cfg.selectedBuckets.length > 3 ? "…" : ""}'),
@@ -662,7 +671,7 @@ class _BackupBucketsPageState extends State<BackupBucketsPage> {
                     Padding(
                         padding: const EdgeInsets.all(16),
                         child: Text(
-                            '勾选要自动备份的相册；一个都不勾 = 全部相册都备份。\n'
+                            '勾选要自动备份的相册；一个都不勾 = 全部不备份。\n'
                             '取消勾选只是不备份新照片，已备份的不受影响。',
                             style: TextStyle(
                                 fontSize: 12,

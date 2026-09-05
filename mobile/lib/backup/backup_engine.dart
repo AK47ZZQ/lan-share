@@ -135,11 +135,13 @@ class BackupEngine {
       List<LedgerRow> pending;
       try {
         var media = await MediaSource.query(includeVideos: cfg.includeVideos);
-        // 相册范围（0.14 白名单）：selectedBuckets 非空时只备勾选的相册；
-        // 旧排除表（0.6.0）继续生效直至用户在新 UI 保存一次即清空。
-        // 都只影响扫描阶段，账本不动——之后取消勾选，同 id 的照片自动
-        // 重新进入待备集合
-        if (cfg.selectedBuckets.isNotEmpty) {
+        // 相册白名单（0.14，同日改为"一个不勾 = 全部不备份"）：只备勾选的
+        // 相册，空白名单 = 不备份任何相册；旧排除表（0.6.0）继续生效直至
+        // 用户在新 UI 保存一次即清空。都只影响扫描阶段，账本不动——之后
+        // 勾选/取消勾选，同 id 的照片自动进出待备集合
+        if (cfg.selectedBuckets.isEmpty) {
+          media = const [];
+        } else {
           final sel = cfg.selectedBuckets.toSet();
           media = media.where((m) => sel.contains(m.bucket)).toList();
         }

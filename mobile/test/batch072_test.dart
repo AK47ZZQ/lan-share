@@ -28,12 +28,13 @@ void main() {
       expect(loaded.excludedBuckets, isEmpty);
     });
 
-    test('默认值：不勾=全部备份，旧排除表读到仍生效', () async {
+    test('默认值：一个不勾 = 全部不备份（0.14.1 语义），旧排除表读到仍生效',
+        () async {
       SharedPreferences.setMockInitialValues({
         'backup_excluded_buckets': ['Screenshots'],
       });
       final cfg = await BackupConfig.load();
-      expect(cfg.selectedBuckets, isEmpty); // 空=全部
+      expect(cfg.selectedBuckets, isEmpty); // 空=全部不备份
       expect(cfg.excludedBuckets, ['Screenshots']);
     });
 
