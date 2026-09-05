@@ -25,7 +25,7 @@ export interface DeviceInfo { id: number; name: string; created_at: number; last
 export interface NotificationItem { id: number; type: string; title: string; body: string | null; link: string | null; created_at: number; read: boolean }
 export interface PhotoItem { path: string; name: string; taken: string; month: string; uploader: string; thumb: string }
 export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
-export interface Album { id: string; title: string; month: string; created_by?: string }
+export interface Album { id: string; title: string; month?: string; created_by?: string; count?: number; cover?: string }
 export interface PhotoComment { id: number; user: string; body: string; created_at: number; mine: boolean }
 export interface PhotoReactions { emojis: string[]; reactions: { emoji: string; count: number; names: string[] }[]; mine: string[] }
 
@@ -138,10 +138,11 @@ export const api = {
   disk: () => fetch('/api/disk').then(r => handle<DiskInfo>(r)),
   search: (q: string) => fetch(`/api/search?q=${encodeURIComponent(q)}`).then(r => handle<Entry[]>(r)),
   recent: (limit = 30) => fetch(`/api/recent?limit=${limit}`).then(r => handle<Entry[]>(r)),
-  photos: (limit: number, offset: number, month?: string, uploader?: string) => {
+  photos: (limit: number, offset: number, month?: string, uploader?: string, album?: string) => {
     const q = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (month) q.set('month', month)
     if (uploader) q.set('uploader', uploader)
+    if (album) q.set('album', album)
     return getAs(`/api/photos?${q}`).then(r => handle<{ total: number; items: PhotoItem[] }>(r))
   },
   photoFacets: () => getAs('/api/photos/facets').then(r => handle<PhotoFacets>(r)),

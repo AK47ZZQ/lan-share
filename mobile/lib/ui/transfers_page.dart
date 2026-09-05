@@ -325,14 +325,65 @@ class _Tile extends ConsumerWidget {
                   }),
               ListTile(
                   leading: const Icon(Icons.delete_outline),
-                  title: const Text('移除任务记录',
+                  title: const Text('移除记录（不删除文件）',
                       style: TextStyle(color: Colors.red)),
+                  subtitle: const Text('仅从列表清掉这条记录，手机里的文件保留',
+                      style: TextStyle(fontSize: 11)),
                   onTap: () {
                     Navigator.pop(ctx);
                     engine.removeTask(task);
                   }),
+              ListTile(
+                  leading: const Icon(Icons.delete_forever_outlined),
+                  title: const Text('删除本地文件并移除记录',
+                      style: TextStyle(color: Colors.red)),
+                  subtitle: const Text('把下载到 App 目录的这份文件从手机删掉',
+                      style: TextStyle(fontSize: 11)),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await _deleteLocalFile(context);
+                  }),
               const SizedBox(height: 8),
             ])));
+  }
+
+  /// 删除本地副本并移除任务记录（v0.14：用户问"删除到底删没删文件"——
+  /// 此前移除只清记录不碰文件，语义不明；这里给出明确的文件删除入口，
+  /// 服务端原件不受影响）
+  Future<void> _deleteLocalFile(BuildContext context) async {
+    final exists = File(task.localPath).existsSync();
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (d) => AlertDialog(
+                title: Text('删除「${task.name}」的本地文件？'),
+                content: Text(exists
+                    ? '只删除下载到手机 App 目录里的这份副本，服务端原件不受影响。'
+                    : '本地文件已不存在（可能被系统清理），本次只移除任务记录。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(d, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor:
+                              Theme.of(d).colorScheme.error),
+                      onPressed: () => Navigator.pop(d, true),
+                      child: const Text('删除')),
+                ]));
+    if (ok != true) return;
+    if (exists) {
+      try {
+        await File(task.localPath).delete();
+      } catch (_) {
+        // 删不掉（权限/被占用）：仍移除记录，提示用户
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('文件删除失败，已仅移除记录'),
+              duration: Duration(seconds: 2)));
+        }
+      }
+    }
+    engine.removeTask(task);
   }
 
   void _showError(BuildContext context) {
@@ -365,13 +416,13 @@ class _Tile extends ConsumerWidget {
               icon: const Icon(Icons.play_arrow),
               onPressed: () => engine.resumeTask(task)),
           IconButton(
-              tooltip: '移除',
+              tooltip: '移除记录（不删文件）',
               icon: const Icon(Icons.close),
               onPressed: () => engine.removeTask(task)),
         ]);
       case TransferStatus.done:
         return IconButton(
-            tooltip: '移除',
+            tooltip: '移除记录（不删文件）',
             icon: const Icon(Icons.close),
             onPressed: () => engine.removeTask(task));
       default:

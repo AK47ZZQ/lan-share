@@ -11,7 +11,9 @@ class BackupConfig {
   final bool includeVideos;
   final bool notifyDone;
   final bool allowPublicServer; // §6：公网地址默认不备份（流量保护），可开
-  final List<String> excludedBuckets; // 排除的相册（0.6.0：截图/聊天图等）
+  final List<String> selectedBuckets; // 白名单：要备份的相册（0.14；空=全部）
+  final List<String> excludedBuckets; // 旧排除表（0.6.0）：仅兼容存量配置，
+                                      // 新 UI 不再编辑，保存白名单时清空
 
   const BackupConfig({
     this.enabled = false,
@@ -20,6 +22,7 @@ class BackupConfig {
     this.includeVideos = false,
     this.notifyDone = true,
     this.allowPublicServer = false,
+    this.selectedBuckets = const [],
     this.excludedBuckets = const [],
   });
 
@@ -32,6 +35,7 @@ class BackupConfig {
       includeVideos: sp.getBool(_kVideos) ?? false,
       notifyDone: sp.getBool(_kNotify) ?? true,
       allowPublicServer: sp.getBool(_kPublic) ?? false,
+      selectedBuckets: sp.getStringList(_kSelected) ?? const [],
       excludedBuckets: sp.getStringList(_kExcluded) ?? const [],
     );
   }
@@ -43,6 +47,7 @@ class BackupConfig {
     bool? includeVideos,
     bool? notifyDone,
     bool? allowPublicServer,
+    List<String>? selectedBuckets,
     List<String>? excludedBuckets,
   }) =>
       BackupConfig(
@@ -52,6 +57,7 @@ class BackupConfig {
         includeVideos: includeVideos ?? this.includeVideos,
         notifyDone: notifyDone ?? this.notifyDone,
         allowPublicServer: allowPublicServer ?? this.allowPublicServer,
+        selectedBuckets: selectedBuckets ?? this.selectedBuckets,
         excludedBuckets: excludedBuckets ?? this.excludedBuckets,
       );
 
@@ -63,6 +69,7 @@ class BackupConfig {
     await sp.setBool(_kVideos, includeVideos);
     await sp.setBool(_kNotify, notifyDone);
     await sp.setBool(_kPublic, allowPublicServer);
+    await sp.setStringList(_kSelected, selectedBuckets);
     await sp.setStringList(_kExcluded, excludedBuckets);
     // 约束/范围变化会改变待备集合（如开启视频），pending 计数归 -1 让下个
     // 周期强制跑一轮，别被 Worker 的"空跑跳过"捷径挡住
@@ -75,5 +82,6 @@ class BackupConfig {
   static const _kVideos = 'backup_include_videos';
   static const _kNotify = 'backup_notify_done';
   static const _kPublic = 'backup_allow_public';
+  static const _kSelected = 'backup_selected_buckets';
   static const _kExcluded = 'backup_excluded_buckets';
 }

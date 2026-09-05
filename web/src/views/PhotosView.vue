@@ -34,8 +34,10 @@ const facets = ref<PhotoFacets | null>(null)
 const albums = ref<Album[]>([])
 const selMonth = ref('')
 const selUploader = ref('')
+const selAlbum = ref('')   // v0.14 文件夹式精选专辑 id（非空时按专辑条目过滤）
 const filterDesc = computed(() => {
   const parts: string[] = []
+  if (selAlbum.value) parts.push(`专辑：${albums.value.find(a => a.id === selAlbum.value)?.title ?? selAlbum.value}`)
   if (selMonth.value) parts.push(selMonth.value)
   if (selUploader.value) parts.push(selUploader.value)
   return parts.join(' · ')
@@ -53,7 +55,7 @@ async function loadMore() {
   loading.value = true
   err.value = ''
   try {
-    const r = await api.photos(LIMIT, offset.value, selMonth.value || undefined, selUploader.value || undefined)
+    const r = await api.photos(LIMIT, offset.value, selMonth.value || undefined, selUploader.value || undefined, selAlbum.value || undefined)
     total.value = r.total
     for (const p of r.items) {
       const last = groups.value[groups.value.length - 1]
@@ -79,8 +81,22 @@ function pickUploader(u: string) {
   selUploader.value = selUploader.value === u ? '' : u
   applyFilter()
 }
+function isItemAlbum(a: Album) {
+  // v0.14 判定：条目专辑（勾选过内容或无月份）；服务端对旧月份书签型
+  // 也回 count=0，不能拿 count!=null 当判据（审查 P1，否则 web 上建的
+  // 月份书签专辑点了必是空列表）
+  return (a.count ?? 0) > 0 || !a.month
+}
 function pickAlbum(a: Album) {
-  selMonth.value = a.month
+  if (isItemAlbum(a)) {
+    // v0.14 条目专辑：再次点击取消
+    selAlbum.value = selAlbum.value === a.id ? '' : a.id
+    selMonth.value = ''
+  } else {
+    // 旧月份书签型专辑
+    selAlbum.value = ''
+    selMonth.value = selMonth.value === a.month ? '' : (a.month ?? '')
+  }
   applyFilter()
 }
 
@@ -122,10 +138,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))   // 不移除
 
     <!-- 精选专辑 -->
     <div v-if="albums.length" class="album-row">
-      <div v-for="a in albums" :key="a.id" class="album-card" :class="{ on: selMonth === a.month }"
+      <div v-for="a in albums" :key="a.id" class="album-card" :class="{ on: selAlbum === a.id || selMonth === a.month }"
            @click="pickAlbum(a)">
         <span class="album-title">⭐ {{ a.title }}</span>
-        <span class="album-sub">{{ a.month }}</span>
+        <span class="album-sub">{{ isItemAlbum(a) ? `${a.count ?? 0} 项` : a.month }}</span>
         <button v-if="me.role === 'admin' || a.created_by === me.username" class="album-del" :title="a.created_by ? `${a.created_by} 创建` : '移除专辑'"
                 @click.stop="removeAlbum(a)">✕</button>
       </div>
@@ -146,7 +162,7 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))   // 不移除
           👤{{ u.name }} <small>{{ u.count }}</small>
         </button>
       </template>
-      <button v-if="selMonth || selUploader" class="chip clear" @click="selMonth = ''; selUploader = ''; applyFilter()">✕ 清除筛选</button>
+      <button v-if="selMonth || selUploader || selAlbum" class="chip clear" @click="selMonth = ''; selUploader = ''; selAlbum = ''; applyFilter()">✕ 清除筛选</button>
     </div>
 
     <p v-if="err" class="err">{{ err }}</p>

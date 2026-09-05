@@ -78,8 +78,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
 
   Future<void> _loadStats() async {
     try {
-      final s = await BackupLedger.I
-          .stats(excluded: _cfg?.excludedBuckets ?? const []);
+      final s = await BackupLedger.I.stats(
+          excluded: _cfg?.excludedBuckets ?? const [],
+          included: _cfg?.selectedBuckets ?? const []);
       if (mounted) setState(() => _stats = s);
     } catch (_) {
       // 与后台引擎 isolate 并发开库时可能短暂失败（迁移竞态/库锁）。
@@ -169,7 +170,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                       if ((stats?.excludedPending ?? 0) > 0) ...[
                         const SizedBox(height: 2),
                         Text(
-                            '已排除相册中还有 ${stats!.excludedPending} 项不参与备份',
+                            '不在备份范围内的相册还有 ${stats!.excludedPending} 项不参与备份',
                             style: const TextStyle(
                                 fontSize: 12,
                                 color: Colors.grey)),
@@ -275,15 +276,18 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   onChanged: (v) => _set(cfg.copyWith(includeVideos: v))),
               ListTile(
                   leading: const Icon(Icons.photo_library_outlined),
-                  title: const Text('排除相册'),
-                  subtitle: Text(cfg.excludedBuckets.isEmpty
-                      ? '全部相册都备份'
-                      : '已排除 ${cfg.excludedBuckets.length} 个'
-                          '：${cfg.excludedBuckets.take(3).join("、")}'
-                          '${cfg.excludedBuckets.length > 3 ? "…" : ""}'),
+                  title: const Text('选择备份相册'),
+                  subtitle: Text(cfg.selectedBuckets.isEmpty
+                      ? (cfg.excludedBuckets.isEmpty
+                          ? '全部相册都备份（点此可只备份勾选的相册）'
+                          : '此前排除了 ${cfg.excludedBuckets.length} 个相册，'
+                              '点此改用勾选白名单')
+                      : '只备份勾选的 ${cfg.selectedBuckets.length} 个'
+                          '：${cfg.selectedBuckets.take(3).join("、")}'
+                          '${cfg.selectedBuckets.length > 3 ? "…" : ""}'),
                   onTap: () async {
                     await Navigator.push(context, MaterialPageRoute(
-                        builder: (_) => BackupExclusionsPage(cfg: cfg)));
+                        builder: (_) => BackupBucketsPage(cfg: cfg)));
                     await _reload();
                   }),
               SwitchListTile(
@@ -531,20 +535,22 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
   }
 }
 
-/// 排除相册管理页（0.6.0）：勾选不参与自动备份的相册（截图/聊天图等）。
-/// 排除只影响扫描阶段，账本不动：取消勾选后同 id 媒体自动重回待备集合。
-class BackupExclusionsPage extends StatefulWidget {
+/// 备份相册选择页（0.14 白名单化）：勾选要备份的相册。
+/// 白名单只影响扫描阶段，账本不动：取消勾选后同 id 媒体自动重回待备集合。
+/// 旧"排除相册"（0.6.0 黑名单）不再单独编辑——保存本页即清除旧表，
+/// 语义统一收敛到"勾选要备份的相册，不勾=全部备份"。
+class BackupBucketsPage extends StatefulWidget {
   final BackupConfig cfg;
-  const BackupExclusionsPage({super.key, required this.cfg});
+  const BackupBucketsPage({super.key, required this.cfg});
 
   @override
-  State<BackupExclusionsPage> createState() => _BackupExclusionsPageState();
+  State<BackupBucketsPage> createState() => _BackupBucketsPageState();
 }
 
-class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
+class _BackupBucketsPageState extends State<BackupBucketsPage> {
   Map<String, int>? _buckets;
   String? _error;
-  late final Set<String> _excluded = Set.of(widget.cfg.excludedBuckets);
+  late final Set<String> _selected = Set.of(widget.cfg.selectedBuckets);
   bool _dirty = false;
 
   @override
@@ -571,9 +577,10 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
   }
 
   Future<void> _save() async {
-    final cfg = widget.cfg.copyWith(excludedBuckets: _excluded.toList());
+    final cfg = widget.cfg.copyWith(
+        selectedBuckets: _selected.toList(), excludedBuckets: const []);
     await cfg.save();
-    // 排除即刻生效：save() 已把 pending 置 -1 强制下轮，这里再拉一轮，
+    // 白名单即刻生效：save() 已把 pending 置 -1 强制下轮，这里再拉一轮，
     // 别让用户等最长 15 分钟的周期窗口才看到待备数变化（0.6.2）
     if (cfg.enabled) BackupBridge.runOnce();
   }
@@ -582,6 +589,7 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
   Widget build(BuildContext context) {
     final buckets = _buckets;
     final names = (buckets?.keys.toList() ?? const <String>[])..sort();
+    final legacyExcluded = widget.cfg.excludedBuckets;
     return PopScope(
         canPop: !_dirty,
         onPopInvokedWithResult: (didPop, _) async {
@@ -592,7 +600,7 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
         },
         child: Scaffold(
             appBar: AppBar(
-                title: const Text('排除相册'),
+                title: const Text('选择备份相册'),
                 actions: [
                   if (_dirty)
                     TextButton(
@@ -654,14 +662,25 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
                     Padding(
                         padding: const EdgeInsets.all(16),
                         child: Text(
-                            '勾选的相册不参与自动备份（截图、聊天图等建议排除）。'
-                            '取消勾选会重新纳入备份。',
+                            '勾选要自动备份的相册；一个都不勾 = 全部相册都备份。\n'
+                            '取消勾选只是不备份新照片，已备份的不受影响。',
                             style: TextStyle(
                                 fontSize: 12,
                                 color: Theme.of(context).colorScheme.outline))),
+                    if (legacyExcluded.isNotEmpty && _dirty)
+                      Padding(
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                          child: Text(
+                              '保存后将清除旧的"排除相册"设置'
+                              '（${legacyExcluded.take(3).join("、")}'
+                              '${legacyExcluded.length > 3 ? "…" : ""}），'
+                              '以后都用这里的勾选控制。',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.orange))),
                     for (final n in names)
                       CheckboxListTile(
-                          value: _excluded.contains(n),
+                          value: _selected.contains(n),
                           title: Text(n.isEmpty ? '（未分类）' : n,
                               maxLines: 1, overflow: TextOverflow.ellipsis),
                           subtitle: Text('${buckets[n]} 项',
@@ -669,8 +688,8 @@ class _BackupExclusionsPageState extends State<BackupExclusionsPage> {
                           onChanged: (v) {
                             setState(() {
                               v == true
-                                  ? _excluded.add(n)
-                                  : _excluded.remove(n);
+                                  ? _selected.add(n)
+                                  : _selected.remove(n);
                               _dirty = true;
                             });
                           }),

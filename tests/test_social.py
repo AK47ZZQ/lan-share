@@ -113,9 +113,10 @@ def test_album_member_can_create_and_delete_own(member, auth):
     r = member.post("/api/albums", json={"title": "外婆生日", "month": "2026-08"})
     assert r.status_code == 200, r.text
 
-    # 同月重复 → 409
+    # v0.14 起专辑不再按月绑定：同月可建多本（旧的 409 查重已随
+    # "月份书签"语义一并废弃）
     r = auth.post("/api/albums", json={"title": "admin 抢注", "month": "2026-08"})
-    assert r.status_code == 409
+    assert r.status_code == 200
 
     # 创建者本人可删
     r = member.post("/api/albums", json={"title": "春游", "month": "2026-03"})
@@ -132,6 +133,77 @@ def test_album_member_cannot_delete_others(member, auth):
     assert r.status_code == 403
     r = member.post("/api/albums", json={"title": "x", "month": "2025-13"})
     assert r.status_code == 400                          # 非法月份
+
+
+# ─── v0.14 专辑条目（文件夹式勾选）────────────────────────
+
+def test_album_items_crud_and_photo_filter(member, photo_path):
+    r = member.post("/api/albums", json={"title": "暑假精选"})
+    assert r.status_code == 200 and r.json()["id"], r.text
+    aid = r.json()["id"]
+
+    # 列表瘦身：count/cover，不携带全量 items
+    lst = next(a for a in member.get("/api/albums").json() if a["id"] == aid)
+    assert lst["count"] == 0 and "cover" not in lst and "items" not in lst
+
+    # 勾选加入自己的照片 → 详情可见 → /api/photos?album= 过滤生效
+    r = member.put(f"/api/albums/{aid}/items", json={"add": [photo_path]})
+    assert r.status_code == 200 and r.json()["items"] == [photo_path], r.text
+    detail = member.get(f"/api/albums/{aid}").json()
+    assert detail["items"] == [photo_path]
+    r = member.get("/api/photos", params={"album": aid})
+    assert r.status_code == 200, r.text
+    assert photo_path in [i["path"] for i in r.json()["items"]]
+
+    # 重复 add 幂等（保序去重）
+    r = member.put(f"/api/albums/{aid}/items", json={"add": [photo_path]})
+    assert r.json()["items"] == [photo_path]
+    # 列表此时有 cover
+    lst = next(a for a in member.get("/api/albums").json() if a["id"] == aid)
+    assert lst["count"] == 1 and lst["cover"] == photo_path
+
+    # 移出
+    r = member.put(f"/api/albums/{aid}/items", json={"remove": [photo_path]})
+    assert r.json()["items"] == []
+
+    r = member.delete(f"/api/albums/{aid}")
+    assert r.status_code == 200
+    assert member.get(f"/api/albums/{aid}").status_code == 404
+    r = member.get("/api/photos", params={"album": aid})
+    assert r.status_code == 404                          # 专辑删了过滤即 404
+
+
+def test_album_items_acl_and_validation(member, auth, photo_path):
+    # admin 建的专辑，成员不能改条目（只能 admin 或创建者）
+    r = auth.post("/api/albums", json={"title": "admin 挑的"})
+    assert r.status_code == 200
+    aid = r.json()["id"]
+    r = member.put(f"/api/albums/{aid}/items", json={"add": [photo_path]})
+    assert r.status_code == 403
+
+    # 别人空间的照片收不进来（不可见 404 防探测）
+    r = member.post("/api/albums", json={"title": "我的精选"})
+    myaid = r.json()["id"]
+    r = member.put(f"/api/albums/{myaid}/items",
+                   json={"add": ["private/admin/secret.jpg"]})
+    assert r.status_code == 404
+
+    # 不存在的专辑 404
+    r = member.put("/api/albums/al-nope/items", json={"add": [photo_path]})
+    assert r.status_code == 404
+
+    # 标题校验
+    assert member.post("/api/albums", json={"title": ""}).status_code == 400
+    assert member.post("/api/albums", json={"title": "x" * 41}).status_code == 400
+    assert member.post("/api/albums", json={"title": "t", "month": "2025-1"}).status_code == 400
+
+
+def test_album_month_bookmark_still_filters(member, photo_path):
+    """旧月份书签型专辑（有 month 无 items）在 /api/photos?album= 下不误伤。"""
+    r = member.post("/api/albums", json={"title": "月份书签", "month": "1999-01"})
+    aid = r.json()["id"]
+    r = member.get("/api/photos", params={"album": aid})
+    assert r.status_code == 200 and r.json()["items"] == []
 
 
 # ─── B3 数据导出 ──────────────────────────────────────────

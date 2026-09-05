@@ -365,7 +365,12 @@ class BackupLedger {
   /// 统计（0.7.1 起分照片/视频，且感知排除相册）：排除只影响扫描阶段、
   /// 账本行不动，所以被排除相册的 pending/error 行会永远留在库里——
   /// 不从统计里扣掉，"待备份/失败"就永远等不到归零，状态卡看起来像坏了。
-  Future<LedgerStats> stats({List<String> excluded = const []}) async {
+  /// 统计。`excluded`=不备份的相册名（旧排除表）；`included`=白名单相册
+  /// （0.14）：非空时"不参与备份"的语义取反——不在名单里的未完成项都算
+  /// 排除项。两者可同时生效（白名单 ∩ 非排除）。
+  Future<LedgerStats> stats(
+      {List<String> excluded = const [],
+      List<String> included = const []}) async {
     final db = await open();
     final groups = await db.rawQuery(
         'SELECT status, kind, COUNT(*) AS c, SUM(size) AS bytes, '
@@ -379,6 +384,22 @@ class BackupLedger {
           'SELECT status, kind, COUNT(*) AS c FROM ledger '
           "WHERE status != 'done' AND bucket IN ($marks) GROUP BY status, kind",
           names);
+    }
+    final sel = included.take(500).toList();
+    if (sel.isNotEmpty) {
+      final marks = List.filled(sel.length, '?').join(',');
+      final includedGroups = await db.rawQuery(
+          'SELECT status, kind, COUNT(*) AS c FROM ledger '
+          "WHERE status != 'done' AND bucket NOT IN ($marks) "
+          'GROUP BY status, kind',
+          sel);
+      // 白名单语义："排除项" = 全账本未完成 - 白名单内未完成。这里算出的
+      // includedGroups（NOT IN 白名单的未完成行）就是缺口，把它与旧排除
+      // 表的行一起喂给 statsFromGroups，由它从全量组里扣减（两路来源可
+      // 直接并列，不会重复计数）。空串 bucket（"未分类"）不剔除：与引擎
+      // 侧 sel.contains(m.bucket) 的判断保持同一口径——用户勾了"未分类"
+      // 时（'' 在名单里）它不计排除，没勾时计入排除。
+      excludedGroups = [...excludedGroups, ...includedGroups];
     }
     return statsFromGroups(groups, excludedGroups);
   }

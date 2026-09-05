@@ -389,11 +389,12 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
                 month: str | None = Query(default=None),
                 uploader: str | None = Query(default=None),
                 media_type: str | None = Query(default=None),
+                album: str | None = Query(default=None),
                 refresh: bool = Query(default=False),
                 _user=Depends(require_user)):
     """照片时间线：按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）。
-    可按 month=YYYY-MM 与 uploader、media_type=photo|video 过滤。
-    refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
+    可按 month=YYYY-MM 与 uploader、media_type=photo|video、album=<精选专辑id>
+    过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos(force=refresh)
     users = _known_users()
@@ -406,6 +407,13 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
         rows = [r for r in rows if _photo_uploader(r["path"], users) == uploader]
     if media_type in ("photo", "video"):
         rows = [r for r in rows if _media_type(r["path"]) == media_type]
+    if album:
+        # 精选专辑过滤（v0.14）：只出专辑勾选的条目，仍按拍摄日排序
+        hit = next((a for a in _load_albums() if a.get("id") == album), None)
+        if not hit:
+            raise HTTPException(status_code=404, detail="专辑不存在")
+        wanted = set(hit.get("items") or [])
+        rows = [r for r in rows if r["path"] in wanted]
     total = len(rows)
     rows = rows[offset:offset + limit]
     return {
@@ -477,9 +485,56 @@ def _save_albums(albums: list[dict]):
         _db().commit()
 
 
+def _mutate_albums(mutator) -> bool:
+    """精选专辑整表"读-改-写"原子化（v0.14 审查 P2）。
+
+    _load_albums()→改→_save_albums() 三步之间不持锁时，两个设备并发
+    勾选/删除会整份互相覆盖丢更新；专辑条目现在是用户策展数据，必须
+    全程持 _db_lock。_save_albums 自己也拿这把锁（Lock 不可重入），
+    所以这里绕开它直接写库。mutator(albums) 就地修改，返回 False 表示
+    未命中（不落库）。"""
+    import json
+    with _db_lock:
+        row = _db().execute(
+            "SELECT value FROM settings WHERE key=?", (_ALBUMS_KEY,)).fetchone()
+        try:
+            albums = json.loads(row["value"]) if row and row["value"] else []
+            if not isinstance(albums, list):
+                albums = []
+        except Exception:
+            albums = []
+        if not mutator(albums):
+            return False
+        _db().execute(
+            "INSERT INTO settings(key, value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_ALBUMS_KEY, json.dumps(albums, ensure_ascii=False)))
+        _db().commit()
+        return True
+
+
+def _visible_album_items(user, items: list) -> list[str]:
+    """按请求者可见性过滤专辑条目：收进专辑后权限变化（转入 private/
+    回收站）的照片不应向无权者泄露路径名（v0.14 审查 P1，防探测边界
+    与照片互动一致）。"""
+    return [p for p in items if isinstance(p, str) and visible(user, p.split("/"))]
+
+
 @app.get("/api/albums")
-def list_albums(_user=Depends(require_user)):
-    return _load_albums()
+def list_albums(request: Request, _user=Depends(require_user)):
+    # v0.14：items 不随列表下发（50 专辑 × 500 路径会把时间线首页拖肥），
+    # 列表只给 count/cover，全量条目走 GET /api/albums/{id}。
+    # cover/count 都按请求者可见性过滤（P1/P2：不可见路径名不下发）
+    user = preview_user(request, _user)
+    out = []
+    for a in _load_albums():
+        items = _visible_album_items(user, a.get("items") or [])
+        d = {k: v for k, v in a.items() if k != "items"}
+        d["count"] = len(items)
+        if items:
+            d["cover"] = items[0]
+        out.append(d)
+    return out
 
 
 class AlbumBody(BaseModel):

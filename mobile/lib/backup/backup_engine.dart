@@ -135,8 +135,14 @@ class BackupEngine {
       List<LedgerRow> pending;
       try {
         var media = await MediaSource.query(includeVideos: cfg.includeVideos);
-        // 排除相册（0.6.0）：截图/聊天图这类目录不备份。只影响扫描阶段，
-        // 账本不动——之后取消排除，同 id 的照片自动重新进入待备集合
+        // 相册范围（0.14 白名单）：selectedBuckets 非空时只备勾选的相册；
+        // 旧排除表（0.6.0）继续生效直至用户在新 UI 保存一次即清空。
+        // 都只影响扫描阶段，账本不动——之后取消勾选，同 id 的照片自动
+        // 重新进入待备集合
+        if (cfg.selectedBuckets.isNotEmpty) {
+          final sel = cfg.selectedBuckets.toSet();
+          media = media.where((m) => sel.contains(m.bucket)).toList();
+        }
         if (cfg.excludedBuckets.isNotEmpty) {
           final excl = cfg.excludedBuckets.toSet();
           media = media.where((m) => !excl.contains(m.bucket)).toList();
@@ -211,7 +217,8 @@ class BackupEngine {
       await sp.setInt('backup_progress_done', 0);
       await sp.setInt('backup_progress_total', 0);
       try {
-        final st = await ledger.stats(excluded: cfg.excludedBuckets);
+        final st = await ledger.stats(excluded: cfg.excludedBuckets,
+            included: cfg.selectedBuckets);
         await sp.setInt('backup_failed_count', st.error);
         await sp.setInt('backup_pending_photos', st.pendingPhotos);
         await sp.setInt('backup_pending_videos', st.pendingVideos);

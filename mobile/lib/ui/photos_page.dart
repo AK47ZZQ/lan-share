@@ -24,6 +24,7 @@ import '../data/net.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'album_detail_page.dart';
 import 'photo_models.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
@@ -169,6 +170,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       _failed = false;
     });
     await _loadMore(force: true);
+    // 月份分布随刷新重拉（v0.14）：此前 _months 首拉后永久缓存，备份/
+    // 上传/删除/别的设备传新照片，时间栏数目不动、新月份也永远不进
+    // 快滚轴和按月列表——用户感知"照片墙不同步"的第二根源
+    _months = null;
+    await _ensureMonths();
+    if (mounted) setState(() {});   // 快滚轴/侧栏月份数目刷新
   }
 
   void _setFilter(String v) {
@@ -200,22 +207,16 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _pickMonth() async {
     final months = await _ensureMonths();
     if (!mounted) return;
-    final canCreate = ref.read(sessionProvider).role != 'guest';
     // 闭包内无法提升可空局部变量：先物化成 final 列表再用
     final monthEntries = months.entries.toList();
     final sel = await showModalBottomSheet<String>(
         context: context,
         builder: (ctx) => SafeArea(
             child: monthEntries.isEmpty
-                ? ListView(shrinkWrap: true, children: [
-                    const Padding(
+                ? ListView(shrinkWrap: true, children: const [
+                    Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(child: Text('还没有照片'))),
-                    if (canCreate)
-                      ListTile(
-                          leading: const Icon(Icons.add),
-                          title: const Text('新建精选专辑'),
-                          onTap: () => Navigator.pop(ctx, '__add__')),
                   ])
                 : ListView(shrinkWrap: true, children: [
                     ListTile(
@@ -233,25 +234,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                   color: Theme.of(ctx).colorScheme.outline)),
                           selected: _month == e.key,
                           onTap: () => Navigator.pop(ctx, e.key)),
-                    if (canCreate)
-                      ListTile(
-                          leading: const Icon(Icons.add),
-                          title: const Text('新建精选专辑'),
-                          onTap: () => Navigator.pop(ctx, '__add__')),
                   ])));
-    if (sel == '__add__') {
-      await _addAlbum();
-      return;
-    }
     if (sel == null || !mounted) return;
     setState(() => _month = sel.isEmpty ? null : sel);
     _refresh();
-  }
-
-  List<String> _sortedMonths() {
-    final keys = _months?.keys.toList() ?? <String>[];
-    keys.sort();
-    return keys;
   }
 
   /// 精选专辑加载（0.8.0）：失败静默（行不显示），不阻塞照片墙
@@ -266,7 +252,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     } catch (_) {}
   }
 
-  /// 新建精选专辑（admin）：标题 + 从现有月份里选
+  /// 新建精选专辑（v0.14 文件夹式）：起名即建空专辑 → 直接进专辑页
+  /// 弹选照片（勾选或按月全选）
   Future<void> _addAlbum() async {
     if (!mounted) return;
     // controller 生命周期由 PromptDialog 自持（v0.13：旧写法在退场动画中
@@ -279,31 +266,37 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               hint: '暑假合集',
             ));
     if (title == null || title.trim().isEmpty || !mounted) return;
-    // AppBar 直进本流程时不经过 _pickMonth，缓存可能为空（刚创建过专辑被
-    // 破缓存/首拉失败）——月份表会只剩表头的确定性死路，先确保就绪
-    await _ensureMonths();
-    if (!mounted) return;
-    final month = await showModalBottomSheet<String>(
-        context: context,
-        builder: (ctx) => SafeArea(
-            child: ListView(shrinkWrap: true, children: [
-              const ListTile(title: Text('选择专辑月份')),
-              for (final m in _sortedMonths())
-                ListTile(title: Text(_monthLabel(m)),
-                    onTap: () => Navigator.pop(ctx, m)),
-            ])));
-    if (month == null || !mounted) return;
     try {
       final dio = await ApiClient.I.dio();
-      // v0.11 起全家共创：成员可建（旧 /api/admin/albums 仅 admin，
-      // 成员端点且带月份查重 409——v0.13 App 端点对齐）
-      await dio.post('/api/albums', data: {'title': title, 'month': month});
-      _toast('专辑已创建');
-      _loadAlbums();
-      setState(() => _months = null); // 破缓存让下次进来重新拉
+      final r = await dio.post('/api/albums', data: {'title': title.trim()});
+      final id = r.data['id'] as String?;
+      if (!mounted) return;
+      if (id == null || id.isEmpty) {
+        _toast('创建失败');
+        _loadAlbums();
+        return;
+      }
+      await Navigator.push<bool>(context, MaterialPageRoute(
+          builder: (_) => AlbumDetailPage(
+              id: id,
+              title: title.trim(),
+              createdBy: ref.read(sessionProvider).username ?? '',
+              openPicker: true)));
+      if (mounted) _loadAlbums();   // 添加了照片/直接返回都刷新列表计数
     } catch (e) {
       _toast(errDetail(e));
     }
+  }
+
+  /// 打开专辑详情；返回 true 表示内容有变（删专辑/移出/加入），刷新列表
+  Future<void> _openAlbum(_Album a) async {
+    final changed = await Navigator.push<bool>(context, MaterialPageRoute(
+        builder: (_) => AlbumDetailPage(
+            id: a.id,
+            title: a.title,
+            createdBy: a.createdBy,
+            month: a.month)));
+    if (changed == true && mounted) _loadAlbums();
   }
 
   /// 专辑长按菜单：创建者信息 + 删除（admin 或创建者本人；服务端兜底 403）
@@ -327,20 +320,19 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                     fontWeight: FontWeight.bold)),
                             const SizedBox(height: 4),
                             Text(
-                                '月份合集 · ${_monthLabel(a.month)}'
-                                '${a.createdBy.isEmpty ? "" : " · 由 ${a.createdBy} 创建"}',
+                                '${a.count > 0 ? "${a.count} 项 · " : ""}'
+                                '${a.createdBy.isEmpty ? "" : "由 ${a.createdBy} 创建"}',
                                 style: const TextStyle(
                                     fontSize: 12,
                                     color: Colors.grey)),
                           ]))),
               const Divider(height: 1),
               ListTile(
-                  leading: const Icon(Icons.calendar_view_month),
-                  title: const Text('查看这个月'),
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('查看专辑'),
                   onTap: () {
                     Navigator.pop(ctx);
-                    setState(() => _month = a.month);
-                    _refresh();
+                    _openAlbum(a);
                   }),
               if (canDelete)
                 ListTile(
@@ -411,22 +403,28 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     super.dispose();
   }
 
-  /// 手机相册多选上传（0.7.0 起落 照片/<用户名>/手机上传/：选择器不返回
-  /// 来源相册，给不了 <相册名> 那一层，与自动备份的相册子目录分开；
-  /// 0.4.2~0.6.x 曾落 照片/手机相册/<用户名>/ 与自动备份同夹）
+  /// 手机相册多选上传（0.7.0 起落 照片|视频/<用户名>/手机上传/：选择器
+  /// 不返回来源相册，给不了 <相册名> 那一层，与自动备份的相册子目录分开；
+  /// 0.14 起支持视频，按扩展名分流到 视频/<用户名>/手机上传/）
+  static const _vidExts = {'mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi'};
+
   Future<void> _pickAndUpload() async {
     final res = await FilePicker.platform
-        .pickFiles(type: FileType.image, allowMultiple: true);
+        .pickFiles(type: FileType.media, allowMultiple: true);
     if (res == null || res.files.isEmpty) return;
     final username = ref.read(sessionProvider).username ?? '';
-    final dest = '照片/$username/$kManualUploadAlbum';
     final engine = TransferEngine.I;
     var n = 0;
     final enqueued = <TransferTask>[];
     for (final f in res.files) {
       if (f.path == null) continue;
+      final ext = f.extension?.toLowerCase() ?? '';
+      final isVideo = _vidExts.contains(ext);
       final t = engine.enqueueUpload(
-          localPath: f.path!, destDir: dest, name: f.name);
+          localPath: f.path!,
+          destDir:
+              '${isVideo ? "视频" : "照片"}/$username/$kManualUploadAlbum',
+          name: f.name);
       if (t != null) {
         enqueued.add(t);
         n++;
@@ -565,7 +563,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                         ? null
                         : () => _addAlbum()),
                 IconButton(
-                    tooltip: '上传手机照片',
+                    tooltip: '上传照片/视频',
                     icon: const Icon(Icons.add_photo_alternate_outlined),
                     onPressed: _pickAndUpload),
               ],
@@ -577,11 +575,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               : RefreshIndicator(
                   onRefresh: _refresh,
                   child: Column(children: [
-                    // 精选专辑行（0.8.0 对齐 Web PhotosView）：管理员维护的
-                    // 月份合集，点击即按月过滤；长按删除（仅管理员）
+                    // 精选专辑行（v0.14 文件夹式）：封面缩略图迷你卡，
+                    // 点按进专辑详情（勾选添加/移出/下载），长按删除入口
                     if (_albums != null && _albums!.isNotEmpty)
                       SizedBox(
-                          height: 76,
+                          height: 92,
                           child: ListView(
                               scrollDirection: Axis.horizontal,
                               padding:
@@ -592,34 +590,63 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                       padding:
                                           const EdgeInsets.only(right: 8),
                                       child: GestureDetector(
+                                          onTap: () => _openAlbum(a),
                                           onLongPress: () =>
                                               _albumSheet(a),
-                                          child: InputChip(
-                                              visualDensity:
-                                                  VisualDensity.compact,
-                                              avatar: Icon(
-                                                  Icons.auto_awesome,
-                                                  size: 16,
+                                          child: Container(
+                                              width: 92,
+                                              padding: const EdgeInsets
+                                                  .fromLTRB(5, 5, 5, 4),
+                                              decoration: BoxDecoration(
                                                   color: Theme.of(context)
                                                       .colorScheme
-                                                      .primary),
-                                              label: Text(a.title,
-                                                  style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight:
-                                                          FontWeight.w500,
-                                                      color: Theme.of(context)
-                                                          .colorScheme
-                                                          .primary)),
-                                              selected:
-                                                  _month == a.month,
-                                              onPressed: () {
-                                                setState(() => _month =
-                                                    _month == a.month
-                                                        ? null
-                                                        : a.month);
-                                                _refresh();
-                                              }))),
+                                                      .surfaceContainerHighest,
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          10)),
+                                              child: Column(children: [
+                                                Expanded(
+                                                    child: ClipRRect(
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(7),
+                                                        child:
+                                                            SizedBox.expand(
+                                                                child: (a.cover
+                                                                            ?.isNotEmpty ??
+                                                                        false) &&
+                                                                    _base !=
+                                                                        null
+                                                            ? AuthImage(
+                                                                url:
+                                                                    '$_base/thumb/${encPath(a.cover!)}')
+                                                            : Icon(
+                                                                Icons
+                                                                    .auto_awesome_mosaic_outlined,
+                                                                color: Theme.of(
+                                                                        context)
+                                                                    .colorScheme
+                                                                    .primary)))),
+                                                const SizedBox(height: 3),
+                                                Text(a.title,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow
+                                                        .ellipsis,
+                                                    style: const TextStyle(
+                                                        fontSize: 11,
+                                                        fontWeight:
+                                                            FontWeight.w600)),
+                                                Text(
+                                                    a.count > 0
+                                                        ? '${a.count} 项'
+                                                        : '空的',
+                                                    style: TextStyle(
+                                                        fontSize: 9.5,
+                                                        color: Theme.of(
+                                                                context)
+                                                            .colorScheme
+                                                            .outline)),
+                                              ])))),
                               ])),
                     // 类型筛选 + 月份 chip 行
                     SizedBox(
@@ -917,15 +944,20 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 }
 
-/// 精选专辑条目（0.8.0）：/api/albums，管理员维护的月份合集
+/// 精选专辑条目（v0.14 文件夹式）：/api/albums 列表只给 count/cover，
+/// 全量条目在详情页按需取；month 仅旧月份书签型专辑有值
 class _Album {
   final String id;
   final String title;
   final String month;
   final String createdBy;
+  final int count;
+  final String? cover;
   _Album.fromJson(Map<String, dynamic> j)
       : id = j['id'] as String? ?? '',
         title = j['title'] as String? ?? '',
         month = j['month'] as String? ?? '',
-        createdBy = j['created_by'] as String? ?? '';
+        createdBy = j['created_by'] as String? ?? '',
+        count = (j['count'] as num?)?.toInt() ?? 0,
+        cover = j['cover'] as String?;
 }
