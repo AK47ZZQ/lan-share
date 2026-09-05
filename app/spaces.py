@@ -19,6 +19,7 @@
 
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -54,12 +55,40 @@ def _clean_parts(rest: str) -> list[str]:
     return parts
 
 
-def _grant_hit(user_id: int, vkey: str, need: str) -> bool:
-    """授权前缀命中（按路径段，E10：不得用裸 startswith）。grant 过期即失效。"""
-    key = _normcase(vkey)
+# grants 进程内 TTL 缓存（R1-P2-9）：guest 路径每次 visible()/_grant_hit 都全量
+# 拉 grants，照片墙 500 行/页 = 500 次 DB 往返。30s TTL + 写操作失效。
+_grants_cache: dict[int, tuple[list, float]] = {}
+_grants_cache_lock = threading.Lock()
+_GRANTS_TTL = 30.0
+
+
+def _grants_for(user_id: int) -> list:
+    now = time.time()
+    with _grants_cache_lock:
+        hit = _grants_cache.get(user_id)
+        if hit and now - hit[1] < _GRANTS_TTL:
+            return hit[0]
     rows = _db().execute(
         "SELECT path, can_read, can_write, expires_at FROM grants WHERE user_id=?",
         (user_id,)).fetchall()
+    with _grants_cache_lock:
+        _grants_cache[user_id] = (rows, time.time())
+    return rows
+
+
+def invalidate_grants_cache(user_id: int | None = None):
+    """授权/用户变更后失效缓存；user_id=None 清全部（如角色变更影响可见性）。"""
+    with _grants_cache_lock:
+        if user_id is None:
+            _grants_cache.clear()
+        else:
+            _grants_cache.pop(user_id, None)
+
+
+def _grant_hit(user_id: int, vkey: str, need: str) -> bool:
+    """授权前缀命中（按路径段，E10：不得用裸 startswith）。grant 过期即失效。"""
+    key = _normcase(vkey)
+    rows = _grants_for(user_id)
     now = time.time()
     for r in rows:
         if r["expires_at"] and r["expires_at"] < now:

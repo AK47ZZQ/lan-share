@@ -66,7 +66,8 @@ async function redeem() {
     const r = await fetch('/api/invites/redeem', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: inviteCode.value, username: rUsername.value, password: rPassword.value }),
-    }).then(r => r.json())
+      // 非 JSON 响应（5xx HTML 等）不再抛英文 "Unexpected token"（R1-P3-14）
+    }).then(r => r.ok ? r.json() : Promise.reject(new Error(`创建失败（HTTP ${r.status}）`)))
     if (r.ok) {
       toast(`账号「${r.username}」创建成功，请登录`, 'ok')
       redeeming.value = false
@@ -115,7 +116,8 @@ async function redeem() {
         </p>
       </form>
 
-      <form v-else @submit.prevent="submit">
+      <!-- v-else-if（R1-P1-1）：邀请码建号页此前会同时渲染下方的登录表单 -->
+      <form v-else-if="!redeeming" @submit.prevent="submit">
         <input v-model="username" placeholder="用户名" autocomplete="username" autofocus />
         <input v-model="password" type="password" placeholder="密码" autocomplete="current-password" />
         <button class="btn" type="submit" :disabled="busy || !username || !password">

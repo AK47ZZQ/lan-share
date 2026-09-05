@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 家庭动态页（全员）：完整动态流 + 高亮定位 + 每条"去查看"直达
 import { onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, type ActivityItem, type Me } from '../api'
 import { ACTION_ICON, activityTitle, activityRouteFor, relTime } from '../activity'
 import { confirmDlg, toast } from '../ui'
@@ -14,6 +14,7 @@ const limit = ref(50)
 const hasMore = ref(false)
 const highlightTs = ref(0)
 const route = useRoute()
+const router = useRouter()
 
 async function load() {
   loading.value = true
@@ -21,7 +22,9 @@ async function load() {
   try {
     const r = await api.activity(limit.value)
     items.value = r
-    hasMore.value = r.length >= Math.min(limit.value, 100)
+    // 服务端硬顶 100 条（admin.py max_items=100）：到顶即藏"加载更多"，
+    // 否则按钮永真空转（R1-P2-5）
+    hasMore.value = r.length >= Math.min(limit.value, 100) && limit.value < 100
   } catch (e) { err.value = (e as Error).message }
   finally { loading.value = false }
 }
@@ -32,7 +35,8 @@ function loadMore() {
 
 function go(n: ActivityItem) {
   const r = activityRouteFor(props.me, n)
-  if (r) window.location.assign(r.path + (r.query?.dir !== undefined ? `?dir=${encodeURIComponent(r.query.dir)}` : ''))
+  // SPA 路由跳转（R1-P3-11）：整页 assign 丢全局状态并白屏重载
+  if (r) router.push({ path: r.path, query: r.query })
 }
 async function clearFeed() {
   if (!(await confirmDlg('清空当前动态？（不影响审计历史记录）', { danger: true, okText: '清空' }))) return

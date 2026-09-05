@@ -258,6 +258,10 @@ def update_album_items(album_id: str, body: AlbumItemsBody, request: Request,
                        _user=Depends(require_user)):
     if _user["role"] == "guest":
         raise HTTPException(status_code=403, detail="访客不能编辑专辑")
+    # 长度预检（R1-P3-3）：与 create_album 同款上限，避免可见性校验循环跑完才限长
+    if len(body.add) + len(body.remove) > 2 * ALBUM_ITEMS_MAX:
+        raise HTTPException(status_code=400,
+                            detail=f"一次最多操作 {2 * ALBUM_ITEMS_MAX} 项")
     from app.api.system import _mutate_albums
     # add 条目先校验可见性（不可见一律 404 防探测）；保序去重
     add_normed: list[str] = []

@@ -126,17 +126,26 @@ function fileIcon(e: Entry): string {
   return '📄'
 }
 
+// 请求序号守卫（R1-P2-3）：慢链路下快速连点目录/搜索，旧响应后到会覆盖新结果
+let loadSeq = 0
 async function load(p: string) {
+  const my = ++loadSeq
   err.value = ''
   searchResults.value = null
   view.value = 'browse'
   try {
     const r = await api.list(p)
+    if (my !== loadSeq) return   // 已有更新的请求，丢弃本次响应
     path.value = r.path
     items.value = r.items
     selected.value.clear()
     selectMode.value = false
-  } catch (e) { err.value = (e as Error).message }
+    shownLimit.value = 500
+  } catch (e) {
+    if (my !== loadSeq) return
+    err.value = (e as Error).message
+    items.value = []   // 失败不留上一目录内容，避免误读（R1-P3-13）
+  }
 }
 
 function open(e: Entry) {
@@ -217,8 +226,9 @@ async function startUpload(files: File[]) {
 async function onPick(ev: Event) {
   const input = ev.target as HTMLInputElement
   if (!input.files?.length) return
-  await startUpload(Array.from(input.files))
-  input.value = ''
+  const files = Array.from(input.files)
+  input.value = ''   // 先复位再上传（R1-P3-18）：批次进行中可选同批文件重新触发 change
+  await startUpload(files)
 }
 
 // 粘贴上传：Ctrl+V 文件/截图（截图自动命名），输入框聚焦时不抢
@@ -270,8 +280,12 @@ async function newFolder() {
 async function runSearch() {
   const q = searchQ.value.trim()
   if (!q) { searchResults.value = null; return }
+  const my = ++loadSeq
   try {
-    searchResults.value = await api.search(q)
+    const r = await api.search(q)
+    if (my !== loadSeq) return
+    searchResults.value = r
+    shownLimit.value = 500
     view.value = 'browse'
   } catch (e) { toast((e as Error).message, 'err') }
 }
@@ -297,11 +311,47 @@ function onViewerShare(item: { path: string }) {
   sharePaths.value = [item.path]
 }
 
+// 大目录截断渲染（R1-P2-10）：上千 DOM + 缩略图会卡顿，先出 500 项 + "显示更多"
+const shownLimit = ref(500)
+// 排序（体验优化）：名称/大小/修改时间，点击切换方向
+type SortKey = 'name' | 'size' | 'modified'
+const sortKey = ref<SortKey | null>(null)
+const sortAsc = ref(true)
+function setSort(k: SortKey) {
+  if (sortKey.value === k) sortAsc.value = !sortAsc.value
+  else { sortKey.value = k; sortAsc.value = true }
+}
 const shownItems = computed(() => {
-  if (view.value === 'recent') return recentItems.value
-  if (searchResults.value) return searchResults.value
-  return items.value
+  let list: Entry[]
+  if (view.value === 'recent') list = recentItems.value
+  else if (searchResults.value) list = searchResults.value
+  else list = items.value
+  if (sortKey.value) {
+    const dir = sortAsc.value ? 1 : -1
+    list = [...list].sort((a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1
+      if (sortKey.value === 'size') return ((a.size ?? 0) - (b.size ?? 0)) * dir
+      if (sortKey.value === 'modified') return a.modified.localeCompare(b.modified) * dir
+      return a.name.localeCompare(b.name, 'zh-CN') * dir
+    })
+  }
+  return list.slice(0, shownLimit.value)
 })
+const shownTotal = computed(() => {
+  if (view.value === 'recent') return recentItems.value.length
+  if (searchResults.value) return searchResults.value.length
+  return items.value.length
+})
+const hasMore = computed(() => shownTotal.value > shownItems.value.length)
+// 多选操作条显示已选总大小（体验优化）
+const selectedBytes = computed(() =>
+  items.value.filter(i => selected.value.has(i.path))
+    .reduce((s, i) => s + (i.size ?? 0), 0))
+function humanBytes(n: number): string {
+  let u = 'B'
+  while (n >= 1024) { n /= 1024; u = u === 'KB' ? 'MB' : u === 'MB' ? 'GB' : 'TB' }
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${u}`
+}
 
 onMounted(() => {
   load(String(route.query.dir || ''))
@@ -343,6 +393,11 @@ onUnmounted(() => {
         <button :class="{ on: grid }" title="网格视图" @click="grid = true">▦</button>
         <button :class="{ on: !grid }" title="列表视图" @click="grid = false">☰</button>
       </span>
+      <span class="view-toggle" title="排序">
+        <button :class="{ on: sortKey === 'name' }" title="按名称" @click="setSort('name')">A↓</button>
+        <button :class="{ on: sortKey === 'size' }" title="按大小" @click="setSort('size')">⇅</button>
+        <button :class="{ on: sortKey === 'modified' }" title="按修改时间" @click="setSort('modified')">🕒</button>
+      </span>
     </div>
 
     <div class="crumbs" v-if="searchMode">
@@ -366,8 +421,8 @@ onUnmounted(() => {
     </div>
     <div v-if="shownItems.length && grid && view === 'browse'" class="fgrid">
       <div v-for="(e, gi) in shownItems" :key="e.path"
-           class="gcard" :class="{ selected: selected.has(e.path) }"
-           @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
+           class="gcard" :class="{ selected: selected.has(e.path) }" role="button" tabindex="0"
+           @click="open(e)" @keydown.enter="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox gcheck" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
         <span class="gicon" :class="e.is_private_root ? 'private' : e.is_dir ? 'dir' + (hashName(e.name) % 4) : ''">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" @load="thumbLoad" @error="thumbError" />
@@ -383,8 +438,8 @@ onUnmounted(() => {
     </div>
     <div v-else-if="shownItems.length" class="card flist" style="padding:8px">
       <div v-for="e in shownItems" :key="e.path"
-           class="frow file-row" :class="{ selected: selected.has(e.path) }"
-           @click="open(e)" @contextmenu.prevent="openMenu($event, e)">
+           class="frow file-row" :class="{ selected: selected.has(e.path) }" role="button" tabindex="0"
+           @click="open(e)" @keydown.enter="open(e)" @contextmenu.prevent="openMenu($event, e)">
         <span v-if="selectMode" class="checkbox" :class="{ on: selected.has(e.path) }" @click.stop="toggle(e.path)">✓</span>
         <span class="icon" :class="{ 'icon-private': e.is_private_root }">
           <img v-if="thumbOf(e)" :src="thumbOf(e)!" loading="lazy" alt="" @load="thumbLoad" @error="thumbError" />
@@ -404,9 +459,16 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- 显示更多（大目录截断渲染） -->
+    <div v-if="hasMore" style="text-align:center;padding:12px">
+      <button class="btn ghost sm" @click="shownLimit += 500">
+        显示更多（已显示 {{ shownItems.length }} / {{ shownTotal }}）
+      </button>
+    </div>
+
     <!-- 多选操作条 -->
     <div v-if="selectMode && selected.size" class="opsbar">
-      <span class="count">已选 {{ selected.size }}</span>
+      <span class="count">已选 {{ selected.size }}<template v-if="selectedBytes"> · {{ humanBytes(selectedBytes) }}</template></span>
       <button class="btn ghost sm" @click="toggleAll">{{ allSelected ? '全不选' : '全选' }}</button>
       <button class="btn ghost sm" @click="doZip">打包下载</button>
       <button class="btn ghost sm" @click="showMove = true">移动到…</button>

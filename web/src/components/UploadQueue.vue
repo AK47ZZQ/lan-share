@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { fmtSpeed, iconForName } from '../ui'
 import {
   cancelAll, cancelItem, clearFinished, clearResumables, hasFinished, pauseItem,
-  resumables, resumeItem, retryItem, toggleCollapsed, upl, uplSpeed, uplSummary,
+  resumables, resumeItem, retryAll, retryItem, toggleCollapsed, upl, uplSpeed, uplSummary,
 } from '../uploader'
 
 // destDir 仅作展示语义占位（回调已随 item 走）；保留声明以便父组件传参不散落为 attr
@@ -65,6 +65,9 @@ const spark = computed(() => {
         <span>{{ spark.now }}</span>
       </span>
       <span class="flex1" />
+      <button v-if="uplSummary.failed && !uplSummary.active" class="btn ghost sm"
+              style="margin-right:4px" title="重试全部失败项"
+              @click.stop="retryAll()">↻ 重试全部</button>
       <button v-if="uplSummary.active" class="iconbtn" title="全部取消" @click.stop="cancelAll()">⏹</button>
       <button v-else-if="hasFinished" class="iconbtn" title="清空记录" @click.stop="clearFinished()">✕</button>
       <span class="upl-chev">{{ upl.collapsed ? '▴' : '▾' }}</span>

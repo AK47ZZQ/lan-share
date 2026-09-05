@@ -12,6 +12,7 @@ const maxDl = ref<number | null>(null)
 const targetUser = ref('')
 const members = ref<Member[]>([])
 const link = ref('')
+const createdPassword = ref('')   // 提取码不再落库回显：仅创建响应一次性下发（R1-P2-5）
 const busy = ref(false)
 const publicBase = ref('')
 const qrFailed = ref(false)
@@ -37,6 +38,7 @@ async function create() {
   try {
     const r = await api.createShare(props.paths[0], hours.value, password.value || null, maxDl.value, targetUser.value || null)
     link.value = api.shareLink(r.token)
+    createdPassword.value = r.password || ''
     if (targetUser.value) {
       toast(`已分享给「${targetUser.value}」，对方会在铃铛通知里看到`, 'ok')
       emit('close')
@@ -54,6 +56,9 @@ async function create() {
     <div v-if="link" class="share-done">
       <p style="font-size:13.5px;color:var(--text-2)">链接已生成：</p>
       <input :value="link" readonly style="width:100%" @focus="($event.target as HTMLInputElement).select()" />
+      <label v-if="createdPassword" class="field" style="margin-top:8px">提取码（仅此一次展示，请记录）
+        <input :value="createdPassword" readonly @focus="($event.target as HTMLInputElement).select()" />
+      </label>
       <div style="display:flex;gap:8px;justify-content:center;margin-top:10px;flex-wrap:wrap">
         <button class="btn ghost sm" @click="copyText(link)">📋 局域网链接</button>
         <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + link.split('/').pop())">🌐 公网链接</button>

@@ -79,6 +79,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     _tick = Timer.periodic(const Duration(seconds: 2), (_) => _loadLocal());
     // ⚠️ 必须持有并在 dispose 取消：匿名 Timer 会登出后继续空转（泄漏）
     _diskTick = Timer.periodic(const Duration(seconds: 30), (_) {
+      // 生命周期闸门（R1-P2-2）：退后台不再打服务端三连请求
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
       _loadDisk();
       _loadRecent();
       _loadActivity();
@@ -107,6 +109,9 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   Future<void> _loadLocal() async {
+    // 生命周期闸门（R1-P2-2）：退后台 2s 轮询只读本地 prefs 开销小但
+    // setState 无意义，直接跳过
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
     final sp = await SharedPreferences.getInstance();
     // 引擎在独立 isolate 写 prefs，不 reload 就永远是首帧缓存（备份卡假死）
     await sp.reload();

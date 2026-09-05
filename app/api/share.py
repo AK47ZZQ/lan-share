@@ -68,11 +68,11 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         _db().execute(
             "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain, target_user_id) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (token, str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"), target_path.name,
+             (token, str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"), target_path.name,
              target_path.stat().st_size if target_path.is_file() else None,
              time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
              _user["user_id"] if "user_id" in _user.keys() else None,
-             password or None, target_id))
+             None, target_id))
         if target_id:
             _db().execute(
                 "INSERT INTO notifications(user_id, type, title, body, link, created_at) "
@@ -80,13 +80,17 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
                 (target_id, "share", f"{_user['username']} 给你分享了文件",
                  target_path.name, f"/s/{token}", time.time()))
         _db().commit()
-    audit("share_create", path, f"{expires_hours}h", client_ip(request))
+    audit("share_create", str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"),
+          f"{expires_hours}h", client_ip(request))
     if target_id:
-        audit("share_target", path, f"→ {target_username}", client_ip(request))
+        audit("share_target", str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"),
+              f"→ {target_username}", client_ip(request))
         push_webhook("📬 收到定向分享",
                      f"{_user['username']} 分享给 {target_username}：{target_path.name}")
     return {"ok": True, "token": token, "expires_in": f"{expires_hours}h",
-            "target": target_username}
+            "target": target_username,
+            # 提取码不再落库（R1-P2-5）：仅创建响应返回一次，供创建者当场记录
+            "password": password or None}
 
 
 def _target_guard(s: sqlite3.Row, request: Request) -> bool:
@@ -153,7 +157,7 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
 
 
 @app.get("/api/share/meta/{token}")
-async def share_meta(token: str, request: Request):
+def share_meta(token: str, request: Request):
     s = _get_active_share(token)
     is_target = _target_guard(s, request)
     return {
@@ -174,40 +178,46 @@ _tickets_lock = threading.Lock()
 
 
 @app.post("/api/share/{token}/prepare")
-async def share_prepare(request: Request, token: str, body: SharePrepareBody):
+def share_prepare(request: Request, token: str, body: SharePrepareBody):
     s = _get_active_share(token)
     is_target = _target_guard(s, request)
     # 定向分享的收件成员（及 admin）登录即取，无需提取码
     if not is_target:
         _check_share_password(request, s, body.password)
-    if s["max_downloads"] and s["downloads"] >= s["max_downloads"]:
-        raise HTTPException(status_code=410, detail="下载次数已达上限")
     tkt = secrets.token_urlsafe(24)
+    # 下载计数移到发票时原子递增（R1-P2-4）：此前计数在 dl 完成后才发生，
+    # 并发 prepare N 张票（此刻 downloads=0）即可把"限 1 次下载"变 N 次完整下载
+    with _db_lock:
+        cur = _db().execute(
+            "UPDATE shares SET downloads=downloads+1 WHERE token=? "
+            "AND (max_downloads IS NULL OR downloads < max_downloads)", (token,))
+        # commit 必须在 raise 之前：UPDATE 命中 0 行也已开启事务，锁内 raise
+        # 会把连接留在持有 RESERVED 锁的未决事务里，锁死后续所有写操作
+        _db().commit()
+        if not cur.rowcount:
+            raise HTTPException(status_code=410, detail="下载次数已达上限")
     with _tickets_lock:
         # 顺带清理过期票据
         now = time.time()
         for k in [k for k, v in _tickets.items() if v["exp"] < now]:
             del _tickets[k]
-        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL, "counted": False}
+        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL, "counted": True}
     return {"ok": True, "url": f"/api/share/{token}/dl?tkt={tkt}",
             "name": s["name"], "expires": TICKET_TTL}
 
 
 def _share_download_done(token: str, path: str, ip: str, tkt: str = ""):
-    """下载响应发送完成后计数与审计（客户端中途取消不计）。
+    """下载响应发送完成后审计（客户端中途取消不计）。
 
     按票据去重：手机下载管理器（小米等）会对大文件并发多个 Range 分段请求，
-    每段完成都会走到这里——同一 tkt 只计 1 次，否则一次下载被记 N 次、
-    误触 max_downloads 上限。"""
+    每段完成都会走到这里——同一 tkt 只审计 1 次。计数已移至 prepare 发票时
+    （R1-P2-4），此处不再递增 downloads。"""
     with _tickets_lock:
         info = _tickets.get(tkt)
         if info is not None:
-            if info.get("counted"):
+            if info.get("counted_audit"):
                 return
-            info["counted"] = True
-    with _db_lock:
-        _db().execute("UPDATE shares SET downloads = downloads + 1 WHERE token=?", (token,))
-        _db().commit()
+            info["counted_audit"] = True
     audit("share_download", path, ip=ip)
 
 
@@ -218,9 +228,9 @@ async def share_download(request: Request, token: str, tkt: str):
         info = _tickets.get(tkt)
     if not info or info["token"] != token or info["exp"] < time.time():
         raise HTTPException(status_code=403, detail="下载链接已失效，请刷新页面重试")
+    # 次数上限已在 prepare 发票时原子把关（R1-P2-4）：此处不再复查——
+    # prepare 计数后 downloads 已达上限，复查会把自己的合法票据 410 掉
     s = _get_active_share(token)
-    if s["max_downloads"] and s["downloads"] >= s["max_downloads"]:
-        raise HTTPException(status_code=410, detail="下载次数已达上限")
     file_path = SHARE_ROOT / s["path"]
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File deleted")
@@ -231,18 +241,24 @@ async def share_download(request: Request, token: str, tkt: str):
 
 
 @app.get("/api/share/{token}/qr")
-async def share_qr(token: str, request: Request, _user=Depends(require_user)):
+def share_qr(token: str, request: Request, _user=Depends(require_user)):
     if not _db().execute("SELECT 1 FROM shares WHERE token=?", (token,)).fetchone():
         raise HTTPException(status_code=404, detail="Share not found")
-    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = request.headers.get("host") or request.url.netloc
-    url = f"{proto}://{host}/s/{token}"
+    # host 优先取管理员配置的公网地址（R1-P3-5）：LAN 可注入 X-Forwarded-Proto
+    # /Host 影响二维码指向；配置缺失时才回退请求头
+    row = _db().execute("SELECT value FROM settings WHERE key='public_base_url'").fetchone()
+    if row and row["value"]:
+        url = f"{row['value'].rstrip('/')}/s/{token}"
+    else:
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        host = request.headers.get("host") or request.url.netloc
+        url = f"{proto}://{host}/s/{token}"
     from app.api.system import qr_svg_response
     return qr_svg_response(url)
 
 
 @app.get("/api/shares")
-async def list_shares(request: Request, _user=Depends(require_user)):
+def list_shares(request: Request, _user=Depends(require_user)):
     now = time.time()
     with _db_lock:
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
@@ -271,7 +287,8 @@ async def list_shares(request: Request, _user=Depends(require_user)):
             "expires_at": datetime.fromtimestamp(s["expires_at"]).isoformat(),
             "expires_in": f"{max(0, int((s['expires_at'] - now) / 3600))}h",
             "has_password": s["password_hash"] is not None,
-            "password": s["password_plain"],
+            # 提取码不再回传（R1-P2-5：明文落库=一次 dump 全泄露，存量字段也
+            # 不再暴露）；新分享的提取码在创建响应中一次性下发
             "downloads": s["downloads"],
             "max_downloads": s["max_downloads"],
             "created_at": datetime.fromtimestamp(s["created_at"]).isoformat(),
@@ -280,7 +297,7 @@ async def list_shares(request: Request, _user=Depends(require_user)):
 
 
 @app.get("/api/shares/{token}/history")
-async def share_history(token: str, _user=Depends(require_user)):
+def share_history(token: str, _user=Depends(require_user)):
     """某分享的取件记录（下载成功 + 密码错误尝试）。仅创建者与 admin。"""
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
@@ -297,7 +314,7 @@ async def share_history(token: str, _user=Depends(require_user)):
 
 
 @app.delete("/api/shares/{token}")
-async def revoke_share(request: Request, token: str, _user=Depends(require_user)):
+def revoke_share(request: Request, token: str, _user=Depends(require_user)):
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
@@ -319,8 +336,8 @@ class ShareEditBody(BaseModel):
 
 
 @app.patch("/api/shares/{token}")
-async def edit_share(request: Request, token: str, body: ShareEditBody,
-                     _user=Depends(require_user)):
+def edit_share(request: Request, token: str, body: ShareEditBody,
+               _user=Depends(require_user)):
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
@@ -328,8 +345,10 @@ async def edit_share(request: Request, token: str, body: ShareEditBody,
         raise HTTPException(status_code=403, detail="Forbidden")
     if body.expires_hours is None and body.max_downloads is None:
         raise HTTPException(status_code=400, detail="没有要修改的字段")
-    if body.expires_hours is not None and body.expires_hours < 1:
-        raise HTTPException(status_code=400, detail="expires_hours must be >= 1")
+    # 与 create_share 同上限（R1-P1-1）：过大值会让 datetime.fromtimestamp 抛
+    # OSError，GET /api/shares 持续 500 且 UI 无法撤销
+    if body.expires_hours is not None and not 1 <= body.expires_hours <= 24 * 365:
+        raise HTTPException(status_code=400, detail="expires_hours must be 1-8760")
     if body.max_downloads is not None and body.max_downloads < 1:
         raise HTTPException(status_code=400, detail="max_downloads must be >= 1")
     with _db_lock:

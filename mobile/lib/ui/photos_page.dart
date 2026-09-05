@@ -92,6 +92,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 服务端脉搏：对时间线做一次"有没有变"的轻探测。快照与上次不同
   /// （新增/删除/最新一张换人）→ 整页强刷。首次只记录不触发。
   Future<void> _pulseCheck() async {
+    // 生命周期闸门（R1-P2-2，对齐 AutoSwitch）：退后台/锁屏后不再打网络
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
     if (!mounted || _loading) return;
     try {
       final dio = await ApiClient.I.dio();
@@ -114,6 +116,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   Future<void> _checkBackupDone() async {
+    // 生命周期闸门（R1-P2-2）：退后台不轮询
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
     if (!mounted || _loading) return;
     final sp = await SharedPreferences.getInstance();
     // 引擎在独立 headless isolate 写 prefs，UI isolate 的插件缓存不 reload
@@ -167,6 +171,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   Future<void> _refresh() async {
+    if (!mounted) return;   // R1-P2-4：彻底删除/查看器回调路径可能在 dispose 后触发
     _gen++;
     setState(() {
       _items.clear();

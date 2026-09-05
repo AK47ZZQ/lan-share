@@ -794,7 +794,13 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final canManage = ref.read(sessionProvider).role != 'guest';
-    return Scaffold(
+    // 系统返回键先回上级目录（R1-P3-8）：深层目录按返回直接退出整个页面
+    return PopScope(
+      canPop: _stack.length <= 1,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _stack.length > 1) setState(() => _popTo(_stack.length - 2));
+      },
+      child: Scaffold(
       appBar: AppBar(
         leading: _selecting
             ? IconButton(
@@ -908,7 +914,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
               ),
             ]),
       bottomNavigationBar: _selecting ? _selectionBar(canManage) : null,
-    );
+    ));
   }
 
   /// 双布局（0.12.0 Web 同款）：常用目录区两种布局共用（置顶），条目区

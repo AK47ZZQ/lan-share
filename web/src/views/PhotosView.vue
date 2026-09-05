@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { api, type PhotoItem, type PhotoFacets, type Album, type Me } from '../api'
-import { promptDlg, toast } from '../ui'
+import { confirmDlg, promptDlg, toast } from '../ui'
 import Modal from '../components/Modal.vue'
 import ShareModal from '../components/ShareModal.vue'
 import FileViewer, { type ViewerItem } from '../components/FileViewer.vue'
@@ -111,6 +111,8 @@ async function featureMonth() {
   } catch (e) { toast((e as Error).message, 'err') }
 }
 async function removeAlbum(a: Album) {
+  // 二次确认（R1-P2-7）：✕ 热区小，手滑即删
+  if (!(await confirmDlg(`移除精选专辑「${a.title}」？（不影响照片本身）`, { danger: true, okText: '移除' }))) return
   try {
     await api.deleteAlbum(a.id)
     albums.value = albums.value.filter(x => x.id !== a.id)
@@ -172,9 +174,10 @@ onUnmounted(() => window.removeEventListener('scroll', onScroll))   // 不移除
     <div v-for="g in groups" :key="g.date">
       <div class="phdate">{{ g.date }}</div>
       <div class="photogrid">
-        <div v-for="p in g.photos" :key="p.path" class="ph"
-             @click="viewerIndex = navItems.findIndex(x => x.path === p.path)">
-          <img :src="p.thumb" loading="lazy" alt="" />
+        <div v-for="p in g.photos" :key="p.path" class="ph" role="button" tabindex="0"
+             @click="viewerIndex = navItems.findIndex(x => x.path === p.path)"
+             @keydown.enter="viewerIndex = navItems.findIndex(x => x.path === p.path)">
+          <img :src="p.thumb" loading="lazy" :alt="p.name" />
         </div>
       </div>
     </div>

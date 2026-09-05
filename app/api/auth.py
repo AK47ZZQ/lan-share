@@ -60,7 +60,7 @@ def set_session_cookie(response: Response, request: Request, user_id: int):
 
 @app.get("/api/auth/state")
 async def auth_state(request: Request):
-    user = get_session_user(request)
+    user = await run_in_threadpool(get_session_user, request)
     return {"needs_setup": user_count() == 0,
             "logged_in": bool(user),
             "username": user["username"] if user else None}
@@ -70,8 +70,18 @@ async def auth_state(request: Request):
 async def setup(body: AuthBody, request: Request, response: Response):
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
-    if not body.username.strip():
-        raise HTTPException(status_code=400, detail="用户名不能为空")
+    # 首个管理员用户名同样过完整校验（含路径分隔符/Windows 保留名，R1-P3-5），
+    # 否则可建出 private 目录落在设备命名空间的残废账号。
+    # setup 是引导入口：放行 admin/administrator/root/system 等管理语义保留名
+    # （测试夹具与存量惯例），但路径段冲突名（shared/private/incoming/tmp）、
+    # 分隔符与设备名仍然拒绝
+    from app.api.admin import _clean_username
+    username = body.username.strip()
+    if username.lower() not in {"admin", "administrator", "root", "system"}:
+        username = _clean_username(username)
+    else:
+        if len(username) > 64 or re.search(r"[\s\u0000-\u001f\u007f]", username):
+            raise HTTPException(status_code=400, detail="用户名不能含空白/控制字符，且不超过 64 字符")
     if user_count() > 0:
         # 廉价预检（锁内还有复查兜底双管理员）：setup 关闭后未认证请求
         # 不必白烧 100-300ms 的 scrypt（R2-P3）
@@ -83,11 +93,11 @@ async def setup(body: AuthBody, request: Request, response: Response):
         if user_count() > 0:
             raise HTTPException(status_code=403, detail="管理员已存在")
         _db().execute("INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,'admin')",
-                      (body.username.strip(), new_hash, time.time()))
+                      (username, new_hash, time.time()))
         _db().commit()
     uid = _db().execute("SELECT id FROM users WHERE username=?",
-                        (body.username.strip(),)).fetchone()["id"]
-    audit("setup", body.username.strip(), ip=client_ip(request))
+                        (username,)).fetchone()["id"]
+    audit("setup", username, ip=client_ip(request))
     set_session_cookie(response, request, uid)
     return {"ok": True}
 
@@ -111,11 +121,25 @@ async def _verify_pw(pw: str, stored: str) -> bool:
     return await run_in_threadpool(verify_password, pw, stored)
 
 
+# 用户名不存在时也跑一次等价 scrypt（懒初始化哑哈希）：消除"不存在用户 0ms /
+# 存在用户 300ms"的登录时序用户名枚举（R1-P3-2）
+_DUMMY_HASH: str | None = None
+
+
+async def _verify_pw_with_dummy(pw: str, stored: str | None) -> bool:
+    global _DUMMY_HASH
+    if stored is None:
+        if _DUMMY_HASH is None:
+            _DUMMY_HASH = await run_in_threadpool(hash_password, secrets.token_urlsafe(16))
+        stored = _DUMMY_HASH
+    return await _verify_pw(pw, stored)
+
+
 @app.post("/api/login")
 async def login(body: AuthBody, request: Request, response: Response):
     pub = is_public_entry(request)
-    row = _login_gate(body.username, request)
-    ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
+    row = await run_in_threadpool(_login_gate, body.username, request)
+    ok = await _verify_pw_with_dummy(body.password, row["password_hash"] if row else None)
     if not ok:
         record_login_fail(body.username, pub)
         audit("login_fail", body.username, "pub" if pub else "", client_ip(request))
@@ -147,8 +171,8 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
     """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。
     认证器不可用时可用开通时下发的一次性恢复码顶替（用一枚销一枚）。"""
     pub = is_public_entry(request)
-    row = _login_gate(body.username, request)
-    ok = bool(row) and await _verify_pw(body.password, row["password_hash"])
+    row = await run_in_threadpool(_login_gate, body.username, request)
+    ok = await _verify_pw_with_dummy(body.password, row["password_hash"] if row else None)
     if not ok:
         record_login_fail(body.username, pub)
         audit("login_fail", body.username, "pub" if pub else "", client_ip(request))
@@ -211,7 +235,7 @@ async def logout(request: Request, response: Response):
 @app.get("/authcheck")
 async def authcheck(request: Request):
     """Caddy forward_auth 子请求入口：会话有效 200，否则 401。"""
-    if get_session_user(request):
+    if await run_in_threadpool(get_session_user, request):
         return PlainTextResponse("ok")
     raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -219,7 +243,9 @@ async def authcheck(request: Request):
 @app.get("/api/auth/me")
 async def me(request: Request):
     # Cookie 会话与 App Bearer 设备 Token 并存（App 登录后用它确认身份）
-    user = get_session_user(request) or get_bearer_user(request)
+    user = await run_in_threadpool(get_session_user, request)
+    if not user:
+        user = await run_in_threadpool(get_bearer_user, request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return {"username": user["username"], "role": user["role"],
@@ -387,6 +413,10 @@ async def change_username(request: Request, body: UsernameBody,
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
     if new_name.lower() in RESERVED_USERNAMES:
         raise HTTPException(status_code=400, detail="该用户名是保留名")
+    # 路径分隔符/..段/冒号/设备保留名校验（R1-P0-2：缺此校验时 "a/../../b"
+    # 可把私人目录 rename 出数据根，路径穿越写）；与管理端 _clean_username 对齐
+    from app.api.admin import _clean_username
+    _clean_username(new_name)
     # 重名检查与 UPDATE 同锁（否则并发改名可双双通过检查）
     with _db_lock:
         if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
@@ -402,8 +432,16 @@ async def change_username(request: Request, body: UsernameBody,
         try:
             old_dir.rename(new_dir)
         except OSError:
+            # 目录改名失败时回滚用户名：否则 username 与私人目录永久错位、
+            # 本人数据"消失"（R1-P2-4）
+            with _db_lock:
+                _db().execute("UPDATE users SET username=? WHERE id=?",
+                              (row["username"], row["id"]))
+                _db().commit()
             audit("username_dir_rename_fail", f"{row['username']} → {new_name}",
                   ip=client_ip(request))
+            raise HTTPException(status_code=500,
+                                detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")
     # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
     old_inc = SHARE_ROOT / "incoming" / row["username"]
     new_inc = SHARE_ROOT / "incoming" / new_name
@@ -600,7 +638,10 @@ async def pair_claim(request: Request, body: PairClaimBody):
     ip = client_ip(request)
     if not (code.isdigit() and len(code) == 6):
         raise HTTPException(status_code=400, detail="配对码格式错误")
-    if not allow_rate(f"pairclaim:{ip}", 5, 60):
+    # 公网侧全体共享一个 IP 桶（出口恒为隧道），阈值放大防单人占满卡死全体配对；
+    # 爆破面由 6 位码 + 一码一用 + 3min TTL 兜底（R1-P3-6）
+    pub = is_public_entry(request)
+    if not allow_rate(f"pairclaim:{ip}", 30 if pub else 5, 60):
         raise HTTPException(status_code=429, detail="尝试过于频繁，请稍后再试")
     now = time.time()
     with _pair_lock:

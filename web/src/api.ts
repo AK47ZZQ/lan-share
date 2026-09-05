@@ -127,7 +127,7 @@ export const api = {
     if (password) f.append('password', password)
     if (max_downloads) f.append('max_downloads', String(max_downloads))
     if (target) f.append('target', target)
-    return fetch('/api/share', { method: 'POST', body: f }).then(r => handle<{ token: string }>(r))
+    return fetch('/api/share', { method: 'POST', body: f }).then(r => handle<{ token: string; password?: string | null }>(r))
   },
   shares: () => getAs('/api/shares').then(r => handle<Record<string, ShareItem>>(r)).then(d => Object.entries(d).map(([token, s]) => ({ ...s, token }))),
   shareHistory: (token: string) => fetch(`/api/shares/${encodeURIComponent(token)}/history`).then(r => handle<ShareHistoryRow[]>(r)),

@@ -191,7 +191,12 @@ async function pumpAll() {
       await runItem(next)
       if (next.status === 'paused') break
     }
-  } finally { pumping = false }
+  } finally {
+    pumping = false
+    // 暂停/失败退出时补跑期间入队的批次（R1-P1-2）：泵退出后新批次无人
+    // 消费会永久卡"排队"；暂停项保持 paused 不受影响
+    if (upl.items.some(i => i.status === 'queue')) void pumpAll()
+  }
 }
 
 async function runItem(item: UplItem) {
@@ -244,6 +249,16 @@ export function retryItem(item: UplItem) {
   item.status = 'queue'  // 绕过 runItem 的"排队时已取消"守卫
   ensureTicker()
   return pumpAll()
+}
+
+// 一键重试全部失败项（体验优化）：此前需逐项点 ↻
+export function retryAll(): number {
+  let n = 0
+  for (const i of upl.items) {
+    if (i.status === 'fail') { i.status = 'queue'; n++ }
+  }
+  if (n) { ensureTicker(); void pumpAll() }
+  return n
 }
 
 export function resumeItem(item: UplItem) {

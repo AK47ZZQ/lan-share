@@ -3,7 +3,7 @@
 // 图片缩放平移/中图档、文本/Markdown/代码/CSV 渲染、docx、音频连播、视频倍速/画中画。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, type Me } from '../api'
-import { confirmDlg, human, promptDlg, toast } from '../ui'
+import { confirmDlg, dlg, human, promptDlg, toast } from '../ui'
 import Modal from './Modal.vue'
 import ShareModal from './ShareModal.vue'
 import 'highlight.js/styles/github-dark.css'
@@ -458,6 +458,8 @@ function onFsChange() { isFs.value = !!document.fullscreenElement }
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  // App 级对话框打开时让位（R1-P3-16）：否则 Esc 会同时关掉背后的预览器
+  if (dlg.open) return
   if (sharePath.value) { if (e.key === 'Escape') sharePath.value = null; return }
   if (e.key === 'Escape') { showInfo.value ? showInfo.value = false : close() }
   else if (e.key === 'ArrowLeft') go(-1)

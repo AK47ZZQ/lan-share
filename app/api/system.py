@@ -82,11 +82,15 @@ def _cleanup_tmp():
     # 15 位以上时间戳量级）才回收
     orphan_re = re.compile(r"\.(?:uploading|dav-uploading)-\d+-\d{15,}$")
     for f in SHARE_ROOT.rglob("*"):
-        if f.is_file() and (f.name.endswith((".uploading", ".dav-uploading", ".dedup"))
-                            or orphan_re.search(f.name)
-                            or f.name.startswith(".tmp-")) \
-                and f.stat().st_mtime < orphan_cutoff:
-            f.unlink(missing_ok=True)
+        # 全树扫描对竞态不设防会杀掉整轮清理（R1-P2-3，与函数头部注释同源）
+        try:
+            if f.is_file() and (f.name.endswith((".uploading", ".dav-uploading", ".dedup"))
+                                or orphan_re.search(f.name)
+                                or f.name.startswith(".tmp-")) \
+                    and f.stat().st_mtime < orphan_cutoff:
+                f.unlink(missing_ok=True)
+        except OSError:
+            continue
     # 缩略图缓存：30 天未再生成（即 30 天没被访问命中缺失）的档位回收，防慢性磁盘泄漏
     thumbs = SHARE_ROOT / ".thumbs"
     if thumbs.exists():
@@ -143,8 +147,11 @@ def _cleanup_zips():
     if zdir.exists():
         cutoff = time.time() - ZIP_TTL * 2
         for f in zdir.iterdir():
-            if f.is_file() and f.stat().st_mtime < cutoff:
-                f.unlink(missing_ok=True)
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink(missing_ok=True)
+            except OSError:
+                continue   # 竞态（票据下载并发删除）跳过（R1-P2-3）
     with _zips_lock:
         now = time.time()
         for k in [k for k, v in _zips.items() if v["exp"] < now]:
@@ -394,7 +401,7 @@ def _photo_uploader(rel: str, users: set[str] | None = None) -> str:
 
 
 @app.get("/api/photos")
-def list_photos(request: Request, limit: int = Query(default=120, le=500),
+def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
                 offset: int = Query(default=0, ge=0),
                 month: str | None = Query(default=None),
                 uploader: str | None = Query(default=None),
@@ -408,9 +415,31 @@ def list_photos(request: Request, limit: int = Query(default=120, le=500),
     user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos(force=refresh)
     users = _known_users()
-    all_rows = _db().execute(
-        "SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY taken_at DESC, path").fetchall()
-    rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
+    # 可见性下推 SQL（R1-P2-10）：member/admin 的 visible() 语义可用路径前缀
+    # 完整表达——shared 全可见、private/incoming 仅本人子树；点前缀隐藏段
+    # 一并排除（与 visible() 对齐）。guest 仍走 Python 过滤（grants 已有缓存）
+    role = user["role"] if "role" in user.keys() else "member"
+    if role in ("admin", "member"):
+        esc = (user["username"].replace("\\", "\\\\")
+               .replace("%", r"\%").replace("_", r"\_"))
+        own_priv = f"private/{esc}/%"
+        if role == "admin":
+            cond = ("(path NOT LIKE 'private/%' OR path LIKE ? ESCAPE '\\')"
+                    " AND path NOT LIKE '.%' AND path NOT LIKE '%/.%'")
+            args: list = [own_priv]
+        else:
+            cond = ("((path NOT LIKE 'private/%' AND path NOT LIKE 'incoming/%')"
+                    " OR path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')"
+                    " AND path NOT LIKE '.%' AND path NOT LIKE '%/.%'")
+            args = [own_priv, f"incoming/{esc}/%"]
+        all_rows = _db().execute(
+            f"SELECT path, taken_at, duration, codec, width, height FROM photos "
+            f"WHERE {cond} ORDER BY taken_at DESC, path", args).fetchall()
+    else:
+        all_rows = _db().execute(
+            "SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY taken_at DESC, path").fetchall()
+    rows = [r for r in all_rows if visible(user, r["path"].split("/"))] \
+        if role not in ("admin", "member") else list(all_rows)
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
     if uploader:

@@ -77,16 +77,23 @@ def dir_tree(path: Path) -> dict:
     for entry in sorted(path.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
         if entry.name.startswith("."):
             continue
-        stat = entry.stat()
+        # iterdir 与 stat 之间条目可能被并发删除（R1-P2-2）：一次竞态 OSError
+        # 不能让整个目录列表 500
+        try:
+            stat = entry.stat()
+            is_dir = entry.is_dir()
+            is_file = entry.is_file()
+        except OSError:
+            continue
         rel = str(entry.relative_to(SHARE_ROOT)).replace("\\", "/")
         items.append({
             "name": entry.name,
             "path": rel,
-            "is_dir": entry.is_dir(),
-            "size": stat.st_size if entry.is_file() else None,
-            "size_human": human_size(stat.st_size) if entry.is_file() else "-",
+            "is_dir": is_dir,
+            "size": stat.st_size if is_file else None,
+            "size_human": human_size(stat.st_size) if is_file else "-",
             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-            "ext": entry.suffix.lower() if entry.is_file() else None,
+            "ext": entry.suffix.lower() if is_file else None,
         })
     rel_path = str(path.relative_to(SHARE_ROOT)).replace("\\", "/")
     return {"path": rel_path if rel_path != "." else "", "items": items}
@@ -111,10 +118,14 @@ def move_to_trash(target: Path, orig_path: str):
         _db().commit()
 
 
-async def save_upload(file: UploadFile, dest: Path) -> dict:
+async def save_upload(file: UploadFile, dest: Path, quota_user=None) -> dict:
     """单请求直传。先写 .uploading 临时文件、完成后 os.replace 原子落位；
     临时名带唯一后缀，两个并发同名单请求（如分片超时重试与原请求并发）
-    不会同时打开同一个 tmp 交错写坏；旧版本在替换前进回收站。"""
+    不会同时打开同一个 tmp 交错写坏；旧版本在替换前进回收站。
+
+    quota_user 传入时在落位前按真实占用校验配额（R1-P1-2）：starlette 对
+    multipart 文件部分的 UploadFile.size 恒为 0，端点预检无法可信计价；此刻
+    tmp 已含完整内容且位于目标目录树内，配额扫描已计入其字节，传 0 即精确。"""
     if dest.is_dir():
         raise HTTPException(status_code=409, detail="同名目录已存在")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +154,13 @@ async def save_upload(file: UploadFile, dest: Path) -> dict:
     if dest.is_dir():
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="同名目录已存在")
+    if quota_user is not None:
+        try:
+            from app.spaces import enforce_quota
+            enforce_quota(quota_user, dest, 0)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
         move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     os.replace(tmp, dest)

@@ -902,7 +902,29 @@ class _MePageState extends ConsumerState<MePage> {
           leading: Icon(Icons.logout, color: cs.error),
           title: Text('退出登录',
               style: TextStyle(color: cs.error)),
-          onTap: () => ref.read(sessionProvider.notifier).logout(),
+          // 二次确认（R1-P2-5）：全 App 唯一无确认的高危操作，误触即清凭据
+          onTap: () async {
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('退出登录？'),
+                content: const Text('将清除本机保存的登录凭据与传输记录状态，'
+                    '下次需要重新输入密码登录。'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+                  FilledButton(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.error),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('退出')),
+                ],
+              ),
+            );
+            if (ok == true) {
+              // ignore: discarded_futures
+              ref.read(sessionProvider.notifier).logout();
+            }
+          },
         ),
         const SizedBox(height: 12),
         Center(child: Text('LAN Share App · v$_version',

@@ -11,7 +11,7 @@ import { confirmDlg, fmtTs, toast } from '../ui'
 const router = useRouter()
 function viewAs(username: string) {
   setPreviewAs(username)
-  router.push('/files')
+  router.push('/')   // router 只有 /（R1-P3-12）：'/files' 靠 catch-all 兜底才碰巧能用
   toast(`已切换到「${username}」视角浏览（只读预览）`, 'ok')
 }
 
@@ -78,8 +78,11 @@ async function loadAll() {
 async function createInvite(role: string) {
   try {
     const r = await api.adminCreateInvite(role, 72)
-    await navigator.clipboard?.writeText(`${location.origin}/login?invite=${r.code}`).catch(() => {})
-    toast(`邀请码已复制：${r.code}（72 小时内有效，redeem 入口 /login）`, 'ok')
+    let copied = true
+    try { await navigator.clipboard?.writeText(`${location.origin}/login?invite=${r.code}`) } catch { copied = false }
+    // 剪贴板失败不再谎报"已复制"（R1-P3-15）：码在 toast 文本里仍可手动复制
+    toast(copied ? `邀请码已复制：${r.code}（72 小时内有效）`
+                 : `已生成邀请码：${r.code}（复制失败，请手动复制，72 小时内有效）`, copied ? 'ok' : 'info')
     await loadAll()
   } catch (e) { toast((e as Error).message, 'err') }
 }
@@ -144,9 +147,12 @@ function copyInvite(code: string) {
   navigator.clipboard?.writeText(code).then(() => toast('已复制', 'ok')).catch(() => toast(code, 'info'))
 }
 async function revokeInvite(code: string) {
+  // 二次确认（R1-P2-6）：误点 ✕ 立即失效且无法撤销撤销
+  if (!(await confirmDlg(`撤销邀请码 ${code.slice(0, 6)}…？撤销后立即失效`, { danger: true, okText: '撤销' }))) return
   try { await api.adminDeleteInvite(code); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
 async function delGrant(g: { id: number }) {
+  if (!(await confirmDlg('撤销这条目录授权？成员将立即失去对应访问权', { danger: true, okText: '撤销' }))) return
   try { await api.adminDeleteGrant(g.id); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
 const pubUrl = ref('')

@@ -235,7 +235,7 @@ async function doPwd() {
           <div style="font-size:13.5px;font-weight:600">🔑 修改密码</div>
           <input v-model="oldPwd" type="password" placeholder="当前密码" autocomplete="current-password" />
           <input v-model="newPwd" type="password" placeholder="新密码（至少 8 位）" autocomplete="new-password" />
-          <button class="btn sm" :disabled="pwdBusy || !oldPwd || !newPwd">
+          <button class="btn sm" :disabled="pwdBusy || !oldPwd || !newPwd || newPwd.length < 8">
             {{ pwdBusy ? '提交中…' : '修改密码' }}
           </button>
           <p style="font-size:12px;color:var(--text-3);margin:0">修改后其他设备的登录会全部失效，当前设备保持登录。</p>

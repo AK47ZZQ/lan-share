@@ -19,7 +19,9 @@ async function prepare() {
   try {
     const r = await publicApi.prepare(token, pwd.value || null)
     dlUrl.value = r.url
-    window.open(r.url, '_blank')
+    // await 之后不在用户手势栈内，window.open 会被浏览器拦截（R1-P2-4）；
+    // 服务端返回 attachment 头，当前页直接跳转即可
+    location.href = r.url
   } catch (e) {
     if ((e as Error).message.includes('上限')) { limitReached.value = true; return }
     err.value = (e as Error).message

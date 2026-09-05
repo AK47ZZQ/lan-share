@@ -6,7 +6,9 @@ let seq = 0
 export function toast(text: string, kind: 'ok' | 'err' | 'info' = 'info') {
   const id = ++seq
   toasts.push({ id, text, kind })
-  setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1) }, 3200)
+  // 错误类 6s（体验优化）：长报错 3.2s 读不完；成功/提示保持 3.2s
+  const ms = kind === 'err' ? 6000 : 3200
+  setTimeout(() => { const i = toasts.findIndex(t => t.id === id); if (i >= 0) toasts.splice(i, 1) }, ms)
 }
 
 export function fmtTs(ts: number | string): string {

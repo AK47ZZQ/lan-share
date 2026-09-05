@@ -527,6 +527,26 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
   void initState() {
     super.initState();
     _load();
+    // 下载完成自动刷新（R1-P3-10）：此前停留视图时完成的下载不出现，
+    // 必须手动来回切 Tab 才重载
+    TransferEngine.I.addListener(_onEngineChanged);
+  }
+
+  void _onEngineChanged() {
+    if (!mounted) return;
+    // done 数量增长 = 有新完成的下载，重载列表
+    final doneCount =
+        TransferEngine.I.tasks.where((t) => t.status == TransferStatus.done).length;
+    if (doneCount > _lastDoneCount) _load();
+    _lastDoneCount = doneCount;
+  }
+
+  int _lastDoneCount = 0;
+
+  @override
+  void dispose() {
+    TransferEngine.I.removeListener(_onEngineChanged);
+    super.dispose();
   }
 
   Future<void> _load() async {

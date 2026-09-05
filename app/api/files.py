@@ -261,6 +261,15 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     return {"ok": True, "index": index}
 
 
+def _destroy_upload_session(sid: str, d: Path):
+    """销毁分片会话：分片目录 + DB 记录一并清除（finish 校验失败强制客户端
+    重新 init，重缴会话数/总量/配额三道闸，R1-P2-6）。"""
+    shutil.rmtree(d, ignore_errors=True)
+    with _db_lock:
+        _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
+        _db().commit()
+
+
 @app.post("/api/upload/finish/{sid}")
 async def upload_finish(request: Request, sid: str, _user=Depends(require_user)):
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
@@ -304,11 +313,15 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise
     if size != row["total_size"]:
         tmp.unlink(missing_ok=True)
+        _destroy_upload_session(sid, d)
         raise HTTPException(status_code=400, detail="Size mismatch")
 
     real_sha = sha.hexdigest()
     if row["sha256"] and row["sha256"] != real_sha:
         tmp.unlink(missing_ok=True)
+        # 会话与全部分片一并销毁（R1-P2-6）：仅删 tmp 时会话保留，攻击者可
+        # init 一个 64GB 会话后循环 finish 触发反复全量重组+哈希（磁盘 IO DoS）
+        _destroy_upload_session(sid, d)
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
     enforce_quota(owner, dest, size)
@@ -337,10 +350,10 @@ async def upload_file(request: Request, path: str = "", file: UploadFile = File(
                       _user=Depends(require_user)):
     clean_name = clean_filename(file.filename)
     dest = resolve(_user, path, "write") / clean_name
-    # multipart 声明的 size 由客户端控制，谎报 0 即绕过配额——缺声明时按
-    # 直传上限悲观计价（review 2026-09-03：实际写入字节流仍受 MAX_UPLOAD_SIZE 硬约束）
-    enforce_quota(_user, dest, file.size or MAX_UPLOAD_SIZE)
-    result = await save_upload(file, dest)
+    # 真实配额校验移入 save_upload 落位前（R1-P1-2）：starlette multipart 的
+    # file.size 恒为 0，预检 `file.size or MAX_UPLOAD_SIZE` 会把所有直传按 2GB
+    # 计价，配额 <2GB 的成员任何直传必 409
+    result = await save_upload(file, dest, quota_user=_user)
     deduped = register_blob(dest, result["sha256"], result["size"])
     audit("upload", result["path"], result["size_human"], client_ip(request))
     return {"ok": True, "deduped": deduped, **result}
@@ -419,7 +432,7 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             if was_dir:
                 sync_grants_on_move(old_rel, final_rel)
             results.append({"src": src, "ok": True, "dest": final_rel})
-            audit("move", src, f"→ {final_rel}", client_ip(request))
+            audit("move", old_rel or src, f"→ {final_rel}", client_ip(request))
         except HTTPException as e:
             results.append({"src": src, "ok": False, "error": e.detail})
         except OSError as e:
@@ -492,7 +505,8 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
                 shutil.copy2(target, placed)
             final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
             results.append({"src": src, "ok": True, "dest": final_rel})
-            audit("copy", src, f"→ {final_rel}", client_ip(request))
+            audit("copy", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                  f"→ {final_rel}", client_ip(request))
         except HTTPException as e:
             results.append({"src": src, "ok": False, "error": e.detail})
         except OSError as e:
@@ -511,7 +525,9 @@ async def delete_file(request: Request, path: str, _user=Depends(require_user)):
         raise HTTPException(status_code=404, detail="Not found")
     # 回收站登记物理相对路径（此前存请求原样 vpath，visible() 无法判定归属）
     _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
-    audit("trash", path, ip=client_ip(request))
+    # 审计同样记物理相对路径（R1-P3-1）：vpath 形态（private:x.jpg）进动态流
+    # 后 visible() 无法归一，会泄漏到全员可见
+    audit("trash", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), ip=client_ip(request))
     return {"ok": True}
 
 
@@ -599,8 +615,9 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     elif not visible(_user, parts):
         raise HTTPException(status_code=403, detail="Forbidden")
     trash_path = SHARE_ROOT / row["trash_path"]
+    # rmtree 大目录（数万文件）可达分钟级，进线程池防冻结事件循环（R1-P2-8）
     if trash_path.is_dir():
-        shutil.rmtree(trash_path, ignore_errors=True)
+        await run_in_threadpool(shutil.rmtree, trash_path, True)
     else:
         trash_path.unlink(missing_ok=True)
     with _db_lock:
@@ -614,7 +631,8 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
 async def empty_trash(request: Request, _admin=Depends(require_admin)):
     trash_root = SHARE_ROOT / ".trash"
     if trash_root.exists():
-        shutil.rmtree(trash_root, ignore_errors=True)
+        # 同 delete_trash_item：rmtree 进线程池（R1-P2-8）
+        await run_in_threadpool(shutil.rmtree, trash_root, True)
     with _db_lock:
         _db().execute("DELETE FROM trash")
         _db().commit()
@@ -773,7 +791,7 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
         raise HTTPException(status_code=500, detail="重命名失败（目标被占用或系统错误）")
     if old_rel:
         sync_grants_on_move(old_rel, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
-    audit("rename", body.path, body.new_name, client_ip(request))
+    audit("rename", old_rel or body.path, body.new_name, client_ip(request))
     return {"ok": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")}
 
 
@@ -859,7 +877,7 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
 
 
 @app.get("/api/recent")
-def recent_files(limit: int = Query(default=20, le=100), _user=Depends(require_user)):
+def recent_files(limit: int = Query(default=20, ge=0, le=100), _user=Depends(require_user)):
     files = []
     for f in SHARE_ROOT.rglob("*"):
         rel_parts = f.relative_to(SHARE_ROOT).parts
@@ -871,9 +889,17 @@ def recent_files(limit: int = Query(default=20, le=100), _user=Depends(require_u
     return files[:limit]
 
 
+# 网盘全量扫描 5 分钟 TTL 缓存（R1-P2-11）：10 万文件级库上每次 /api/disk
+# 全树 rglob+stat 数秒；仪表盘/存储详情是高频页面，容忍 5 分钟内的统计滞后
+_scan_cache: dict = {"ts": 0.0, "physical": 0, "cats": {}}
+_SCAN_TTL = 300.0
+
+
 def _scan_share_sizes():
     """网盘内容统计：返回 (去重后的物理占用, 各一级目录/根文件的逻辑大小)。
     NTFS 硬链接去重的同一份内容按物理只计一次；隐藏（点前缀）路径全部排除。"""
+    if _scan_cache["ts"] and time.time() - _scan_cache["ts"] < _SCAN_TTL:
+        return _scan_cache["physical"], _scan_cache["cats"]
     seen = set()
     physical = 0
     categories: dict[str, int] = {}
@@ -893,6 +919,7 @@ def _scan_share_sizes():
             physical += st.st_size
         top = rel.parts[0] if len(rel.parts) > 1 else "(根目录文件)"
         categories[top] = categories.get(top, 0) + st.st_size
+    _scan_cache.update(ts=time.time(), physical=physical, cats=categories)
     return physical, categories
 
 

@@ -16,12 +16,14 @@ from app.db import _db, _db_lock, is_unique_violation
 from app.filetools import human_size
 from app.security import (audit, client_ip, hash_password, require_admin, require_user,
                           reset_netloc_cache)
-from app.spaces import RESERVED_USERNAMES, _normcase_eq, visible
+from app.spaces import (RESERVED_USERNAMES, _normcase_eq, invalidate_grants_cache,
+                        visible)
 from app.api.notify import get_webhook_url, push_webhook, webhook_send
 from app.main import app
 
 
 def _clean_username(name: str) -> str:
+    from app.filetools import _RESERVED_NAME
     n = (name or "").strip()
     if not n or len(n) > 64 or re.search(r"[\s\u0000-\u001f\u007f]", n):
         raise HTTPException(status_code=400, detail="用户名不能含空白/控制字符，且不超过 64 字符")
@@ -29,6 +31,8 @@ def _clean_username(name: str) -> str:
         raise HTTPException(status_code=400, detail="该用户名是保留名")
     if re.search(r"[/\\:]", n):
         raise HTTPException(status_code=400, detail="用户名不能含路径分隔符或冒号")
+    if _RESERVED_NAME.match(n):
+        raise HTTPException(status_code=400, detail="该用户名是 Windows 设备保留名")
     return n
 
 
@@ -70,12 +74,14 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
     row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 最后管理员守卫提到写事务之前：锁内"先 UPDATE 后 raise"会把连接留在
+    # 持有 RESERVED 锁的未决事务里，锁死全库所有后续写操作（与 R1-P0-1 同类）
+    if (body.role is not None and body.role != "admin") or body.is_active is False:
+        _last_admin_guard(_db(), uid)
     with _db_lock:
         if body.role is not None:
             if body.role not in ("admin", "member", "guest"):
                 raise HTTPException(status_code=400, detail="非法角色")
-            if body.role != "admin":
-                _last_admin_guard(_db(), uid)
             _db().execute("UPDATE users SET role=? WHERE id=?", (body.role, uid))
         if body.is_active is not None:
             if not body.is_active:
@@ -87,9 +93,12 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
             _db().execute("UPDATE users SET is_active=? WHERE id=?",
                           (1 if body.is_active else 0, uid))
         if body.quota_bytes is not None:
+            if body.quota_bytes < 0:
+                raise HTTPException(status_code=400, detail="配额不能为负数")
             _db().execute("UPDATE users SET quota_bytes=? WHERE id=?",
                           (body.quota_bytes or None, uid))
         _db().commit()
+    invalidate_grants_cache(uid)   # 角色/状态变更影响可见性，失效 grants 缓存
     audit("user_update", row["username"], f"active={body.is_active} role={body.role} "
           f"quota={body.quota_bytes}", client_ip(request))
     return {"ok": True}
@@ -124,7 +133,14 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
         try:
             old_dir.rename(new_dir)
         except OSError:
+            # 目录改名失败时回滚用户名：否则 users.username 与私人目录永久错位，
+            # 用户私人数据"消失"（P2 边界）。DB 已提交但目录占用可重试整个改名。
+            with _db_lock:
+                _db().execute("UPDATE users SET username=? WHERE id=?", (row["username"], uid))
+                _db().commit()
             audit("admin_dir_rename_fail", f"{row['username']} → {new_name}", ip=client_ip(request))
+            raise HTTPException(status_code=500,
+                                detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")
     # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
     old_inc = SHARE_ROOT / "incoming" / row["username"]
     new_inc = SHARE_ROOT / "incoming" / new_name
@@ -306,6 +322,12 @@ def invite_redeem(body: RedeemBody, request: Request):
     now = time.time()
     # scrypt 求值（约 100-300ms）放全局锁外，避免占住 _db_lock
     new_hash = hash_password(body.password)
+    # private 目录先建：账号入库后再 mkdir 失败会留下残废账号（目录落在设备命名空间）
+    try:
+        (SHARE_ROOT / "private" / username).mkdir(parents=True, exist_ok=True)
+    except OSError:
+        raise HTTPException(status_code=500, detail="私人目录创建失败，请稍后重试")
+    redeem_failed = False
     with _db_lock:
         try:
             cur = _db().execute(
@@ -327,10 +349,14 @@ def invite_redeem(body: RedeemBody, request: Request):
             # 补偿回退（引擎中立：不等价于事务 rollback，但同样不留下孤儿账号）
             _db().execute("DELETE FROM users WHERE id=?", (uid,))
             _db().commit()
-            audit("invite_redeem_fail", body.code[:6], ip=client_ip(request))
-            raise HTTPException(status_code=403, detail="邀请码无效或已过期")
-        _db().commit()
-    (SHARE_ROOT / "private" / username).mkdir(parents=True, exist_ok=True)
+            # audit() 内部也要取 _db_lock（不可重入）：锁内调用会自死锁（R1-P0-1），
+            # 移到锁外执行
+            redeem_failed = True
+        else:
+            _db().commit()
+    if redeem_failed:
+        audit("invite_redeem_fail", body.code[:6], ip=client_ip(request))
+        raise HTTPException(status_code=403, detail="邀请码无效或已过期")
     audit("invite_redeemed", username, row["role"], client_ip(request))
     push_webhook("👋 新成员加入", f"{username}（{row['role']}）已激活账号")
     return {"ok": True, "username": username, "role": row["role"]}
@@ -469,6 +495,7 @@ def admin_create_grant(body: GrantBody, request: Request, _admin=Depends(require
                       (body.user_id, vkey, 1 if body.can_read else 0,
                        1 if body.can_write else 0, _admin["user_id"], time.time(), expires))
         _db().commit()
+    invalidate_grants_cache(body.user_id)
     audit("grant_change", target["username"], f"{vkey} r={body.can_read} w={body.can_write}",
           client_ip(request))
     return {"ok": True, "path": vkey}
@@ -477,10 +504,12 @@ def admin_create_grant(body: GrantBody, request: Request, _admin=Depends(require
 @app.delete("/api/admin/grants/{gid}")
 def admin_delete_grant(gid: int, request: Request, _admin=Depends(require_admin)):
     with _db_lock:
+        owner = _db().execute("SELECT user_id FROM grants WHERE id=?", (gid,)).fetchone()
         cur = _db().execute("DELETE FROM grants WHERE id=?", (gid,))
         _db().commit()
     if not cur.rowcount:
         raise HTTPException(status_code=404, detail="授权不存在")
+    invalidate_grants_cache(owner["user_id"] if owner else None)
     audit("grant_revoke", str(gid), ip=client_ip(request))
     return {"ok": True}
 

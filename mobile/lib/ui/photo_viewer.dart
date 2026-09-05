@@ -44,6 +44,10 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   late final PageController _pageController =
       PageController(initialPage: widget.initial);
   Timer? _slide;
+  // 缩放与翻页手势仲裁（R1-P3-6）：双指捏合/放大期间禁用 PageView 滑动，
+  // 防止横向漂移误翻页并清零缩放；放大后也可正常横滑翻页（先收一手物理，
+  // 简化实现：交互期间冻结翻页）
+  bool _interacting = false;
 
   @override
   void dispose() {
@@ -276,6 +280,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
             child: PageView.builder(
               itemCount: widget.items.length,
               controller: _pageController,
+              physics: _interacting
+                  ? const NeverScrollableScrollPhysics()
+                  : const PageScrollPhysics(),
               onPageChanged: (i) => setState(() => _index = i),
               itemBuilder: (context, i) {
                 final p = widget.items[i];
@@ -283,6 +290,10 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                     ? _VideoPage(item: p)
                     : InteractiveViewer(
                         maxScale: 5,
+                        onInteractionStart: (_) =>
+                            setState(() => _interacting = true),
+                        onInteractionEnd: (_) =>
+                            setState(() => _interacting = false),
                         child: Center(
                           child: Hero(
                             tag: 'ph-${p.path}',
@@ -403,7 +414,7 @@ class _VideoPage extends StatefulWidget {
   State<_VideoPage> createState() => _VideoPageState();
 }
 
-class _VideoPageState extends State<_VideoPage> {
+class _VideoPageState extends State<_VideoPage> with WidgetsBindingObserver {
   VideoPlayerController? _ctrl;
   Future<void>? _initing;
   String? _error;
@@ -411,7 +422,19 @@ class _VideoPageState extends State<_VideoPage> {
   @override
   void initState() {
     super.initState();
+    // 生命周期观察者（R1-P2-3）：退后台只有声音没有画面的问题
+    WidgetsBinding.instance.addObserver(this);
     _initing = _start();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final c = _ctrl;
+    if (c == null || !c.value.isInitialized) return;
+    if (state == AppLifecycleState.paused && c.value.isPlaying) {
+      c.pause();
+      if (mounted) setState(() {});
+    }
   }
 
   Future<void> _start() async {
@@ -444,6 +467,7 @@ class _VideoPageState extends State<_VideoPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ctrl?.dispose();
     super.dispose();
   }

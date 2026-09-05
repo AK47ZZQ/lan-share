@@ -495,5 +495,8 @@ def _migrate_v3():
             );
             CREATE INDEX IF NOT EXISTS idx_pr_photo ON photo_reactions(photo_path);
         """)
-        conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users)")
+        # 仅当库内已无 admin 时才晋升（R1-P2-1）：此前每次启动无条件把最小 id
+        # 用户提为 admin，管理员被降级/删号后重启会"复活"成 admin
+        conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users) "
+                     "AND NOT EXISTS(SELECT 1 FROM users WHERE role='admin')")
         conn.commit()

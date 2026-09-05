@@ -17,12 +17,13 @@ onMounted(async () => {
 async function onPick(ev: Event) {
   const input = ev.target as HTMLInputElement
   if (!input.files?.length) return
-  await uploadFiles(Array.from(input.files), {
+  const files = Array.from(input.files)
+  input.value = ''   // 先复位再上传：批次进行中可再次选同批文件（R1-P3-18）
+  await uploadFiles(files, {
     destDir: 'incoming',
     onEachDone: n => toast(`${n} 已备份`, 'ok'),
     onEachFail: n => toast(`${n} 上传失败`, 'err'),
   })
-  input.value = ''
 }
 </script>
 

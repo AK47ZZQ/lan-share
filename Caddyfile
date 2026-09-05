@@ -13,6 +13,10 @@
 	# 剥离外部传入的 X-Forwarded-For，防止伪造（后端取 XFF 最后一个值）
 	request_header -X-Forwarded-For
 
+	# X-Forwarded-Proto 同样强制覆写（R1-P3-5）：Caddy 默认信任私网来源的
+	# XFP 族头，LAN 客户端可注入影响后端 is_https()（Cookie secure 位/二维码）
+	request_header X-Forwarded-Proto {scheme}
+
 	# 公网入口标记：默认注入（隧道端口生效）；LAN 站点块再删除同名头。
 	# 后端 is_public_entry 以此为可信信号做防爆破分账与 healthz 管控。
 	request_header X-LanShare-Entry public

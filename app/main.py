@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, File
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import quote, urlsplit
 
-from app.config import (API_RATE_LIMIT, LOGIN_RATE_LIMIT, PROJECT_ROOT, SHARE_RATE_LIMIT)
+from app.config import (API_RATE_LIMIT, API_RATE_LIMIT_PUB, AUTHCHECK_RATE_LIMIT,
+                        LOGIN_RATE_LIMIT, LOGIN_RATE_LIMIT_PUB, PROJECT_ROOT, SHARE_RATE_LIMIT)
 from app.db import init_db
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, public_netlocs, set_audit_user)
@@ -44,6 +45,9 @@ async def security_middleware(request: Request, call_next):
         u = await run_in_threadpool(
             lambda: get_session_user(request) or get_bearer_user(request))
         set_audit_user(u["username"] if u else "")
+        # 认证结果挂 request.state：require_user 复用，省掉每请求第二次
+        # 会话查询（R1-P3-3）
+        request.state._ls_user = u or False
     except Exception:
         set_audit_user("")
     # CSRF：带 Origin 的请求必须与 Host 同源（SameSite=Lax 之外的第二道防线）
@@ -58,22 +62,25 @@ async def security_middleware(request: Request, call_next):
     if path == "/healthz" and (is_public_entry(request) or _healthz_blocked(request)):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     if path == "/api/login":
-        # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）
-        limit, bucket = LOGIN_RATE_LIMIT, ("login@pub" if is_public_entry(request) else "login")
+        # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）。
+        # 公网侧全体共享一个 IP 桶，阈值放大防单人刷满卡死全家（R1-P2-3）
+        limit = LOGIN_RATE_LIMIT_PUB if is_public_entry(request) else LOGIN_RATE_LIMIT
+        bucket = "login@pub" if is_public_entry(request) else "login"
     elif path.startswith("/api/upload/chunk/"):
         limit, bucket = 0, None  # 分块上传按块数计频，不受常规限速（仍有会话认证保护）
     elif path.startswith("/api/share/") or path == "/api/share":
         limit, bucket = SHARE_RATE_LIMIT, "share"
     elif path.startswith("/api/") or path == "/authcheck":
-        # authcheck 是 Caddy forward_auth 子请求，跟随 /files 静态请求高频出现，单独桶
+        # authcheck 是 Caddy forward_auth 子请求，跟随 /files 静态请求高频出现，
+        # 单独桶；但外部客户端也能直打该未认证 DB 往返端点，必须节流（R1-P2-2）
         if path == "/authcheck":
-            limit, bucket = 0, None
+            limit, bucket = AUTHCHECK_RATE_LIMIT, "authcheck"
         else:
             # 弱网加固（v0.10.1）：Caddy 反代使内外网 client_ip 都是 127.0.0.1，
-            # 全家共享一个桶会让公网设备互相挤掉——按入口分账（LAN 120/公网 240），
+            # 全家共享一个桶会让公网设备互相挤掉——按入口分账，
             # 家里三个人同时翻照片墙不再互相 429
             pub = is_public_entry(request)
-            limit = API_RATE_LIMIT * 2 if pub else API_RATE_LIMIT
+            limit = API_RATE_LIMIT_PUB if pub else API_RATE_LIMIT
             bucket = "api:pub" if pub else "api:lan"
     else:
         limit, bucket = 0, None
@@ -116,13 +123,27 @@ _MAINTENANCE_PAGE = (
 )
 
 
+# index.html 按 (mtime, size) 缓存（R1-P3-4）：up/login/s/{token} 每次请求
+# 同步重读文件，内容没变就复用
+_spa_index_cache: dict = {"key": None, "html": ""}
+
+
 def spa_index() -> HTMLResponse:
     index = _spa_dist / "index.html"
     if not index.is_file():
         return HTMLResponse(_MAINTENANCE_PAGE, status_code=503,
                             headers={"Retry-After": "60", "Content-Security-Policy": CSP})
-    return HTMLResponse(index.read_text(encoding="utf-8"),
-                        headers={"Content-Security-Policy": CSP})
+    try:
+        st = index.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is None or _spa_index_cache["key"] != key:
+        html = index.read_text(encoding="utf-8")
+        if key is not None:
+            _spa_index_cache.update(key=key, html=html)
+        return HTMLResponse(html, headers={"Content-Security-Policy": CSP})
+    return HTMLResponse(_spa_index_cache["html"], headers={"Content-Security-Policy": CSP})
 
 
 @app.get("/up", response_class=HTMLResponse)
@@ -133,7 +154,7 @@ async def up_page():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    if not get_session_user(request):
+    if not await run_in_threadpool(get_session_user, request):
         return RedirectResponse("/login", status_code=307)
     return spa_index()
 

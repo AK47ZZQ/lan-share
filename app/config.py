@@ -28,6 +28,11 @@ SHARE_RATE_LIMIT = 30             # 分享取件 每分钟每 IP
 LOGIN_MAX_FAILS = 5               # 连续失败次数
 LOGIN_LOCK_SECONDS = 15 * 60      # 账号锁定时长
 TICKET_TTL = 10 * 60              # 分下载票据有效期（秒）
+# 公网侧全体共享一个出口 IP 桶（隧道恒 127.0.0.1），按 LAN 阈值会让单人刷满
+# 桶卡死全家（R1-P2-3）；爆破防线由按账号锁定兜底，IP 桶只防洪水
+LOGIN_RATE_LIMIT_PUB = 30         # /api/login 公网侧每分钟
+API_RATE_LIMIT_PUB = 600          # /api/* 公网侧每分钟
+AUTHCHECK_RATE_LIMIT = 600        # /authcheck（forward_auth 子请求 + 外部直打）每分钟
 
 # ── 大文件上传（v3.6）────────────────────────────────────
 MAX_WEBDAV_SIZE = 20 * 1024 * 1024 * 1024   # WebDAV PUT 上限 20GB（流式写盘，PC 互传挂盘用）

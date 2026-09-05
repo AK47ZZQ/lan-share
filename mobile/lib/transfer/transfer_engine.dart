@@ -132,6 +132,9 @@ class TransferEngine extends ChangeNotifier {
           t.localPath == localPath &&
           t.destDir == destDir &&
           t.name == name) {
+        // 去重命中 error 态任务时重新驱动（R1-P2-1）：此前直接返回旧任务，
+        // UI 却报"已加入队列"，重试这一高频路径假成功
+        if (t.status == TransferStatus.error) resumeTask(t);
         return t;
       }
     }
@@ -162,6 +165,7 @@ class TransferEngine extends ChangeNotifier {
       if (t.kind == TransferKind.download &&
           !t.finished &&
           t.remotePath == remotePath) {
+        if (t.status == TransferStatus.error) resumeTask(t);  // 同上传（R1-P2-1）
         return t;
       }
     }
@@ -426,7 +430,7 @@ class TransferEngine extends ChangeNotifier {
           t.received.clear();
           continue;
         }
-        backoff = await _retryOrThrow(t, e, backoff);
+        backoff = await _retryOrThrow(t, e, backoff, token: token);
         continue;
       }
 
@@ -461,7 +465,7 @@ class TransferEngine extends ChangeNotifier {
             failed = true;
             break;
           }
-          backoff = await _retryOrThrow(t, e, backoff);
+          backoff = await _retryOrThrow(t, e, backoff, token: token);
           failed = true;
           break;
         }
@@ -482,7 +486,7 @@ class TransferEngine extends ChangeNotifier {
         return;
       } on DioException catch (e) {
         if (token.isCancelled) throw _Paused();
-        backoff = await _retryOrThrow(t, e, backoff);
+        backoff = await _retryOrThrow(t, e, backoff, token: token);
       }
     }
   }
@@ -563,7 +567,7 @@ class TransferEngine extends ChangeNotifier {
           if (t.attempts > 3) throw Exception('远端文件大小与断点不符，已重试多次');
           continue;
         }
-        backoff = await _retryOrThrow(t, e, backoff);
+        backoff = await _retryOrThrow(t, e, backoff, token: token);
       }
     }
   }
@@ -602,7 +606,8 @@ class TransferEngine extends ChangeNotifier {
   /// 429 例外：限速语义是"稍后再来"，走退避（与备份引擎 _backoff 同语义——
   /// 家庭共享公网出口时多端容易撞 120 req/min 的全局配额，判死会把暂时
   /// 失败变永久失败）
-  Future<int> _retryOrThrow(TransferTask t, DioException e, int backoff) async {
+  Future<int> _retryOrThrow(TransferTask t, DioException e, int backoff,
+      {required CancelToken token}) async {
     final status = e.response?.statusCode;
     if (status != null && status >= 400 && status < 500 && status != 429) {
       final d = e.response?.data;
@@ -618,7 +623,12 @@ class TransferEngine extends ChangeNotifier {
     final wait = [2, 5, 10, 30, 60, 120, 240, 480][backoff.clamp(0, 7)];
     t.error = '网络波动，${wait}s 后重试（第 ${t.attempts} 次）';
     notifyListeners();
-    await Future.delayed(Duration(seconds: wait));
+    // 长 sleep 拆 1s 分片（R1-P3-7）：暂停/取消即时生效，而非最长 8 分钟后
+    // 循环下一轮才检查、任务长时间显示"传输中"却无动作
+    for (var i = 0; i < wait; i++) {
+      if (token.isCancelled) throw _Paused();
+      await Future.delayed(const Duration(seconds: 1));
+    }
     return backoff + 1;
   }
 

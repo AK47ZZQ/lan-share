@@ -136,7 +136,11 @@ def create_session(request: Request, user_id: int) -> str:
 
 
 def require_user(request: Request) -> sqlite3.Row:
-    user = get_session_user(request) or get_bearer_user(request)
+    # 中间件已在本请求内做过会话查询（R1-P3-3）：结果挂在 request.state，
+    # 复用之（False=已确认未登录），省掉每个认证请求的第二次 DB 往返
+    user = getattr(request.state, "_ls_user", None)
+    if user is None:
+        user = get_session_user(request) or get_bearer_user(request) or False
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user

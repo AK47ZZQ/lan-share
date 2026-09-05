@@ -57,8 +57,10 @@ watchEffect(() => {
   <!-- 全局确认/输入对话框（Promise 化）；z 高于业务弹窗——动态 teleport 的
        模态会 append 到 body 末尾，同 z-index 时会反过来盖住本对话框 -->
   <teleport to="body">
-    <div v-if="dlg.open" class="overlay dlg-overlay" @click.self="dlgCancel">
-      <div class="modal-card" style="width:min(400px,92vw)">
+    <div v-if="dlg.open" class="overlay dlg-overlay" @click.self="dlgCancel"
+         @keydown.esc="dlgCancel">
+      <!-- Enter 确认 / Esc 取消（R1-P2-9）：confirm 模式此前只能鼠标点 -->
+      <div class="modal-card" style="width:min(400px,92vw)" @keydown.enter="dlgOk">
         <h3>{{ dlg.title }}</h3>
         <p style="font-size:14px;margin:0 0 14px">{{ dlg.text }}</p>
         <input v-if="dlg.kind === 'prompt'" v-model="dlg.value" :placeholder="dlg.placeholder"

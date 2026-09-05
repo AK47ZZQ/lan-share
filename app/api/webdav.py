@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 
 from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.db import _db
-from app.security import (audit, client_ip, get_session_user, is_public_entry,
+from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail, verify_password)
 from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve
@@ -69,6 +69,12 @@ async def _dav_auth(request: Request):
         row["password_hash"] if row else None)
     ok = bool(row) and stored and await run_in_threadpool(verify_password, password, stored)
     if not ok:
+        # IP 级失败限速（R1-P2-1）：/dav 不在应用层限速桶内，公网匿名者可对
+        # 每个账号发 5 次坏凭据滚动锁死全家 DAV+登录（15 分钟窗口补 5 发）。
+        # 只在失败时消耗令牌，不影响正常 DAV 客户端的高频 Basic 认证
+        if not allow_rate(f"davfail:{client_ip(request)}", 15, 60):
+            raise HTTPException(status_code=429, detail="Too many attempts",
+                                headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
         record_login_fail(username, pub)
         audit("login_fail", username, "pub" if pub else "", client_ip(request))
         raise HTTPException(status_code=401, detail="Unauthorized",
@@ -162,8 +168,13 @@ async def dav_handler(request: Request, path: str = ""):
             for child in sorted(target.iterdir(), key=lambda e: e.name.lower()):
                 if child.name.startswith("."):
                     continue
-                rel = f"/dav/{path}/{child.name}" if path else f"/dav/{child.name}"
-                entries.append(_dav_prop_entry(rel, child))
+                # iterdir 与 stat 之间条目可能被并发删除（R1-P2-2）：一次竞态
+                # OSError 不能让整个 PROPFIND 500
+                try:
+                    rel = f"/dav/{path}/{child.name}" if path else f"/dav/{child.name}"
+                    entries.append(_dav_prop_entry(rel, child))
+                except OSError:
+                    continue
         body = ('<?xml version="1.0" encoding="utf-8"?>\n'
                 '<D:multistatus xmlns:D="DAV:">' + "".join(entries) + "</D:multistatus>")
         return Response(content=body, status_code=207, media_type="application/xml; charset=utf-8")
@@ -209,7 +220,16 @@ async def dav_handler(request: Request, path: str = ""):
         except HTTPException:
             tmp.unlink(missing_ok=True)
             raise
-        os.replace(tmp, target)
+        # 落位前复查 + 失败清理（R1-P2-5）：流传输期间目标处可能被并发建出
+        # 同名目录（exists 是流开始前的旧值），os.replace 顶目录会 PermissionError
+        if target.is_dir():
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(status_code=409, detail="Is collection")
+        try:
+            os.replace(tmp, target)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
         audit("dav_put", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
               human_size(size), client_ip(request))
         return Response(status_code=201 if created else 204)
