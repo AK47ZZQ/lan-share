@@ -4,6 +4,7 @@
 // 「App安装包/」即完成发版。
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -92,15 +93,35 @@ class UpdateService {
     return dir;
   }
 
-  /// 下载到沙盒下载目录的 updates 子目录（覆盖旧更新包），返回落盘路径
+  /// 下载到沙盒下载目录的 updates 子目录（覆盖旧更新包），返回落盘路径。
+  /// 完整性校验（R1-P1 + 红队 P2）：sha256 与服务端下发值比对，缺失即拒装
+  /// （fail closed，服务端 /api/app/latest 自算兜底）——http 入口下链路内
+  /// 攻击者可换包，未校验直接交系统安装器等于 RCE 通道。校验失败删包并抛错。
   static Future<String> download(UpdateInfo info,
       {void Function(int received, int total)? onProgress}) async {
     final dir = await _updateDir();
-    final path = '${dir.path}/lanshare-${info.version}.apk';
+    // 版本号消毒：只留白名单字符，防 path 拼接注入（version 来自服务端 JSON）
+    final safeVer = info.version.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
+    final path = '${dir.path}/lanshare-$safeVer.apk';
     final dio = await ApiClient.I.dio();
     await dio.download('/api/app/download', path,
         onReceiveProgress: onProgress,
         options: Options(receiveTimeout: const Duration(minutes: 30)));
+    final f = File(path);
+    // 红队 P2：sha256 与 size 同信道可整段伪造，size 校验只防意外损坏。
+    // sha256 缺失即拒装（fail closed）——服务端 /api/app/latest 已改为
+    // version.json 缺失时自算兜底
+    if (info.sha256 == null || info.sha256!.isEmpty) {
+      await f.delete().catchError((_) => f);
+      throw StateError('服务端未提供安装包校验值，已拒绝安装');
+    }
+    // 流式摘要：85MB 级 APK readAsBytes 全量进内存有 OOM 风险（R2-P2）
+    final digest = await sha256.bind(f.openRead()).first;
+    final expected = info.sha256!.replaceAll(':', '').toLowerCase();
+    if (digest.toString() != expected) {
+      await f.delete().catchError((_) => f);
+      throw StateError('安装包校验失败（sha256 不符），已删除下载文件');
+    }
     return path;
   }
 

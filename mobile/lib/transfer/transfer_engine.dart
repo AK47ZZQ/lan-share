@@ -376,7 +376,9 @@ class TransferEngine extends ChangeNotifier {
               },
               cancelToken: token);
           if (r.data['instant'] == true) {
-            t.remotePath = r.data['path'] as String;
+            // path 缺失兜底（与 backup_engine 同坑）：响应异常时别把"秒传成功"
+            // 误标为任务 error 进无限重试
+            t.remotePath = (r.data['path'] as String?) ?? t.name;
             t.received.clear();
             _setStatus(t, TransferStatus.done);
             _speed[t.id] = 0;
@@ -385,7 +387,19 @@ class TransferEngine extends ChangeNotifier {
             return;
           }
           t.sid = r.data['session'] as String;
+          // 会话 id 白名单（与 backup_engine 同防御，红队 P3）：响应字段不可信
+          if (!RegExp(r'^[A-Za-z0-9_\-]{8,64}$').hasMatch(t.sid!)) {
+            throw Exception('服务端返回异常会话标识');
+          }
           t.chunkSize = (r.data['chunk_size'] as num).toInt();
+          // 服务端异常响应可能给 0/负值（与 backup_engine 同坑）：cs<=0 会让
+          // total 计算抛 UnsupportedError 把任务判死
+          // 文案友好：FormatException 会原样穿到 t.error 展示给用户。
+          // 上限同理（红队 P3）：超大 chunk_size 会让客户端把整个文件读进
+          // 单请求内存 OOM
+          if (t.chunkSize <= 0 || t.chunkSize > 16 * 1024 * 1024) {
+            throw Exception('服务端返回异常分片大小，请稍后重试');
+          }
           t.received
             ..clear()
             ..addAll(((r.data['received'] as List?) ?? const [])
@@ -395,6 +409,12 @@ class TransferEngine extends ChangeNotifier {
           final r =
               await dio.get('/api/upload/state/${t.sid}', cancelToken: token);
           t.chunkSize = (r.data['chunk_size'] as num).toInt();
+          // 文案友好：FormatException 会原样穿到 t.error 展示给用户。
+          // 上限同理（红队 P3）：超大 chunk_size 会让客户端把整个文件读进
+          // 单请求内存 OOM
+          if (t.chunkSize <= 0 || t.chunkSize > 16 * 1024 * 1024) {
+            throw Exception('服务端返回异常分片大小，请稍后重试');
+          }
           t.received.addAll(((r.data['received'] as List?) ?? const [])
               .map((e) => (e as num).toInt()));
         }
@@ -454,7 +474,7 @@ class TransferEngine extends ChangeNotifier {
         final r = await dio.post('/api/upload/finish/${t.sid}',
             cancelToken: token,
             options: Options(receiveTimeout: const Duration(minutes: 15)));
-        t.remotePath = r.data['path'] as String;
+        t.remotePath = (r.data['path'] as String?) ?? t.name;
         _setStatus(t, TransferStatus.done);
         _speed[t.id] = 0;
         // ignore: discarded_futures
@@ -528,9 +548,20 @@ class TransferEngine extends ChangeNotifier {
           throw Exception('远端文件不存在');
         }
         if (status == 416) {
-          // Range 起点即文件尾（.part 已完整）：服务端按 RFC 回 416，视为完成
-          _finishDownload(t, part);
-          return;
+          // Range 起点即文件尾（.part 已完整）：服务端按 RFC 回 416，视为完成。
+          // 注意不能走 _retryOrThrow——它对 4xx 直接判死，"重试"是死代码。
+          // size 未知（=0）的任务下载完整后断点续传也会 416，保留旧语义收尾；
+          // size 已知但 .part 长度不符（远端被替换变小后的陈旧 .part）必须
+          // 清掉从头下载，否则把坏文件改名成"已完成"（R2-P1）
+          if (t.size <= 0 || part.lengthSync() == t.size) {
+            _finishDownload(t, part);
+            return;
+          }
+          part.deleteSync();
+          t.receivedBytes = 0;
+          t.attempts += 1;
+          if (t.attempts > 3) throw Exception('远端文件大小与断点不符，已重试多次');
+          continue;
         }
         backoff = await _retryOrThrow(t, e, backoff);
       }

@@ -4,6 +4,7 @@ import mimetypes
 import os
 import secrets
 import shutil
+import time
 from datetime import datetime
 from email.utils import formatdate
 from pathlib import Path
@@ -38,7 +39,8 @@ def _xml_escape(s: str) -> str:
 
 async def _dav_auth(request: Request):
     """WebDAV 认证：Cookie 会话或 Basic（复用登录防爆破）。scrypt 校验在线程池执行。"""
-    user = get_session_user(request)
+    # Cookie 会话查询含 DB 往返（每 DAV 请求必经，PROPFIND 高频），进线程池
+    user = await run_in_threadpool(get_session_user, request)
     if user:
         return user
     auth = request.headers.get("authorization", "")
@@ -182,15 +184,19 @@ async def dav_handler(request: Request, path: str = ""):
         if not parent.exists():
             raise HTTPException(status_code=409, detail="Parent collection missing")
         created = not exists
-        tmp = target.with_name(target.name + ".dav-uploading")
+        tmp = target.with_name(f"{target.name}.dav-uploading-{os.getpid()}-{time.time_ns()}")
         size = 0
-        async with aiofiles.open(tmp, "wb") as f:
-            async for chunk in request.stream():
-                size += len(chunk)
-                if size > MAX_WEBDAV_SIZE:
-                    tmp.unlink(missing_ok=True)
-                    raise HTTPException(status_code=413)
-                await f.write(chunk)
+        try:
+            async with aiofiles.open(tmp, "wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_WEBDAV_SIZE:
+                        tmp.unlink(missing_ok=True)
+                        raise HTTPException(status_code=413)
+                    await f.write(chunk)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
         if exists:
             # 覆盖的旧版本进回收站，而不是直接丢失（.trash 在 private 树外，
             # 不计入配额扫描；先移走旧文件，下一步的配额扫描即为最终占用）
@@ -237,29 +243,38 @@ async def dav_handler(request: Request, path: str = ""):
         dest = _dav_destination(request, user)
         if dest == target:
             raise HTTPException(status_code=403, detail="Same resource")
-        if method == "MOVE":
-            # 与界面 /api/move 同款守卫：私人根不可移动、成员不得跨空间搬运（E9）
-            if _is_own_private_root(user, target):
-                raise HTTPException(status_code=403, detail="私人空间根目录不可移动")
-            _cross_space_guard(user, target, dest)
-        else:
-            enforce_quota(user, dest, _dav_tree_size(target))
+        # 与界面 /api/move 同款成环守卫：把目录搬进自己的子目录
+        if target.is_dir() and target in dest.parents:
+            raise HTTPException(status_code=400, detail="Cannot move/copy into itself")
         overwrite = request.headers.get("overwrite", "T").upper() != "F"
-        if dest.exists():
-            if not overwrite:
-                raise HTTPException(status_code=412, detail="Destination exists")
-            # 被覆盖的旧目标进回收站，与界面行为一致
-            _move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
-        if method == "MOVE":
-            shutil.move(str(target), str(dest))
-            audit("dav_move", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
-        else:
-            if target.is_dir():
-                shutil.copytree(target, dest)
+
+        # 拷贝/移动可能是 10GB 级操作（含 _dav_tree_size 全树扫描），必须离开
+        # 事件循环跑线程池，否则整个服务所有用户一起冻结
+        def _do_transfer() -> int:
+            if method == "MOVE":
+                # 与界面 /api/move 同款守卫：私人根不可移动、成员不得跨空间搬运（E9）
+                if _is_own_private_root(user, target):
+                    raise HTTPException(status_code=403, detail="私人空间根目录不可移动")
+                _cross_space_guard(user, target, dest)
             else:
-                shutil.copy2(target, dest)
-            audit("dav_copy", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
-        return Response(status_code=201 if not dest.exists() or method == "COPY" else 204)
+                enforce_quota(user, dest, _dav_tree_size(target))
+            if dest.exists():
+                if not overwrite:
+                    raise HTTPException(status_code=412, detail="Destination exists")
+                # 被覆盖的旧目标进回收站，与界面行为一致
+                _move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+            if method == "MOVE":
+                shutil.move(str(target), str(dest))
+                audit("dav_move", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
+            else:
+                if target.is_dir():
+                    shutil.copytree(target, dest)
+                else:
+                    shutil.copy2(target, dest)
+                audit("dav_copy", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
+            return 201 if not dest.exists() or method == "COPY" else 204
+
+        return Response(status_code=await run_in_threadpool(_do_transfer))
 
     if method == "LOCK":
         token = f"opaquelocktoken:{secrets.token_hex(8)}"

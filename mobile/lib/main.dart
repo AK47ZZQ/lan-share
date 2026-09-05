@@ -8,6 +8,7 @@ import 'backup/backup_bridge.dart';
 import 'backup/backup_config.dart';
 import 'backup/backup_engine.dart';
 import 'data/api/api_client.dart';
+import 'data/local/verifier_store.dart';
 import 'data/update_service.dart';
 import 'state/session.dart';
 import 'state/settings.dart';
@@ -17,6 +18,10 @@ import 'ui/login_page.dart';
 import 'ui/theme/app_theme.dart';
 
 void main() {
+  // 旧版 TOTP SP 明文副本启动即清（红队 P2）：不等验证器页/登录页触发，
+  // 长期登录设备上明文不该残留（本地操作，静默失败无妨）
+  // ignore: discarded_futures
+  VerifierStore.purgeLegacySp();
   // 回调在 runApp 前注入：避免"启动期 401 拦截器无回调"的窗口期
   final container = ProviderContainer();
   onUnauthorized = () {

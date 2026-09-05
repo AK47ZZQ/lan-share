@@ -354,12 +354,10 @@ class _MePageState extends ConsumerState<MePage> {
                       onPressed: () => Navigator.pop(ctx, true),
                       child: const Text('修改')),
                 ]));
-    if (ok != true || !mounted) {
-      oldCtrl.dispose();
-      newCtrl.dispose();
-      againCtrl.dispose();
-      return;
-    }
+    // 控制器不 dispose 交给 GC（backup_settings 同款方案）：await 返回时
+    // 对话框退场动画未结束、TextField 仍挂在树上，此刻 dispose 必崩红屏
+    //（v0.13 E2E 实测机制，见 prompt_dialog 头注释）
+    if (ok != true || !mounted) return;
     if (newCtrl.text.length < 8) {
       _toast('新密码至少 8 位');
       return;
@@ -413,17 +411,9 @@ class _MePageState extends ConsumerState<MePage> {
                       onPressed: () => Navigator.pop(ctx, true),
                       child: const Text('修改')),
                 ]));
-    if (ok != true || !mounted) {
-      nameCtrl.dispose();
-      pwdCtrl.dispose();
-      return;
-    }
+    if (ok != true || !mounted) return;
     final newName = nameCtrl.text.trim();
-    if (newName.isEmpty || newName == session.username) {
-      nameCtrl.dispose();
-      pwdCtrl.dispose();
-      return;
-    }
+    if (newName.isEmpty || newName == session.username) return;
     try {
       final dio = await ApiClient.I.dio();
       await dio.post('/api/auth/username',
@@ -438,9 +428,6 @@ class _MePageState extends ConsumerState<MePage> {
       setState(() {});
     } catch (e) {
       _toast('修改失败：${_detail(e)}');
-    } finally {
-      nameCtrl.dispose();
-      pwdCtrl.dispose();
     }
   }
 
@@ -476,16 +463,10 @@ class _MePageState extends ConsumerState<MePage> {
                       onPressed: () => Navigator.pop(ctx, true),
                       child: const Text('保存')),
                 ]));
-    if (ok != true || !mounted) {
-      curCtrl.dispose();
-      newCtrl.dispose();
-      return;
-    }
+    if (ok != true || !mounted) return;
     final newPwd = newCtrl.text;
     if (newPwd.isNotEmpty && newPwd.length < 8) {
       _toast('WebDAV 密码至少 8 位（留空=清除）');
-      newCtrl.dispose();
-      curCtrl.dispose();
       return;
     }
     try {
@@ -501,9 +482,6 @@ class _MePageState extends ConsumerState<MePage> {
           : '已清除：WebDAV 回退用登录密码挂载');
     } catch (e) {
       _toast('保存失败：${_detail(e)}');
-    } finally {
-      curCtrl.dispose();
-      newCtrl.dispose();
     }
   }
 
@@ -573,10 +551,7 @@ class _MePageState extends ConsumerState<MePage> {
                       onPressed: () => Navigator.pop(ctx, true),
                       child: const Text('生成')),
                 ]));
-    if (ok != true || !mounted) {
-      pwdCtrl.dispose();
-      return;
-    }
+    if (ok != true || !mounted) return;
     List codes;
     try {
       final dio = await ApiClient.I.dio();
@@ -588,8 +563,6 @@ class _MePageState extends ConsumerState<MePage> {
     } catch (e) {
       _toast('生成失败：${_detail(e)}');
       return;
-    } finally {
-      pwdCtrl.dispose();
     }
     if (!mounted) return;
     if (codes.isEmpty) {

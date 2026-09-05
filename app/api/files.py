@@ -16,6 +16,7 @@ from typing import Optional
 import aiofiles
 from fastapi import (Depends, File, HTTPException, Query, Request, UploadFile,
                      Response)
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -149,6 +150,17 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
     if body.size > MAX_CHUNKED_SIZE:
         raise HTTPException(status_code=413,
                             detail=f"File too large for chunked upload (max {human_size(MAX_CHUNKED_SIZE)})")
+    # 分片真实字节落在 .chunks（配额扫描视野外）：不限流的话一个成员开 N 个
+    # 64GB 会话即可绕过配额灌满磁盘（红队 P2）——并发会话与未完成总量双上限
+    row = _db().execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(total_size),0) AS total "
+        "FROM upload_sessions WHERE user_id=?",
+        (_user["user_id"],)).fetchone()
+    if row["n"] >= 8:
+        raise HTTPException(status_code=429, detail="上传会话过多，请先完成或取消在途任务")
+    if row["total"] + body.size > MAX_CHUNKED_SIZE:
+        raise HTTPException(status_code=429,
+                            detail=f"未完成上传总量超限（≤{human_size(MAX_CHUNKED_SIZE)}）")
     enforce_quota(_user, dest, body.size)
 
     # 秒传：库里有同 sha256 内容（服务端算的，可信），直接硬链接
@@ -223,19 +235,24 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     if index < 0 or index >= total:
         raise HTTPException(status_code=400, detail="Chunk index out of range")
     part = _chunk_dir(sid) / f"part-{index:06d}"
-    # 原子写：客户端中断（暂停/断网）时只留下 _tmp_*（不匹配 part-*，续传不会误信半截分片）
-    tmp = _chunk_dir(sid) / f"_tmp_{index:06d}"
+    # 原子写：客户端中断（暂停/断网）时只留下 _tmp_*（不匹配 part-*，续传不会误信半截分片）；
+    # 临时名带唯一后缀，同分片并发重试不会交错写坏
+    tmp = _chunk_dir(sid) / f"_tmp_{index:06d}-{os.getpid()}-{time.time_ns()}"
     expected = min(cs, row["total_size"] - index * cs)
     size = 0
     overflow = False
-    async with aiofiles.open(tmp, "wb") as f:
-        async for chunk in request.stream():
-            size += len(chunk)
-            if size > expected:
-                # 超发立即停止接收（不再把整块写完才比对），防滥用端点灌盘
-                overflow = True
-                break
-            await f.write(chunk)
+    try:
+        async with aiofiles.open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > expected:
+                    # 超发立即停止接收（不再把整块写完才比对），防滥用端点灌盘
+                    overflow = True
+                    break
+                await f.write(chunk)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     if overflow or size != expected:
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=400,
@@ -266,18 +283,25 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
             raise HTTPException(status_code=403, detail="Forbidden")
     dest_dir = resolve(owner, row["dest_dir"] or "", "write")
     dest = dest_dir / row["filename"]
+    if dest.is_dir():
+        # 与直传同款守卫：同名目录存在时不能拿文件去顶替（否则整个目录被静默移进回收站）
+        raise HTTPException(status_code=409, detail="同名目录已存在")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".uploading")
+    tmp = dest.with_name(f"{dest.name}.uploading-{os.getpid()}-{time.time_ns()}")
 
     size = 0
     sha = hashlib.sha256()
-    async with aiofiles.open(tmp, "wb") as out:
-        for part in parts:
-            async with aiofiles.open(part, "rb") as f:
-                while chunk := await f.read(1024 * 1024):
-                    size += len(chunk)
-                    sha.update(chunk)
-                    await out.write(chunk)
+    try:
+        async with aiofiles.open(tmp, "wb") as out:
+            for part in parts:
+                async with aiofiles.open(part, "rb") as f:
+                    while chunk := await f.read(1024 * 1024):
+                        size += len(chunk)
+                        sha.update(chunk)
+                        await out.write(chunk)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     if size != row["total_size"]:
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Size mismatch")
@@ -288,6 +312,11 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
     enforce_quota(owner, dest, size)
+    # 落位前重查（TOCTOU 收窄，红队 P2）：分片重组可达数十分钟，期间同名
+    # 目录可能被并发建出——目录绝不能被静默移进回收站
+    if dest.is_dir():
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail="同名目录已存在")
     if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
         move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     os.replace(tmp, dest)
@@ -623,16 +652,20 @@ async def preview_file(path: str, w: int | None = Query(default=None),
         cache_dir.mkdir(exist_ok=True)
         cached = cache_dir / f"{key}.jpg"
         if not cached.exists():
-            from PIL import Image, ImageOps
-            tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
-            try:
-                img = ImageOps.exif_transpose(Image.open(target))   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
-                img.thumbnail((w, w))
-                img.convert("RGB").save(tmp, "JPEG", quality=82)
-                os.replace(tmp, cached)
-            except Exception:
-                tmp.unlink(missing_ok=True)
-                raise HTTPException(status_code=500, detail="Preview error")
+            # PIL 解码/EXIF 矫正/缩放是 CPU 密集同步操作，大图会跑数秒，
+            # 必须进线程池，否则照片墙冷缓存时冻结整个事件循环
+            def _render_thumb() -> None:
+                from PIL import Image, ImageOps
+                tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
+                try:
+                    img = ImageOps.exif_transpose(Image.open(target))   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
+                    img.thumbnail((w, w))
+                    img.convert("RGB").save(tmp, "JPEG", quality=82)
+                    os.replace(tmp, cached)
+                except Exception:
+                    tmp.unlink(missing_ok=True)
+                    raise HTTPException(status_code=500, detail="Preview error")
+            await run_in_threadpool(_render_thumb)
         return FileResponse(cached, media_type="image/jpeg")
     return FileResponse(target, media_type=mime or "application/octet-stream",
                         filename=target.name)
@@ -646,6 +679,8 @@ class ZipBody(BaseModel):
 
 _zips: dict[str, dict] = {}
 _zips_lock = threading.Lock()
+_zip_busy: set[str] = set()   # 在途打包的用户名（红队 P2：打包与全局线程池/磁盘共用，
+                              # 不限并发则单成员可打瘫全站 + 30min 回收窗内灌满磁盘）
 
 
 @app.post("/api/zip")
@@ -653,36 +688,44 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
     """打包选中文件/目录为 zip，返回短时效下载 URL。"""
     if not body.paths or len(body.paths) > 500:
         raise HTTPException(status_code=400, detail="Invalid paths")
-    targets = [resolve(_user, p, "read") for p in body.paths]
-    for t in targets:
-        if not t.exists():
-            raise HTTPException(status_code=404, detail=f"Not found: {t.name}")
-
-    zdir = SHARE_ROOT / ".zips"
-    zdir.mkdir(exist_ok=True)
-    zpath = zdir / f"{secrets.token_urlsafe(8)}.zip"
-    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
-        for t in targets:
-            if t.is_dir():
-                for f in t.rglob("*"):
-                    if f.is_file():
-                        z.write(f, str(f.relative_to(t.parent)))
-            else:
-                # 重名时保留路径去重
-                arc = t.name
-                base = arc.rsplit(".", 1)[0] if "." in arc else arc
-                ext = ("." + arc.rsplit(".", 1)[1]) if "." in arc else ""
-                n = 1
-                while arc in z.namelist():
-                    arc = f"{base} ({n}){ext}"
-                    n += 1
-                z.write(t, arc)
-    token = secrets.token_urlsafe(16)
     with _zips_lock:
-        _zips[token] = {"path": zpath, "exp": time.time() + ZIP_TTL}
-    audit("zip", f"{len(targets)} items", ip=client_ip(request))
-    return {"ok": True, "url": f"/api/zip/{token}",
-            "name": f"lan-share-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"}
+        if _user["username"] in _zip_busy:
+            raise HTTPException(status_code=429, detail="已有打包任务在进行，请稍候")
+        _zip_busy.add(_user["username"])
+    try:
+        targets = [resolve(_user, p, "read") for p in body.paths]
+        for t in targets:
+            if not t.exists():
+                raise HTTPException(status_code=404, detail=f"Not found: {t.name}")
+
+        zdir = SHARE_ROOT / ".zips"
+        zdir.mkdir(exist_ok=True)
+        zpath = zdir / f"{secrets.token_urlsafe(8)}.zip"
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+            for t in targets:
+                if t.is_dir():
+                    for f in t.rglob("*"):
+                        if f.is_file():
+                            z.write(f, str(f.relative_to(t.parent)))
+                else:
+                    # 重名时保留路径去重
+                    arc = t.name
+                    base = arc.rsplit(".", 1)[0] if "." in arc else arc
+                    ext = ("." + arc.rsplit(".", 1)[1]) if "." in arc else ""
+                    n = 1
+                    while arc in z.namelist():
+                        arc = f"{base} ({n}){ext}"
+                        n += 1
+                    z.write(t, arc)
+        token = secrets.token_urlsafe(16)
+        with _zips_lock:
+            _zips[token] = {"path": zpath, "exp": time.time() + ZIP_TTL}
+        audit("zip", f"{len(targets)} items", ip=client_ip(request))
+        return {"ok": True, "url": f"/api/zip/{token}",
+                "name": f"lan-share-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"}
+    finally:
+        with _zips_lock:
+            _zip_busy.discard(_user["username"])
 
 
 @app.get("/api/zip/{token}")

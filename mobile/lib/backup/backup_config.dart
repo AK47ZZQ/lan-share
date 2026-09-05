@@ -11,7 +11,8 @@ class BackupConfig {
   final bool includeVideos;
   final bool notifyDone;
   final bool allowPublicServer; // §6：公网地址默认不备份（流量保护），可开
-  final List<String> selectedBuckets; // 白名单：要备份的相册（0.14；空=全部）
+  final List<String> selectedBuckets; // 白名单：要备份的相册（0.14；空=一个都不备份，
+                                      // 见 backup_engine 白名单语义）
   final List<String> excludedBuckets; // 旧排除表（0.6.0）：仅兼容存量配置，
                                       // 新 UI 不再编辑，保存白名单时清空
 

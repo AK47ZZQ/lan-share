@@ -11,6 +11,7 @@
 import os
 import sqlite3
 import threading
+import time
 
 from app.config import DB_PATH, SHARE_ROOT
 
@@ -241,9 +242,31 @@ def pg_setval_sequences(conn: _PgConn):
 
 # ── 连接与初始化 ──────────────────────────────────────────
 
+def is_unique_violation(e: Exception) -> bool:
+    """引擎中立地识别唯一约束冲突（sqlite3.IntegrityError / psycopg UniqueViolation）。
+    并发竞态兜底场景只允许吞这一种异常，其它 DB 故障必须上抛。"""
+    if isinstance(e, sqlite3.IntegrityError):
+        return True
+    return type(e).__name__ == "UniqueViolation"
+
+
 def _db():
-    """每线程独立连接。"""
+    """每线程独立连接。PG 断线自愈：连接池里的缓存连接在 PG 重启/网络闪断后
+    会变死连接，超过 30s 未用时先廉价 ping 一次，失败则重建，避免全站持续 500。"""
     conn = getattr(_db_local, "conn", None)
+    if conn is not None and USE_PG:
+        now = time.monotonic()
+        if now - getattr(_db_local, "last_ok", 0.0) > 30:
+            try:
+                conn.execute("SELECT 1")
+                _db_local.last_ok = now
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                conn = None
+                _db_local.conn = None
     if conn is None:
         if USE_PG:
             conn = _PgConn(DATABASE_URL)
@@ -252,6 +275,8 @@ def _db():
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=30000")
         _db_local.conn = conn
+        if USE_PG:
+            _db_local.last_ok = time.monotonic()
     return conn
 
 

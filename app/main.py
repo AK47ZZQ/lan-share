@@ -5,23 +5,44 @@
 页面路由与 static 挂载殿后——与 v2 单文件的注册顺序保持一致。
 """
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from app.config import (API_RATE_LIMIT, LOGIN_RATE_LIMIT, PROJECT_ROOT, SHARE_RATE_LIMIT)
 from app.db import init_db
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
-                          is_public_entry, set_audit_user)
+                          is_public_entry, public_netlocs, set_audit_user)
 
 app = FastAPI(title="LAN Share", version="3.8.0")
+
+
+def _healthz_blocked(request: Request) -> bool:
+    """healthz 兜底管控：公网地址漏配（public_netlocs 为空、is_public_entry 恒
+    False）时，按 Host 判定——只有私网 IP/loopback/localhost 放行，其余当公网拦下。"""
+    if public_netlocs():
+        return False   # 已配置：交给 is_public_entry 判定
+    # urlsplit().hostname 同时解决 IPv6 字面量与纯主机名（nas:8765）两种形态
+    host = (urlsplit(f"//{request.headers.get('host') or ''}").hostname or "").lower()
+    if not host:
+        return True
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host)
+        return not (ip.is_private or ip.is_loopback)
+    except ValueError:
+        return host not in ("localhost",)
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     # 审计上下文：本请求的登录用户名（audit() 自动带上；未登录为空）。
-    # Cookie 会话与 App Bearer 设备 Token 并存（APP-DESIGN §3）
+    # Cookie 会话与 App Bearer 设备 Token 并存（APP-DESIGN §3）。
+    # 会话/Token 校验含 DB 读写（过期删除、滑动续期），同步 PG 往返必须
+    # 进线程池，否则每个请求都在事件循环里串行排队。
     try:
-        u = get_session_user(request) or get_bearer_user(request)
+        u = await run_in_threadpool(
+            lambda: get_session_user(request) or get_bearer_user(request))
         set_audit_user(u["username"] if u else "")
     except Exception:
         set_audit_user("")
@@ -31,8 +52,10 @@ async def security_middleware(request: Request, call_next):
         return JSONResponse({"detail": "CSRF check failed"}, status_code=403)
     path = request.url.path
     ip = client_ip(request)
-    # 公网入口管控：healthz 不对公网暴露（磁盘水位信息泄露 + 探测面）
-    if path == "/healthz" and is_public_entry(request):
+    # 公网入口管控：healthz 不对公网暴露（磁盘水位信息泄露 + 探测面）。
+    # 兜底：公网地址未配置时按 Host 判定——非私网 IP/localhost 的一律当公网
+    #（漏配 public_base_url 时 healthz 也不会裸奔到公网域名上）
+    if path == "/healthz" and (is_public_entry(request) or _healthz_blocked(request)):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     if path == "/api/login":
         # 登录限速按入口分桶：公网攻击者的流量挤占不了家人的配额（公网 IP 恒为 127.0.0.1）
@@ -159,8 +182,9 @@ async def spa_fallback(spa_path: str, request: Request):
         f = _dist_file(spa_path)
         if f:
             return f
-    if not get_session_user(request):
-        return RedirectResponse(f"/login?next={request.url.path}", status_code=307)
+    if not await run_in_threadpool(get_session_user, request):
+        return RedirectResponse(f"/login?next={quote(request.url.path, safe='/')}",
+                                status_code=307)
     if _spa_ok():
         f = _dist_file(spa_path)
         if f:

@@ -12,11 +12,11 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
-from app.db import _db, _db_lock
+from app.db import _db, _db_lock, is_unique_violation
 from app.filetools import human_size
 from app.security import (audit, client_ip, hash_password, require_admin, require_user,
                           reset_netloc_cache)
-from app.spaces import RESERVED_USERNAMES, _normcase_eq
+from app.spaces import RESERVED_USERNAMES, _normcase_eq, visible
 from app.api.notify import get_webhook_url, push_webhook, webhook_send
 from app.main import app
 
@@ -109,10 +109,11 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
     new_name = _clean_username(body.value)
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
-    if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
-                     (new_name,)).fetchone():
-        raise HTTPException(status_code=409, detail="该用户名已被占用")
     with _db_lock:
+        # 占用检查与 UPDATE 同锁（检查在锁外时并发两次改名可双双通过、第二个撞唯一约束 500）
+        if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
+                         (new_name,)).fetchone():
+            raise HTTPException(status_code=409, detail="该用户名已被占用")
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, uid))
         _db().commit()
     old_dir = SHARE_ROOT / "private" / row["username"]
@@ -146,11 +147,13 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
         raise HTTPException(status_code=404, detail="用户不存在")
     if len(body.value) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
+    # scrypt 求值（约 100-300ms）放全局锁外，避免占住 _db_lock 让并发会话续期排队
+    new_hash = hash_password(body.value)
     with _db_lock:
         # 重置密码 = 凭据疑似泄露的恢复动作：清 TOTP/恢复码 + 吊销全部 Cookie 会话
         # 与 App 设备 Token（Bearer 90 天滑动，不吊销则接管恢复不彻底）
         _db().execute("UPDATE users SET password_hash=?, totp_secret=NULL, totp_enabled=0, totp_rc=NULL, totp_last_step=NULL WHERE id=?",
-                      (hash_password(body.value), uid))
+                      (new_hash, uid))
         _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
         _db().execute("DELETE FROM device_tokens WHERE user_id=?", (uid,))
         _db().commit()
@@ -301,16 +304,21 @@ def invite_redeem(body: RedeemBody, request: Request):
                      (username,)).fetchone():
         raise HTTPException(status_code=409, detail="该用户名已被占用")
     now = time.time()
+    # scrypt 求值（约 100-300ms）放全局锁外，避免占住 _db_lock
+    new_hash = hash_password(body.password)
     with _db_lock:
         try:
             cur = _db().execute(
                 "INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,?) "
                 "RETURNING id",
-                (username, hash_password(body.password), now, row["role"]))
+                (username, new_hash, now, row["role"]))
             uid = cur.fetchone()["id"]
-        except Exception:
-            # 并发 redeem 撞同名：唯一约束兜底（占位查询与插入之间的窗口）
-            raise HTTPException(status_code=409, detail="该用户名已被占用")
+        except Exception as e:
+            # 并发 redeem 撞同名：唯一约束兜底（占位查询与插入之间的窗口）。
+            # 其它 DB 故障必须上抛——吞成 409 会误导用户且掩盖故障（R2-P2）
+            if is_unique_violation(e):
+                raise HTTPException(status_code=409, detail="该用户名已被占用")
+            raise
         # 原子占位：仅当邀请未被使用且未过期时认领（并发 redeem 安全）
         claim = _db().execute(
             "UPDATE invites SET used_by=?, used_at=? WHERE code=? AND used_by IS NULL "
@@ -510,8 +518,9 @@ def activity(limit: int = 50, user=Depends(require_user)):
         if r["action"] not in show or len(items) >= max_items:
             continue
         target = r["target"] or ""
-        if target.startswith("private/") and not target.lower().startswith(
-                "private/" + username.lower() + "/"):
+        # 统一用 visible() 判权（红队 P2）：此前只过滤 private/，他人 incoming/
+        # 直传文件名与移动轨迹对全员可见
+        if not visible(user, [p for p in target.split("/") if p]):
             continue
         # 聚合：与当前组首（items[-1]）同人同类且落在 10 分钟窗口内
         if items:

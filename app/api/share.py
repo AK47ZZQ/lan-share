@@ -31,8 +31,10 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
                        max_downloads: Optional[int] = Form(default=None),
                        target: Optional[str] = Form(default=None),
                        _user=Depends(require_user)):
-    if expires_hours < 1:
-        raise HTTPException(status_code=400, detail="expires_hours must be >= 1")
+    if expires_hours < 1 or expires_hours > 24 * 365:
+        # 上限防毒数据：expires_at 过大时 Windows datetime.fromtimestamp 抛
+        # OSError，GET /api/shares 对所有人持续 500 且 UI 无法撤销（红队 P2）
+        raise HTTPException(status_code=400, detail="expires_hours must be 1-8760")
     if max_downloads is not None and max_downloads < 1:
         raise HTTPException(status_code=400, detail="max_downloads must be >= 1")
     # 只能分享自己可读的路径（v3：分享权限跟随创建者）。

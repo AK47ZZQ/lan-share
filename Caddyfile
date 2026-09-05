@@ -8,11 +8,14 @@
 
 # 8801 = 备用隧道（樱花FRP frpc「自动HTTPS」探测口）：Caddy 在此以同一证书
 # 直接提供 TLS，frpc 探测到本地即 HTTPS 后保持纯 TCP 透传（与主隧道 35391 同形）。
-:8765, :8767, :443, :8801 {
-	tls C:/lan-share/certs/cert.pem C:/lan-share/certs/key.pem
+(lan_common) {	tls C:/lan-share/certs/cert.pem C:/lan-share/certs/key.pem
 
 	# 剥离外部传入的 X-Forwarded-For，防止伪造（后端取 XFF 最后一个值）
 	request_header -X-Forwarded-For
+
+	# 公网入口标记：默认注入（隧道端口生效）；LAN 站点块再删除同名头。
+	# 后端 is_public_entry 以此为可信信号做防爆破分账与 healthz 管控。
+	request_header X-LanShare-Entry public
 
 	header {
 		Strict-Transport-Security "max-age=86400"
@@ -62,3 +65,16 @@
 		max_size 25GB
 	}
 }
+
+# LAN 主入口：删除客户端自带的公网标记（防伪造，红队 2026-09-06 P1）
+:8765 {
+	import lan_common
+	request_header -X-LanShare-Entry
+}
+
+# 隧道/备用入口：注入公网标记（Host 头客户端可伪造，物理端口才是可信信号；
+# 后端 is_public_entry 据此分账：公网失败只锁公网侧 + healthz 不对公网暴露）
+:8767, :443, :8801 {
+	import lan_common
+}
+

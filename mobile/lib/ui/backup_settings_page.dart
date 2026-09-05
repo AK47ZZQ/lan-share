@@ -106,6 +106,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     }
     cfg = cfg.copyWith(enabled: on);
     await cfg.save();
+    if (!mounted) return; // await 期间页面可能已被卸载（R1-P2）
     setState(() => _cfg = cfg);
     await BackupBridge.applySchedule(cfg);
     if (on) {
@@ -134,6 +135,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
       }
     }
     await cfg.save();
+    if (!mounted) return; // await 期间页面可能已被卸载（R1-P2）
     setState(() => _cfg = cfg);
     await BackupBridge.applySchedule(cfg);
     if (cfg.enabled) await BackupBridge.runOnce();
@@ -866,8 +868,12 @@ class _BackupBucketsPageState extends State<BackupBucketsPage> {
         onPopInvokedWithResult: (didPop, _) async {
           if (didPop || !_dirty) return;
           final nav = Navigator.of(context);
-          await _save();
-          nav.pop();
+          try {
+            await _save();
+          } finally {
+            // _save 抛错也必须退出页面，否则用户被卡死（R1-P3）
+            nav.pop();
+          }
         },
         child: Scaffold(
             appBar: AppBar(

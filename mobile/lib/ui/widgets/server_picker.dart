@@ -135,6 +135,7 @@ Future<void> showServerPicker(
       ]),
     ),
   );
-  // sheet 已关闭，builder 闭包不再使用；不释放会每次开面板泄漏一个
-  controller.dispose();
+  // 控制器不 dispose 交给 GC：await 返回时面板退场动画未结束、TextField
+  // 仍在树上且 viewInsets 变化会触发重建读到已 dispose 控制器（R1-P1，
+  // 同 me_page 对话框处理）
 }

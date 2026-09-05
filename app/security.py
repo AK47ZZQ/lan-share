@@ -220,7 +220,12 @@ def reset_netloc_cache():
 
 def is_public_entry(request: Request) -> bool:
     """请求是否来自公网入口（主/备用任一命中）。防爆破/限速/healthz 管控的判定基础：
-    公网侧的失败只锁公网侧，LAN 家人登录永不因公网攻击被锁（DoS 隔离）。"""
+    公网侧的失败只锁公网侧，LAN 家人登录永不因公网攻击被锁（DoS 隔离）。
+    Caddy 在隧道端口（8767/443/8801）注入 X-LanShare-Entry: public、在 LAN 端口
+    （8765）剥离同名头——Host 头是客户端可伪造的（红队 P1：伪造私网 Host 即可
+    把爆破失败记进 LAN 锁键远程锁死全家登录），物理端口标记才是可信信号。"""
+    if (request.headers.get("x-lanshare-entry") or "").lower() == "public":
+        return True
     host = (request.headers.get("host") or "").lower()
     return bool(host) and host in public_netlocs()
 

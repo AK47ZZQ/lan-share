@@ -58,8 +58,10 @@ class TotpEntry {
         secret: j['secret'] as String,
         label: (j['label'] as String?) ?? '',
         issuer: (j['issuer'] as String?) ?? '',
-        digits: (j['digits'] as int?) ?? 6,
-        period: (j['period'] as int?) ?? 30,
+        // 存量数据同样不信任：早期版本曾把恶意二维码的 digits=0/period=0
+        // 原样入库，不 clamp 会让验证器页每秒除零崩溃且无自愈路径（R2-P1）
+        digits: _clampDigits(j['digits'] as int?),
+        period: _clampPeriod(j['period'] as int?),
       );
 }
 
@@ -94,6 +96,11 @@ int _pow10(int n) {
 }
 
 /// 解析 otpauth://totp/… 绑定二维码内容。非 otpauth/totp 或缺 secret 返回 null。
+/// digits/period 来自外部二维码，不 clamp 的话 period=0 会让 `% e.period` /
+/// `epoch ~/ period` 整数除零崩溃、非法 digits 抛 RangeError（R1-P2）。
+int _clampPeriod(int? v) => (v == null || v <= 0) ? 30 : (v > 3600 ? 3600 : v);
+int _clampDigits(int? v) => (v == null || v < 6 || v > 10) ? 6 : v;
+
 TotpEntry? parseOtpauthUri(String raw) {
   final trimmed = raw.trim();
   if (!trimmed.startsWith('otpauth://totp/')) return null;
@@ -115,8 +122,8 @@ TotpEntry? parseOtpauthUri(String raw) {
       secret: secret.toUpperCase(),
       label: label,
       issuer: issuer,
-      digits: int.tryParse(uri.queryParameters['digits'] ?? '') ?? 6,
-      period: int.tryParse(uri.queryParameters['period'] ?? '') ?? 30,
+      digits: _clampDigits(int.tryParse(uri.queryParameters['digits'] ?? '')),
+      period: _clampPeriod(int.tryParse(uri.queryParameters['period'] ?? '')),
     );
   } catch (_) {
     return null;

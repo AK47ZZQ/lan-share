@@ -57,12 +57,23 @@ def _apk_path(data: dict):
 def app_latest(_user=Depends(require_user)):
     data = _load_version()
     apk = _apk_path(data)
+    # 服务端自算 sha256（红队 P2）：version.json 手填值可能缺失/过期——
+    # 客户端已改为 sha256 缺失即拒装（fail closed），服务端兜底自算保证链路可用。
+    # APK ~85MB，md5 级耗时只在检查更新时发生一次
+    sha = str(data.get("sha256") or "")
+    if not sha and apk.is_file():
+        import hashlib
+        h = hashlib.sha256()
+        with open(apk, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        sha = h.hexdigest()
     return {
         "version": str(data["version"]),
         "build": data["build"],
         "filename": data["filename"],
         "notes": str(data.get("notes") or ""),
-        "sha256": str(data.get("sha256") or "") or None,
+        "sha256": sha or None,
         "available": apk.is_file(),
         "size": apk.stat().st_size if apk.is_file() else None,
         "size_human": human_size(apk.stat().st_size) if apk.is_file() else None,

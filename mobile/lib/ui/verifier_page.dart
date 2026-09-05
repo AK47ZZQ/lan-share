@@ -57,7 +57,12 @@ class _VerifierPageState extends State<VerifierPage> {
       _snack('这不是两步验证二维码', err: true);
       return;
     }
-    await VerifierStore.upsert(entry);
+    try {
+      await VerifierStore.upsert(entry);
+    } on StateError {
+      _snack('安全存储不可用，绑定失败', err: true);
+      return;
+    }
     await _reload();
     _snack('已绑定 ${entry.label.isEmpty ? '账号' : entry.label}');
   }
@@ -93,6 +98,8 @@ class _VerifierPageState extends State<VerifierPage> {
       if (mounted) _snack('已绑定');
     } on FormatException {
       _snack('密钥格式不对（应为 Base32）', err: true);
+    } on StateError {
+      _snack('安全存储不可用，绑定失败', err: true);
     }
   }
 
@@ -114,7 +121,12 @@ class _VerifierPageState extends State<VerifierPage> {
       ),
     );
     if (ok != true) return;
-    await VerifierStore.remove(e.label);
+    try {
+      await VerifierStore.remove(e.label);
+    } on StateError {
+      _snack('安全存储不可用，删除失败', err: true);
+      return;
+    }
     await _reload();
   }
 

@@ -216,7 +216,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           if (e.previewable) AuthCacheManager.I.clearFailed(_thumbUrl(e)!);
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // 空吞会静默残留旧列表（R1-P3）：至少给个反馈
+      _toast('刷新失败');
+    }
   }
 
   /// 面包屑回退：直接出栈，不重新请求
@@ -778,9 +781,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     } catch (e) {
       _toast('打包失败：${errDetail(e)}');
     } finally {
-      try {
-        await f?.delete();
-      } catch (_) {}
+      // 不立刻删：shareXFiles 返回时接收方 App 才开始读 content URI，
+      // 此刻删文件会让分享读到刚删除的目标（R1-P2）；残留由系统随
+      // cache 目录回收（文件名已带时间戳，不冲突）
       if (mounted) setState(() => _zipping = false);
     }
   }

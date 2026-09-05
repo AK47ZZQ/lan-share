@@ -18,6 +18,8 @@ class MediaProxy {
   HttpServer? _server;
   String _secret = '';
   HttpClient? _client;
+  Future<void>? _ensuring; // 并发 urlFor 复用同一次启动（R1-P3：双 bind 会
+                           // 泄漏先建的监听 socket，且其端口恒 403）
 
   /// 远端文件 → 本地代理 URL（幂等：服务随用随起）
   Future<String> urlFor(String remotePath) async {
@@ -28,11 +30,20 @@ class MediaProxy {
 
   Future<void> _ensure() async {
     if (_server != null) return;
-    // 路径秘钥：同机其它 App 理论上可访问 loopback，随机秘钥防枚举拉流
-    _secret = _randomToken();
-    _client = TrustStore.createHttpClient()..autoUncompress = false;
-    _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    _server!.listen(_handle, onError: (Object _) {});
+    return _ensuring ??= _doEnsure();
+  }
+
+  Future<void> _doEnsure() async {
+    try {
+      // 路径秘钥：同机其它 App 理论上可访问 loopback，随机秘钥防枚举拉流
+      _secret = _randomToken();
+      _client = TrustStore.createHttpClient()..autoUncompress = false;
+      _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      _server!.listen(_handle, onError: (Object _) {});
+    } catch (_) {
+      _ensuring = null; // 失败可重试
+      rethrow;
+    }
   }
 
   /// 重试前重置回源 HttpClient 与本地服务：蜂窝下回源 socket 可能已僵死，
@@ -40,6 +51,7 @@ class MediaProxy {
   Future<void> reset() async {
     final s = _server;
     _server = null;
+    _ensuring = null;
     final c = _client;
     _client = null;
     c?.close(force: true);

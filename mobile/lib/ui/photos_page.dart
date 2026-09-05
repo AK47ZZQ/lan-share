@@ -126,7 +126,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   Future<void> _loadMore({bool force = false}) async {
-    if (_loading || _done || !mounted) return;
+    // force（下拉/切筛选后的整墙重拉）绕过 _loading guard：否则分页请求
+    // 在途时点筛选会把照片墙清成假空态且无人再拉（R1-P1）；gen 校验
+    // 已保证旧响应被丢弃，不会串页
+    if ((!force && _loading) || _done || !mounted) return;
     final gen = _gen;
     // _limit 依赖异步赋值的 _base：必须在此刻物化，请求与 _done 判断
     // 用同一个值——否则首屏请求发出时 _base 还没到位被判成公网（limit=60），
@@ -155,7 +158,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     } catch (_) {
       if (mounted && gen == _gen) setState(() => _failed = true);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      // 过期请求（gen 已换代）不碰 _loading：force 请求仍在途时提前放行
+      // 会让滚动监听再起一个同 gen 请求，两者都从同一 offset 追加 → 重复
+      if (mounted && gen == _gen) setState(() => _loading = false);
       final sp = await SharedPreferences.getInstance();
       _lastBackupDone = sp.getInt('backup_last_done_at');
     }
@@ -387,7 +392,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   static String _monthLabel(String ym) {
     final p = ym.split('-');
     if (p.length != 2) return ym;
-    return '${p[0]} 年 ${int.parse(p[1])} 月';
+    return '${p[0]} 年 ${int.tryParse(p[1]) ?? p[1]} 月';
   }
 
   void _onAddressChanged() {

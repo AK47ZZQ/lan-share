@@ -121,7 +121,7 @@ class BackupEngine {
       if (username.contains('/') ||
           username.contains('\\') ||
           username.contains('..')) {
-        return jsonEncode({'status': 'skip', 'reason': 'bad_username'});
+        return await finish({'status': 'skip', 'reason': 'bad_username'});
       }
       // 账本按账号隔离：同机换账号（或服务端改名）时旧账号的 done 记录
       // 会把新账号的照片永久跳过——检测到账号变化就清账本重对账
@@ -311,7 +311,9 @@ class BackupEngine {
               'sha256': ?sha,
             });
             if (r.data['instant'] == true) {
-              await ledger.markDone(row.mediaId, r.data['path'] as String);
+              // path 缺失兜底（与 finish 分支同坑，R2-P3）：别把秒传成功误标失败
+              await ledger.markDone(
+                  row.mediaId, (r.data['path'] as String?) ?? row.name);
               return true;
             }
             sid = r.data['session'] as String;
@@ -335,8 +337,11 @@ class BackupEngine {
                   .map((e) => (e as num).toInt()));
             await ledger.setReceived(row.mediaId, received.length);
           }
-          // 服务端异常响应可能给 0/负值，后面除法与分片总数会全崩
-          if (chunkSize <= 0) throw const FormatException('bad_chunk_size');
+          // 服务端异常响应可能给 0/负值/超大值（红队 P3：超大 chunk_size 会让
+          // 客户端把整个文件读进单请求内存 OOM），clamp 到协议合理区间
+          if (chunkSize <= 0 || chunkSize > 16 * 1024 * 1024) {
+            throw const FormatException('bad_chunk_size');
+          }
         } on DioException catch (e) {
           if (e.response?.statusCode == 404 && sid != null) {
             sid = null; // 会话过期（3 天 TTL）→ 重开，断点归零

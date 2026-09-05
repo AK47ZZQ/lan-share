@@ -111,18 +111,43 @@ class _HomePageState extends ConsumerState<HomePage> {
     // 引擎在独立 isolate 写 prefs，不 reload 就永远是首帧缓存（备份卡假死）
     await sp.reload();
     if (!mounted) return;
+    // 2s 周期定时器：值全部未变就跳过 setState（R1-P2）——HomePage 常驻
+    // IndexedStack，无条件重建等于 App 全生命周期每 2s 重建整页
+    final backupOn = sp.getBool('backup_enabled') ?? false;
+    final pending = sp.getInt('backup_pending_count') ?? -1;
+    final pendingPhotos = sp.getInt('backup_pending_photos');
+    final pendingVideos = sp.getInt('backup_pending_videos');
+    final pendingBytes = sp.getInt('backup_pending_bytes') ?? 0;
+    final lastDoneAt = sp.getInt('backup_last_done_at');
+    final failed = sp.getInt('backup_failed_count') ?? 0;
+    final progressDone = sp.getInt('backup_progress_done') ?? 0;
+    final progressTotal = sp.getInt('backup_progress_total') ?? 0;
+    final lastRound = sp.getString('backup_last_round');
+    final workerState = sp.getString('backup_worker_state');
+    final unchanged = backupOn == _backupOn &&
+        pending == _pending &&
+        pendingPhotos == _pendingPhotos &&
+        pendingVideos == _pendingVideos &&
+        pendingBytes == _pendingBytes &&
+        lastDoneAt == _lastDoneAt &&
+        failed == _failed &&
+        progressDone == _progressDone &&
+        progressTotal == _progressTotal &&
+        lastRound == _lastRound &&
+        workerState == _workerState;
+    if (unchanged) return;
     setState(() {
-      _backupOn = sp.getBool('backup_enabled') ?? false;
-      _pending = sp.getInt('backup_pending_count') ?? -1;
-      _pendingPhotos = sp.getInt('backup_pending_photos');
-      _pendingVideos = sp.getInt('backup_pending_videos');
-      _pendingBytes = sp.getInt('backup_pending_bytes') ?? 0;
-      _lastDoneAt = sp.getInt('backup_last_done_at');
-      _failed = sp.getInt('backup_failed_count') ?? 0;
-      _progressDone = sp.getInt('backup_progress_done') ?? 0;
-      _progressTotal = sp.getInt('backup_progress_total') ?? 0;
-      _lastRound = sp.getString('backup_last_round');
-      _workerState = sp.getString('backup_worker_state');
+      _backupOn = backupOn;
+      _pending = pending;
+      _pendingPhotos = pendingPhotos;
+      _pendingVideos = pendingVideos;
+      _pendingBytes = pendingBytes;
+      _lastDoneAt = lastDoneAt;
+      _failed = failed;
+      _progressDone = progressDone;
+      _progressTotal = progressTotal;
+      _lastRound = lastRound;
+      _workerState = workerState;
     });
   }
 

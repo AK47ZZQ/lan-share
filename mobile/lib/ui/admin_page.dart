@@ -383,6 +383,12 @@ class _AdminPageState extends ConsumerState<AdminPage>
       final newPwd = await _prompt('重置密码 — ${u.username}', '新密码（至少 8 位）',
           obscure: true);
       if (newPwd == null) return;
+      // 与改自己密码/WebDAV 密码同款下限（R1-P3）：短密码提交到服务端只会
+      // 得到一条 400，当场反馈更直观
+      if (newPwd.length < 8) {
+        _toast('密码至少 8 位');
+        return;
+      }
       await _post('/api/admin/users/${u.id}/password', {'value': newPwd},
           okMsg: '密码已重置（其两步验证同步解除、设备 Token 全部吊销）');
     }

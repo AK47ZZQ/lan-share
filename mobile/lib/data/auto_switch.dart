@@ -315,15 +315,14 @@ class AutoSwitch {
       final j = Map<String, dynamic>.from(r.data as Map);
       if (!j.containsKey('cert_sha256')) return null; // 非本系统服务端
       final entries = AppEntries.fromJson(j);
-      // 红队 P1：cert_sha256 键是"自报家门"，http 候选没有任何密码学校验——
-      // 同网段攻击者抢 IP 起假服务即可通过探测，业务流量（含 Bearer）会被
-      // 导过去。https 候选的 TLS 握手本身已由 TrustStore 裁决（指纹不在库
-      // 必被拒），http 候选则要求证书指纹与已信任库或本地哨兵一致才算本系统。
-      if (uri.scheme != 'https') {
-        final known = TrustStore.I.knowsFingerprint(entries.certSha256) ||
-            normFp(entries.certSha256) == await _sentinelFp();
-        if (!known) return null;
-      }
+      // 红队 R1-P1：cert_sha256 是"自报家门"，指纹门槛必须对所有 scheme 生效
+      // （https 由 TrustStore 握手裁决 + 此处同源复核双保险），且空指纹直接
+      // 拒绝——哨兵为空时 normFp('') == _sentinelFp() 会让空指纹穿透。
+      final fp = normFp(entries.certSha256);
+      if (fp.isEmpty) return null;
+      final known = TrustStore.I.knowsFingerprint(entries.certSha256) ||
+          fp == await _sentinelFp();
+      if (!known) return null;
       return entries;
     } on DioException catch (e) {
       if (!trustIfKnown || e.error is! HandshakeException) return null;
@@ -359,8 +358,11 @@ class AutoSwitch {
     };
     if (autoPauseIds.isNotEmpty) {
       _autoPausedIds.addAll(autoPauseIds);
-      await _persistAutoPaused();
+      // R1-P3：pauseAll 必须在 await 之前——中间隔着 _persistAutoPaused()
+      // 的写盘 await 时，窗口内入队的任务会被 pauseAll 翻成 userPaused
+      // 却不在快照里，切回 LAN 后永不被自动恢复
       TransferEngine.I.pauseAll();
+      await _persistAutoPaused();
     }
     final backToLan = !isPublicAddress(url);
     _lastSwitchAt = DateTime.now();
@@ -409,9 +411,16 @@ class AutoSwitch {
     } catch (_) {}
   }
 
-  /// 局域网候选：地址历史里的非公网项（最近使用在前，天然优先级）
+  /// 局域网候选：地址历史里的非公网 https 项（最近使用在前，天然优先级）。
+  /// 红队 P1：http 候选的"指纹同源"检查输入是明文自报值 + 公开常量
+  /// （cert_sha256 任何 TLS 连接者都能读到），对链路内攻击者不构成密码学
+  /// 约束——重放真实指纹即可把 Bearer 导向假服务器。https 候选有 TrustStore
+  /// 握手裁决兜底，http 候选只允许用户手动选择（实际部署 LAN 入口即 Caddy
+  /// https :8765，直连 8766 仅本机）。
   Future<List<String>> _lanCandidates() async =>
-      (await Prefs.addresses()).where((a) => !isPublicAddress(a)).toList();
+      (await Prefs.addresses())
+          .where((a) => !isPublicAddress(a) && a.startsWith('https://'))
+          .toList();
 
   /// 缓存公网入口 + 证书指纹（局域网挂掉时 entries 问不到，切公网只能
   /// 靠这份缓存）。审查 P2：只在值变化时写 prefs（探测每 20s 一次，无条件
@@ -424,7 +433,8 @@ class AutoSwitch {
   /// 延迟，也杜绝指纹同源但端口未入库导致的静默切换失败。overTls=false
   /// （当前走 http 明文 LAN）时不预信任：明文信道上的 entries 可被同
   /// 网段 MITM 整体伪造，此时写入的是攻击者选定的 host:port（红队 P1-2）；
-  /// prefs 候选缓存照常落盘，消费端另有 https-only + 指纹同源双门槛。
+  /// v0.16.2 起候选缓存与指纹哨兵同样只在 TLS 信道写入（R1-P1），
+  /// 消费端仍保留 https-only + 指纹同源双门槛做纵深防御。
   Future<void> _cachePublicEntries(AppEntries entries,
       {required bool overTls}) async {
     try {
@@ -433,6 +443,16 @@ class AutoSwitch {
       final fp = entries.certSha256;
       final oldPubs = sp.getStringList(_kPubCache) ?? const [];
       final oldFp = sp.getString(_kFpCache) ?? '';
+      // 红队 R1-P1：http 明文信道上的 entries 可被同网段 MITM 整体伪造——
+      // 公网候选缓存与指纹哨兵只在 TLS 信道上写入，否则等于给攻击者播种
+      // 假公网入口/假哨兵指纹（哨兵是 http 候选的信任锚，被播种即失守）。
+      // 清空/撤销类操作保留：最坏是 DoS（缓存被清），不构成凭据泄露。
+      if (!overTls) {
+        if (pubs.isEmpty && oldPubs.isNotEmpty) {
+          await sp.remove(_kPubCache);
+        }
+        return;
+      }
       // 红队 P1-2：服务端撤销公网配置（public/public_alt 变空）时旧缓存
       // 必须失效，否则会拿 A 服务器的入口当 B 的兜底
       if (pubs.isEmpty && oldPubs.isNotEmpty) {

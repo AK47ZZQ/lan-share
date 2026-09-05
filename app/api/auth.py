@@ -68,16 +68,22 @@ async def auth_state(request: Request):
 
 @app.post("/api/setup")
 async def setup(body: AuthBody, request: Request, response: Response):
+    if len(body.password) < 8:
+        raise HTTPException(status_code=400, detail="密码至少 8 位")
+    if not body.username.strip():
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    if user_count() > 0:
+        # 廉价预检（锁内还有复查兜底双管理员）：setup 关闭后未认证请求
+        # 不必白烧 100-300ms 的 scrypt（R2-P3）
+        raise HTTPException(status_code=403, detail="管理员已存在")
+    # scrypt 求值（约 100-300ms）放全局锁外 + 线程池，避免占住 _db_lock 并阻塞事件循环
+    new_hash = await run_in_threadpool(hash_password, body.password)
     # 检查 + 插入同锁（否则空库并发 setup 可建出双管理员）
     with _db_lock:
         if user_count() > 0:
             raise HTTPException(status_code=403, detail="管理员已存在")
-        if len(body.password) < 8:
-            raise HTTPException(status_code=400, detail="密码至少 8 位")
-        if not body.username.strip():
-            raise HTTPException(status_code=400, detail="用户名不能为空")
         _db().execute("INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,'admin')",
-                      (body.username.strip(), hash_password(body.password), time.time()))
+                      (body.username.strip(), new_hash, time.time()))
         _db().commit()
     uid = _db().execute("SELECT id FROM users WHERE username=?",
                         (body.username.strip(),)).fetchone()["id"]

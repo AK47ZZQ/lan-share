@@ -290,14 +290,19 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                                                 : _sel.add(item.path));
                                           } else {
                                             // ignore: discarded_futures
-                                            Navigator.push(context,
+                                            Navigator.push<bool>(context,
                                                 MaterialPageRoute(
                                                     builder: (_) =>
                                                         PhotoViewerPage(
                                                             base: _base!,
                                                             items: _items,
                                                             initial: i),
-                                                    fullscreenDialog: true));
+                                                    fullscreenDialog: true)).then(
+                                                (deleted) {
+                                              // 查看器里删掉的照片回来后立即出列
+                                              //（与 photos_page 同语义，R1-P3）
+                                              if (deleted == true) _reload();
+                                            });
                                           }
                                         },
                                         onLongPress: () => setState(() =>
@@ -431,6 +436,8 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
   bool _failed = false;   // 网络抖动：置失败态给重试入口，别静默终止分页
   int _offset = 0;
   int _saving = 0;
+  int _gen = 0;   // 刷新代际：force 绕过 _loading 后，在途的旧分页响应必须被丢弃，
+                  // 否则与刷新请求重复入列、_offset 虚增（R2-P1，照搬 photos_page）
   int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
   @override
@@ -452,8 +459,11 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
     super.dispose();
   }
 
-  Future<void> _loadMore() async {
-    if (_loading || _done || !mounted) return;
+  Future<void> _loadMore({bool force = false}) async {
+    // force（下拉刷新）绕过 _loading guard：分页在途时刷新会把列表清成
+    // 假空态且无人再拉（R1-P1，与 photos_page 同修）
+    if ((!force && _loading) || _done || !mounted) return;
+    final gen = ++_gen;
     setState(() => _loading = true);
     try {
       final dio = await ApiClient.I.dio();
@@ -462,16 +472,16 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
       final list = (r.data['items'] as List)
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
           .toList();
-      if (!mounted) return;
+      if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
       setState(() {
         _items.addAll(list);
         _offset += list.length;
         _done = list.length < _limit;
       });
     } catch (_) {
-      if (mounted) setState(() => _failed = true);
+      if (mounted && gen == _gen) setState(() => _failed = true);
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && gen == _gen) setState(() => _loading = false);
     }
   }
 
@@ -572,7 +582,8 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
   static String _monthLabel(String ym) {
     final p = ym.split('-');
     if (p.length != 2) return ym;
-    return '${p[0]} 年 ${int.parse(p[1])} 月';
+    // tryParse：服务端 facets 的坏月份串在 build 里求值，parse 抛错=红屏
+    return '${p[0]} 年 ${int.tryParse(p[1]) ?? p[1]} 月';
   }
 
   @override
@@ -597,7 +608,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                   _offset = 0;
                   _done = false;
                 });
-                await _loadMore();
+                await _loadMore(force: true);
               },
               child: _items.isEmpty && !_loading
                   ? ListView(children: const [

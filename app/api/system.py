@@ -73,10 +73,17 @@ def _cleanup_tmp():
                 f.parent.rmdir()
         except OSError:
             continue   # 竞态（并发删/占用）跳过，下轮再收
-    # 孤儿上传临时文件（崩溃残留）：超过 1 天的 .uploading/.dav-uploading/.dedup/.tmp-* 一律回收
+    # 孤儿上传临时文件（崩溃残留）：超过 1 天的 .uploading/.dav-uploading/
+    # .dedup/.tmp-* 一律回收。上传临时名已唯一化（.uploading-<pid>-<ns>），
+    # endswith 匹配不到——必须同时按中缀匹配（R2-P1 回归修复）
     orphan_cutoff = time.time() - 86400
+    # 锚定正则而非任意中缀：用户可能合法拥有 "a.uploading-1-2" 这类文件名
+    # （红队 P1），只有精确仿造临时名格式（.uploading-<pid>-<ns>，ns 为
+    # 15 位以上时间戳量级）才回收
+    orphan_re = re.compile(r"\.(?:uploading|dav-uploading)-\d+-\d{15,}$")
     for f in SHARE_ROOT.rglob("*"):
         if f.is_file() and (f.name.endswith((".uploading", ".dav-uploading", ".dedup"))
+                            or orphan_re.search(f.name)
                             or f.name.startswith(".tmp-")) \
                 and f.stat().st_mtime < orphan_cutoff:
             f.unlink(missing_ok=True)
@@ -327,6 +334,10 @@ def _scan_photos(force: bool = False):
                 return
         seen = set()
         updates = []
+        # 一次性载入现有 photos 索引做内存比对（循环里逐条 SELECT 是 N+1，
+        # 几万文件的库每轮扫描就是几万次往返）；gone 的差集也直接由它推导
+        known = {r["path"]: (r["mtime_ns"], r["size"])
+                 for r in _db().execute("SELECT path, mtime_ns, size FROM photos").fetchall()}
         for f in SHARE_ROOT.rglob("*"):
             rel_parts = f.relative_to(SHARE_ROOT).parts
             if any(p.startswith(".") for p in rel_parts):
@@ -336,8 +347,8 @@ def _scan_photos(force: bool = False):
             stat = f.stat()
             rel = str(f.relative_to(SHARE_ROOT)).replace("\\", "/")
             seen.add(rel)
-            row = _db().execute("SELECT mtime_ns, size FROM photos WHERE path=?", (rel,)).fetchone()
-            if row and row["mtime_ns"] == stat.st_mtime_ns and row["size"] == stat.st_size:
+            row = known.get(rel)
+            if row and row[0] == stat.st_mtime_ns and row[1] == stat.st_size:
                 continue
             # 图片行 duration 写 0（非视频即"已处理"），视频留 NULL 交给补扫；
             # 内容变更（mtime 变）时 duration 一并重置，换过的视频会被重新探测
@@ -350,8 +361,7 @@ def _scan_photos(force: bool = False):
                     "ON CONFLICT(path) DO UPDATE SET taken_at=excluded.taken_at, "
                     "mtime_ns=excluded.mtime_ns, size=excluded.size, duration=excluded.duration", updates)
                 _db().execute("DELETE FROM photos WHERE mtime_ns=0")
-            gone = [r["path"] for r in _db().execute("SELECT path FROM photos").fetchall()
-                    if r["path"] not in seen]
+            gone = [p for p in known if p not in seen]
             if gone:
                 _db().executemany("DELETE FROM photos WHERE path=?", [(g,) for g in gone])
             _db().commit()

@@ -1,3 +1,45 @@
+## 2026-09-06 — v0.16.2+53：全仓四维审查 2 轮 + 对抗审查（安全加固批次）
+
+资深 Reviewer 按边界条件/异常处理/性能瓶颈/安全风险四维做 2 轮审查 + 1 轮
+红队对抗审查，P1×7/P2×13 全闭环；pytest 161 / Dart 136 / analyze 0 全绿。
+
+**服务端**
+- [P1] WebDAV MOVE/COPY（shutil + 全树扫描）与图片预览 PIL 渲染改跑线程池
+  （此前大文件/大图会冻结整个事件循环，全站所有用户一起卡死）。
+- [P1] 孤儿临时文件回收改锚定正则——唯一化临时名 `.uploading-<pid>-<ns>`
+  此前按任意中缀匹配，会把用户合法的 `a.uploading-1-2` 文件静默删掉。
+- [P1] Caddyfile 隧道端口注入 `X-LanShare-Entry: public`（LAN 8765 显式剥
+  离同名头）：Host 头客户端可伪造，伪造私网 Host 即可把公网爆破失败记进
+  LAN 锁键远程锁死全家登录——is_public_entry 改以物理端口标记为可信信号。
+- [P2] 中间件会话校验 / SPA 深链 / WebDAV 每请求的同步 DB 往返全部进线程池；
+  PG 断线自愈（>30s 未用 ping 失败重建，PG 重启不再全站 500 到人工重启）；
+  上传临时名唯一化+异常清理（并发同名单请求不再交错写坏）+ 同名目录 409
+  （文件不再顶替整目录）+ 落位前重查（TOCTOU 收窄）；scrypt 求值移出全局
+  锁；照片扫描 N+1 改内存比对；分享 expires_hours 封顶 8760（毒数据此前可
+  让 /api/shares 全员 500）；分片上传会话数/未完成总量双上限（.chunks 在
+  配额视野外的灌盘 DoS）；/api/zip 单用户并发 1；/api/activity 改 visible()
+  统一判权（他人 incoming 文件名泄漏）；invite_redeem/social 异常收窄为唯
+  一约束冲突；healthz 公网地址漏配兜底；spa next 参数 URL 编码；setup 廉价
+  预检。
+
+**App**
+- [P1] 自动切换 https-only：公网候选（v0.15.2）之外，LAN 候选同样只接受
+  https——http 候选的"指纹同源"输入是明文自报值+公开常量（cert_sha256
+  任何 TLS 连接者都能读到），重放真实指纹即可把 Bearer 导向假服务器；同时
+  指纹门槛扩到所有 scheme、空指纹拒绝、候选缓存/指纹哨兵只在 TLS 信道写入。
+- [P1] 自更新 fail-closed：APK 下载后流式算 sha256 与服务端比对，服务端未
+  提供 sha256 即拒装（服务端 /api/app/latest 改为 version.json 缺失时自算
+  兜底）；版本号白名单消毒。
+- [P2] 传输引擎补齐备份引擎已修的响应防御：chunk_size≤0/超大（16MB 上限，
+  恶意值此前可让客户端 OOM）、path 判空、session id 白名单；416 分支重做
+  （此前"重试"是死代码且会把陈旧 .part 改名成已完成文件）；TOTP digits/
+  period 全入口 clamp（存量坏数据此前每秒除零红屏）；TOTP secret 收口
+  Keystore-only（旧 SP 明文副本启动即清）；api_client 构建代际守卫（切服后
+  旧地址 Dio 不再写回）；me_page 四对话框+server_picker 控制器 dispose 时
+  序（E2E 红屏同类残留统一收口 GC 方案）；照片墙/选照片页刷新竞态（假空
+  态+重复入列）；主页 2s 轮询无变化跳过整页重建；备份页 mounted/PopScope
+  守卫；zip 分享后不立刻删文件；管理面板重置密码 8 位下限。
+
 ## 2026-09-06 — v0.16.1+52：开屏圆角回退 + 启动深浅色跟随设置 + 清空服务端备份
 
 用户反馈三件（1 轮审查 + 1 轮对抗审查，P1×3/P2×6 全闭环；E2E 踩中并根修

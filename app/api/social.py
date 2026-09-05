@@ -16,7 +16,7 @@ from fastapi import Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
-from app.db import _db, _db_lock
+from app.db import _db, _db_lock, is_unique_violation
 from app.security import audit, client_ip, require_user
 from app.spaces import visible
 from app.main import app
@@ -135,9 +135,13 @@ def toggle_reaction(body: ReactionBody, request: Request, _user=Depends(require_
                     "INSERT INTO photo_reactions(photo_path, user_id, emoji, created_at) "
                     "VALUES(?,?,?,?)", (norm, _user["user_id"], body.emoji, time.time()))
                 on = True
-            except Exception:
-                # 并发双击竞态：UNIQUE 已挡住，视为已点（幂等）
-                on = True
+            except Exception as e:
+                # 并发双击竞态：UNIQUE 已挡住，视为已点（幂等）。
+                # 只吞唯一约束冲突——其它 DB 故障照常上抛，静默丢写入。
+                if is_unique_violation(e):
+                    on = True
+                else:
+                    raise
         _db().commit()
     audit("photo_react", f"{'on' if on else 'off'} {body.emoji} {norm[:100]}",
           ip=client_ip(request))
