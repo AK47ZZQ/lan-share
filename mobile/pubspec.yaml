@@ -2,7 +2,7 @@ name: lanshare_app
 description: "LAN Share 家庭网盘 · 手机 App（Flutter，APP-DESIGN v0.1）"
 publish_to: 'none'
 
-version: 0.15.0+48
+version: 0.15.1+49
 
 environment:
   sdk: ^3.13.1
@@ -47,6 +47,26 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # 品牌开屏（v0.15.1）：launch window 直接画云朵 logo——Android 12+ 的
+  # 系统开屏图标取自系统缓存的桌面图标，覆盖安装后长期不刷新（用户实测
+  # "开屏 logo 未替换"），改用自己的 splash drawable 才拿回控制权
+  flutter_native_splash: ^2.4.6
+
+# flutter_native_splash 配置：改过配置/资源后跑
+# `dart run flutter_native_splash:create` 重新生成 android 资源
+flutter_native_splash:
+  color: "#ffffff"
+  color_dark: "#0B1020" # 云朵紫蓝主题 darkBg（app_theme.dart 派生底）
+  image: splash/splash_logo.png
+  image_dark: splash/splash_logo.png
+  android: true
+  ios: false
+  web: false
+  android_12:
+    color: "#ffffff"
+    color_dark: "#0B1020"
+    image: splash/splash_android12.png
+    image_dark: splash/splash_android12.png
 
 flutter:
   uses-material-design: true

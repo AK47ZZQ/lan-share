@@ -1,3 +1,22 @@
+## 2026-09-05 — v0.15.1+49：品牌开屏修复（"开屏 logo 未替换"根因）
+
+用户反馈 App 打开时的界面 logo 没有被替换。排查证据链：源码 res、发布
+APK 内全部 mipmap、模拟器冷启动截图**都已是 v0.8.5 的新云朵**——旧 logo
+来自 **Android 12+ 系统开屏的图标缓存**：系统开屏图标取自缓存的桌面图标，
+覆盖安装长期不刷新（MIUI 尤其顽固），App 侧无直接控制权。
+
+- **接入 flutter_native_splash**（品牌开屏）：launch window 直接画
+  `windowSplashScreenAnimatedIcon` 指向的自有 drawable（渐变圆角块+描边
+  云，scripts/make-splash.py 复用 make-app-icon.py 品牌绘制生成 768² 与
+  Android12 1152² 透明底两档），深浅色各配底色（白 / #0B1020 云朵紫蓝
+  darkBg）——开屏观感从此与系统桌面图标缓存彻底脱钩，且把 Android <12
+  的"纯白无 logo"开屏也一并品牌化。
+- 今后改品牌/换开屏：改 scripts/make-app-icon.py（桌面/PWA/通知）与
+  scripts/make-splash.py（开屏），跑 `dart run flutter_native_splash:create`。
+- 用户侧一次性动作：装本版后如桌面/开屏仍显示旧图标，重启一次手机即可
+  （系统缓存刷新）。
+- Dart 110 全绿 / analyze 零问题；模拟器冷启动实测新开屏生效、首页正常。
+
 ## 2026-09-05 — v0.15.0+48：主页/我的页重设计 + 局域网/公网自动切换（纯 App 批次）
 
 用户四诉求（最近上传点开体验/admin 存储可点详情/主页头脑风暴/我的页分类）+
