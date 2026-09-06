@@ -1,29 +1,36 @@
-// 文档预览器（v0.17 预览大改）：照片查看器之外的第二类全屏查看。
-// · md/markdown → flutter_markdown 渲染（表格/代码块跟随样式）
-// · txt/log/json/csv 等文本 → 等宽滚动 + 自动换行
+// 文档预览器（v0.19 预览兼容重构）：
+// · md/markdown → flutter_markdown 渲染
+// · txt/log/json/yaml/py/js 等文本 → 等宽滚动 + 自动换行
 // · pdf → flutter_pdfview 内嵌（经鉴权下载到临时文件后本地渲染）
-// · docx → archive 解包 word/document.xml 提取正文段落（轻量纯文本视图，
-//   版式还原交给"用其他应用打开"）；.doc 旧格式无解包能力，回退系统打开
-// · 超限（文本 >2MB / pdf >200MB）与拉取失败给明确提示与重试
+// · docx → doc_extract 纯 Dart 解析：标题/加粗/斜体/列表/表格转 Markdown，
+//   内嵌图片落临时目录随 Markdown 渲染（v0.17 只能抽正文，v0.19 版式重构）
+// · xlsx/csv → 表格化 Markdown；pptx → 逐页大纲；rtf/doc → 尽力提取文本
+// · html/htm → 富文本笔记预览（WebView 只读，与编辑器同源渲染）
+// · 任意格式 → App 栏「用其他应用打开」兜底（下载临时文件后系统打开）
+// · 超限与失败给明确提示与重试
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../data/api/api_client.dart';
+import 'doc_extract.dart';
 import 'notes_page.dart';
+import 'rich_note_editor.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 
 const _textLimit = 2 * 1024 * 1024;
 const _pdfLimit = 200 * 1024 * 1024;
+const _officeLimit = 100 * 1024 * 1024;
+const _openExtLimit = 100 * 1024 * 1024;
 
 /// 按文件名判断是否可进文档预览器（files_page/recent_page 共用口径）。
-/// v0.18 扩面：代码/配置类纯文本（yaml/xml/py/js/html…）都按文本预览。
+/// v0.19 扩面：docx 富转换、xlsx/pptx 解析、rtf/doc 尽力提取、html 富预览。
 bool isDocPreviewable(String name) {
   final n = name.toLowerCase();
   return n.endsWith('.md') ||
@@ -34,6 +41,12 @@ bool isDocPreviewable(String name) {
       n.endsWith('.csv') ||
       n.endsWith('.pdf') ||
       n.endsWith('.docx') ||
+      n.endsWith('.doc') ||
+      n.endsWith('.xlsx') ||
+      n.endsWith('.pptx') ||
+      n.endsWith('.rtf') ||
+      n.endsWith('.html') ||
+      n.endsWith('.htm') ||
       n.endsWith('.yaml') ||
       n.endsWith('.yml') ||
       n.endsWith('.xml') ||
@@ -46,7 +59,6 @@ bool isDocPreviewable(String name) {
       n.endsWith('.ts') ||
       n.endsWith('.dart') ||
       n.endsWith('.html') ||
-      n.endsWith('.htm') ||
       n.endsWith('.css') ||
       n.endsWith('.sh') ||
       n.endsWith('.bat') ||
@@ -55,7 +67,7 @@ bool isDocPreviewable(String name) {
       n.endsWith('.srt');
 }
 
-/// 这些后缀同时可在预览页一键进笔记编辑器（v0.18：txt 及代码文本也行）
+/// 这些后缀同时可在预览页一键进编辑器（文本类进纯文本编辑器，html 进富文本）
 bool isNoteEditable(String name) {
   final n = name.toLowerCase();
   return n.endsWith('.md') ||
@@ -73,7 +85,6 @@ bool isNoteEditable(String name) {
       n.endsWith('.js') ||
       n.endsWith('.ts') ||
       n.endsWith('.dart') ||
-      n.endsWith('.html') ||
       n.endsWith('.css') ||
       n.endsWith('.sh') ||
       n.endsWith('.bat') ||
@@ -93,8 +104,10 @@ class DocViewerPage extends StatefulWidget {
 
 class _DocViewerPageState extends State<DocViewerPage> {
   Future<Widget>? _load;
-  int? _total; // pdf 下载进度用
-  File? _tmpFile; // 本页生成的临时文件，dispose 清理（review P2-2）
+  int? _total; // 大文件下载进度用
+  final _tmpFiles = <File>[]; // 本页生成的临时文件，dispose 清理
+  final _tmpDirs = <Directory>[]; // docx 图片目录（递归清）
+  bool _openingExternal = false;
 
   @override
   void initState() {
@@ -104,23 +117,24 @@ class _DocViewerPageState extends State<DocViewerPage> {
 
   @override
   void dispose() {
-    final f = _tmpFile;
-    if (f != null) {
+    for (final f in _tmpFiles) {
       // ignore: discarded_futures
       f.delete().catchError((_) => f);
+    }
+    for (final d in _tmpDirs) {
+      // ignore: discarded_futures
+      d.delete(recursive: true).catchError((_) => d);
     }
     super.dispose();
   }
 
-  Future<List<int>> _fetch({void Function(int, int?)? onProgress}) async {
+  Future<List<int>> _fetch({required int limit, void Function(int, int?)? onProgress}) async {
     final dio = await ApiClient.I.dio();
     final enc = _enc(widget.path);
     // 走 /preview/ 而非 /files/（v0.17.2）：Caddy 对 /files/* 挂了
     // forward_auth→/authcheck，而 authcheck 只查 Cookie 会话不认 App 的
     // Bearer——App 侧 /files 恒 401（还触发拦截器登出）。/preview 对
     // 非图片直接回 FileResponse，且走正常反代（下载引擎同款通道）。
-    final isPdf = widget.name.toLowerCase().endsWith('.pdf');
-    final limit = isPdf ? _pdfLimit : _textLimit;
     try {
       final head = await dio.head('/preview/$enc');
       final cl = head.headers.value('content-length');
@@ -144,27 +158,63 @@ class _DocViewerPageState extends State<DocViewerPage> {
     final f = File(
         '${dir.path}/docview-${DateTime.now().millisecondsSinceEpoch}$suffix');
     await f.writeAsBytes(bytes, flush: true);
-    _tmpFile = f; // dispose 时清理（review P2-2）
+    _tmpFiles.add(f); // dispose 时清理（review P2-2）
     return f.path;
+  }
+
+  /// docx 内嵌图片的落盘目录（dispose 时递归删除）
+  Future<String> _newMediaDir() async {
+    final dir = await getTemporaryDirectory();
+    final d = Directory(
+        '${dir.path}/docview-media-${DateTime.now().millisecondsSinceEpoch}');
+    await d.create(recursive: true);
+    _tmpDirs.add(d);
+    return d.path;
   }
 
   Future<Widget> _build() async {
     final n = widget.name.toLowerCase();
     if (n.endsWith('.pdf')) return _pdf();
     if (n.endsWith('.docx')) return _docx();
+    if (n.endsWith('.xlsx')) return _office(() => xlsxToMarkdown(_lastRaw!));
+    if (n.endsWith('.pptx')) {
+      return _office(() => pptxToText(_lastRaw!), mono: true);
+    }
+    if (n.endsWith('.rtf')) return _rtf();
+    if (n.endsWith('.doc')) return _docLegacy();
+    if (n.endsWith('.csv')) return _csv();
+    if (n.endsWith('.html') || n.endsWith('.htm')) {
+      final raw = await _fetch(limit: _officeLimit);
+      return RichNoteViewer(html: utf8.decode(raw, allowMalformed: true));
+    }
     if (n.endsWith('.md') || n.endsWith('.markdown')) {
-      final raw = await _fetch();
+      final raw = await _fetch(limit: _textLimit);
       if (raw.length > _textLimit) throw _TooLarge(_textLimit);
       return _markdown(utf8.decode(raw, allowMalformed: true));
     }
     // 其余按文本
-    final raw = await _fetch();
+    final raw = await _fetch(limit: _textLimit);
     if (raw.length > _textLimit) throw _TooLarge(_textLimit);
     return _plain(utf8.decode(raw, allowMalformed: true));
   }
 
+  List<int>? _lastRaw; // office 系两段式：先拉字节，再转（便于复用拉取逻辑）
+
+  /// zip 型 office 文档（docx/xlsx/pptx）：拉取 → 转换 → 渲染
+  Future<Widget> _office(String Function() convert, {bool mono = false}) async {
+    final raw = await _fetch(limit: _officeLimit, onProgress: (c, t) {
+      if (mounted && t != null && t > 0 && (c % (512 * 1024) == 0)) {
+        setState(() => _total = t);
+      }
+    });
+    _lastRaw = raw;
+    if (raw.length > _officeLimit) throw _TooLarge(_officeLimit);
+    final md = convert();
+    return mono ? _plain(md) : _markdown(md, images: true);
+  }
+
   Future<Widget> _pdf() async {
-    final raw = await _fetch(onProgress: (c, t) {
+    final raw = await _fetch(limit: _pdfLimit, onProgress: (c, t) {
       if (mounted && t != null && t > 0 && (c % (512 * 1024) == 0)) {
         setState(() => _total = t);
       }
@@ -175,36 +225,108 @@ class _DocViewerPageState extends State<DocViewerPage> {
   }
 
   Future<Widget> _docx() async {
-    final raw = await _fetch();
-    if (raw.length > _textLimit) throw _TooLarge(_textLimit);
-    final archive = ZipDecoder().decodeBytes(raw);
-    final xml = archive.findFile('word/document.xml');
-    if (xml == null) throw const _DocxEmpty();
-    final doc = utf8.decode(xml.content as List<int>, allowMalformed: true);
-    return _plain(_docxText(doc), mono: false);
+    final raw = await _fetch(limit: _officeLimit, onProgress: (c, t) {
+      if (mounted && t != null && t > 0 && (c % (512 * 1024) == 0)) {
+        setState(() => _total = t);
+      }
+    });
+    _lastRaw = raw;
+    if (raw.length > _officeLimit) throw _TooLarge(_officeLimit);
+    final mediaDir = await _newMediaDir();
+    final md = docxToMarkdown(raw, mediaDir: mediaDir);
+    return _markdown(md, images: true);
   }
 
-  /// word/document.xml 转纯文本：段末换行、`<w:tab/>` 变制表、去掉其余标签。
-  /// （review P1-1：此前残留一版用原始索引切已缩短字符串的 fold，真实 docx
-  /// 必抛 RangeError——删掉，replaceAllMapped 一遍就是正确实现）
-  static String _docxText(String doc) {
-    final s = doc
-        .replaceAll('<w:tab/>', '\t')
-        .replaceAll('<w:br/>', '\n')
-        .replaceAll('</w:p>', '\n')
-        .replaceAllMapped(RegExp(r'<[^>]*>'), (_) => '');
-    return const _Entities().decode(s).trim();
+  Future<Widget> _csv() async {
+    final raw = await _fetch(limit: _textLimit);
+    final md = csvToMarkdown(utf8.decode(raw, allowMalformed: true));
+    return _markdown(md);
+  }
+
+  Future<Widget> _rtf() async {
+    final raw = await _fetch(limit: _textLimit);
+    return _plain(rtfToText(utf8.decode(raw, allowMalformed: true)));
+  }
+
+  Future<Widget> _docLegacy() async {
+    final raw = await _fetch(limit: _officeLimit, onProgress: (c, t) {
+      if (mounted && t != null && t > 0 && (c % (512 * 1024) == 0)) {
+        setState(() => _total = t);
+      }
+    });
+    if (raw.length > _officeLimit) throw _TooLarge(_officeLimit);
+    return _plain(docToTextBestEffort(raw));
+  }
+
+  /// 兜底：任意格式下载到临时文件后交系统应用打开（xls/ppt/zip 等的出路）
+  Future<void> _openExternal() async {
+    if (_openingExternal) return;
+    setState(() => _openingExternal = true);
+    try {
+      final raw = await _fetch(limit: _openExtLimit, onProgress: (c, t) {
+        if (mounted && t != null && t > 0 && (c % (1024 * 1024) == 0)) {
+          setState(() => _total = t);
+        }
+      });
+      final i = widget.name.lastIndexOf('.');
+      final suffix = i >= 0 ? widget.name.substring(i) : '';
+      // 外部 App 要读这个文件，不能进 dispose 清理名单
+      final dir = await getTemporaryDirectory();
+      final f = File(
+          '${dir.path}/openext-${DateTime.now().millisecondsSinceEpoch}$suffix');
+      await f.writeAsBytes(raw, flush: true);
+      final r = await OpenFilex.open(f.path);
+      if (mounted) {
+        if (r.type != ResultType.done) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('系统没有能打开这类文件的应用')));
+        }
+      }
+    } on DioException catch (e) {
+      if (e.error is _TooLarge) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text('文件超过 100MB，请先下载后再打开')));
+        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('打开失败，请稍后重试')));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('打开失败，请稍后重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _openingExternal = false);
+    }
   }
 
   String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
-
   // ── 渲染壳 ──────────────────────────────────────────────
 
-  Widget _markdown(String data) => Markdown(
+  Widget _markdown(String data, {bool images = false}) => Markdown(
         data: data,
         selectable: true,
         padding: const EdgeInsets.all(16),
+        sizedImageBuilder: images
+            ? (config) {
+                final uri = config.uri;
+                if (uri.scheme == 'file') {
+                  final f = File.fromUri(uri);
+                  if (f.existsSync()) {
+                    return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(f,
+                                width: 280, fit: BoxFit.contain)));
+                  }
+                }
+                return const SizedBox.shrink();
+              }
+            : null,
         styleSheet: MarkdownStyleSheet(
           p: const TextStyle(fontSize: 15, height: 1.55),
           h1: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
@@ -229,8 +351,10 @@ class _DocViewerPageState extends State<DocViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    // 可编辑文本（v0.17 md → v0.18 全文本）：预览页一键进编辑器
-    final editable = isNoteEditable(widget.name);
+    // 可编辑文本（v0.17 md → v0.19 全文本+富文本）：预览页一键进编辑器
+    final editable = isNoteEditable(widget.name) ||
+        widget.name.toLowerCase().endsWith('.html') ||
+        widget.name.toLowerCase().endsWith('.htm');
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.name,
@@ -261,7 +385,17 @@ class _DocViewerPageState extends State<DocViewerPage> {
                     });
                   }
                 }),
-        ]),
+          // 万能兜底（v0.19）：任何格式下载后交系统应用打开
+          IconButton(
+              tooltip: '用其他应用打开',
+              icon: _openingExternal
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.open_in_new),
+              onPressed: _openExternal),
+        ],
+      ),
       body: FutureBuilder<Widget>(
           future: _load,
           builder: (context, snap) {
@@ -278,23 +412,45 @@ class _DocViewerPageState extends State<DocViewerPage> {
             }
             if (snap.hasError) {
               final tooLarge = snap.error is _TooLarge;
+              final msg = snap.error.toString();
+              final rough = snap.error is FormatException ||
+                  msg.contains('未能') || msg.contains('粗略');
               return Center(
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.description_outlined,
                     size: 46, color: Colors.white38),
                 const SizedBox(height: 10),
-                Text(tooLarge
-                        ? '文件超过预览上限（${humanSize((snap.error as _TooLarge).limit)}）'
-                        : '预览失败：${snap.error}'
-                    , style: const TextStyle(fontSize: 13)),
+                Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(tooLarge
+                            ? '文件超过预览上限（${humanSize((snap.error as _TooLarge).limit)}）'
+                            : msg.length > 120
+                                ? '预览失败：${msg.substring(0, 120)}'
+                                : '预览失败：$msg',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 13))),
                 const SizedBox(height: 8),
-                TextButton.icon(
-                    onPressed: () => setState(() {
-                          _total = null;
-                          _load = _build();
-                        }),
-                    icon: const Icon(Icons.refresh, size: 18),
-                    label: const Text('重试')),
+                Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (!tooLarge)
+                    TextButton.icon(
+                        onPressed: () => setState(() {
+                              _total = null;
+                              _load = _build();
+                            }),
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: const Text('重试')),
+                  TextButton.icon(
+                      onPressed: _openExternal,
+                      icon: const Icon(Icons.open_in_new, size: 18),
+                      label: const Text('用其他应用打开')),
+                ]),
+                if (rough) ...[
+                  const SizedBox(height: 4),
+                  Text('此类旧版格式仅能粗略提取，重要文档建议转换后再预览',
+                      style: TextStyle(
+                          fontSize: 11, color: Theme.of(context)
+                              .colorScheme.onSurfaceVariant)),
+                ],
               ]));
             }
             return snap.data ?? const SizedBox.shrink();
@@ -308,21 +464,4 @@ class _TooLarge implements Exception {
   const _TooLarge(this.limit);
   @override
   String toString() => '文件过大';
-}
-
-class _DocxEmpty implements Exception {
-  const _DocxEmpty();
-  @override
-  String toString() => 'docx 中没有找到正文（可能是旧版或受保护文档）';
-}
-
-/// 最小 XML 实体还原（docx 正文常出现这五个）
-class _Entities {
-  const _Entities();
-  String decode(String s) => s
-      .replaceAll('&amp;', '&')
-      .replaceAll('&lt;', '<')
-      .replaceAll('&gt;', '>')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&apos;', "'");
 }

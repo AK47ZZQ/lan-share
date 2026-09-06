@@ -30,6 +30,10 @@ set PUB_HOSTED_URL=https://pub.flutter-io.cn
 set FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
 call flutter pub get || exit /b 1
 
+echo === Patch flutter_inappwebview_android proguard line (AGP hard-error) ===
+REM inappwebview 1.1.3 的 proguard-android.txt 被新版 AGP 拒绝：缓存内补丁
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SRC%\..\scripts\patch-inappwebview.ps1" || exit /b 1
+
 echo === flutter build apk --%MODE% ===
 call flutter build apk --%MODE% || exit /b 1
 

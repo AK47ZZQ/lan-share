@@ -51,11 +51,12 @@ class _RecentItem {
     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt',
     '.md', '.csv', '.epub',
   };
-  // v0.17：DocViewerPage 实际支持的范围（与 isDocPreviewable 口径一致）
+  // v0.17/0.19：DocViewerPage 支持范围（与 doc_viewer.isDocPreviewable 口径一致）
   static const _docPreviewExts = {
     '.md', '.markdown', '.txt', '.log', '.json', '.csv', '.pdf', '.docx',
+    '.doc', '.xlsx', '.pptx', '.rtf', '.html', '.htm',
     '.yaml', '.yml', '.xml', '.ini', '.conf', '.cfg', '.properties', '.py',
-    '.js', '.ts', '.dart', '.html', '.htm', '.css', '.sh', '.bat', '.ps1',
+    '.js', '.ts', '.dart', '.css', '.sh', '.bat', '.ps1',
     '.sql', '.srt',
   };
   // v0.18：音频扩面（与 ui/audio_viewer.dart kAudioExts 同口径）

@@ -14,13 +14,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
 import 'dir_picker_page.dart';
+import 'rich_note_editor.dart';
 
 const _kNotesLastDir = 'notes_last_dir';
 String _draftKey(String remotePath) => 'note_draft_$remotePath';
 
-/// 把笔记编辑器 push 出去的便捷入口（doc_viewer/notes_page 共用）
+/// 把笔记编辑器 push 出去的便捷入口（doc_viewer/notes_page 共用）。
+/// v0.19：.html 是富文本笔记，路由到富文本编辑器。
 Future<void> openNoteEditor(BuildContext context,
     {required String dir, required String name, bool isNew = false}) async {
+  final n = name.toLowerCase();
+  if (n.endsWith('.html') || n.endsWith('.htm')) {
+    await openRichNoteEditor(context, dir: dir, name: name, isNew: isNew);
+    return;
+  }
   await Navigator.push(context, MaterialPageRoute(
       builder: (_) => NoteEditorPage(dir: dir, name: name, isNew: isNew)));
 }
@@ -93,10 +100,13 @@ class _NotesPageState extends State<NotesPage> {
       for (final e in items) {
         final m = e as Map;
         final name = (m['name'] as String?) ?? '';
-        // v0.17.1：txt 也算笔记（列表/新建/编辑全链路）
-        if ((name.toLowerCase().endsWith('.md') ||
-                name.toLowerCase().endsWith('.markdown') ||
-                name.toLowerCase().endsWith('.txt')) &&
+        // v0.17.1：txt；v0.19：html（富文本）都算笔记（列表/新建/编辑全链路）
+        final lower = name.toLowerCase();
+        if ((lower.endsWith('.md') ||
+                lower.endsWith('.markdown') ||
+                lower.endsWith('.txt') ||
+                lower.endsWith('.html') ||
+                lower.endsWith('.htm')) &&
             (m['type'] as String?) != 'dir') {
           notes.add(_Note(
               name: name,
@@ -122,7 +132,8 @@ class _NotesPageState extends State<NotesPage> {
 
   Future<void> _newNote() async {
     final nameCtrl = TextEditingController();
-    var isTxt = false;
+    // 0=Markdown 1=纯文本 2=富文本（.html，v0.19）
+    var kind = 0;
     final name = await showDialog<String>(
         context: context,
         builder: (dctx) => StatefulBuilder(
@@ -135,16 +146,23 @@ class _NotesPageState extends State<NotesPage> {
                       maxLength: 60,
                       decoration: const InputDecoration(
                           labelText: '标题',
-                          hintText: '保存为 <标题>.md / .txt')),
+                          hintText: '保存为 <标题>.md / .txt / .html')),
                   const SizedBox(height: 4),
-                  // 类型二选一（v0.17.1）：md 走渲染预览，txt 纯文本
-                  SegmentedButton<bool>(
+                  // 类型三选一：md 渲染预览 / txt 纯文本 / html 富文本日记
+                  SegmentedButton<int>(
                       segments: const [
-                        ButtonSegment(value: false, label: Text('Markdown')),
-                        ButtonSegment(value: true, label: Text('纯文本')),
+                        ButtonSegment(value: 0, label: Text('Markdown')),
+                        ButtonSegment(value: 1, label: Text('纯文本')),
+                        ButtonSegment(value: 2, label: Text('富文本')),
                       ],
-                      selected: {isTxt},
-                      onSelectionChanged: (s) => setD(() => isTxt = s.first)),
+                      selected: {kind},
+                      onSelectionChanged: (s) => setD(() => kind = s.first)),
+                  const SizedBox(height: 4),
+                  if (kind == 2)
+                    Text('富文本支持表格、图片、字体颜色大小，保存为 .html',
+                        style: TextStyle(
+                            fontSize: 11.5, color: Theme.of(dctx)
+                                .colorScheme.onSurfaceVariant)),
                 ]),
                 actions: [
                   TextButton(
@@ -156,7 +174,7 @@ class _NotesPageState extends State<NotesPage> {
                 ]),
         ));
     if (name == null || name.isEmpty || !mounted) return;
-    final ext = isTxt ? '.txt' : '.md';
+    final ext = switch (kind) { 1 => '.txt', 2 => '.html', _ => '.md' };
     // ignore: use_build_context_synchronously
     final d = await Navigator.push<String>(context, MaterialPageRoute(
         builder: (_) => const DirPickerPage(title: '保存到哪个目录？')));
@@ -401,7 +419,7 @@ class _NotesPageState extends State<NotesPage> {
                           const SizedBox(height: 120),
                           Center(
                               child: Text(_searchCtrl.text.trim().isEmpty
-                                  ? '这个目录还没有 .md / .txt 笔记'
+                                  ? '这个目录还没有 .md / .txt / .html 笔记'
                                   : '没有匹配「${_searchCtrl.text.trim()}」的笔记')),
                           const SizedBox(height: 6),
                           Center(
