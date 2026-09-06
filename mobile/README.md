@@ -1,18 +1,11 @@
 # LAN Share App（Flutter 跨端）
 
+> **App 子模块技术文档**：工程结构 / 传输协议 / 备份与分享机制 / 构建签名。
+> 功能总览、里程碑状态与版本历史见根目录 `README.md` 与 `CHANGELOG.md`
+> （当前 **v0.20.0+60**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
+
 家庭网盘 LAN Share 的原生移动客户端。需求见 `docs/DESIGN-v3/APP-REQUIREMENTS.md`，
 技术方案见 `docs/DESIGN-v3/APP-DESIGN.md`。
-
-## 里程碑
-
-| 阶段 | 状态 | 内容 |
-|------|------|------|
-| M-A0 | ✅ | 设备 Token 契约（登录换 Bearer，90 天滑动过期，可吊销） |
-| M-A1 | ✅ | 登录(+TOTP) / 照片墙 / 文件浏览 / 我的（设备管理） / 自签证书 TOFU |
-| M-A2 | ✅ | 手动传输：上传（分片续传+秒传）/ 下载（Range 断点）/ 传输中心（进度/速度/暂停/续传/重试/杀进程恢复） |
-| M-A3 | ✅ | 相册自动备份：WorkManager 周期+MediaStore 即时感知（自写 Kotlin 薄桥）+ sqflite 账本去重 + 后台 isolate 引擎 + 前台服务通知；250MB 杀进程续传零重传（part-mtime 证据）、重启手机自动恢复 |
-| M-A4 | ✅ | 系统分享接收（SEND/SEND_MULTIPLE → 分享暂存，文本落 txt，传完删副本）+ 分享管理（列表/创建/撤销/多地址复制链接）+ APK 分发（加固版经自家链接）；零服务端改动 |
-| M-A5 | ✅ | 登录页 v2 全家桶（v0.5.0~0.5.2+13）：方向 A 布局（品牌区+浮层卡片+地址状态条）/ 连接预检 / 生物识别一键登录（凭据仅 Keystore）/ 配对码免密登录（/api/pair/*，Web 端出码）/ 扫码填地址（mobile_scanner）；两步验证补全：一次性恢复码 + admin 精准解除 + 登录六格 + **App 内置验证器**（RFC 6238 自实现，零第三方）；模拟器端到端真连全通过 |
 
 ## 目录结构
 
@@ -38,9 +31,10 @@ lib/
 ├── transfer/               ★ M-A2 传输核心（纯 Dart，可单测，双端共享）
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
-└── ui/                     首页(综合面板) / 照片(日分组时间线) / 文件 / 传输中心 /
-                            我的（+备份设置/账本/分享管理/创建分享页）/
-                            登录页 v2（方向 A+预检/生物识别/配对码）/ 扫码 / 内置验证器
+└── ui/                     首页(卡片式综合面板/最近上传) / 照片(拍摄·入库双序时间线) /
+                            文件(双布局+新建 md·txt / 上传二维码) / 传输中心(汇总条) /
+                            笔记(md·txt·html 富文本) / 分享管理 / 我的(备份设置/授权卡/
+                            验证器/更新) / 登录页 v2(预检/生物识别/配对码) / 管理面板
 
 android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄桥
 ├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）
@@ -82,10 +76,10 @@ android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄
   attempts>5 置 error，账本页可手动重试
 - **保护**：单批在 dataSync 前台服务通知下执行（Android 12+ 后台启动受限时
   降级，靠账本断点分多轮跑完）；公网地址默认不备份（§6 流量保护，可开）
-- **语义**：单向备份——相册里删掉的照片不会从网盘删除；备份位置固定
-  `照片/手机相册/<用户名>/`（0.4.2 起与手动上传统一落位，网页时间线按
-  此归属"拍摄者"并全员可见；此前在 `incoming/<用户名>/手机相册/` 的存量
-  已由服务端迁移）；视频默认不备份（开关可开）
+- **语义**：单向备份——相册里删掉的照片不会从网盘删除；备份位置（v0.7.0+18
+  重构）固定 `照片|视频/<用户名>/<相册名>/` 三级目录（账本带相册维度，
+  改名用户自动落新目录）；手动上传落 `照片/<用户名>/手机上传/`；视频默认
+  不备份（开关可开）；排除相册按相册维度勾选
 - **验收**（模拟器 API 35 E2E）：60 张全自动备份 sha 一致；账本去重重跑
   mtime 零变化；250MB 杀进程续传**零重传**（服务端分片文件 mtime 前后一致
   的物理证据）；重启手机周期任务自动恢复
@@ -127,10 +121,11 @@ scripts\build-apk.bat debug|release
 替代：仓库已建 ASCII 结点路径 `C:\lan-share` → 真实目录，在该路径下
 直接 `flutter build apk --debug` 也可（M-A2/M-A3 实测，避开中文路径同理）。
 
-启动图标由 `scripts/make-app-icon.py`（hermes venv 的 PIL）生成：与 PWA
-同品牌（紫渐变 + 白 L，几何/配色按 `web/public/icons/icon-512.png` 实测），
+启动图标由 `scripts/make-app-icon.py`（hermes venv 的 PIL）生成：**云朵渐变
+品牌 logo**（紫蓝渐变 + 白描边云，v0.8.5 起与 PWA/网页同源；早期"白 L"已废），
 产出自适应（anydpi-v26 + monochrome）与遗留圆角两套；改品牌先改脚本常量
-再重跑、重新构建。
+再重跑、重新构建。开屏圆角由 flutter_native_splash 自带 drawable 承担
+（v0.15.1 起，勿依赖系统缓存）。
 
 ## 签名与发布（v0.4.0+4 起 release 为正式签名）
 
@@ -167,3 +162,7 @@ scripts\build-apk.bat debug|release
 - **照片时间线为 Sliver 虚拟化**（0.4.4）：CustomScrollView + 按日
   SliverGrid + 置顶改随滚日期头（悬浮头压照片，真机反馈弃用）；勿改回
   shrinkWrap 网格——整组销毁重建会让已加载图片划走即消失
+- **sqflite 账本连接进程级共享**（v0.7.1 根因）：引擎 isolate 的 close()
+  会杀死主 isolate 的连接——账本永不主动 close，连接在进程内全局复用
+- 更完整的版本化踩坑（含 MediaStore 发布复查、edge-to-edge、Reorderable
+  header 等 v0.20 项）见 `项目记忆/03-踩坑清单.md`
