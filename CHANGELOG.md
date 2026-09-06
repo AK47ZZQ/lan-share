@@ -1,3 +1,37 @@
+## 2026-09-06 — v0.19.0+59：文档预览兼容重构 + 富文本笔记
+
+App 端两大块（纯客户端改动，服务端无变更、无需重启）：
+
+### ① 文档预览兼容重构（doc_extract.dart 纯 Dart 解析，无原生依赖）
+- **docx**：从"只抽正文"升级为带样式转换——标题（Heading1/标题 1）→ Markdown
+  标题、加粗/斜体、编号/项目符号列表、表格转 Markdown 表格、内嵌图片解包落
+  临时目录随文渲染（markdown sizedImageBuilder 渲染 file:/// 图片）
+- **xlsx**：解析 sharedStrings/workbook/rels，前 3 个工作表转 Markdown 表格
+  （200 行 × 30 列截断）；**csv**：引号感知解析转表格
+- **pptx**：逐页提取 <a:t> 文本出大纲；**rtf**：控制字剥离（目的地跳过、
+  \uNNNN 与 \'hh 还原）；**doc**：UTF-16LE 段（≥4 对或含高位 0）+ ASCII 段
+  启发式抽取，UI 明示"粗略提取"
+- 预览页常驻「用其他应用打开」：任意格式（xls/ppt/zip…）下载到临时文件后
+  交系统应用，失败/超限（100MB）有明确提示
+- isDocPreviewable 扩面：doc/xlsx/pptx/rtf/html/htm 纳入；recent_page 口径同步
+
+### ② 富文本笔记（保存为 .html 文件）
+- 选型 html_editor_enhanced（Summernote 内核 WebView）：Quill 的 Delta 模型
+  没有表格，弃选；HTML 文件即笔记——网盘可移植、Web 端浏览器可直接打开
+- 新建笔记三选一：Markdown / 纯文本 / 富文本(.html)；笔记列表纳入 .html
+- 编辑器工具栏：粗斜下划删除线、字号、字色/背景色、列表、对齐缩进、
+  表格插入、链接、水平线、撤销重做、清除格式
+- 图片插入：App 内相册选取 → base64 data URI 内嵌（单文件自包含，移动
+  改名不断链）；表情：常用 emoji 快捷面板（系统键盘 emoji 也可用）
+- DocViewer 对 .html 用 RichNoteViewer 只读渲染（与编辑器同源），
+  预览页一键进编辑器；脏态返回拦截
+- 依赖：html_editor_enhanced 2.7.1（引入 flutter_inappwebview）；构建脚本
+  新增 scripts/patch-inappwebview.ps1 缓存补丁（详见踩坑清单）
+
+### 质量口径
+- Dart 144 项测试全绿（新增 doc_extract 6 项：测试内自构造 docx/xlsx/pptx
+  zip 样本）；analyze 0；APK 99.2MB（WebView 引入 +2.4MB）
+
 ## 2026-09-06 — v0.18.0+58：首页卡片自定义 + 预览音频/文本扩面 + 笔记增强
 
 App 端三组功能（纯客户端改动，服务端无变更、无需重启）：
