@@ -17,13 +17,19 @@ class SessionState {
   final bool checking;   // 请求进行中
   final bool loggedIn;
   final String? username;
+  final String? nickname; // 显示层昵称（v0.17）：登录/路径仍用 username
+  final String? avatarPath; // 服务端相对路径（.avatars/<uid>.jpg），空=无头像
   final String? role;
+  /// 昵称优先显示：各界面展示身份时统一走这里
+  String? get displayName =>
+      ((nickname ?? '').trim().isNotEmpty ? nickname : username);
   final String? error;
   final bool needTotp;   // 服务端要求动态验证码
   final TrustRequiredError? trustIssue; // 自签证书待确认
   const SessionState(
       {this.checking = false, this.loggedIn = false, this.username,
-      this.role, this.error, this.needTotp = false, this.trustIssue});
+      this.nickname, this.avatarPath, this.role, this.error,
+      this.needTotp = false, this.trustIssue});
 }
 
 class SessionController extends StateNotifier<SessionState> {
@@ -50,6 +56,8 @@ class SessionController extends StateNotifier<SessionState> {
       state = SessionState(
           loggedIn: true,
           username: name,
+          nickname: r.data['nickname'] as String?,
+          avatarPath: r.data['avatar_path'] as String?,
           role: r.data['role'] as String?);
     } on DioException catch (e) {
       if (e.response?.statusCode != 401) {
@@ -143,6 +151,8 @@ class SessionController extends StateNotifier<SessionState> {
       state = SessionState(
           loggedIn: true,
           username: name,
+          nickname: me.data['nickname'] as String?,
+          avatarPath: me.data['avatar_path'] as String?,
           role: me.data['role'] as String?);
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
@@ -172,6 +182,34 @@ class SessionController extends StateNotifier<SessionState> {
     state = SessionState(
         loggedIn: true,
         username: name,
+        nickname: me.data['nickname'] as String?,
+        role: me.data['role'] as String?);
+  }
+
+  /// 资料更新（v0.17）：改昵称后原地刷新状态，免重新拉 /me
+  Future<void> updateProfile(String nickname) async {
+    final dio = await ApiClient.I.dio();
+    final r = await dio.patch('/api/auth/profile',
+        data: {'nickname': nickname});
+    final nick = (r.data['nickname'] as String?) ?? '';
+    state = SessionState(
+        loggedIn: state.loggedIn,
+        username: state.username,
+        nickname: nick,
+        avatarPath: state.avatarPath,
+        role: state.role);
+  }
+
+  /// 头像上传后重取 /me：同步 avatarPath（昵称/角色一起以服务端为准）
+  Future<void> refreshFromMe() async {
+    final dio = await ApiClient.I.dio();
+    final me = await dio.get('/api/auth/me',
+        options: Options(headers: {'x-login-flow': '1'}));
+    state = SessionState(
+        loggedIn: state.loggedIn,
+        username: me.data['username'] as String?,
+        nickname: me.data['nickname'] as String?,
+        avatarPath: me.data['avatar_path'] as String?,
         role: me.data['role'] as String?);
   }
 

@@ -460,6 +460,14 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
         rows = [r for r in rows if r["path"] in wanted]
     total = len(rows)
     rows = rows[offset:offset + limit]
+    # 拍摄者昵称映射（v0.17 资料体系）：客户端显示优先昵称，筛选仍传 username
+    nicks: dict[str, str] = {}
+    try:
+        for u in _db().execute(
+                "SELECT username, nickname FROM users WHERE nickname != ''"):
+            nicks[u["username"]] = u["nickname"]
+    except Exception:
+        nicks = {}
     return {
         "total": total,
         "items": [{
@@ -468,6 +476,7 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
             "taken": r["taken_at"],
             "month": (r["taken_at"] or "")[:7],
             "uploader": _photo_uploader(r["path"], users),
+            "uploader_nick": nicks.get(_photo_uploader(r["path"], users), ""),
             "media_type": _media_type(r["path"]),
             "duration": r["duration"],
             "codec": r["codec"],

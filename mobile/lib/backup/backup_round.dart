@@ -35,10 +35,12 @@ const _pauseReasonText = {
   'unplugged': '等待充电',
   'system_stop': '系统叫停，稍后自动继续',
   'disabled': '备份已关闭',
+  'user_paused': '您在设置里暂停了备份',
 };
 
 const _skipReasonText = {
   'disabled': '备份已关闭',
+  'user_paused': '已暂停备份（设置里可恢复）',
   'not_logged_in': '未登录',
   'public_server': '当前为公网地址，默认不备份',
   'cooldown': '失败冷却中，稍后自动重试',

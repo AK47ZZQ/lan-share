@@ -52,13 +52,16 @@ class BackupEngine {
   static Future<String?> _pauseReason(String trigger) async {
     final sp = await SharedPreferences.getInstance();
     if (!(sp.getBool('backup_enabled') ?? false)) return 'disabled';
+    // 用户手动暂停（v0.17）：手动轮同样尊重——"暂停备份"是明确叫停，
+    // 点了"立即备份"想跑，先回设置页解除暂停
+    final cfg = await BackupConfig.load();
+    if (cfg.paused) return 'user_paused';
     try {
       final r = await const MethodChannel('lanshare/backup')
           .invokeMethod<Map<Object?, Object?>>('checkStop');
       if (r != null) {
         if (r['stopped'] == true) return 'system_stop';
         if (trigger != 'manual') {
-          final cfg = await BackupConfig.load();
           if (cfg.wifiOnly && r['metered'] == true) return 'wifi_lost';
           if (cfg.chargingOnly && r['charging'] == false) return 'unplugged';
         }
@@ -95,6 +98,10 @@ class BackupEngine {
       final cfg = await BackupConfig.load();
       if (!cfg.enabled) {
         return await finish({'status': 'skip', 'reason': 'disabled'});
+      }
+      // 用户暂停：调度照在（开关没关），引擎直接早退——省一轮媒体库扫描
+      if (cfg.paused) {
+        return await finish({'status': 'skip', 'reason': 'user_paused'});
       }
       final token = await SecureStore.token();
       if (token == null || token.isEmpty) {
@@ -178,6 +185,7 @@ class BackupEngine {
           break;
         }
         attempted++;
+        await sp.setString('backup_progress_current', row.name);
         try {
           final ok = await _uploadOne(dio, ledger, row, username);
           if (!ok) {
@@ -218,6 +226,7 @@ class BackupEngine {
       // 分照片/视频回写供首页分类显示。
       await sp.setInt('backup_progress_done', 0);
       await sp.setInt('backup_progress_total', 0);
+      await sp.setString('backup_progress_current', '');
       try {
         final st = await ledger.stats(excluded: cfg.excludedBuckets,
             included: cfg.selectedBuckets);
@@ -246,6 +255,7 @@ class BackupEngine {
       try {
         await sp.setInt('backup_progress_done', 0);
         await sp.setInt('backup_progress_total', 0);
+        await sp.setString('backup_progress_current', '');
       } catch (_) {}
     }
     return finish();

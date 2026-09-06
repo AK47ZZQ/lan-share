@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:dio/dio.dart' show DioException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -11,6 +12,7 @@ import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
 import '../backup/backup_round.dart';
 import '../backup/media_source.dart';
+import '../data/api/api_client.dart';
 import '../data/api/purge.dart' show purgeServerFiles;
 import '../state/session.dart';
 import '../transfer/transfer_task.dart' show humanSize;
@@ -31,6 +33,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   Map<String, Object?>? _diag; // 备份诊断快照（充电/网络/通知，0.7.3）
   String? _lastRound;   // 引擎最近一轮 JSON
   String? _workerState; // Worker/队列状态 JSON
+  int _progDone = 0;    // 本轮进度（引擎逐张落盘，详情页/设置页共用）
+  int _progTotal = 0;
+  String _progCurrent = '';
 
   @override
   void initState() {
@@ -89,6 +94,16 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
       // 从此停在旧数字假死（0.7.1 修的"状态卡不更新/无法实时显示"）；
       // 下个 2s tick 自然重试。
     }
+    try {
+      final sp = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _progDone = sp.getInt('backup_progress_done') ?? 0;
+          _progTotal = sp.getInt('backup_progress_total') ?? 0;
+          _progCurrent = sp.getString('backup_progress_current') ?? '';
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _toggle(bool on) async {
@@ -236,34 +251,112 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     return (purge, clearLedger);
   }
 
-  /// 第二步：输入用户名确认（type-to-confirm，防手滑+防误入）。
+  /// 第二步：输入用户名 + 登录密码（v0.17：在 type-to-confirm 之上加本人口令
+  /// 复核，服务端 /api/auth/verify-password 校验——捡到解锁手机的人也删不掉）。
   Future<bool> _wipeConfirm(String username) async {
-    final ctrl = TextEditingController();
+    final userCtrl = TextEditingController();
+    final pwCtrl = TextEditingController();
+    final userFocus = FocusNode();
+    final pwFocus = FocusNode();
     final ok = await showDialog<bool>(
       context: context,
-      builder: (dctx) => AlertDialog(
-        title: const Text('确认执行'),
-        content: TextField(
-          controller: ctrl,
-          autocorrect: false,
-          decoration: const InputDecoration(
-            hintText: '输入用户名以确认',
-            helperText: '输入与用户名完全一致时才能继续')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('取消')),
-          ListenableBuilder(
-            listenable: ctrl,
-            builder: (dctx, _) => FilledButton(
-              style: FilledButton.styleFrom(
-                  backgroundColor: Theme.of(dctx).colorScheme.error),
-              onPressed: ctrl.text.trim() == username
-                  ? () => Navigator.pop(dctx, true)
-                  : null,
-              child: const Text('确认清空')),
-          ),
-        ],
+      builder: (dctx) => StatefulBuilder(
+        builder: (dctx, setD) {
+          var err = '';
+          var checking = false;
+
+          Future<void> submit() async {
+            if (checking) return;
+            if (userCtrl.text.trim() != username) {
+              setD(() => err = '用户名不一致');
+              return;
+            }
+            if (pwCtrl.text.isEmpty) {
+              setD(() => err = '请输入密码');
+              return;
+            }
+            setD(() { checking = true; err = ''; });
+            try {
+              final dio = await ApiClient.I.dio();
+              await dio.post('/api/auth/verify-password',
+                  data: {'password': pwCtrl.text});
+              if (dctx.mounted) Navigator.pop(dctx, true);
+            } on DioException catch (e) {
+              final d = e.response?.data;
+              final detail = d is Map && d['detail'] != null
+                  ? d['detail'].toString()
+                  : null;
+              setD(() {
+                checking = false;
+                err = e.response?.statusCode == 429
+                    ? (detail ?? '尝试过于频繁，请稍后再试')
+                    : (e.response?.statusCode == 401
+                        ? '密码错误'
+                        : '服务器不可达，请稍后重试');
+              });
+            } catch (_) {
+              setD(() { checking = false; err = '服务器不可达，请稍后重试'; });
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('确认执行'),
+            content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                TextField(
+                  controller: userCtrl,
+                  focusNode: userFocus,
+                  autocorrect: false,
+                  autofillHints: const [AutofillHints.username],
+                  textInputAction: TextInputAction.next,
+                  onSubmitted: (_) => pwFocus.requestFocus(),
+                  decoration: const InputDecoration(
+                    labelText: '用户名',
+                    hintText: '输入与用户名完全一致')),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pwCtrl,
+                  focusNode: pwFocus,
+                  obscureText: true,
+                  autocorrect: false,
+                  autofillHints: const [AutofillHints.password],
+                  onSubmitted: (_) => submit(),
+                  decoration: const InputDecoration(
+                    labelText: '登录密码',
+                    hintText: '校验本人口令后才会执行')),
+                if (err.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(err,
+                      style: TextStyle(
+                          color: Theme.of(dctx).colorScheme.error,
+                          fontSize: 12.5)),
+                ],
+              ]),
+            ),
+            actions: [
+              TextButton(
+                onPressed: checking ? null : () => Navigator.pop(dctx, false),
+                child: const Text('取消')),
+              ListenableBuilder(
+                listenable: Listenable.merge([userCtrl, pwCtrl]),
+                builder: (dctx, _) => FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: Theme.of(dctx).colorScheme.error),
+                  onPressed: checking ||
+                          userCtrl.text.trim() == username &&
+                              pwCtrl.text.isNotEmpty
+                      ? submit
+                      : null,
+                  child: checking
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('确认清空'),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
     // 不能在这里 ctrl.dispose()：对话框退场动画期间 TextField 与
@@ -392,6 +485,28 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 value: cfg.enabled,
                 onChanged: locked ? null : (v) => _toggle(v),
               ),
+              // 用户暂停（v0.17）：开关照开、调度照在，引擎逐张前让路——
+              // 与"关闭备份"的区别：暂停保留全部配置，一键恢复继续跑
+              if (cfg.enabled)
+                SwitchListTile(
+                  secondary: Icon(cfg.paused
+                      ? Icons.pause_circle
+                      : Icons.pause_circle_outline),
+                  title: const Text('暂停备份'),
+                  subtitle: Text(cfg.paused
+                      ? '已暂停：满足约束后也不会自动备份，关闭此开关恢复'
+                      : '临时停一段时间（出差/省流量），配置保持不变'),
+                  value: cfg.paused,
+                  onChanged: locked
+                      ? null
+                      : (v) async {
+                          final c = cfg.copyWith(paused: v);
+                          await c.save();
+                          if (!mounted) return;
+                          setState(() => _cfg = c);
+                          await BackupBridge.applySchedule(c);
+                        },
+                ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Card(
@@ -434,6 +549,52 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   ),
                 ),
               ),
+              // 本轮进度卡（v0.17 备份详情化）：引擎逐张落盘，2s 轮询刷新
+              if (_progTotal > 0 && !_busy)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Card(
+                    elevation: 0,
+                    color: cs.surfaceContainerHighest,
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Row(children: [
+                          const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2)),
+                          const SizedBox(width: 10),
+                          Expanded(
+                              child: Text('备份中 $_progDone/$_progTotal 项'
+                                  '（${(_progDone * 100 ~/ _progTotal)}%）',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold))),
+                        ]),
+                        const SizedBox(height: 10),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: TweenAnimationBuilder<double>(
+                            tween: Tween(begin: 0,
+                                end: _progDone / _progTotal),
+                            duration: const Duration(milliseconds: 400),
+                            builder: (_, v, _) => LinearProgressIndicator(
+                                value: v.clamp(0.0, 1.0), minHeight: 8),
+                          ),
+                        ),
+                        if (_progCurrent.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text('正在上传：$_progCurrent',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.grey)),
+                        ],
+                      ]),
+                    ),
+                  ),
+                ),
               const Divider(height: 24),
               // 备份诊断卡（0.7.3）：环境快照 + 最近调度/轮次状态。
               // "点了立即备份没反应"不再靠猜——卡在哪一环这里一眼可见
@@ -550,7 +711,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 child: Row(children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                        onPressed: cfg.enabled && !_busy
+                        onPressed: cfg.enabled && !cfg.paused && !_busy
                             ? () async {
                                 setState(() => _busy = true);
                                 try {
@@ -576,9 +737,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                     child: FilledButton.tonalIcon(
                         onPressed: () => Navigator.push(context,
                             MaterialPageRoute(
-                                builder: (_) => const BackupLedgerPage())),
-                        icon: const Icon(Icons.receipt_long),
-                        label: const Text('备份账本')),
+                                builder: (_) => const BackupDetailsPage())),
+                        icon: const Icon(Icons.fact_check_outlined),
+                        label: const Text('备份详情')),
                   ),
                 ]),
               ),
@@ -604,7 +765,8 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                             fontWeight: FontWeight.w600)),
                     subtitle: const Text(
                         '删除 照片、视频/<我的用户名>/ 下的全部内容，'
-                        '手机原照片不受影响；两步确认，可选是否清空备份账本',
+                        '手机原照片不受影响；需输入用户名和登录密码确认，'
+                        '可选是否清空备份账本',
                         style: TextStyle(fontSize: 12)),
                     onTap: _busy ? null : () => _wipeServerBackup(cfg),
                   ),
@@ -623,25 +785,55 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
   }
 }
 
-class BackupLedgerPage extends StatefulWidget {
-  const BackupLedgerPage({super.key});
+/// 备份详情页（v0.17 由"备份账本"重构）：顶部实时进度卡（本轮 X/Y 进度条
+/// + 正在上传的文件；空闲时显示最近一轮状态），下方为账本明细（筛选 + 列表）。
+class BackupDetailsPage extends StatefulWidget {
+  const BackupDetailsPage({super.key});
 
   @override
-  State<BackupLedgerPage> createState() => _BackupLedgerPageState();
+  State<BackupDetailsPage> createState() => _BackupDetailsPageState();
 }
 
-class _BackupLedgerPageState extends State<BackupLedgerPage> {
+class _BackupDetailsPageState extends State<BackupDetailsPage> {
   String _filter = 'all';
   String _kind = 'all'; // 类型筛选（0.7.1：照片/视频分开看）
   List<LedgerRow> _rows = [];
   bool _loading = true;
   bool _retrying = false;
   String? _error;
+  Timer? _poll;
+  int _progDone = 0;
+  int _progTotal = 0;
+  String _progCurrent = '';
+  String? _lastRound;
+  int? _doneCount;
+  int? _doneBytes;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // 备份在后台 isolate 跑：2s 轮询进度卡与列表（与设置页同节奏）
+    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _loadProgress());
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadProgress() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _progDone = sp.getInt('backup_progress_done') ?? 0;
+        _progTotal = sp.getInt('backup_progress_total') ?? 0;
+        _progCurrent = sp.getString('backup_progress_current') ?? '';
+        _lastRound = sp.getString('backup_last_round');
+      });
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -649,11 +841,17 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
       final rows = await BackupLedger.I.recent(
           status: _filter == 'all' ? null : _filter,
           kind: _kind == 'all' ? null : _kind);
+      LedgerStats? st;
+      try {
+        st = await BackupLedger.I.stats();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _rows = rows;
         _loading = false;
         _error = null;
+        _doneCount = st == null ? 0 : st.donePhotos + st.doneVideos;
+        _doneBytes = st?.doneBytes ?? 0;
       });
     } catch (e) {
       // 后台引擎正拿着同一个库跑备份时偶发锁冲突；不能让异常把页面
@@ -669,9 +867,11 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final running = _progTotal > 0;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('备份账本'),
+        title: const Text('备份详情'),
         actions: [
           TextButton.icon(
               onPressed: _retrying
@@ -720,6 +920,76 @@ class _BackupLedgerPageState extends State<BackupLedgerPage> {
                           child: const Text('重试'))),
                 ])
               : Column(children: [
+              // ── 实时进度/最近一轮卡 ──────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                child: Card(
+                  elevation: 0,
+                  color: cs.surfaceContainerHighest,
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: running
+                        ? Column(crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                            Row(children: [
+                              const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2)),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                  child: Text('备份中 $_progDone/$_progTotal 项'
+                                      '（${(_progDone * 100 ~/ _progTotal)}%）',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold))),
+                            ]),
+                            const SizedBox(height: 10),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: TweenAnimationBuilder<double>(
+                                tween: Tween(begin: 0,
+                                    end: _progDone / _progTotal),
+                                duration: const Duration(milliseconds: 400),
+                                builder: (_, v, _) => LinearProgressIndicator(
+                                    value: v.clamp(0.0, 1.0), minHeight: 8),
+                              ),
+                            ),
+                            if (_progCurrent.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text('正在上传：$_progCurrent',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Colors.grey)),
+                            ],
+                          ])
+                        : Row(children: [
+                            if (roundView(_lastRound) case final r?) ...[
+                              Icon(r.warn
+                                      ? Icons.info_outline
+                                      : Icons.check_circle_outline,
+                                  size: 18,
+                                  color: r.warn
+                                      ? Colors.orange
+                                      : Colors.green),
+                              const SizedBox(width: 8),
+                              Expanded(child: Text(r.text,
+                                  style: const TextStyle(fontSize: 13))),
+                            ] else
+                              const Expanded(
+                                  child: Text('暂无备份记录',
+                                      style: TextStyle(fontSize: 13))),
+                            if (_doneCount != null && _doneCount! > 0) ...[
+                              Text(
+                                  '累计 $_doneCount 项 · ${humanSize(_doneBytes ?? 0)}',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Colors.grey)),
+                            ],
+                          ]),
+                  ),
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Wrap(spacing: 8, children: [

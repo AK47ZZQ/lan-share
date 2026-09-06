@@ -6,7 +6,7 @@ export interface Entry {
   name: string; path: string; is_dir: boolean; is_private_root?: boolean
   size: number | null; size_human: string; modified: string; ext: string | null
 }
-export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null; totp_enabled?: boolean; totp_rc_left?: number }
+export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null; totp_enabled?: boolean; totp_rc_left?: number; nickname?: string; avatar_path?: string }
 export interface TrashItem { id: number; name: string; orig_path: string; size_human: string; deleted_at: string; days_left: number }
 export interface ShareItem {
   token: string; owner: string; target: string | null; path: string; name: string; size: number | null
@@ -15,7 +15,7 @@ export interface ShareItem {
 }
 export interface ShareHistoryRow { ts: number; ip: string; action: string }
 export interface ShareMeta { name: string; size_human: string; expires_in: string; needs_password: boolean; max_downloads: number | null; downloads: number }
-export interface AdminUser { id: number; username: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string; webdav_set?: boolean; totp_enabled?: boolean }
+export interface AdminUser { id: number; username: string; nickname?: string; avatar_path?: string; role: string; is_active: boolean; quota_bytes: number | null; quota_human: string; created_at: string; webdav_set?: boolean; totp_enabled?: boolean }
 
 export interface Grant { id: number; user_id: number; path: string; can_read: boolean; can_write: boolean; expires_at: number | null }
 export interface ActivityItem { ts: number; username: string; action: string; target: string; detail: string; count: number }
@@ -83,6 +83,14 @@ export const api = {
     jpost('/api/auth/username', { new_username, password }).then(r => handle<{ ok: boolean; username: string }>(r)),
   changePassword: (old_password: string, new_password: string) =>
     jpost('/api/auth/password', { old_password, new_password }).then(r => handle<{ ok: boolean }>(r)),
+  // 资料（v0.17）：昵称只是显示层，登录仍用用户名；头像按 uid 存服务端
+  updateProfile: (nickname: string) =>
+    fetch('/api/auth/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nickname }) }).then(r => handle<{ ok: boolean; nickname: string }>(r)),
+  uploadAvatar: (file: File) => {
+    const fd = new FormData(); fd.append('file', file)
+    return fetch('/api/auth/avatar', { method: 'POST', body: fd }).then(r => handle<{ ok: boolean; avatar_path: string }>(r))
+  },
+  avatarUrl: (username: string, bust: number | string = 0) => `/api/auth/avatar/${encodeURIComponent(username)}?t=${bust}`,
   webdavPwdStatus: () => fetch('/api/auth/webdav-password').then(r => handle<{ set: boolean }>(r)),
   setWebdavPwd: (current_password: string, webdav_password: string) =>
     jpost('/api/auth/webdav-password', { current_password, webdav_password }).then(r => handle<{ ok: boolean; set: boolean }>(r)),

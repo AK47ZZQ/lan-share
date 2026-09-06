@@ -11,8 +11,12 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'about_page.dart';
+import 'notes_page.dart';
 import 'admin_page.dart';
 import 'backup_settings_page.dart';
+import 'package:dio/dio.dart' show DioException, FormData, MultipartFile;
+import 'package:file_picker/file_picker.dart';
+
 import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
@@ -27,6 +31,7 @@ import '../transfer/transfer_task.dart' show humanSize;
 import 'shares_page.dart';
 import 'trash_page.dart';
 import 'verifier_page.dart';
+import 'widgets/auth_image.dart';
 import 'widgets/server_picker.dart' show shortHost, showServerPicker;
 
 class MePage extends ConsumerStatefulWidget {
@@ -687,6 +692,162 @@ class _MePageState extends ConsumerState<MePage> {
               fontSize: 11,
               color: Theme.of(context).colorScheme.onTertiaryContainer)));
 
+  int _avatarBust = 0; // 上传/替换头像后 +1，绕过 AuthCacheManager 磁盘缓存
+
+  Widget _avatarWidget(SessionState session, {double radius = 20}) {
+    final path = session.avatarPath ?? '';
+    if (path.isNotEmpty) {
+      return CircleAvatar(
+          radius: radius,
+          child: ClipOval(
+              child: AuthImage(
+                  url: '$path?t=$_avatarBust',  // absoluteUrl 内部拼 base
+                  fit: BoxFit.cover,
+                  placeholder: (_) => const ColoredBox(
+                      color: Color(0x22000000),
+                      child: Center(
+                          child: SizedBox(
+                              width: 12, height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2)))),
+                  errorBuilder: (_, _) => Text(
+                      (session.username ?? '?').isNotEmpty
+                          ? session.username![0].toUpperCase()
+                          : '?',
+                      style: const TextStyle(fontSize: 16)))));
+    }
+    return CircleAvatar(
+        radius: radius,
+        child: Text((session.username ?? '?').isNotEmpty
+            ? session.username![0].toUpperCase()
+            : '?'));
+  }
+
+  /// 资料编辑（v0.17）：换头像（file_picker 选图 → POST multipart）+ 改昵称
+  Future<void> _openProfileEditor() async {
+    final session = ref.read(sessionProvider);
+    final nickCtrl = TextEditingController(text: (session.nickname ?? '').trim());
+    File? newAvatar;
+    var busy = false;
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (bctx) => StatefulBuilder(
+        builder: (bctx, setD) => Padding(
+          padding: EdgeInsets.only(
+              left: 20, right: 20, top: 18,
+              bottom: 18 + MediaQuery.of(bctx).viewInsets.bottom),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('编辑资料',
+                style: Theme.of(bctx).textTheme.titleMedium),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: busy
+                  ? null
+                  : () async {
+                      final r = await FilePicker.platform
+                          .pickFiles(type: FileType.image);
+                      if (r != null && r.files.single.path != null) {
+                        setD(() => newAvatar = File(r.files.single.path!));
+                      }
+                    },
+              child: Stack(alignment: Alignment.bottomRight, children: [
+                if (newAvatar != null)
+                  CircleAvatar(
+                      radius: 36, backgroundImage: FileImage(newAvatar!))
+                else if ((session.avatarPath ?? '').isNotEmpty)
+                  CircleAvatar(
+                      radius: 36,
+                      child: ClipOval(
+                          child: AuthImage(
+                              url: '${session.avatarPath}?t=$_avatarBust',
+                              fit: BoxFit.cover)))
+                else
+                  CircleAvatar(
+                      radius: 36,
+                      child: Text((session.username ?? '?').isNotEmpty
+                          ? session.username![0].toUpperCase()
+                          : '?',
+                          style: const TextStyle(fontSize: 26))),
+                const CircleAvatar(
+                    radius: 12, child: Icon(Icons.camera_alt, size: 13)),
+              ]),
+            ),
+            const SizedBox(height: 4),
+            Text('点头像更换（jpg/png，8MB 内）',
+                style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+            const SizedBox(height: 14),
+            TextField(
+                controller: nickCtrl,
+                maxLength: 32,
+                decoration: const InputDecoration(
+                    labelText: '昵称',
+                    hintText: '留空恢复显示用户名；登录仍用用户名')),
+            const SizedBox(height: 14),
+            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+              TextButton(
+                  onPressed: busy ? null : () => Navigator.pop(bctx, false),
+                  child: const Text('取消')),
+              const SizedBox(width: 8),
+              FilledButton(
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          setD(() => busy = true);
+                          try {
+                            final dio = await ApiClient.I.dio();
+                            if (newAvatar != null) {
+                              await dio.post('/api/auth/avatar',
+                                  data: FormData.fromMap({
+                                    'file': await MultipartFile.fromFile(
+                                        newAvatar!.path,
+                                        filename: 'avatar.jpg'),
+                                  }));
+                              await ref
+                                  .read(sessionProvider.notifier)
+                                  .refreshFromMe();
+                              if (mounted) setState(() => _avatarBust++);
+                            }
+                            final nick = nickCtrl.text.trim();
+                            if (nick != (session.nickname ?? '').trim()) {
+                              await ref
+                                  .read(sessionProvider.notifier)
+                                  .updateProfile(nick);
+                            }
+                            if (bctx.mounted) Navigator.pop(bctx, true);
+                          } on DioException catch (e) {
+                            final d = e.response?.data;
+                            final detail = d is Map && d['detail'] != null
+                                ? d['detail'].toString()
+                                : '保存失败';
+                            setD(() => busy = false);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(detail)));
+                            }
+                          } catch (_) {
+                            setD(() => busy = false);
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('保存失败，请稍后重试')));
+                            }
+                          }
+                        },
+                  child: busy
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Text('保存')),
+            ]),
+          ]),
+        ),
+      ),
+    );
+    if (saved == true && mounted) {
+      _toast('资料已更新');
+      setState(() {});
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
@@ -705,16 +866,15 @@ class _MePageState extends ConsumerState<MePage> {
                   padding: const EdgeInsets.all(6),
                   child: Column(children: [
                     ListTile(
-                      leading: CircleAvatar(
-                          child: Text((session.username ?? '?').isNotEmpty
-                              ? session.username![0].toUpperCase()
-                              : '?')),
-                      title: Text(session.username ?? ''),
+                      leading: _avatarWidget(session),
+                      title: Text(session.displayName ?? ''),
                       subtitle: Text(session.role == 'admin'
-                          ? '管理员'
+                          ? '管理员 · 点按编辑头像/昵称'
                           : isGuest
-                              ? '访客（只读）'
-                              : '成员'),
+                              ? '访客（只读）· 点按编辑头像/昵称'
+                              : '成员 · 点按编辑头像/昵称'),
+                      trailing: const Icon(Icons.edit_outlined, size: 18),
+                      onTap: _openProfileEditor,
                     ),
                     const Divider(height: 1),
                     ListTile(
@@ -763,6 +923,9 @@ class _MePageState extends ConsumerState<MePage> {
                           _quickTile(Icons.share_outlined, '我的分享', () =>
                               Navigator.push(context, MaterialPageRoute(
                                   builder: (_) => const SharesPage()))),
+                        _quickTile(Icons.edit_note_outlined, '笔记', () =>
+                            Navigator.push(context, MaterialPageRoute(
+                                builder: (_) => const NotesPage()))),
                         _quickTile(Icons.delete_outline, '回收站', () =>
                             Navigator.push(context, MaterialPageRoute(
                                 builder: (_) => const TrashPage()))),

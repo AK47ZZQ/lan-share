@@ -35,7 +35,8 @@ class PhotoViewerPage extends ConsumerStatefulWidget {
   ConsumerState<PhotoViewerPage> createState() => _PhotoViewerPageState();
 }
 
-class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
+class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
+    with TickerProviderStateMixin {
   late int _index = widget.initial;
   // 图片加载失败重试：换 key 强制 AuthImage 重新解析
   int _imgRetry = 0;
@@ -44,6 +45,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   late final PageController _pageController =
       PageController(initialPage: widget.initial);
   Timer? _slide;
+  // 双击缩放（v0.17 预览大改）：受控变换 + 短动画，双击 1x↔2.5x、落点为中心
+  final _transform = TransformationController();
+  AnimationController? _zoomCtrl;
   // 缩放与翻页手势仲裁（R1-P3-6）：双指捏合/放大期间禁用 PageView 滑动，
   // 防止横向漂移误翻页并清零缩放；放大后也可正常横滑翻页（先收一手物理，
   // 简化实现：交互期间冻结翻页）
@@ -52,8 +56,43 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
   @override
   void dispose() {
     _slide?.cancel();
+    _zoomCtrl?.dispose();
+    _transform.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  /// 双击图片：已放大 → 回 1x；1x → 以双击落点为中心放大 2.5x
+  void _onDoubleTapImage(Offset localPos) {
+    final cur = _transform.value.getMaxScaleOnAxis();
+    _zoomCtrl?.dispose();
+    final ctrl = AnimationController(
+        duration: const Duration(milliseconds: 200), vsync: this);
+    _zoomCtrl = ctrl;
+    late final Animation<Matrix4> anim;
+    if (cur > 1.05) {
+      anim = Tween<Matrix4>(begin: _transform.value,
+          end: Matrix4.identity()).animate(
+          CurvedAnimation(parent: ctrl, curve: Curves.easeOut));
+    } else {
+      const target = 2.5;
+      final x = -localPos.dx * (target - 1);
+      final y = -localPos.dy * (target - 1);
+      anim = Tween<Matrix4>(
+          begin: _transform.value,
+          end: Matrix4(target, 0, 0, x, 0, target, 0, y, 0, 0, 0, 1,
+              0, 0, 0, 1)).animate(
+          CurvedAnimation(parent: ctrl, curve: Curves.easeOut));
+    }
+    void listener() {
+      _transform.value = anim.value;
+      if (anim.isCompleted) {
+        _transform.value = anim.value;
+        ctrl.removeListener(listener);
+      }
+    }
+    ctrl.addListener(listener);
+    ctrl.forward();
   }
 
   void _toggleSlideshow() {
@@ -166,7 +205,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                       // 标签随入口切换；来源空段不渲染
                       _row(it.uploader.isEmpty ? '修改时间' : '拍摄日期',
                           it.taken.isEmpty ? '-' : it.taken),
-                      if (it.uploader.isNotEmpty) _row('来源', it.uploader),
+                      if (it.uploader.isNotEmpty) _row('来源', it.uploaderDisplay),
                       if (it.isVideo && it.durationLabel.isNotEmpty)
                         _row('时长', it.durationLabel),
                       const SizedBox(height: 6),
@@ -197,7 +236,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
 
   /// 底部状态行：拍摄日期 / 上传者 任意缺省就跳过该段，两段都在才拼接
   String _statusLine(PhotoItem it) {
-    final parts = [if (it.taken.isNotEmpty) it.taken, if (it.uploader.isNotEmpty) it.uploader];
+    final parts = [if (it.taken.isNotEmpty) it.taken, if (it.uploader.isNotEmpty) it.uploaderDisplay];
     return parts.isEmpty ? it.name : parts.join('  ·  ');
   }
 
@@ -283,12 +322,21 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
               physics: _interacting
                   ? const NeverScrollableScrollPhysics()
                   : const PageScrollPhysics(),
-              onPageChanged: (i) => setState(() => _index = i),
+              onPageChanged: (i) {
+                _transform.value = Matrix4.identity(); // 翻页回 1x
+                setState(() => _index = i);
+              },
               itemBuilder: (context, i) {
                 final p = widget.items[i];
                 return p.isVideo
                     ? _VideoPage(item: p)
-                    : InteractiveViewer(
+                    : GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onDoubleTapDown: (d) => _onDoubleTapImage(
+                            d.localPosition),
+                        onDoubleTap: () {},
+                        child: InteractiveViewer(
+                        transformationController: _transform,
                         maxScale: 5,
                         onInteractionStart: (_) =>
                             setState(() => _interacting = true),
@@ -332,7 +380,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
                             ),
                           ),
                         ),
-                      );
+                      ));
               },
             ),
           ),
@@ -350,6 +398,14 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage> {
             child: Padding(
               padding: const EdgeInsets.only(left: 14, right: 4, top: 4, bottom: 4),
               child: Row(children: [
+                // 页码指示（v0.17 预览大改）：主流相册必备
+                if (widget.items.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Text('${_index + 1}/${widget.items.length}',
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12)),
+                  ),
                 Expanded(
                   // 0.12.0：文件页入口进来 uploader 为空（/api/files 无归属
                   // 字段），空段不渲染，避免孤零零的 " · " 分隔点
@@ -522,6 +578,23 @@ class _VideoPageState extends State<_VideoPage> with WidgetsBindingObserver {
           c.value.isPlaying ? c.pause() : c.play();
           setState(() {});
         },
+        onDoubleTapDown: (d) {
+          // 主流播放器手势：左 1/3 快退 10s、右 1/3 快进 10s、中间播放/暂停
+          final w = MediaQuery.of(context).size.width;
+          final pos = c.value.position;
+          if (d.localPosition.dx < w / 3) {
+            c.seekTo(pos - const Duration(seconds: 10) < Duration.zero
+                ? Duration.zero
+                : pos - const Duration(seconds: 10));
+          } else if (d.localPosition.dx > w * 2 / 3) {
+            final target = pos + const Duration(seconds: 10);
+            c.seekTo(target > c.value.duration ? c.value.duration : target);
+          } else {
+            c.value.isPlaying ? c.pause() : c.play();
+          }
+          if (mounted) setState(() {});
+        },
+        onDoubleTap: () {},
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Expanded(
               child: Center(
@@ -543,6 +616,32 @@ class _VideoPageState extends State<_VideoPage> with WidgetsBindingObserver {
                             color: Colors.white),
                         onPressed: () {
                           c.value.isPlaying ? c.pause() : c.play();
+                          setState(() {});
+                        }),
+                    // 倍速（v0.17 预览大改）：1.0/1.25/1.5/2.0 轮换
+                    GestureDetector(
+                        onTap: () {
+                          const speeds = [1.0, 1.25, 1.5, 2.0];
+                          final i = speeds.indexWhere(
+                              (e) => e == c.value.playbackSpeed);
+                          c.setPlaybackSpeed(
+                              speeds[(i + 1) % speeds.length]);
+                          if (mounted) setState(() {});
+                        },
+                        child: Text(
+                            '×${c.value.playbackSpeed == 1.0 ? '1' : c.value.playbackSpeed.toString()}',
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12))),
+                    const SizedBox(width: 4),
+                    // 静音开关：看视频不想外放声的主流需求
+                    IconButton(
+                        icon: Icon(
+                            c.value.volume == 0
+                                ? Icons.volume_off
+                                : Icons.volume_up,
+                            color: Colors.white70, size: 20),
+                        onPressed: () {
+                          c.setVolume(c.value.volume == 0 ? 1.0 : 0.0);
                           setState(() {});
                         }),
                     Text(

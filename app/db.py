@@ -1,7 +1,8 @@
 """元数据库双引擎：SQLite（默认，开发/测试）或 PostgreSQL（DATABASE_URL，生产）。
 
 - SQL 统一用 '?' 占位符书写；PG 适配层在执行前转为 '%s'（SQL 字符串字面量内的
-  '?' 不替换——本项目 SQL 无该写法）。
+  '?' 不替换——本项目 SQL 无该写法）。SQL 字面量里的 '%'（LIKE 模式等）会
+  统一翻倍成 '%%'——psycopg 把裸 '%' 当占位符前缀，不翻倍直接 ProgrammingError。
 - 行访问统一按 key（r["col"]）：SQLite 用 Row，PG 用 dict_row。
 - 写并发：SQLite 靠 _db_lock 全局串行 + WAL；PG 用 autocommit（多语句原子序列
   已改为引擎中立的补偿写法，见 admin.py invite_redeem）。
@@ -32,6 +33,11 @@ def _pg_sql(sql: str) -> str:
             in_str = not in_str
         if ch == "?" and not in_str:
             out.append("%s")
+        elif ch == "%":
+            # psycopg 把裸 % 当占位符前缀（only '%s','%b','%t' are allowed），
+            # LIKE 模式里的 'private/%' 会让整条 SQL 炸成 ProgrammingError——
+            # 字面 % 一律翻倍（R1-P2-10 照片下推 SQL 生产 500 的根因）
+            out.append("%%")
         else:
             out.append(ch)
     return "".join(out)
@@ -100,7 +106,9 @@ _PG_SCHEMA = """
         totp_enabled INTEGER NOT NULL DEFAULT 0,
         webdav_password_hash TEXT,
         totp_rc TEXT,
-        totp_last_step BIGINT
+        totp_last_step BIGINT,
+        nickname TEXT NOT NULL DEFAULT '',
+        avatar_path TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS sessions(
         token_hash TEXT PRIMARY KEY,
@@ -308,6 +316,8 @@ def init_db():
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS webdav_password_hash TEXT")
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_rc TEXT")
         _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT")
+        _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT NOT NULL DEFAULT ''")
+        _db().execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_path TEXT NOT NULL DEFAULT ''")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS duration DOUBLE PRECISION")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS codec TEXT")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS width INTEGER")
@@ -411,6 +421,10 @@ def _migrate_v3():
             conn.execute("ALTER TABLE users ADD COLUMN totp_rc TEXT")
         if "totp_last_step" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN totp_last_step INTEGER")
+        if "nickname" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''")
+        if "avatar_path" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN avatar_path TEXT NOT NULL DEFAULT ''")
         ucols = {r["name"] for r in conn.execute("PRAGMA table_info(upload_sessions)").fetchall()}
         if "user_id" not in ucols:
             conn.execute("ALTER TABLE upload_sessions ADD COLUMN user_id INTEGER")

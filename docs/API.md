@@ -18,8 +18,12 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/setup` | 🔓* | `{username, password}` 创建管理员；*仅用户表为空时可用，创建后永久关闭 |
 | POST | `/api/login` | 🔓 | `{username, password}`；失败 5 次锁账号 15 分钟；10 次/分/IP |
 | POST | `/api/logout` | 🔓 | 吊销当前会话 |
-| GET | `/api/auth/me` | 🔑 | `{username, role, quota_bytes}`；401=未登录（前端以此为登录态探测） |
+| GET | `/api/auth/me` | 🔑 | `{username, role, quota_bytes, nickname, avatar_path}`；401=未登录（前端以此为登录态探测） |
 | POST | `/api/auth/password` | 🔑 | `{old_password, new_password}`；改密吊销全部会话并重签当前 |
+| PATCH | `/api/auth/profile` | 🔑 | `{nickname}` 改显示昵称（≤32 字符、去控制字符；空=清空恢复显示用户名）。昵称只是显示层，登录/路径/权限仍用 username |
+| POST | `/api/auth/avatar` | 🔑 | multipart `file` 上传/替换头像：PIL 解码（60MP 钳制）→ 中心裁方 → 512px JPEG 存 `data/.avatars/<uid>.jpg`；≤8MB，限速 6 次/分 |
+| GET | `/api/auth/avatar/{username}` | 🔑 | 取用户头像 JPEG（无头像 404；Cache-Control private 300s） |
+| POST | `/api/auth/verify-password` | 🔑 | `{password}` 高危操作本人口令复核（清空服务端备份等），不发会话；限速 5 次/分，429=过频 |
 | POST | `/api/auth/username` | 🔑 | `{new_username, password}` 改用户名，需当前密码确认（失败计入防爆破锁定，锁定期 429）；登录态不变；空白/控制字符/超 64 字符 400，同名（不分大小写）400，密码错误 403 |
 | GET | `/api/auth/webdav-password` | 🔑 | `{set}` 是否已设置 WebDAV 独立密码（不回传哈希） |
 | POST | `/api/auth/webdav-password` | 🔑 | `{current_password, webdav_password}` 设置/清除（空串=清除）WebDAV 独立密码；需当前密码确认（失败计入防爆破）；≥8 位 |

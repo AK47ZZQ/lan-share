@@ -21,8 +21,11 @@ spec.loader.exec_module(m)
 out_dir = os.path.join(ROOT, 'mobile', 'splash')
 os.makedirs(out_dir, exist_ok=True)
 
-# 与遗留桌面图标同款：渐变底 → 品牌标合成 → 圆角
-logo = m.rounded(m.brand_mark(768, bg_image=m.gradient(768)), m.CORNER)
+# 与遗留桌面图标同款：渐变底 → 品牌标合成 → 圆角。
+# v0.17：圆角加大（768 母版 radius 90/512*768=135 太小，四角渐变仍被系统
+# 圆形裁切露出"方感"，用户要求弧度更大）——0.30*768=230，接近 squircle 观感
+SPLASH_CORNER = 230
+logo = m.rounded(m.brand_mark(768, bg_image=m.gradient(768)), SPLASH_CORNER)
 logo.save(os.path.join(out_dir, 'splash_logo.png'))
 
 a12 = m.Image.new('RGBA', (1152, 1152), (0, 0, 0, 0))

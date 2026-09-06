@@ -13,6 +13,7 @@ import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'photo_models.dart';
+import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
 import 'widgets/auth_image.dart';
@@ -49,13 +50,19 @@ class _RecentItem {
     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt',
     '.md', '.csv', '.epub',
   };
+  // v0.17：DocViewerPage 实际支持的范围（与 isDocPreviewable/isDocPreviewable 口径一致）
+  static const _docPreviewExts = {
+    '.md', '.markdown', '.txt', '.log', '.json', '.csv', '.pdf', '.docx',
+  };
 
   String get _ext => (ext ?? '').toLowerCase();
   bool get isImage => imgExts.contains(_ext);
   bool get isVideo => vidExts.contains(_ext);
   bool get isMedia => isImage || isVideo;
-  /// PhotoViewer 走图/视频通道；其余（文档/音频/压缩包）无内建查看器
-  bool get previewable => isMedia;
+  /// PhotoViewer 走图/视频通道；文档类（v0.17）走 DocViewerPage；
+  /// 音频/压缩包等仍无内建查看器，弹操作面板
+  bool get isDocPreviewable => _docPreviewExts.contains(_ext);
+  bool get previewable => isMedia || isDocPreviewable;
   // 与文件页同语义的类型分组（筛选 chips 联动）
   String get typeGroup => isImage
       ? 'image'
@@ -228,6 +235,17 @@ class _RecentPageState extends ConsumerState<RecentPage> {
   /// _filtered 变化，跨帧 index 会 RangeError 或静默打开别的文件
   Future<void> _openPreview(_RecentItem it) async {
     if (_opening || _base == null) return;
+    // v0.17：文档类直进文档预览器
+    if (it.isDocPreviewable) {
+      _opening = true;
+      try {
+        await Navigator.push(context, MaterialPageRoute(
+            builder: (_) => DocViewerPage(path: it.path, name: it.name)));
+      } finally {
+        _opening = false;
+      }
+      return;
+    }
     if (!it.previewable) return _itemSheet(it);
     final previewable = _filtered.where((e) => e.previewable).toList();
     if (previewable.isEmpty) return;

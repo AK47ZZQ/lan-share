@@ -218,7 +218,8 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final username = ref.watch(sessionProvider).username ?? '';
+    // 昵称优先（v0.17）：问候语显示昵称，没有昵称回落用户名
+    final username = ref.watch(sessionProvider).displayName ?? '';
     final engine = ref.watch(transfersProvider);
     final tasks = engine.tasks;
     final active = tasks.where((t) => t.isActive).length;
@@ -419,9 +420,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                           onTap: () => Navigator.push(
                               context,
                               MaterialPageRoute(
-                                  builder: (_) => const BackupLedgerPage())),
+                                  builder: (_) => const BackupDetailsPage())),
                           child: Text(
-                              '⚠️ 有 $_failed 项备份失败，点此查看账本',
+                              '⚠️ 有 $_failed 项备份失败，点此查看详情',
                               style: TextStyle(fontSize: 12, color: cs.error))),
                     ],
                     // 空间预警（0.6.0）：待备份量超过服务端剩余空间时提前提示

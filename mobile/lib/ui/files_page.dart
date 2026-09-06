@@ -29,6 +29,7 @@ import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'dir_picker_page.dart';
 import 'photo_models.dart';
+import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'recent_page.dart';
 import 'share_create_sheet.dart';
@@ -67,7 +68,9 @@ class Entry {
       !isDir && _imgExts.contains((ext ?? '').toLowerCase());
   bool get isVideo =>
       !isDir && _vidExts.contains((ext ?? '').toLowerCase());
-  bool get previewable => isImage || isVideo;
+  // v0.17 预览大改：md/pdf/docx/txt 等文档类也可"点击即预览"
+  bool get isDoc => !isDir && isDocPreviewable(name);
+  bool get previewable => isImage || isVideo || isDoc;
 }
 
 class _Dir {
@@ -685,10 +688,21 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _fileSheet(e);
       return;
     }
+    // v0.17：文档类（md/pdf/docx/txt）走专用预览器，不进图/视频轮播
+    if (e.isDoc) {
+      _opening = true;
+      try {
+        await Navigator.push(context, MaterialPageRoute(
+            builder: (_) => DocViewerPage(path: e.path, name: e.name)));
+      } finally {
+        _opening = false;
+      }
+      return;
+    }
     _opening = true;
     try {
       final items =
-          _sorted.where((x) => x.previewable).map(_toPhotoItem).toList();
+          _sorted.where((x) => x.isImage || x.isVideo).map(_toPhotoItem).toList();
       var idx = items.indexWhere((p) => p.path == e.path);
       if (idx < 0) idx = 0; // 理论不可达（e 本身可预览），防御性兜底
       final deleted = await Navigator.push<bool>(context, MaterialPageRoute(

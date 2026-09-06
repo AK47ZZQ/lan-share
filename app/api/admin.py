@@ -43,9 +43,12 @@ def _clean_username(name: str) -> str:
 def admin_list_users(_admin=Depends(require_admin)):
     rows = _db().execute(
         "SELECT id, username, role, is_active, quota_bytes, created_at, webdav_password_hash, "
-        "totp_enabled FROM users ORDER BY id").fetchall()
+        "totp_enabled, nickname, avatar_path FROM users ORDER BY id").fetchall()
     return [{
-        "id": r["id"], "username": r["username"], "role": r["role"],
+        "id": r["id"], "username": r["username"],
+        "nickname": r["nickname"] if "nickname" in r.keys() else "",
+        "avatar_path": r["avatar_path"] if "avatar_path" in r.keys() else "",
+        "role": r["role"],
         "is_active": bool(r["is_active"]), "quota_bytes": r["quota_bytes"],
         "quota_human": human_size(r["quota_bytes"]) if r["quota_bytes"] else "-",
         "created_at": time.strftime("%Y-%m-%d", time.localtime(r["created_at"])),
@@ -251,6 +254,11 @@ def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin))
         _db().execute("DELETE FROM users WHERE id=?", (uid,))
         _db().commit()
     invalidate_grants_cache(uid)
+    # 头像清理（v0.17）：头像按 uid 固定文件名，删号即成孤儿文件
+    try:
+        (SHARE_ROOT / ".avatars" / f"{uid}.jpg").unlink(missing_ok=True)
+    except OSError:
+        pass
     private_dir = SHARE_ROOT / "private" / row["username"]
     if private_dir.exists():
         orphan_root = SHARE_ROOT / ".orphaned"

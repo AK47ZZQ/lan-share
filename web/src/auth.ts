@@ -4,6 +4,8 @@ import { ref } from 'vue'
 import { api, type Me } from './api'
 
 export const me = ref<Me | null>(null)
+// 头像缓存戳：上传/替换后 +1，让 avatarUrl 的 ?t= 变化绕过 300s 浏览器缓存
+export const avatarBust = ref(Date.now())
 export const authReady = ref(false)
 
 export async function refreshAuth(): Promise<Me | null> {

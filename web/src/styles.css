@@ -175,6 +175,12 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
   width: 28px; height: 28px; border-radius: 50%; background: var(--grad);
   color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 600;
 }
+.avatar-img { object-fit: cover; flex: none; }
+.profile-avatar {
+  width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex: none;
+  background: var(--grad); color: #fff; display: grid; place-items: center;
+  font-size: 22px; font-weight: 600;
+}
 
 /* ── 布局 ── */
 .page { max-width: 1060px; margin: 0 auto; padding: 22px clamp(12px, 3vw, 28px) 90px; }

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class BackupConfig {
   final bool enabled;
+  final bool paused; // 用户手动暂停（v0.17）：开关仍开、调度仍在，引擎逐张前检查。
   final bool wifiOnly;
   final bool chargingOnly;
   final bool includeVideos;
@@ -18,6 +19,7 @@ class BackupConfig {
 
   const BackupConfig({
     this.enabled = false,
+    this.paused = false,
     this.wifiOnly = true,
     this.chargingOnly = true,
     this.includeVideos = false,
@@ -31,6 +33,7 @@ class BackupConfig {
     final sp = await SharedPreferences.getInstance();
     return BackupConfig(
       enabled: sp.getBool(_kEnabled) ?? false,
+      paused: sp.getBool(_kPaused) ?? false,
       wifiOnly: sp.getBool(_kWifi) ?? true,
       chargingOnly: sp.getBool(_kCharging) ?? true,
       includeVideos: sp.getBool(_kVideos) ?? false,
@@ -43,6 +46,7 @@ class BackupConfig {
 
   BackupConfig copyWith({
     bool? enabled,
+    bool? paused,
     bool? wifiOnly,
     bool? chargingOnly,
     bool? includeVideos,
@@ -53,6 +57,7 @@ class BackupConfig {
   }) =>
       BackupConfig(
         enabled: enabled ?? this.enabled,
+        paused: paused ?? this.paused,
         wifiOnly: wifiOnly ?? this.wifiOnly,
         chargingOnly: chargingOnly ?? this.chargingOnly,
         includeVideos: includeVideos ?? this.includeVideos,
@@ -65,6 +70,7 @@ class BackupConfig {
   Future<void> save() async {
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kEnabled, enabled);
+    await sp.setBool(_kPaused, paused);
     await sp.setBool(_kWifi, wifiOnly);
     await sp.setBool(_kCharging, chargingOnly);
     await sp.setBool(_kVideos, includeVideos);
@@ -78,6 +84,7 @@ class BackupConfig {
   }
 
   static const _kEnabled = 'backup_enabled';
+  static const _kPaused = 'backup_user_paused';
   static const _kWifi = 'backup_wifi_only';
   static const _kCharging = 'backup_charging_only';
   static const _kVideos = 'backup_include_videos';

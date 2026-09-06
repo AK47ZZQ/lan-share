@@ -7,6 +7,7 @@ class PhotoItem {
   final String taken;
   final String month;
   final String uploader;
+  final String uploaderNick; // 拍摄者昵称（v0.17 资料体系），空=无昵称
   final String mediaType; // photo | video
   final double? duration; // 秒
   final int? width;       // 原始宽（瀑布流宽高比；null/0=未知→方格回退，v0.11）
@@ -15,8 +16,12 @@ class PhotoItem {
   /// 预览 URL 随之变化，绕开客户端 180 天磁盘缓存陈旧。照片墙不传
   /// （无 mtime 字段，维持既有取舍）。
   final String? cacheKey;
+  /// 显示口径：昵称优先（"共享空间"这类非用户名保持原样）
+  String get uploaderDisplay =>
+      uploaderNick.trim().isNotEmpty ? uploaderNick.trim() : uploader;
   PhotoItem({required this.path, required this.name, required this.taken,
       required this.month, required this.uploader,
+      this.uploaderNick = '',
       this.mediaType = 'photo', this.duration, this.width, this.height,
       this.cacheKey});
 
@@ -37,6 +42,7 @@ class PhotoItem {
       taken: j['taken'] as String? ?? '',
       month: j['month'] as String? ?? '',
       uploader: j['uploader'] as String? ?? '共享空间',
+      uploaderNick: j['uploader_nick'] as String? ?? '',
       mediaType: j['media_type'] as String? ?? 'photo',
       duration: (j['duration'] as num?)?.toDouble(),
       width: (j['width'] as num?)?.toInt(),

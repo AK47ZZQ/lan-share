@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
-import { authReady, logout as authLogout, me, refreshAuth } from './auth'
+import { authReady, logout as authLogout, me, refreshAuth, avatarBust } from './auth'
 import { dlg, dlgCancel, dlgOk, toasts } from './ui'
 import { previewAs, setPreviewAs } from './previewAs'
 import DiskModal from './components/DiskModal.vue'
@@ -32,6 +32,11 @@ function closeMenu() { menuOpen.value = false }
 function doLogout() { closeMenu(); authLogout().then(() => router.replace('/login')) }
 
 function initial(name: string) { return (name || '?').slice(0, 1).toUpperCase() }
+
+// 昵称优先（v0.17）：显示层统一走 displayName，登录/权限仍用 username
+const displayName = computed(() => (me.value?.nickname || '').trim() || me.value?.username || '')
+const hasAvatar = computed(() => !!me.value?.avatar_path)
+const avatarSrc = computed(() => hasAvatar.value ? api.avatarUrl(me.value!.username, avatarBust.value) : '')
 
 function exitPreview() {
   setPreviewAs('')
@@ -99,8 +104,9 @@ watchEffect(() => {
         </button>
         <NotificationsBell v-if="me" :me="me" />
         <button class="userchip avatar-btn" @click.stop="menuOpen = !menuOpen">
-          <span class="uname">{{ me.username }}</span>
-          <span class="avatar">{{ initial(me.username) }}</span>
+          <span class="uname">{{ displayName }}</span>
+          <img v-if="hasAvatar" class="avatar avatar-img" :src="avatarSrc" alt="" />
+          <span v-else class="avatar">{{ initial(me.username) }}</span>
           <span class="caret">▾</span>
         </button>
         <DiskModal v-if="showDisk" :me="me" @close="showDisk = false" />
@@ -108,8 +114,9 @@ watchEffect(() => {
         <teleport to="body">
           <div v-if="menuOpen" class="usermenu" @click.stop>
             <div class="um-head">
-              <span class="avatar">{{ initial(me.username) }}</span>
-              <div><div class="um-name">{{ me.username }}</div>
+              <img v-if="hasAvatar" class="avatar avatar-img" :src="avatarSrc" alt="" />
+              <span v-else class="avatar">{{ initial(me.username) }}</span>
+              <div><div class="um-name">{{ displayName }}</div>
                 <div class="um-role">{{ me.role === 'admin' ? '管理员' : me.role === 'guest' ? '访客' : '成员' }}</div></div>
             </div>
             <router-link class="um-item" to="/" @click="menuOpen = false"><span>🗂️</span> 文件</router-link>

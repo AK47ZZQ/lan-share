@@ -30,7 +30,11 @@ const dirOptions = ref<{ path: string; label: string }[]>([])
 const grantFilter = ref<number | 'all'>('all')
 
 const memberOptions = computed(() => users.value.filter(u => u.role !== 'admin'))
-function memberName(id: number) { return users.value.find(u => u.id === id)?.username ?? `#${id}` }
+function memberName(id: number) {
+  const u = users.value.find(u => u.id === id)
+  return (u?.nickname || '').trim() || u?.username || `#${id}`
+}
+function userDisplay(u: AdminUser) { return (u.nickname || '').trim() || u.username }
 
 async function loadDirs() {
   const out: { path: string; label: string }[] = []
@@ -227,7 +231,7 @@ onMounted(async () => {
       <div v-for="u in users" :key="u.id" class="frow" style="cursor:default">
         <span class="icon" style="font-size:15px;font-weight:700">{{ u.username.slice(0, 1).toUpperCase() }}</span>
         <span class="name">
-          <div>{{ u.username }} <span class="badge" :class="{ warn: u.role !== 'admin' }">{{ u.role }}</span>
+          <div>{{ userDisplay(u) }} <span v-if="(u.nickname || '').trim()" style="font-size:11.5px;color:var(--text-3)">@{{ u.username }}</span> <span class="badge" :class="{ warn: u.role !== 'admin' }">{{ u.role }}</span>
             <span v-if="u.totp_enabled" class="badge" title="已启用两步验证">🛡️ 2FA</span>
             <span v-if="!u.is_active" class="badge danger">已停用</span></div>
           <small>加入于 {{ u.created_at }} · 配额 {{ u.quota_human }}</small>

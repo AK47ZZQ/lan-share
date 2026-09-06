@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, type Me } from '../api'
-import { refreshAuth } from '../auth'
+import { avatarBust, refreshAuth } from '../auth'
 import { toast, promptDlg, confirmDlg } from '../ui'
 
 const props = defineProps<{ me: Me }>()
@@ -27,6 +27,41 @@ const totpCode = ref('')
 const totpBusy = ref(false)
 const totpErr = ref('')
 const totpDisablePwd = ref('')
+// 资料（v0.17）：头像 + 昵称。昵称只是显示层，登录仍用用户名
+const nickName = ref((props.me.nickname || '').trim())
+const nickBusy = ref(false)
+const avatarBusy = ref(false)
+const avatarInput = ref<HTMLInputElement | null>(null)
+const initial = computed(() => (props.me.username || '?').slice(0, 1).toUpperCase())
+
+function pickAvatar() { avatarInput.value?.click() }
+
+async function onAvatarChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  input.value = ''
+  if (!f) return
+  if (!f.type.startsWith('image/')) { toast('请选择图片文件', 'err'); return }
+  avatarBusy.value = true
+  try {
+    await api.uploadAvatar(f)
+    avatarBust.value++
+    toast('头像已更新', 'ok')
+    await refreshAuth()
+    emit('updated')
+  } catch (e) { toast((e as Error).message, 'err') } finally { avatarBusy.value = false }
+}
+
+async function saveNickname() {
+  nickBusy.value = true
+  try {
+    const r = await api.updateProfile(nickName.value.trim())
+    toast(r.nickname ? `昵称已保存：${r.nickname}` : '昵称已清空，恢复显示用户名', 'ok')
+    await refreshAuth()
+    emit('updated')
+  } catch (e) { toast((e as Error).message, 'err') } finally { nickBusy.value = false }
+}
+
 // 恢复码：明文仅开通/重新生成的响应里出现一次，展示到用户点"已妥善保存"为止
 const rcCodes = ref<string[]>([])
 const rcLeft = ref(props.me.totp_rc_left ?? 0)
@@ -218,6 +253,30 @@ async function doPwd() {
         <p style="font-size:13px;color:var(--text-3);margin:0 0 14px">
           当前账号：<b>{{ props.me.username }}</b>（{{ props.me.role === 'admin' ? '管理员' : props.me.role === 'guest' ? '访客' : '成员' }}）
         </p>
+
+        <!-- 资料卡（v0.17）：头像 + 昵称 -->
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+          <img v-if="props.me.avatar_path" class="profile-avatar"
+               :src="api.avatarUrl(props.me.username, avatarBust)" alt="头像" />
+          <span v-else class="profile-avatar profile-avatar-fallback">{{ initial }}</span>
+          <div style="display:grid;gap:7px;flex:1;min-width:230px">
+            <div style="font-size:13.5px;font-weight:600">🧑 资料</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input v-model="nickName" placeholder="昵称（留空恢复显示用户名）" maxlength="32"
+                     style="flex:1;min-width:150px" @keydown.enter="saveNickname" />
+              <button class="btn sm" :disabled="nickBusy" @click="saveNickname">
+                {{ nickBusy ? '保存中…' : '保存昵称' }}
+              </button>
+              <button class="btn ghost sm" :disabled="avatarBusy" @click="pickAvatar">
+                {{ avatarBusy ? '上传中…' : '更换头像' }}
+              </button>
+            </div>
+            <p style="font-size:11.5px;color:var(--text-3);margin:0">
+              登录仍使用用户名；设置昵称后界面各处优先显示昵称。头像支持常见图片格式，8MB 内。
+            </p>
+          </div>
+          <input ref="avatarInput" type="file" accept="image/*" style="display:none" @change="onAvatarChange" />
+        </div>
 
         <form @submit.prevent="doRename" style="display:grid;gap:9px">
           <div style="font-size:13.5px;font-weight:600">✏️ 修改用户名</div>

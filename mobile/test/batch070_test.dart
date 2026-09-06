@@ -43,14 +43,19 @@ void main() {
       expect(_e(ext: '.MP4').isVideo, isTrue);
     });
 
-    test('不可预览类型：目录/无扩展名/文档/压缩包', () {
+    test('文档类可预览（v0.17：md/pdf/docx/txt 走 DocViewerPage）', () {
+      expect(_e(ext: '.pdf').previewable, isTrue);
+      expect(_e(ext: '.md').previewable, isTrue);
+      expect(_e(ext: '.docx').previewable, isTrue);
+      expect(_e(ext: '.txt').previewable, isTrue);
+    });
+
+    test('不可预览类型：目录/无扩展名/压缩包/音频', () {
       expect(_e(isDir: true, ext: null).previewable, isFalse);
       // 目录即使名字带图扩展名（如 "Photos.jpg" 文件夹）也不进预览
       expect(_e(isDir: true, ext: '.jpg').previewable, isFalse);
       expect(_e(ext: null).previewable, isFalse);
-      expect(_e(ext: '.pdf').previewable, isFalse);
       expect(_e(ext: '.zip').previewable, isFalse);
-      expect(_e(ext: '.txt').previewable, isFalse);
       expect(_e(ext: '.mp3').previewable, isFalse);
     });
   });

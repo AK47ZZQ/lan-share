@@ -1,3 +1,57 @@
+## 2026-09-06 — v0.17.0+55：App 细节优化大版本（照片墙修复 + 备份体验 + 资料 + 预览 + 笔记）
+
+用户点名 8 项 + 头脑风暴补充；pytest 164 / Dart 137 / analyze 0 / web build 全绿。
+
+**P0 修复**
+- [P0] 照片墙加载失败根因：R1 引入的照片可见性 SQL 下推在 PostgreSQL 上恒 500
+  （LIKE 字面 `%` 被 psycopg 当占位符，`only '%s','%b','%t' are allowed`）——
+  PG 适配层 `_pg_sql` 对字面 `%` 一律翻倍（全仓收口，未来同类 SQL 免疫）；
+  新增 `tests/test_pg_sql_dialect.py` 钉住方言转换。测试此前只跑 SQLite，暴露
+  "测试引擎=SQLite、生产=PG" 的盲区。
+
+**备份体验**
+- 自动备份新增「暂停备份」开关（`BackupConfig.paused`）：开关照开、调度照在，
+  引擎逐张前与轮次开始双检查；手动"立即备份"同样尊重暂停；文案/诊断卡同步。
+- 清空服务端备份升级为用户名+登录密码双重确认：新增 `POST /api/auth/verify-password`
+  本人口令复核端点（限速+审计），捡到解锁手机也删不掉备份。
+- 「备份账本」重构为「备份详情」：顶部实时进度卡（X/Y 进度条 + 百分比 +
+  正在上传的文件名，引擎逐张落盘 `backup_progress_current`），空闲显示最近一轮
+  状态 + 累计；明细列表保留筛选。
+
+**资料体系（头像 + 昵称）**
+- users 加列 nickname/avatar_path（PG+SQLite 双引擎幂等迁移）。
+- 服务端：PATCH /api/auth/profile（昵称 ≤32 字符校验）、POST /api/auth/avatar
+  （PIL 60MP 钳制+中心裁方 512px JPEG、8MB 上限、限速）、GET /api/auth/avatar/{username}
+  （点前缀 .avatars/ 目录不进照片扫描）；删号同步清头像文件；/api/auth/me、
+  /api/admin/users、/api/photos（uploader_nick 拍摄者昵称映射）返回昵称。
+- Web：账号设置新增资料卡（头像预览+上传、昵称编辑）；顶栏/用户菜单/管理页
+  显示昵称优先（管理页带 @username 角标）；avatarBust 全局缓存戳。
+- App：会话态新增 nickname/avatarPath + refreshFromMe；我的页头像显示 +
+  点按弹资料编辑（file_picker 选图 multipart 上传）；首页问候语、照片查看器
+  来源行昵称优先。
+
+**预览大改（App）**
+- 图片查看器：双击缩放 1x↔2.5x（落点为中心、200ms 动画、翻页自动回位）；
+  页码指示 i/N；保持捏合缩放与手势仲裁。
+- 视频：双击左/中/右 = 快退 10s/播放暂停/快进 10s；新增倍速轮换（×1/1.25/1.5/2）
+  与静音开关；保留迷你进度条。
+- 全新文档预览器 DocViewerPage：md/markdown 渲染（flutter_markdown）、
+  pdf 内嵌（flutter_pdfview，鉴权下载到临时文件+进度）、docx 正文提取
+  （archive 解包 word/document.xml）、txt/log/json/csv 等宽文本视图；
+  文件页/最近页点击即预览（.md 预览页一键进编辑器）。
+
+**MD 笔记（App 新功能）**
+- 我的页宫格新增「笔记」：任意网盘目录下的 .md 文件即笔记，目录可自由选择
+  （DirPickerPage + prefs 记住上次目录）；新建笔记（标题→选目录→编辑器）；
+  全屏 md 源码编辑器（脏态返回确认、保存 multipart 直传覆盖）。
+
+**其他**
+- 开屏图标圆角加大（768 母版 radius 135→230）：系统圆形裁切下的四角渐变
+  "方感"收口；splash 资源全量重生成。
+- 项目目录维护：docs/PROJECT-LAYOUT.md 落库（C:\lan-share junction /
+  C:\lan-share-mobile ASCII 构建镜像 / C:\lan-share-backup 数据安全线的
+  关系与发版链路速查）。
+
 ## 2026-09-06 — v0.16.3+54：资深 Reviewer 三轮审查 + 对抗审查（安全大版本）
 
 四路并发审查（后端边界/异常、后端安全/性能、Web 前端、Flutter App）× 3 轮 +
