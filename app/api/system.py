@@ -2,7 +2,9 @@
 import asyncio
 import io
 import json
+import logging
 import re
+import sqlite3
 import shutil
 import subprocess
 import threading
@@ -466,7 +468,9 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
         for u in _db().execute(
                 "SELECT username, nickname FROM users WHERE nickname != ''"):
             nicks[u["username"]] = u["nickname"]
-    except Exception:
+    except (sqlite3.Error, OSError) as e:
+        # 只吞 DB 瞬时故障并留痕；其它异常照常上抛（别把故障降级成假 200）
+        logging.warning("photo uploader nick map failed: %s", e)
         nicks = {}
     return {
         "total": total,

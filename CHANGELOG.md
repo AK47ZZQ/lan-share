@@ -1,3 +1,37 @@
+## 2026-09-06 — v0.17.1+56：v0.17.0 实测问题修复 + 双路资深 Review 审查闭环
+
+真机实测反馈 5 项 + 两路并行 review（服务端 / App）全量问题闭环；
+pytest 167 / Dart 137 / analyze 0 全绿，生产已重启。
+
+**实测 5 项根因修复**
+- [P0] 文档预览全挂（pdf/txt/md）：用了列目录端点 `/api/files/<path>`（对文件
+  400）——下载真身在 `/files/<path>`（无 /api 前缀）；笔记加载同错。
+- [P0] 昵称/头像保存失败 ×3 连环：① 头像 multipart 超 1MB 被请求体闸 413
+  （白名单只有 /api/upload*）；② 会话行没有 id/password_hash/nickname 列，
+  `user["id"]` 直接 IndexError 500——三个新端点全部改为按 user_id 回查 users；
+  ③ SQLite 写没拿 _db_lock 也没 commit，RESERVED 锁把 audit 卡死 30s。
+- [P0] 预览双击黑屏：Matrix4 构造是列主序，平移量被写进矩阵主体，图片飞出
+  屏幕——改 translateByDouble/scaleByDouble。
+- 头像加载失败：AuthImage 不解析相对路径（照片墙都拼好绝对地址），补 _server 前缀。
+- 笔记入口补到主页快捷区；笔记支持 .txt（新建二选一 Markdown/纯文本）。
+
+**Review 修复（服务端）**
+- [P1] /api/auth/avatar 白名单收窄：专用限额（CL ≤10MB + 拒 chunked）替代
+  整条豁免——FastAPI 先收 body 后鉴权，整条豁免=未认证灌包洞在新端点复活。
+- [P2] _bake 解码异常包进 try（头合法数据流损坏的图归 415 非 500）；
+  get_avatar 改 def 进线程池；tmp 名唯一化；avatar_path 越界钳制（纵深防御）；
+  photos 昵称映射异常收窄+留痕。
+
+**Review 修复（App）**
+- [P0] 清空备份密码复核输错密码 → 全局登出并抹掉一键登录凭据：
+  verify-password 的 401 是业务语义，补 x-login-flow 头。
+- [P1] docx 预览必抛 RangeError（残留一版用原始索引切已缩短字符串的死代码 fold）。
+- [P2] _exchangeToken 丢 avatarPath（密码登录后头像消失）；PDF 临时文件
+  dispose 清理；Content-Length 预检防全量进内存才报超限；弹层 busy 期间
+  setD 验活/禁拖拽；新建笔记同名覆盖二次确认；保存失败透传服务端 detail。
+- [P3] 笔记新建不预置脏、首次创建即切目录、空态文案、根目录 md 编辑提示、
+  缩放动画与捏合/翻页互斥、_server 未就绪头像占位等 10 项。
+
 ## 2026-09-06 — v0.17.0+55：App 细节优化大版本（照片墙修复 + 备份体验 + 资料 + 预览 + 笔记）
 
 用户点名 8 项 + 头脑风暴补充；pytest 164 / Dart 137 / analyze 0 / web build 全绿。

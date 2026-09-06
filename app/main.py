@@ -70,6 +70,18 @@ async def security_middleware(request: Request, call_next):
     # 全量缓冲——FastAPI 先读 body 后做依赖鉴权，单请求即 OOM）
     if request.method in ("POST", "PUT", "PATCH") and not path.startswith("/dav"):
         big_body = path == "/api/upload" or path.startswith("/api/upload/chunk/")
+        # 头像端点专用限额（review P1-1）：不能整条豁免——FastAPI 先收 body 后
+        # 鉴权，未认证整条豁免 = 灌包洞在新端点复活。multipart 正常客户端都带
+        # CL：≤10MB 放行（端点内还有 8MB 第二道闸），chunked 一律拒
+        if path == "/api/auth/avatar":
+            if request.headers.get("transfer-encoding"):
+                return JSONResponse({"detail": "Transfer-Encoding not allowed"},
+                                    status_code=413)
+            cl = request.headers.get("content-length")
+            if not cl or not cl.isdigit() or int(cl) > 10 * 1024 * 1024:
+                return JSONResponse({"detail": "Payload too large"},
+                                    status_code=413)
+            big_body = True
         if not big_body and path.startswith("/api/upload/"):
             first = path[len("/api/upload/"):].split("/", 1)[0]
             big_body = first not in ("init", "state", "finish")

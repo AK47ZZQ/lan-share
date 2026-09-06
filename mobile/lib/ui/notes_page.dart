@@ -73,7 +73,10 @@ class _NotesPageState extends State<NotesPage> {
       for (final e in items) {
         final m = e as Map;
         final name = (m['name'] as String?) ?? '';
-        if (name.toLowerCase().endsWith('.md') &&
+        // v0.17.1：txt 也算笔记（列表/新建/编辑全链路）
+        if ((name.toLowerCase().endsWith('.md') ||
+                name.toLowerCase().endsWith('.markdown') ||
+                name.toLowerCase().endsWith('.txt')) &&
             (m['type'] as String?) != 'dir') {
           notes.add(_Note(
               name: name,
@@ -99,17 +102,30 @@ class _NotesPageState extends State<NotesPage> {
 
   Future<void> _newNote() async {
     final nameCtrl = TextEditingController();
+    var isTxt = false;
     final name = await showDialog<String>(
         context: context,
-        builder: (dctx) => AlertDialog(
+        builder: (dctx) => StatefulBuilder(
+          builder: (dctx, setD) => AlertDialog(
                 title: const Text('新建笔记'),
-                content: TextField(
-                    controller: nameCtrl,
-                    autofocus: true,
-                    maxLength: 60,
-                    decoration: const InputDecoration(
-                        labelText: '标题',
-                        hintText: '保存为 <标题>.md')),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  TextField(
+                      controller: nameCtrl,
+                      autofocus: true,
+                      maxLength: 60,
+                      decoration: const InputDecoration(
+                          labelText: '标题',
+                          hintText: '保存为 <标题>.md / .txt')),
+                  const SizedBox(height: 4),
+                  // 类型二选一（v0.17.1）：md 走渲染预览，txt 纯文本
+                  SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(value: false, label: Text('Markdown')),
+                        ButtonSegment(value: true, label: Text('纯文本')),
+                      ],
+                      selected: {isTxt},
+                      onSelectionChanged: (s) => setD(() => isTxt = s.first)),
+                ]),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(dctx),
@@ -117,17 +133,54 @@ class _NotesPageState extends State<NotesPage> {
                   FilledButton(
                       onPressed: () => Navigator.pop(dctx, nameCtrl.text.trim()),
                       child: const Text('选目录并创建')),
-                ]));
+                ]),
+        ));
     if (name == null || name.isEmpty || !mounted) return;
+    final ext = isTxt ? '.txt' : '.md';
     // ignore: use_build_context_synchronously
     final d = await Navigator.push<String>(context, MaterialPageRoute(
         builder: (_) => const DirPickerPage(title: '保存到哪个目录？')));
     if (d == null || !mounted) return;
     (await SharedPreferences.getInstance()).setString(_kNotesLastDir, d);
     if (!mounted) return;
+    // 同名预检（review P2-6）：/api/upload 对同名文件是静默覆盖，新建变顶替
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/files/${_enc(d)}');
+      final exists = (r.data['items'] as List? ?? const []).any((e) =>
+          ((e as Map)['name'] as String?)?.toLowerCase() ==
+              '$name$ext'.toLowerCase());
+      if (exists && mounted) {
+        final goOn = await showDialog<bool>(
+            context: context,
+            builder: (dctx) => AlertDialog(
+                    title: Text('「$name$ext」已存在'),
+                    content: const Text('继续将覆盖同名文件'
+                        '（旧版本会进服务端回收站）。'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(dctx, false),
+                          child: const Text('取消')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(dctx, true),
+                          child: const Text('覆盖')),
+                    ]));
+        if (goOn != true || !mounted) return;
+      }
+    } catch (_) {
+      // 预检失败不阻塞创建：保存时服务端行为照旧（覆盖），回收站可兜底
+    }
+    if (!mounted) return;
     await openNoteEditor(context,
-        dir: d, name: '$name.md', isNew: true);
-    if (_dir != null) { setState(() => _loading = true); _load(); }
+        dir: d, name: '$name$ext', isNew: true);
+    // P2-4/P3：await 后 setState 必须 mounted；首次使用直接把目录切过去
+    if (!mounted) return;
+    if (_dir == null || _dir != d) {
+      _pickDir(d);
+    } else {
+      setState(() => _loading = true);
+      _load();
+    }
   }
 
   @override
@@ -157,7 +210,7 @@ class _NotesPageState extends State<NotesPage> {
               const SizedBox(height: 6),
               const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 32),
-                  child: Text('笔记就是网盘里的 .md 文件，存哪个文件夹由你定。'
+                  child: Text('笔记就是网盘里的 .md / .txt 文件，存哪个文件夹由你定。'
                       '点「新建笔记」选目录，或右上角直接切换目录。',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 12.5, color: Colors.grey))),
@@ -189,7 +242,7 @@ class _NotesPageState extends State<NotesPage> {
                   : (_notes == null || _notes!.isEmpty)
                       ? ListView(children: const [
                           SizedBox(height: 120),
-                          Center(child: Text('这个目录还没有 .md 笔记')),
+                          Center(child: Text('这个目录还没有 .md / .txt 笔记')),
                           SizedBox(height: 6),
                           Center(
                               child: Text('点右下角「新建笔记」写第一篇',
@@ -278,14 +331,16 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   Future<void> _loadContent() async {
     if (widget.isNew) {
       if (!mounted) return;
-      setState(() { _loading = false; _dirty = true; });
+      // 不预置脏（review P3）：没打字就退出不该弹"放弃修改"；
+      // onChanged 首次输入即置脏
+      setState(() => _loading = false);
       _focus.requestFocus();
       return;
     }
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.get<List<int>>(
-          '/api/files/${_enc(_remotePath)}',
+          '/files/${_enc(_remotePath)}',   // 下载端点（无 /api 前缀）
           options: Options(responseType: ResponseType.bytes));
       final text = utf8.decode(r.data ?? const [], allowMalformed: true);
       if (!mounted) return;
@@ -321,11 +376,19 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           SnackBar(content: Text('已保存到 $_remotePath'),
               duration: const Duration(seconds: 2)));
       return true;
-    } catch (e) {
+    } on DioException catch (e) {
       if (!mounted) return false;
-      final d = e is Exception ? '保存失败，请稍后重试' : '保存失败';
+      final d = e.response?.data;
+      final detail = d is Map && d['detail'] != null
+          ? d['detail'].toString()
+          : null;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(detail ?? '保存失败，请稍后重试')));
+      return false;
+    } catch (_) {
+      if (!mounted) return false;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(d)));
+          .showSnackBar(const SnackBar(content: Text('保存失败，请稍后重试')));
       return false;
     } finally {
       if (mounted) setState(() => _saving = false);

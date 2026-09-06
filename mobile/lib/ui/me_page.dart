@@ -696,12 +696,14 @@ class _MePageState extends ConsumerState<MePage> {
 
   Widget _avatarWidget(SessionState session, {double radius = 20}) {
     final path = session.avatarPath ?? '';
-    if (path.isNotEmpty) {
+    // _server 异步初始化完成前先占位（review P3）：否则首帧打 null.avatars/ 坏 URL
+    if (path.isNotEmpty && _server != null) {
       return CircleAvatar(
           radius: radius,
           child: ClipOval(
               child: AuthImage(
-                  url: '$path?t=$_avatarBust',  // absoluteUrl 内部拼 base
+                  // AuthImage 不解析相对路径（照片墙同款口径）：自己拼 base
+                  url: '$_server$path?t=$_avatarBust',
                   fit: BoxFit.cover,
                   placeholder: (_) => const ColoredBox(
                       color: Color(0x22000000),
@@ -731,6 +733,7 @@ class _MePageState extends ConsumerState<MePage> {
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
+      enableDrag: false,   // busy 期间不可拖拽关闭（review P2-5）
       builder: (bctx) => StatefulBuilder(
         builder: (bctx, setD) => Padding(
           padding: EdgeInsets.only(
@@ -759,7 +762,7 @@ class _MePageState extends ConsumerState<MePage> {
                       radius: 36,
                       child: ClipOval(
                           child: AuthImage(
-                              url: '${session.avatarPath}?t=$_avatarBust',
+                              url: '$_server${session.avatarPath}?t=$_avatarBust',
                               fit: BoxFit.cover)))
                 else
                   CircleAvatar(
@@ -819,13 +822,13 @@ class _MePageState extends ConsumerState<MePage> {
                             final detail = d is Map && d['detail'] != null
                                 ? d['detail'].toString()
                                 : '保存失败';
-                            setD(() => busy = false);
+                            if (bctx.mounted) setD(() => busy = false);
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(content: Text(detail)));
                             }
                           } catch (_) {
-                            setD(() => busy = false);
+                            if (bctx.mounted) setD(() => busy = false);
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('保存失败，请稍后重试')));

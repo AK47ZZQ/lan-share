@@ -47,6 +47,7 @@ class DocViewerPage extends StatefulWidget {
 class _DocViewerPageState extends State<DocViewerPage> {
   Future<Widget>? _load;
   int? _total; // pdf 下载进度用
+  File? _tmpFile; // 本页生成的临时文件，dispose 清理（review P2-2）
 
   @override
   void initState() {
@@ -54,9 +55,37 @@ class _DocViewerPageState extends State<DocViewerPage> {
     _load = _build();
   }
 
+  @override
+  void dispose() {
+    final f = _tmpFile;
+    if (f != null) {
+      // ignore: discarded_futures
+      f.delete().catchError((_) => f);
+    }
+    super.dispose();
+  }
+
   Future<List<int>> _fetch({void Function(int, int?)? onProgress}) async {
     final dio = await ApiClient.I.dio();
-    final r = await dio.get<List<int>>('/api/files/${_enc(widget.path)}',
+    final enc = _enc(widget.path);
+    // Content-Length 预检（review P2-3）：别等全量进内存才发现超限。
+    // HEAD 被拒（405）或无 CL 时忽略，仍走下载后兜底校验
+    final isPdf = widget.name.toLowerCase().endsWith('.pdf');
+    final limit = isPdf ? _pdfLimit : _textLimit;
+    try {
+      final head = await dio.head('/files/$enc');
+      final cl = head.headers.value('content-length');
+      if (cl != null && int.tryParse(cl) != null && int.parse(cl) > limit) {
+        throw _TooLarge(limit);
+      }
+    } on DioException catch (e) {
+      if (e.error is _TooLarge) rethrow;
+      final st = e.response?.statusCode;
+      if (st != null && st >= 400 && st != 405) rethrow;
+    }
+    // 下载端点是 /files/<path>（无 /api 前缀）——/api/files/ 是列目录端点，
+    // 对文件返回 400（v0.17 首发预览全挂的根因）
+    final r = await dio.get<List<int>>('/files/$enc',
         options: Options(responseType: ResponseType.bytes,
             receiveTimeout: const Duration(minutes: 15)),
         onReceiveProgress: onProgress);
@@ -68,6 +97,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
     final f = File(
         '${dir.path}/docview-${DateTime.now().millisecondsSinceEpoch}$suffix');
     await f.writeAsBytes(bytes, flush: true);
+    _tmpFile = f; // dispose 时清理（review P2-2）
     return f.path;
   }
 
@@ -88,7 +118,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
 
   Future<Widget> _pdf() async {
     final raw = await _fetch(onProgress: (c, t) {
-      if (mounted && t != null && t > 0 && (c % (1 << 20) == 0)) {
+      if (mounted && t != null && t > 0 && (c % (512 * 1024) == 0)) {
         setState(() => _total = t);
       }
     });
@@ -107,16 +137,15 @@ class _DocViewerPageState extends State<DocViewerPage> {
     return _plain(_docxText(doc), mono: false);
   }
 
-  /// word/document.xml 转纯文本：段末换行、`<w:tab/>` 变制表、去掉其余标签
+  /// word/document.xml 转纯文本：段末换行、`<w:tab/>` 变制表、去掉其余标签。
+  /// （review P1-1：此前残留一版用原始索引切已缩短字符串的 fold，真实 docx
+  /// 必抛 RangeError——删掉，replaceAllMapped 一遍就是正确实现）
   static String _docxText(String doc) {
-    var s = doc
+    final s = doc
         .replaceAll('<w:tab/>', '\t')
         .replaceAll('<w:br/>', '\n')
-        .replaceAll('</w:p>', '\n');
-    s = RegExp(r'<[^>]+>').allMatches(s).fold(
-        s, (acc, m) => acc.replaceRange(m.start - (m.start - m.start), m.end, ''));
-    // 上面 fold 写法复杂易错，直接再来一次朴素替换（文档体量 <2MB，无所谓）
-    s = s.replaceAllMapped(RegExp(r'<[^>]*>'), (_) => '');
+        .replaceAll('</w:p>', '\n')
+        .replaceAllMapped(RegExp(r'<[^>]*>'), (_) => '');
     return const _Entities().decode(s).trim();
   }
 
@@ -171,7 +200,12 @@ class _DocViewerPageState extends State<DocViewerPage> {
                       ? widget.path.substring(0,
                           widget.path.lastIndexOf('/'))
                       : '';
-                  if (dir.isEmpty || !mounted) return;
+                  if (dir.isEmpty || !mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('根目录下的文件请先移入子目录再编辑'),
+                        duration: Duration(seconds: 2)));
+                    return;
+                  }
                   await openNoteEditor(context,
                       dir: dir, name: widget.name);
                   if (mounted) {

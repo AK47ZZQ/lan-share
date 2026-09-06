@@ -39,8 +39,28 @@ def test_gather_fresh_backup(fake_backup):
     assert d["backup"]["dump_age_hours"] < 3
 
 
-def test_format_fresh_vs_stale(fake_backup):
+def test_format_fresh_vs_stale(fake_backup, monkeypatch):
+    # 磁盘水位与宿主机状态无关化（实测踩坑：C 盘恰好 85.0% 时 warn 恒真，
+    # 与被测的"新备份不告警"逻辑无关）——钉住 disk_usage 再断言
+    import shutil as _sh
+    du = _sh.disk_usage(str(hr.SHARE_ROOT))
+
+    class _Du(tuple):
+        def __new__(cls):
+            return super().__new__(cls, (du.used // 4, du.total))
+        @property
+        def used(self):
+            return du.used // 4
+        @property
+        def total(self):
+            return du.total
+        @property
+        def free(self):
+            return du.total - du.used // 4
+
+    monkeypatch.setattr(hr.shutil, "disk_usage", lambda _: _Du())
     d = hr.gather_health()
+    assert d["disk_used_pct"] < 50
     body, warn = hr.format_report(d)
     assert "备份" in body and "成员" in body
     assert warn is False

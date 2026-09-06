@@ -78,10 +78,13 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
       const target = 2.5;
       final x = -localPos.dx * (target - 1);
       final y = -localPos.dy * (target - 1);
+      // Matrix4 构造是列主序：平移必须放第 4 列（此前写进矩阵主体，
+      // 图片被变换飞出屏幕 = 双击黑屏根因），translate..scale 右乘语义稳妥
       anim = Tween<Matrix4>(
           begin: _transform.value,
-          end: Matrix4(target, 0, 0, x, 0, target, 0, y, 0, 0, 0, 1,
-              0, 0, 0, 1)).animate(
+          end: Matrix4.identity()
+            ..translateByDouble(x, y, 0, 1)
+            ..scaleByDouble(target, target, 1, 1)).animate(
           CurvedAnimation(parent: ctrl, curve: Curves.easeOut));
     }
     void listener() {
@@ -323,6 +326,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                   ? const NeverScrollableScrollPhysics()
                   : const PageScrollPhysics(),
               onPageChanged: (i) {
+                _zoomCtrl?.stop(); // 跨页动画别把旧页矩阵写进新页（review P3）
                 _transform.value = Matrix4.identity(); // 翻页回 1x
                 setState(() => _index = i);
               },
@@ -338,8 +342,10 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                         child: InteractiveViewer(
                         transformationController: _transform,
                         maxScale: 5,
-                        onInteractionStart: (_) =>
-                            setState(() => _interacting = true),
+                        onInteractionStart: (_) {
+                          _zoomCtrl?.stop(); // 缩放动画与捏合抢写 transform（review P3）
+                          setState(() => _interacting = true);
+                        },
                         onInteractionEnd: (_) =>
                             setState(() => _interacting = false),
                         child: Center(

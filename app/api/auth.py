@@ -244,16 +244,25 @@ async def authcheck(request: Request):
 
 @app.get("/api/auth/me")
 async def me(request: Request):
-    # Cookie 会话与 App Bearer 设备 Token 并存（App 登录后用它确认身份）
+    # Cookie 会话与 App Bearer 设备 Token 并存（App 登录后用它确认身份）。
+    # nickname/avatar_path 不在会话行里（security SELECT 列受限），按 uid 回查
     user = await run_in_threadpool(get_session_user, request)
     if not user:
         user = await run_in_threadpool(get_bearer_user, request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    def _prof():
+        row = _db().execute(
+            "SELECT nickname, avatar_path FROM users WHERE id=?",
+            (_uid(user),)).fetchone()
+        return (row["nickname"] if row and row["nickname"] else "",
+                row["avatar_path"] if row and row["avatar_path"] else "")
+
+    nick, avatar = await run_in_threadpool(_prof)
     return {"username": user["username"], "role": user["role"],
             "quota_bytes": user["quota_bytes"],
-            "nickname": user["nickname"] if "nickname" in user.keys() else "",
-            "avatar_path": user["avatar_path"] if "avatar_path" in user.keys() else "",
+            "nickname": nick,
+            "avatar_path": avatar,
             "totp_enabled": bool(user["totp_enabled"]),
             "totp_rc_left": len(json.loads(user["totp_rc"])) if user["totp_rc"] else 0}
 
@@ -262,16 +271,31 @@ class VerifyPwBody(BaseModel):
     password: str
 
 
+def _uid(user) -> int:
+    """会话行/Bearer 行的统一 uid：两行都没有 id 列，只有 user_id
+    （security.get_session_user/get_bearer_user 的 SELECT 列决定）。"""
+    return user["user_id"]
+
+
+def _user_field(user, col: str):
+    """会话行列不全（无 password_hash/nickname 等）：按 uid 回查 users 表。"""
+    row = _db().execute(f"SELECT {col} FROM users WHERE id=?",
+                        (_uid(user),)).fetchone()
+    return row[col] if row else None
+
+
 @app.post("/api/auth/verify-password")
 async def verify_password_ep(body: VerifyPwBody, request: Request,
                              user=Depends(require_user)):
     """高危操作前的本人口令复核（清空服务端备份等）：对当前会话/Bearer
     用户校验密码。不发新会话；限速防拿到的会话在线爆破口令。
     （函数名不与 security.verify_password 撞名——模块内 import 会被覆盖）"""
-    if not allow_rate(f"verifypw:{user['id']}", 5, 60):
+    if not allow_rate(f"verifypw:{_uid(user)}", 5, 60):
         audit("verify_password_rate", user["username"], ip=client_ip(request))
         raise HTTPException(status_code=429, detail="尝试过于频繁，请稍后再试")
-    ok = await _verify_pw(body.password, user["password_hash"])
+    stored = await run_in_threadpool(
+        lambda: _user_field(user, "password_hash"))
+    ok = await _verify_pw(body.password, stored)
     audit("verify_password", user["username"], "ok" if ok else "fail",
           client_ip(request))
     if not ok:
@@ -310,9 +334,14 @@ class ProfileBody(BaseModel):
 async def update_profile(body: ProfileBody, request: Request,
                          user=Depends(require_user)):
     nick = _clean_nickname(body.nickname)
-    await run_in_threadpool(
-        lambda: _db().execute("UPDATE users SET nickname=? WHERE id=?",
-                              (nick, user["id"])))
+
+    def _save() -> None:
+        with _db_lock:   # SQLite 写必须全局锁+commit：否则隐式事务持 RESERVED 锁
+            _db().execute("UPDATE users SET nickname=? WHERE id=?",
+                          (nick, _uid(user)))
+            _db().commit()
+
+    await run_in_threadpool(_save)
     audit("profile_nickname", user["username"], nick or "(清空)",
           client_ip(request))
     return {"ok": True, "nickname": nick}
@@ -323,7 +352,7 @@ async def upload_avatar(request: Request, file: UploadFile = File(...),
                         user=Depends(require_user)):
     """上传/替换头像：PIL 解码（60MP 钳制）→ 中心裁方 → 512px JPEG 落盘。
     旧头像按 uid 固定文件名覆盖，历史版本自然消失。"""
-    if not allow_rate(f"avatar:{user['id']}", 6, 60):
+    if not allow_rate(f"avatar:{_uid(user)}", 6, 60):
         raise HTTPException(status_code=429, detail="尝试过于频繁，请稍后再试")
     raw = await file.read()
     if len(raw) > 8 * 1024 * 1024:
@@ -343,39 +372,56 @@ async def upload_avatar(request: Request, file: UploadFile = File(...),
 
     def _bake() -> bytes:
         import io
-        left = (img.width - side) // 2
-        top = (img.height - side) // 2
-        sq = img.crop((left, top, left + side, top + side)).convert("RGB")
-        sq.thumbnail((512, 512))
-        buf = io.BytesIO()
-        sq.save(buf, "JPEG", quality=88)
-        return buf.getvalue()
+        try:
+            left = (img.width - side) // 2
+            top = (img.height - side) // 2
+            sq = img.crop((left, top, left + side, top + side)).convert("RGB")
+            sq.thumbnail((512, 512))
+            buf = io.BytesIO()
+            sq.save(buf, "JPEG", quality=88)
+            return buf.getvalue()
+        except HTTPException:
+            raise
+        except Exception:
+            # 真正的解码发生在 crop/convert/save（Image.open 只读头）：
+            # 头合法但数据流损坏的图在此抛 OSError，须归 415 而非 500
+            raise HTTPException(status_code=415, detail="不是有效的图片文件")
 
     data = await run_in_threadpool(_bake)
-    dest = _avatar_dir() / f"{user['id']}.jpg"
+    dest = _avatar_dir() / f"{_uid(user)}.jpg"
 
     def _write() -> None:
-        tmp = dest.with_suffix(".tmp")
+        # tmp 名唯一化（review P3-1）：固定 <uid>.tmp 在并发上传时交错写
+        tmp = dest.with_suffix(
+            f".{os.getpid()}-{secrets.token_hex(4)}.tmp")
         tmp.write_bytes(data)
         os.replace(tmp, dest)
+        with _db_lock:   # 同 update_profile：写库全局锁+commit
+            _db().execute("UPDATE users SET avatar_path=? WHERE id=?",
+                          (rel, _uid(user)))
+            _db().commit()
 
+    rel = f".avatars/{_uid(user)}.jpg"
     await run_in_threadpool(_write)
-    rel = f".avatars/{user['id']}.jpg"
-    await run_in_threadpool(
-        lambda: _db().execute("UPDATE users SET avatar_path=? WHERE id=?",
-                              (rel, user["id"])))
     audit("profile_avatar", user["username"], ip=client_ip(request))
     return {"ok": True, "avatar_path": rel}
 
 
 @app.get("/api/auth/avatar/{username}")
-async def get_avatar(username: str, _user=Depends(require_user)):
+def get_avatar(username: str, _user=Depends(require_user)):
+    # def（非 async）：DB 往返与磁盘 stat 进线程池，不阻塞事件循环（项目规范）
     row = _db().execute("SELECT id, avatar_path FROM users WHERE username=?",
                         (username,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     if "avatar_path" in row.keys() and row["avatar_path"]:
         f = SHARE_ROOT / row["avatar_path"]
+        # 纵深防御（review P3-2）：avatar_path 当前只由端点写入常量，但
+        # 一旦列值被污染成越界路径，这里就是登录用户的任意文件读取
+        try:
+            f.resolve().relative_to(_avatar_dir().resolve())
+        except ValueError:
+            raise HTTPException(status_code=404, detail="暂无头像")
         if f.is_file():
             return FileResponse(f, media_type="image/jpeg",
                                 headers={"Cache-Control": "private, max-age=300"})

@@ -3,7 +3,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:dio/dio.dart' show DioException;
+import 'package:dio/dio.dart' show DioException, Options;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -260,6 +260,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     final pwFocus = FocusNode();
     final ok = await showDialog<bool>(
       context: context,
+      barrierDismissible: false, // 复核进行中不可误触关闭（review P2-5）
       builder: (dctx) => StatefulBuilder(
         builder: (dctx, setD) {
           var err = '';
@@ -278,7 +279,10 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
             setD(() { checking = true; err = ''; });
             try {
               final dio = await ApiClient.I.dio();
+              // x-login-flow（P0-1）：密码错误回 401 是本框的业务语义，
+              // 不带头会被拦截器当"Token 失效"清凭据全局登出
               await dio.post('/api/auth/verify-password',
+                  options: Options(headers: {'x-login-flow': '1'}),
                   data: {'password': pwCtrl.text});
               if (dctx.mounted) Navigator.pop(dctx, true);
             } on DioException catch (e) {
@@ -286,16 +290,21 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
               final detail = d is Map && d['detail'] != null
                   ? d['detail'].toString()
                   : null;
-              setD(() {
-                checking = false;
-                err = e.response?.statusCode == 429
-                    ? (detail ?? '尝试过于频繁，请稍后再试')
-                    : (e.response?.statusCode == 401
-                        ? '密码错误'
-                        : '服务器不可达，请稍后重试');
-              });
+              // busy 期间对话框可被点遮罩关闭：setD 前必须验活（review P2-5）
+              if (dctx.mounted) {
+                setD(() {
+                  checking = false;
+                  err = e.response?.statusCode == 429
+                      ? (detail ?? '尝试过于频繁，请稍后再试')
+                      : (e.response?.statusCode == 401
+                          ? '密码错误'
+                          : '服务器不可达，请稍后重试');
+                });
+              }
             } catch (_) {
-              setD(() { checking = false; err = '服务器不可达，请稍后重试'; });
+              if (dctx.mounted) {
+                setD(() { checking = false; err = '服务器不可达，请稍后重试'; });
+              }
             }
           }
 

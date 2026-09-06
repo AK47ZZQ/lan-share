@@ -183,6 +183,7 @@ class SessionController extends StateNotifier<SessionState> {
         loggedIn: true,
         username: name,
         nickname: me.data['nickname'] as String?,
+        avatarPath: me.data['avatar_path'] as String?,
         role: me.data['role'] as String?);
   }
 
@@ -203,8 +204,9 @@ class SessionController extends StateNotifier<SessionState> {
   /// 头像上传后重取 /me：同步 avatarPath（昵称/角色一起以服务端为准）
   Future<void> refreshFromMe() async {
     final dio = await ApiClient.I.dio();
-    final me = await dio.get('/api/auth/me',
-        options: Options(headers: {'x-login-flow': '1'}));
+    // 不带 x-login-flow（review P3）：token 失效就该走正常 401 登出，
+    // 别让陈旧 Token 的 /me 静默失败
+    final me = await dio.get('/api/auth/me');
     state = SessionState(
         loggedIn: state.loggedIn,
         username: me.data['username'] as String?,
