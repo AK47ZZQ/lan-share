@@ -18,6 +18,13 @@ import 'ui/login_page.dart';
 import 'ui/theme/app_theme.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // edge-to-edge（v0.20）：Android 10-14 默认不画到状态栏后面，首页品牌头
+  // 上方露一条系统白底。全局开启后渐变自然铺到屏顶（BrandHeader 自带
+  // topInset 让位），各页 AppBar 自行处理 inset 不受影响
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent));
   // 旧版 TOTP SP 明文副本启动即清（红队 P2）：不等验证器页/登录页触发，
   // 长期登录设备上明文不该残留（本地操作，静默失败无妨）
   // ignore: discarded_futures

@@ -360,13 +360,16 @@ def _scan_photos(force: bool = False):
             if row and row[0] == stat.st_mtime_ns and row[1] == stat.st_size:
                 continue
             # 图片行 duration 写 0（非视频即"已处理"），视频留 NULL 交给补扫；
-            # 内容变更（mtime 变）时 duration 一并重置，换过的视频会被重新探测
+            # 内容变更（mtime 变）时 duration 一并重置，换过的视频会被重新探测。
+            # added_at：首次入库打点（ON CONFLICT 更新分支不碰它——拍照时间
+            # 排序不变，只有新文件才拿到现在时刻）
             updates.append((rel, _photo_taken_at(f), stat.st_mtime_ns, stat.st_size,
-                            None if f.suffix.lower() in VIDEO_EXTS else 0))
+                            None if f.suffix.lower() in VIDEO_EXTS else 0,
+                            time.time()))
         with _db_lock:
             if updates:
                 _db().executemany(
-                    "INSERT INTO photos(path, taken_at, mtime_ns, size, duration) VALUES(?,?,?,?,?) "
+                    "INSERT INTO photos(path, taken_at, mtime_ns, size, duration, added_at) VALUES(?,?,?,?,?,?) "
                     "ON CONFLICT(path) DO UPDATE SET taken_at=excluded.taken_at, "
                     "mtime_ns=excluded.mtime_ns, size=excluded.size, duration=excluded.duration", updates)
                 _db().execute("DELETE FROM photos WHERE mtime_ns=0")
@@ -379,6 +382,16 @@ def _scan_photos(force: bool = False):
     # 补扫放扫描锁外：ffprobe 批量最坏 20×15s，不占住扫描锁拖慢时间线刷新
     _probe_video_durations()
     _probe_image_sizes()   # 瀑布流宽高补扫（PIL 读头，200 张/轮）
+
+
+def photos_scan_bump():
+    """上传落盘后调用（v0.20）：清零普通/强刷两个节流时间戳，下一次
+    /api/photos 请求必定真扫。二维码/网页/App 上传的图片此前要等有人
+    打开照片页且过了 60s 普通节流才入库——"刚传的照片不出现"尾巴收口。
+    两个赋值零成本，上传端点同步调用即可。"""
+    global _last_photo_scan, _last_force_scan
+    _last_photo_scan = 0.0
+    _last_force_scan = 0.0
 
 
 def _known_users() -> set[str]:
@@ -409,9 +422,12 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
                 uploader: str | None = Query(default=None),
                 media_type: str | None = Query(default=None),
                 album: str | None = Query(default=None),
+                sort: str = Query(default="taken", pattern="^(taken|added)$"),
                 refresh: bool = Query(default=False),
                 _user=Depends(require_user)):
-    """照片时间线：按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）。
+    """照片时间线：默认按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）；
+    sort=added 按入库时间倒序（二维码/手机上传的照片按 EXIF 落历史月份，
+    时间线顶部"看不到新照片"的感知问题——入库排序让新上传永远在最前）。
     可按 month=YYYY-MM 与 uploader、media_type=photo|video、album=<精选专辑id>
     过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
@@ -439,12 +455,17 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
                     " OR path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')"
                     " AND path NOT LIKE '.%' AND path NOT LIKE '%/.%'")
             args = [own_priv, f"incoming/{esc}/%"]
+    # 入库排序（v0.20）：COALESCE 双引擎通用（SQLite/PG 均无布尔短路差异），
+    # added_at 为空的存量行沉底
+    order = ("COALESCE(added_at, 0) DESC, path"
+             if sort == "added" else "taken_at DESC, path")
+    if pushdown:
         all_rows = _db().execute(
             f"SELECT path, taken_at, duration, codec, width, height FROM photos "
-            f"WHERE {cond} ORDER BY taken_at DESC, path", args).fetchall()
+            f"WHERE {cond} ORDER BY {order}", args).fetchall()
     else:
         all_rows = _db().execute(
-            "SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY taken_at DESC, path").fetchall()
+            f"SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY {order}").fetchall()
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))] \
         if not pushdown else list(all_rows)
     if month:
@@ -669,12 +690,12 @@ def photo_meta(request: Request, path: str = Query(..., min_length=1),
     return {"width": width, "height": height, "camera": camera}
 
 
-# QR 中心品牌云朵（Material cloud_outlined，evenodd 镂空；与 App/启动图标同源）
+# QR 中心品牌云朵（v0.20 更新：实心云朵，与登录页品牌头/桌面图标同一
+# 官方 cloud 闭合路径——旧版 cloud_outlined 镂空字形与品牌已不同步）
 _QR_LOGO_CLOUD = ("M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 "
-                  "2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 "
-                  "0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4s1.79-4 4-4"
-                  "h.71C7.37 7.69 9.48 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19"
-                  "c1.66 0 3 1.34 3 3s-1.34 3-3 3z")
+                  "2.5 8.36 0.27 10.89 0.27 13.77 0.27 16.66 2.5 18.89 5.39 18.89"
+                  "H19.04C21.13 18.66 22.75 16.82 22.75 14.66 22.75 12.5 21.13 10.66 "
+                  "19.04 10.66Z")
 
 
 def qr_svg_response(text: str) -> Response:
@@ -688,7 +709,7 @@ def qr_svg_response(text: str) -> Response:
     logo = ('<svg x="36%" y="36%" width="28%" height="28%" viewBox="0 0 512 512">'
             '<rect width="512" height="512" rx="96" fill="#ffffff"/>'
             f'<path transform="translate(166.4,166.4) scale(7.4667)" '
-            f'd="{_QR_LOGO_CLOUD}" fill="#5B6CFF" fill-rule="evenodd"/></svg>')
+            f'd="{_QR_LOGO_CLOUD}" fill="#5B6CFF"/></svg>')
     svg = svg.replace("</svg>", logo + "</svg>")
     return Response(content=svg, media_type="image/svg+xml")
 

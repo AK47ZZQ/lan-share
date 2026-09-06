@@ -3,8 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import '../theme/app_theme.dart';
-
 class QrDialog extends StatelessWidget {
   final String url;
   final String title;
@@ -34,7 +32,8 @@ class QrDialog extends StatelessWidget {
                 decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Brand.cloud,
+                // v0.20：实心云朵，与服务端 /api/qr 更新后的品牌 logo 同源
+                child: const Icon(Icons.cloud,
                     size: 30, color: Color(0xFF5B6CFF))),
           ]),
           const SizedBox(height: 10),

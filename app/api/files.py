@@ -344,6 +344,10 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         _db().commit()
     rel = str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")
     audit("upload", rel, human_size(size), client_ip(request))
+    # v0.20：新文件落盘后清零照片扫描节流——下一次照片页请求必扫，
+    # 二维码/网页/App 上传的图片不再等 60s 普通节流
+    from app.api.system import photos_scan_bump
+    photos_scan_bump()
     return {"ok": True, "path": rel, "size": size, "size_human": human_size(size),
             "sha256": real_sha, "deduped": deduped}
 
@@ -360,6 +364,8 @@ async def upload_file(request: Request, path: str = "", file: UploadFile = File(
     result = await save_upload(file, dest, quota_user=_user)
     deduped = register_blob(dest, result["sha256"], result["size"])
     audit("upload", result["path"], result["size_human"], client_ip(request))
+    from app.api.system import photos_scan_bump
+    photos_scan_bump()
     return {"ok": True, "deduped": deduped, **result}
 
 

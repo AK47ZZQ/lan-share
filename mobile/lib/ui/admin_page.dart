@@ -127,29 +127,21 @@ class _AdminPageState extends ConsumerState<AdminPage>
     }
   }
 
-  /// 共享目录树（建授权用）：与 Web 同款只走两层，跳过 private/incoming
+  /// 共享一级目录清单（建授权用，v0.20 重构）：授权只收一级目录，
+  /// 子目录随父级授权自动继承（服务端 spaces._grant_hit 前缀匹配语义）
   Future<void> _loadDirs() async {
     final out = <String>[];
-    Future<void> walk(String p, int depth) async {
-      try {
-        final dio = await ApiClient.I.dio();
-        // 路径段逐段编码：目录名可含空格/#/中文（0.8.1 审查修复）
-        final enc = p.split('/').where((s) => s.isNotEmpty)
-            .map(Uri.encodeComponent).join('/');
-        final r = await dio.get('/api/files/$enc');
-        for (final e in (r.data['items'] as List)) {
-          final m = e as Map;
-          if (m['is_dir'] != true) continue;
-          final name = m['name'] as String;
-          if (name == 'private' || name == 'incoming') continue;
-          final path = m['path'] as String;
-          out.add(path);
-          if (depth < 2) await walk(path, depth + 1);
-        }
-      } catch (_) {/* 无权目录跳过 */}
-    }
-
-    await walk('', 0);
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/files');
+      for (final e in (r.data['items'] as List)) {
+        final m = e as Map;
+        if (m['is_dir'] != true) continue;
+        final name = m['name'] as String;
+        if (name == 'private' || name == 'incoming') continue;
+        out.add(m['path'] as String);
+      }
+    } catch (_) {/* 无权目录跳过 */}
     if (!mounted) return;
     setState(() => _dirOptions = out..sort());
   }
@@ -514,6 +506,111 @@ class _AdminPageState extends ConsumerState<AdminPage>
     _loadAll();
   }
 
+  /// 授权有效期展示（v0.20）：倒计时/过期一目了然
+  String _expiryText(int? exp) {
+    if (exp == null) return '永久';
+    final left = DateTime.fromMillisecondsSinceEpoch(exp * 1000)
+        .difference(DateTime.now());
+    if (left.isNegative) return '已过期';
+    if (left.inHours < 24) return '${left.inHours.clamp(1, 23)} 小时内到期';
+    return '剩 ${left.inDays} 天';
+  }
+
+  bool _grantExpired(_Grant g) =>
+      g.expiresAt != null &&
+      g.expiresAt! * 1000 < DateTime.now().millisecondsSinceEpoch;
+
+  /// 修改授权（v0.20）：upsert 语义。续期=原剩余+延长时间；永久授权
+  /// 续期无意义直接提示；读写切换保留原有效期
+  Future<void> _updateGrant(_Grant g,
+      {required bool canWrite, int extendHours = 0}) async {
+    if (extendHours > 0 && g.expiresAt == null) {
+      _toast('该授权已是永久，无需延长');
+      return;
+    }
+    int? hours;
+    if (g.expiresAt != null) {
+      final left = g.expiresAt! - DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if (left <= 0) {
+        _toast('授权已过期，请删除后重新授权');
+        return;
+      }
+      hours = (left / 3600).ceil() + extendHours;
+    }
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/admin/grants', data: {
+        'user_id': g.userId,
+        'path': g.path,
+        'can_read': true,
+        'can_write': canWrite,
+        'expires_hours': ?hours,
+      });
+      _toast(extendHours > 0
+          ? '已延长 ${_memberName(g.userId)} 的「${g.path.split('/').last}」'
+          : '已改为${canWrite ? '读写' : '只读'}');
+      _loadAll();
+    } catch (e) {
+      _toast(errDetail(e));
+    }
+  }
+
+  /// 单条授权操作菜单（v0.20）：续期/改读写/撤销收进一处，不再只有撤销
+  void _grantSheet(_Grant g) {
+    final expired = _grantExpired(g);
+    showModalBottomSheet(
+        context: context,
+        builder: (ctx) => SafeArea(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                  leading: const Icon(Icons.folder_outlined),
+                  title: Text('${_memberName(g.userId)} · ${g.path}'),
+                  subtitle: Text(
+                      '${_expiryText(g.expiresAt)} · ${g.canWrite ? '读写' : '只读'}')),
+              if (g.expiresAt != null && !expired) ...[
+                ListTile(
+                    leading: const Icon(Icons.update),
+                    title: const Text('延长 7 天'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _updateGrant(g, canWrite: g.canWrite, extendHours: 168);
+                    }),
+                ListTile(
+                    leading: const Icon(Icons.update),
+                    title: const Text('延长 30 天'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _updateGrant(g, canWrite: g.canWrite, extendHours: 720);
+                    }),
+              ],
+              ListTile(
+                  leading: Icon(g.canWrite
+                      ? Icons.lock_outline
+                      : Icons.lock_open_outlined),
+                  title: Text(g.canWrite ? '转为只读' : '转为可写入'),
+                  onTap: g.canWrite
+                      ? () {
+                          Navigator.pop(ctx);
+                          _updateGrant(g, canWrite: false);
+                        }
+                      : () {
+                          Navigator.pop(ctx);
+                          _updateGrant(g, canWrite: true);
+                        }),
+              ListTile(
+                  leading: Icon(Icons.delete_outline,
+                      color: Theme.of(ctx).colorScheme.error),
+                  title: Text('撤销授权',
+                      style: TextStyle(
+                          color: Theme.of(ctx).colorScheme.error)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _del('/api/admin/grants/${g.id}', okMsg: '已撤销');
+                  }),
+              const SizedBox(height: 8),
+            ])));
+  }
+
   // ── 设置卡 ──────────────────────────────────────────────
   Future<void> _savePubUrl() async {
     if (_busy) return;
@@ -552,6 +649,85 @@ class _AdminPageState extends ConsumerState<AdminPage>
       final dio = await ApiClient.I.dio();
       await dio.post('/api/admin/webhook/test');
       _toast('测试消息已发送，去手机上看看');
+    } catch (e) {
+      _toast(errDetail(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// 手动广播（v0.20）：对话框里输标题/正文点推送即达——站内通知人手一条 +
+  /// 已配置的站外 webhook 一起推。默认全体，可勾选部分成员。
+  Future<void> _showNotifyDialog() async {
+    final titleCtrl = TextEditingController();
+    final bodyCtrl = TextEditingController();
+    final targets = <int>{}; // 空 = 全体
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (dctx) => StatefulBuilder(
+            builder: (dctx, setD) => AlertDialog(
+                    title: const Text('发送通知'),
+                    content: SingleChildScrollView(
+                        child: Column(mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                      TextField(
+                          controller: titleCtrl,
+                          autofocus: true,
+                          maxLength: 80,
+                          decoration: const InputDecoration(
+                              labelText: '标题', border: OutlineInputBorder())),
+                      const SizedBox(height: 10),
+                      TextField(
+                          controller: bodyCtrl,
+                          maxLines: 3,
+                          maxLength: 500,
+                          decoration: const InputDecoration(
+                              labelText: '正文（可留空）',
+                              alignLabelWithHint: true,
+                              border: OutlineInputBorder())),
+                      const SizedBox(height: 8),
+                      Wrap(spacing: 6, runSpacing: 4, children: [
+                        FilterChip(
+                            label: const Text('全体',
+                                style: TextStyle(fontSize: 12)),
+                            selected: targets.isEmpty,
+                            onSelected: (_) => setD(() => targets.clear())),
+                        for (final u in _users!
+                            .where((u) => u.role != 'admin' && u.isActive))
+                          FilterChip(
+                              label: Text(u.username,
+                                  style: const TextStyle(fontSize: 12)),
+                              selected: targets.contains(u.id),
+                              onSelected: (v) => setD(() =>
+                                  v ? targets.add(u.id) : targets.remove(u.id))),
+                      ]),
+                    ])),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(dctx, false),
+                          child: const Text('取消')),
+                      ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: titleCtrl,
+                          builder: (_, v, _) => FilledButton.icon(
+                              onPressed: v.text.trim().isEmpty
+                                  ? null
+                                  : () => Navigator.pop(dctx, true),
+                              icon: const Icon(Icons.send_outlined, size: 16),
+                              label: const Text('推送'))),
+                    ])));
+    if (ok != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.post('/api/admin/notify', data: {
+        'title': titleCtrl.text.trim(),
+        'body': bodyCtrl.text.trim(),
+        if (targets.isNotEmpty) 'user_ids': targets.toList(),
+      });
+      final n = (r.data['sent'] as num?)?.toInt() ?? 0;
+      _toast('已推送给 $n 人'
+          '${(r.data['webhook'] as bool? ?? false) ? '，站外 webhook 同步发送' : ''}');
     } catch (e) {
       _toast(errDetail(e));
     } finally {
@@ -710,6 +886,19 @@ class _AdminPageState extends ConsumerState<AdminPage>
                           (_busy || v.text.isEmpty) ? null : _testHook,
                       child: const Text('发送测试'))),
             ]),
+            const Divider(height: 20),
+            // v0.20 手动广播：填标题点推送即达（站内+站外）
+            Row(children: [
+              Expanded(
+                  child: Text('群发站内通知（成员的消息中心即时可见，'
+                      '已配置 webhook 时同步推送到手机）',
+                      style: TextStyle(
+                          fontSize: 11, color: Colors.grey))),
+              FilledButton.icon(
+                  onPressed: _busy ? null : _showNotifyDialog,
+                  icon: const Icon(Icons.campaign_outlined, size: 18),
+                  label: const Text('发送通知')),
+            ]),
           ])),
       const SizedBox(height: 24),
     ]);
@@ -817,7 +1006,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             ]),
             const SizedBox(height: 8),
             Row(children: [
-              const Text('共享目录（可多选，两层）',
+              const Text('共享一级目录（可多选，子目录自动继承）',
                   style: TextStyle(fontSize: 12)),
               const Spacer(),
               TextButton.icon(
@@ -890,8 +1079,14 @@ class _AdminPageState extends ConsumerState<AdminPage>
           ])),
       for (final g in grants)
         _card(
-            child: Row(children: [
-          const Icon(Icons.key_outlined),
+            // v0.20：整卡点按/长按进操作菜单（续期/改读写/撤销），
+            // 过期授权红牌一眼可见
+            child: InkWell(
+                onTap: () => _grantSheet(g),
+                child: Row(children: [
+          Icon(
+              _grantExpired(g) ? Icons.key_off_outlined : Icons.key_outlined,
+              color: _grantExpired(g) ? cs.error : null),
           const SizedBox(width: 10),
           Expanded(
               child: Column(
@@ -899,24 +1094,30 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   children: [
               Row(children: [
                 Flexible(
-                    child: Text(g.path,
+                    child: Text(g.path.split('/').last,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontWeight: FontWeight.w600, fontSize: 13))),
                 const SizedBox(width: 6),
                 _badge(g.canWrite ? '读写' : '只读',
                     g.canWrite ? cs.primary : cs.outline),
+                if (g.expiresAt != null) ...[
+                  const SizedBox(width: 4),
+                  _badge(_expiryText(g.expiresAt),
+                      _grantExpired(g) ? cs.error : Colors.orange),
+                ],
               ]),
               Text(
-                  '${_memberName(g.userId)} · ${g.expiresAt == null ? '永久' : DateTime.fromMillisecondsSinceEpoch(g.expiresAt! * 1000).toString().split(' ').first}',
+                  '${_memberName(g.userId)} · ${g.path}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Colors.grey)),
             ])),
           IconButton(
-              icon: Icon(Icons.close, size: 20, color: cs.error),
-              tooltip: '撤销授权',
-              onPressed: () => _del('/api/admin/grants/${g.id}',
-                  okMsg: '已撤销')),
-        ])),
+              icon: const Icon(Icons.more_vert, size: 20),
+              tooltip: '授权操作',
+              onPressed: () => _grantSheet(g)),
+        ]))),
       if (grants.isEmpty)
         const Padding(
             padding: EdgeInsets.all(40),

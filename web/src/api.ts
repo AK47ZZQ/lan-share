@@ -107,6 +107,10 @@ export const api = {
   getWebhook: () => fetch('/api/admin/webhook').then(r => handle<{ url: string }>(r)),
   setWebhook: (url: string) => jpost('/api/admin/webhook', { url }).then(r => handle<{ ok: boolean; url: string }>(r)),
   testWebhook: () => jpost('/api/admin/webhook/test', {}).then(r => handle<{ ok: boolean }>(r)),
+  // v0.20 手动广播：站内通知逐人 + 已配置 webhook 同步推
+  adminNotify: (title: string, body: string, userIds?: number[]) =>
+    jpost('/api/admin/notify', { title, body, ...(userIds?.length ? { user_ids: userIds } : {}) })
+      .then(r => handle<{ ok: boolean; sent: number; webhook: boolean }>(r)),
 
   // 每日健康日报（磁盘/备份/证书/隧道 → Webhook）
   getHealthReport: () => fetch('/api/admin/healthreport').then(r => handle<{ enabled: boolean; time: string; backup_dest: string; webhook_set: boolean }>(r)),

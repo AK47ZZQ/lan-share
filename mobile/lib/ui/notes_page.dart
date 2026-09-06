@@ -47,6 +47,10 @@ class _NotesPageState extends State<NotesPage> {
   // v0.18：搜索（纯本地文件名过滤）与条目长按管理
   bool _searching = false;
   final _searchCtrl = TextEditingController();
+  // v0.20 多选：Set 非空即选择模式（与照片墙/文件页同款约定），
+  // 长按进入，AppBar 切换，底部操作栏批量删除
+  final _selected = <String>{};
+  bool get _selecting => _selected.isNotEmpty;
 
   @override
   void initState() {
@@ -260,13 +264,22 @@ class _NotesPageState extends State<NotesPage> {
     }
   }
 
-  /// 删除（v0.18）：进服务端回收站，30 天内可在回收站恢复
-  Future<void> _deleteNote(_Note n) async {
+  /// 长按条目进入多选（v0.20，与照片墙/文件页一致）；单条管理由
+  /// 选择栏承载：单选时"重命名"，删除始终可用。原底部弹单已并入。
+
+  /// 批量删除（v0.20 多选）：逐条进服务端回收站，可恢复
+  Future<void> _deleteSelected() async {
+    final names = _filtered
+        .where((n) => _selected.contains(n.path))
+        .map((n) => n.name)
+        .toList();
     final ok = await showDialog<bool>(
         context: context,
         builder: (dctx) => AlertDialog(
-                title: Text('删除「${n.name}」？'),
-                content: const Text('将进入服务端回收站，30 天内可随时恢复。'),
+                title: Text('删除 ${names.length} 篇笔记？'),
+                content: Text('${names.take(5).join('、')}'
+                    '${names.length > 5 ? ' 等 ${names.length} 篇' : ''}'
+                    '，将进入服务端回收站（30 天内可恢复）。'),
                 actions: [
                   TextButton(
                       onPressed: () => Navigator.pop(dctx, false),
@@ -276,59 +289,29 @@ class _NotesPageState extends State<NotesPage> {
                       child: const Text('删除')),
                 ]));
     if (ok != true || !mounted) return;
+    var done = 0, fail = 0;
     try {
       final dio = await ApiClient.I.dio();
-      final enc = n.path.split('/').map(Uri.encodeComponent).join('/');
-      await dio.delete('/api/files/$enc');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已删除（可在回收站恢复）'),
-              duration: Duration(seconds: 2)));
-      setState(() => _loading = true);
-      _load();
+      for (final p in _selected.toList()) {
+        try {
+          await dio.delete('/api/files/${_enc(p)}');
+          done++;
+        } catch (_) {
+          fail++;
+        }
+      }
     } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('删除失败，请稍后重试')));
+      fail = _selected.length;
     }
-  }
-
-  /// 长按条目 → 管理（编辑/重命名/删除）
-  void _noteSheet(_Note n) {
-    showModalBottomSheet(context: context, builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('编辑'),
-              onTap: () {
-                Navigator.pop(ctx);
-                // ignore: discarded_futures
-                openNoteEditor(context, dir: _dir!, name: n.name)
-                    .then((_) {
-                  if (mounted) {
-                    setState(() => _loading = true);
-                    _load();
-                  }
-                });
-              }),
-          ListTile(
-              leading: const Icon(Icons.drive_file_rename_outline),
-              title: const Text('重命名'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _rename(n);
-              }),
-          ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('删除'),
-              iconColor: Theme.of(context).colorScheme.error,
-              textColor: Theme.of(context).colorScheme.error,
-              onTap: () {
-                Navigator.pop(ctx);
-                _deleteNote(n);
-              }),
-          const SizedBox(height: 8),
-        ])));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(fail == 0
+            ? '已删除 $done 篇（可在回收站恢复）'
+            : '已删除 $done 篇，失败 $fail 篇'),
+        duration: const Duration(seconds: 2)));
+    setState(() => _selected.clear());
+    setState(() => _loading = true);
+    _load();
   }
 
   @override
@@ -336,9 +319,35 @@ class _NotesPageState extends State<NotesPage> {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_dir == null || _dir!.isEmpty ? '笔记' : '笔记 · $_dir',
+        leading: _selecting
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() => _selected.clear()))
+            : null,
+        title: Text(
+            _selecting
+                ? '已选 ${_selected.length} 篇'
+                : _dir == null || _dir!.isEmpty
+                    ? '笔记'
+                    : '笔记 · $_dir',
             style: const TextStyle(fontSize: 16)),
-        actions: [
+        actions: _selecting
+            ? [
+                TextButton(
+                    onPressed: () => setState(() {
+                          if (_selected.length == _filtered.length) {
+                            _selected.clear();
+                          } else {
+                            _selected
+                              ..clear()
+                              ..addAll(_filtered.map((n) => n.path));
+                          }
+                        }),
+                    child: Text(_selected.length == _filtered.length
+                        ? '全不选'
+                        : '全选')),
+              ]
+            : [
           // 搜索（v0.18）：纯本地文件名过滤，不额外打服务端
           IconButton(
               tooltip: _searching ? '关闭搜索' : '搜索笔记',
@@ -372,10 +381,12 @@ class _NotesPageState extends State<NotesPage> {
               )
             : null,
       ),
-      floatingActionButton: FloatingActionButton.extended(
-          onPressed: _newNote,
-          icon: const Icon(Icons.note_add),
-          label: const Text('新建笔记')),
+      floatingActionButton: _selecting
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _newNote,
+              icon: const Icon(Icons.note_add),
+              label: const Text('新建笔记')),
       body: _dir == null
           ? Center(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -436,18 +447,32 @@ class _NotesPageState extends State<NotesPage> {
                               itemCount: _filtered.length,
                               itemBuilder: (_, i) {
                                 final n = _filtered[i];
+                                final sel = _selected.contains(n.path);
                                 return ListTile(
-                                  leading: Icon(Icons.description_outlined,
-                                      color: cs.primary),
+                                  leading: sel
+                                      ? Icon(Icons.check_circle,
+                                          color: cs.primary)
+                                      : Icon(Icons.description_outlined,
+                                          color: cs.primary),
                                   title: Text(n.name,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis),
                                   subtitle: Text(
                                       '${n.modified.split('T').first} · ${n.sizeHuman}',
                                       style: const TextStyle(fontSize: 12)),
-                                  trailing: const Icon(
-                                      Icons.edit_outlined, size: 18),
+                                  trailing: sel
+                                      ? null
+                                      : const Icon(
+                                          Icons.edit_outlined, size: 18),
+                                  selected: sel,
                                   onTap: () async {
+                                    // 多选态：点按=勾选切换（与照片墙一致）
+                                    if (_selecting) {
+                                      setState(() => sel
+                                          ? _selected.remove(n.path)
+                                          : _selected.add(n.path));
+                                      return;
+                                    }
                                     await openNoteEditor(context,
                                         dir: _dir!, name: n.name);
                                     if (mounted) {
@@ -455,9 +480,66 @@ class _NotesPageState extends State<NotesPage> {
                                       _load();
                                     }
                                   },
-                                  onLongPress: () => _noteSheet(n),
+                                  onLongPress: () {
+                                    if (_selecting) return;
+                                    setState(() => _selected.add(n.path));
+                                  },
                                 );
                               })),
+      bottomNavigationBar: _selecting
+          ? SafeArea(
+              child: Container(
+                  decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      border: Border(
+                          top: BorderSide(
+                              color: Theme.of(context).dividerColor,
+                              width: 0.5))),
+                  child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        if (_selected.length == 1)
+                          InkWell(
+                              onTap: () {
+                                final n = _filtered.firstWhere(
+                                    (n) => n.path == _selected.first);
+                                _rename(n);
+                              },
+                              borderRadius: BorderRadius.circular(10),
+                              child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 8),
+                                  child: Column(mainAxisSize: MainAxisSize.min,
+                                      children: const [
+                                        Icon(Icons.drive_file_rename_outline,
+                                            size: 22),
+                                        SizedBox(height: 2),
+                                        Text('重命名',
+                                            style: TextStyle(fontSize: 12)),
+                                      ]))),
+                        InkWell(
+                            onTap: _deleteSelected,
+                            borderRadius: BorderRadius.circular(10),
+                            child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 8),
+                                child: Column(mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                  Icon(Icons.delete_outline,
+                                      size: 22,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .error),
+                                  const SizedBox(height: 2),
+                                  Text('删除',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .error)),
+                                ]))),
+                      ])))
+          : null,
     );
   }
 }

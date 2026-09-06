@@ -299,22 +299,18 @@ class _HomePageState extends ConsumerState<HomePage> {
     } catch (_) {}
   }
 
-  /// 最近上传横滑条：全库最近修改的媒体文件（跨上传入口，30s 一刷）
+  /// 最近上传横滑条：全库最近修改的文件（跨上传入口，30s 一刷）。
+  /// v0.20 扩面：不再只留图片/视频——文档/音频/压缩包等以类型色块显示
   Future<void> _loadRecent() async {
     try {
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/recent', queryParameters: {'limit': 100});
-      const mediaExts = {
-        '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.heic', '.heif',
-        '.mp4', '.mov', '.m4v', '.3gp', '.webm', '.avi', '.mkv',
-      };
       final items = (r.data as List)
           .whereType<Map>()
           .map((e) => _RecentUpload(
               path: (e['path'] as String?) ?? '',
               name: (e['name'] as String?) ?? '',
               ext: ((e['ext'] as String?) ?? '').toLowerCase()))
-          .where((e) => mediaExts.contains(e.ext))
           .take(12)
           .toList();
       if (!mounted) return;
@@ -374,11 +370,16 @@ class _HomePageState extends ConsumerState<HomePage> {
     return RefreshIndicator(
         onRefresh: _refreshAll,
         child: ReorderableListView(
-            // 品牌头固定在列表头不参与排序（v0.18 卡片自定义）
-            header: BrandHeader(
-              topInset: MediaQuery.of(context).padding.top,
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+            // 品牌头固定在列表头不参与排序（v0.18 卡片自定义）。v0.20：
+            // ReorderableListView 带 header 时列表顶部 padding 会被挪去包
+            // header（SDK reorderable_list.dart：listPadding.top 置 0），
+            // 第一张卡片直接贴住渐变头——header 外再包一层底部间距补回
+            header: Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: BrandHeader(
+                  topInset: MediaQuery.of(context).padding.top,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                     const BrandCloud(size: 44),
                     const SizedBox(height: 12),
                     Text(_greeting(username),
@@ -398,6 +399,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   fontSize: 12));
                         }),
                   ]),
+                ),
             ),
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
             buildDefaultDragHandles: false, // 长按卡片启动拖动（延迟监听器）
@@ -467,9 +469,39 @@ class _HomePageState extends ConsumerState<HomePage> {
                                         child: SizedBox(
                                             width: 92,
                                             height: 92,
-                                            child: AuthImage(
-                                                url: '$_base/thumb/'
-                                                    '${it.path.split("/").map(Uri.encodeComponent).join("/")}'))),
+                                            // 图片/视频走缩略图；其余类型
+                                            // 用品牌类型色块+图标（v0.20）
+                                            child: it.isImage || it.isVideo
+                                                ? AuthImage(
+                                                    url: '$_base/thumb/'
+                                                        '${it.path.split("/").map(Uri.encodeComponent).join("/")}')
+                                                : Container(
+                                                    color: cs.surfaceContainerHighest,
+                                                    child: Column(
+                                                        mainAxisAlignment:
+                                                            MainAxisAlignment
+                                                                .center,
+                                                        children: [
+                                                          FileTypeTile(
+                                                              ext: it.ext,
+                                                              icon: it.typeIcon,
+                                                              size: 40),
+                                                          const SizedBox(
+                                                              height: 4),
+                                                          Text(
+                                                              it.ext.isEmpty
+                                                                  ? '文件'
+                                                                  : it.ext
+                                                                      .substring(1)
+                                                                      .toUpperCase(),
+                                                              maxLines: 1,
+                                                              overflow: TextOverflow
+                                                                  .ellipsis,
+                                                              style: const TextStyle(
+                                                                  fontSize: 10,
+                                                                  color: Colors
+                                                                      .grey)),
+                                                        ])))),
                                     if (it.isVideo)
                                       const Positioned(
                                           right: 4,
@@ -874,7 +906,48 @@ class _RecentUpload {
   final String ext;
   _RecentUpload({required this.path, required this.name, required this.ext});
 
-  bool get isVideo => const {
-        '.mp4', '.mov', '.m4v', '.3gp', '.webm', '.avi', '.mkv'
-      }.contains(ext);
+  static const _videoExts = {
+    '.mp4', '.mov', '.m4v', '.3gp', '.webm', '.avi', '.mkv'
+  };
+  static const _imageExts = {
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.heic', '.heif', '.gif'
+  };
+
+  bool get isVideo => _videoExts.contains(ext);
+  bool get isImage => _imageExts.contains(ext);
+
+  /// 非媒体文件的类型图标（v0.20：最近上传条扩面——文档/压缩包/音频等
+  /// 也进横滑条，用类型色块替代缩略图）
+  IconData get typeIcon {
+    switch (ext) {
+      case '.mp3':
+      case '.m4a':
+      case '.flac':
+      case '.wav':
+      case '.aac':
+      case '.ogg':
+      case '.opus':
+        return Icons.music_note;
+      case '.pdf':
+        return Icons.picture_as_pdf;
+      case '.xls':
+      case '.xlsx':
+      case '.csv':
+        return Icons.table_chart;
+      case '.zip':
+      case '.7z':
+      case '.rar':
+        return Icons.folder_zip;
+      case '.md':
+      case '.markdown':
+      case '.txt':
+      case '.html':
+      case '.htm':
+        return Icons.edit_note;
+      case '.apk':
+        return Icons.android;
+      default:
+        return Icons.insert_drive_file;
+    }
+  }
 }

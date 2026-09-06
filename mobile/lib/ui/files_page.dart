@@ -28,6 +28,7 @@ import '../state/settings.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'dir_picker_page.dart';
+import 'notes_page.dart';
 import 'photo_models.dart';
 import 'audio_viewer.dart';
 import 'doc_viewer.dart';
@@ -35,6 +36,7 @@ import 'photo_viewer.dart';
 import 'recent_page.dart';
 import 'share_create_sheet.dart';
 import 'trash_page.dart';
+import 'upload_qr_page.dart';
 
 class Entry {
   final String name;
@@ -253,6 +255,21 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     } catch (e) {
       _toast('创建失败：${_detail(e)}');
     }
+  }
+
+  /// 新建文档（v0.20）：md/txt 不预建空文件——直接进编辑器（isNew），
+  /// 保存时 multipart 直传落盘，取消则不产生任何垃圾文件
+  Future<void> _newDoc(bool markdown) async {
+    final ext = markdown ? '.md' : '.txt';
+    final name = await _promptText(
+        markdown ? '新建 Markdown 笔记' : '新建文本文件',
+        '标题（自动加 $ext）',
+        markdown ? '会议记录' : '备忘');
+    if (name == null || name.trim().isEmpty || !mounted) return;
+    // ignore: use_build_context_synchronously
+    await openNoteEditor(context,
+        dir: _path, name: '${name.trim()}$ext', isNew: true);
+    if (mounted) await _refresh();
   }
 
   Future<void> _rename(Entry e) async {
@@ -860,10 +877,40 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                         : '全选')),
               ]
             : [
-                IconButton(
-                    tooltip: '新建文件夹',
-                    icon: const Icon(Icons.create_new_folder_outlined),
-                    onPressed: canManage ? _mkdir : null),
+                // v0.20：新建收进菜单——文件夹 / Markdown / 文本
+                PopupMenuButton<String>(
+                    tooltip: '新建',
+                    enabled: canManage,
+                    icon: const Icon(Icons.add),
+                    onSelected: (v) {
+                      if (v == 'folder') _mkdir();
+                      if (v == 'md') _newDoc(true);
+                      if (v == 'txt') _newDoc(false);
+                    },
+                    itemBuilder: (_) => const [
+                          PopupMenuItem(
+                              value: 'folder',
+                              child: ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading:
+                                      Icon(Icons.create_new_folder_outlined),
+                                  title: Text('新建文件夹'))),
+                          PopupMenuItem(
+                              value: 'md',
+                              child: ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(Icons.edit_note),
+                                  title: Text('新建 Markdown 笔记'))),
+                          PopupMenuItem(
+                              value: 'txt',
+                              child: ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(Icons.text_snippet_outlined),
+                                  title: Text('新建文本文件'))),
+                        ]),
                 IconButton(
                     tooltip: settings.filesGrid ? '切换为列表视图' : '切换为网格视图',
                     icon: Icon(settings.filesGrid
@@ -884,10 +931,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                         Navigator.push(context,
                             MaterialPageRoute(builder: (_) => const TrashPage()));
                       }
+                      if (v == 'qr') {
+                        // v0.20：手机上传二维码（对齐 Web"📲 手机上传"），
+                        // 含二维码图保存到相册
+                        // ignore: discarded_futures
+                        showUploadQrSheet(context);
+                      }
                       if (v == 'refresh') _refresh();
                     },
                     itemBuilder: (_) => const [
                           PopupMenuItem(value: 'recent', child: Text('最近文件')),
+                          PopupMenuItem(value: 'qr', child: Text('📲 手机上传二维码')),
                           PopupMenuItem(value: 'trash', child: Text('回收站')),
                           PopupMenuItem(value: 'refresh', child: Text('刷新')),
                         ]),

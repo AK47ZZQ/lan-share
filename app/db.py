@@ -171,7 +171,8 @@ _PG_SCHEMA = """
         duration DOUBLE PRECISION,
         codec TEXT,
         width INTEGER,
-        height INTEGER
+        height INTEGER,
+        added_at DOUBLE PRECISION
     );
     CREATE TABLE IF NOT EXISTS grants(
         id BIGSERIAL PRIMARY KEY,
@@ -322,6 +323,9 @@ def init_db():
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS codec TEXT")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS width INTEGER")
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS height INTEGER")
+        # v0.20：入库时间（二维码/手机上传按拍摄时间落历史月份，"没更新"
+        # 的感知问题）——扫描首次见到该文件时打点，按入库排序用
+        _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS added_at DOUBLE PRECISION")
         # 提取码明文停存（R1-P2-5 + R2-P2）：PG 分支同样清洗存量值（幂等）
         _db().execute("UPDATE shares SET password_plain=NULL WHERE password_plain IS NOT NULL")
         _backfill_audit_usernames()
@@ -391,7 +395,8 @@ def init_db():
             duration REAL,
             codec TEXT,
             width INTEGER,
-            height INTEGER
+            height INTEGER,
+            added_at REAL
         );
     """)
     _db().commit()
@@ -450,6 +455,8 @@ def _migrate_v3():
             conn.execute("ALTER TABLE photos ADD COLUMN width INTEGER")
         if "height" not in pcols:
             conn.execute("ALTER TABLE photos ADD COLUMN height INTEGER")
+        if "added_at" not in pcols:
+            conn.execute("ALTER TABLE photos ADD COLUMN added_at REAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS grants(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

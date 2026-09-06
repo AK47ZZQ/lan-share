@@ -68,6 +68,9 @@ object MediaStoreBridge {
     /// 已下载文件保存进系统相册（v0.13 传输页"保存到手机相册"）。
     /// API 29+ 走 IS_PENDING 无需存储权限；26-28 需运行时 WRITE 权限，
     /// App 未申请——直接报错引导（目标机型基本 29+）。
+    /// v0.20 加固：DISPLAY_NAME 净化（厂商 ROM 对部分字符会直接拒绝 insert）；
+    /// 发布失败先复查行状态（部分 MIUI 版本 update 返回 0 但已发布）；
+    /// 错误带异常类名，Dart 侧透传给用户便于定位机型差异。
     private fun saveToGallery(ctx: Context, args: Map<*, *>?): String {
         val path = args?.get("path") as? String ?: return err("missing_path")
         val video = args["isVideo"] as? Boolean ?: false
@@ -77,30 +80,44 @@ object MediaStoreBridge {
         val collection =
             if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        // 文件名净化：路径分隔符/Windows 非法字符/控制符 → 下划线
+        val safeName = f.name.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_")
         val values = android.content.ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+            put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
             put(MediaStore.MediaColumns.MIME_TYPE, mimeFor(f.extension, video))
             put(MediaStore.MediaColumns.RELATIVE_PATH,
                 if (video) "Movies/LAN Share" else "Pictures/LAN Share")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = ctx.contentResolver
-        val uri = resolver.insert(collection, values) ?: return err("insert_failed")
+        val uri = try {
+            resolver.insert(collection, values) ?: return err("insert_failed")
+        } catch (e: Exception) {
+            return err("insert_failed:${e.javaClass.simpleName}:${e.message ?: ""}".take(180))
+        }
         try {
             resolver.openOutputStream(uri)?.use { out ->
                 f.inputStream().use { it.copyTo(out) }
             } ?: return err("open_output_failed")
         } catch (e: Exception) {
             resolver.delete(uri, null, null)   // 残留 pending 记录清掉
-            return err(e.message ?: "copy_failed")
+            return err("copy_failed:${e.javaClass.simpleName}:${e.message ?: ""}".take(180))
         }
         val done = android.content.ContentValues().apply {
             put(MediaStore.MediaColumns.IS_PENDING, 0)
         }
-        // 发布失败（罕见）：记录会滞留 pending 相册不可见，必须如实报错
-        if (resolver.update(uri, done, null, null) == 0) return err("publish_failed")
+        // 发布（罕见）update 返回 0：部分 ROM 上记录已发布但 update 误报 0——
+        // 复查 IS_PENDING 实际值再定性，避免把已成功报成失败
+        val published = resolver.update(uri, done, null, null) > 0 ||
+                queryPending(ctx.contentResolver, uri) == false
+        if (!published) return err("publish_failed")
         return JSONObject().put("ok", true).toString()
     }
+
+    /// 查询 MediaStore 行的 IS_PENDING（复查发布状态用）；行不存在视为已发布
+    private fun queryPending(resolver: ContentResolver, uri: Uri): Boolean? =
+        resolver.query(uri, arrayOf(MediaStore.MediaColumns.IS_PENDING), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getInt(0) == 1 else null }
 
     private fun query(ctx: Context, args: Map<*, *>?): String {
         val includeVideos = args?.get("videos") as? Boolean ?: false

@@ -37,18 +37,16 @@ function memberName(id: number) {
 function userDisplay(u: AdminUser) { return (u.nickname || '').trim() || u.username }
 
 async function loadDirs() {
+  // v0.20 授权重构：只取共享空间一级目录（子目录随父级授权自动继承，
+  // 服务端 admin_create_grant 也已只收一级路径）
   const out: { path: string; label: string }[] = []
-  async function walk(p: string, depth: number) {
-    try {
-      const r = await api.list(p)
-      for (const e of r.items.filter(x => x.is_dir && !x.is_private_root && x.path !== 'private' && x.path !== 'incoming')) {
-        if (e.name === 'private' || e.name === 'incoming') continue
-        out.push({ path: e.path, label: e.path })
-        if (depth < 2) await walk(e.path, depth + 1)
-      }
-    } catch { /* 无权目录跳过 */ }
-  }
-  await walk('', 0)
+  try {
+    const r = await api.list('')
+    for (const e of r.items.filter(x => x.is_dir && !x.is_private_root && x.path !== 'private' && x.path !== 'incoming')) {
+      if (e.name === 'private' || e.name === 'incoming') continue
+      out.push({ path: e.path, label: e.path })
+    }
+  } catch { /* 无权目录跳过 */ }
   dirOptions.value = out
 }
 
@@ -177,6 +175,27 @@ async function testHook() {
   try { await api.testWebhook(); toast('测试消息已发送，去手机上看看', 'ok') }
   catch (e) { toast((e as Error).message, 'err') }
 }
+// 手动广播（v0.20）：标题/正文 + 可选成员，站内通知 + webhook 一起推
+const notifyOpen = ref(false)
+const notifyTitle = ref('')
+const notifyBody = ref('')
+const notifyTargets = ref<number[]>([])
+const notifyBusy = ref(false)
+async function sendNotify() {
+  if (!notifyTitle.value.trim()) return
+  notifyBusy.value = true
+  try {
+    const r = await api.adminNotify(notifyTitle.value.trim(), notifyBody.value.trim(),
+      notifyTargets.value.length ? [...notifyTargets.value] : undefined)
+    toast(`已推送给 ${r.sent} 人${r.webhook ? '，站外 webhook 同步发送' : ''}`, 'ok')
+    notifyOpen.value = false; notifyTitle.value = ''; notifyBody.value = ''; notifyTargets.value = []
+  } catch (e) { toast((e as Error).message, 'err') } finally { notifyBusy.value = false }
+}
+function toggleNotify(id: number) {
+  notifyTargets.value = notifyTargets.value.includes(id)
+    ? notifyTargets.value.filter(x => x !== id)
+    : [...notifyTargets.value, id]
+}
 
 // 每日健康日报
 const hrEnabled = ref(true)
@@ -268,6 +287,26 @@ onMounted(async () => {
         <input v-model="hookUrl" placeholder="GET 模板 URL，需含 {title}/{body} 占位符" style="flex:1;min-width:260px;font-size:14px" />
         <button class="btn sm" :disabled="hookBusy" @click="saveHook">保存</button>
         <button class="btn ghost sm" :disabled="hookBusy || !hookUrl" @click="testHook">发送测试</button>
+        <button class="btn sm" @click="notifyOpen = true">📣 发送通知</button>
+      </div>
+      <div v-if="notifyOpen" style="display:grid;gap:8px;background:var(--bg-2,#f6f6f8);border:1px solid var(--line);border-radius:10px;padding:10px">
+        <input v-model="notifyTitle" maxlength="80" placeholder="标题（必填，如：明晚 20:00 全家网盘维护）" style="font-size:14px" />
+        <textarea v-model="notifyBody" maxlength="500" rows="2" placeholder="正文（可留空）" style="font-size:14px;resize:vertical"></textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px">
+            <input type="checkbox" :checked="notifyTargets.length === 0" @change="notifyTargets = []" style="width:auto" /> 全体
+          </label>
+          <template v-for="u in users.filter(x => x.role !== 'admin' && x.is_active !== false)" :key="u.id">
+            <label style="display:flex;align-items:center;gap:4px;font-size:13px">
+              <input type="checkbox" :checked="notifyTargets.includes(u.id)"
+                @change="toggleNotify(u.id)" style="width:auto" /> {{ u.nickname || u.username }}
+            </label>
+          </template>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn ghost sm" @click="notifyOpen = false">取消</button>
+          <button class="btn sm" :disabled="notifyBusy || !notifyTitle.trim()" @click="sendNotify">推送</button>
+        </div>
       </div>
       <p style="font-size:12px;color:var(--text-3);margin:0">
         定向分享、新成员加入时推送到站外（GET 模板，占位符经 URL 编码后替换）。示例：<span v-pre>ntfy <code>https://ntfy.sh/你的主题/{title}</code> · Bark <code>https://api.day.app/你的key/{title}/{body}</code> · Server酱 <code>https://sctapi.ftqq.com/你的key.send?title={title}&desp={body}</code></span>
@@ -329,7 +368,7 @@ onMounted(async () => {
               <span v-if="!memberOptions.length" style="color:var(--text-3);font-size:12.5px">暂无成员</span>
             </div>
           </label>
-          <label class="field">共享目录（可多选）
+          <label class="field">共享目录（一级目录，子目录自动继承）
             <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;max-height:132px;overflow:auto">
               <label v-for="d in dirOptions" :key="d.path"
                      style="display:inline-flex;align-items:center;gap:4px;font-size:13px;padding:4px 9px;border:1px solid var(--line);border-radius:999px;cursor:pointer"

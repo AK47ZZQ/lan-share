@@ -57,6 +57,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Map<String, Object?>? _pulseSnap; // 脉搏快照（total+首张路径），变了才整页强刷
   String _mediaFilter = 'all';  // all | photo | video
   String? _month;               // YYYY-MM 按月快跳（null=全部）
+  // v0.20 排序维度：false=按拍摄时间（时间线默认）；true=按入库时间
+  // （二维码/网页刚传的照片按 EXIF 落历史月份"看不到新图"——入库序
+  // 新上传永远在最前，平板视图不分组直接平铺）
+  bool _byAdded = false;
   Map<String, int>? _months;    // facets 缓存（月份选择页用）
   List<_Album>? _albums;        // 精选专辑（0.8.0，管理员维护）
   // 每页条数：局域网 120 / 公网 60（弱网首屏少拉半屏，滚动突发更小，v0.10.3）
@@ -148,6 +152,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         if (force) 'refresh': true,
         if (_mediaFilter != 'all') 'media_type': _mediaFilter,
         if (_month != null) 'month': _month,
+        if (_byAdded) 'sort': 'added',
       });
       final list = (r.data['items'] as List)
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
@@ -600,11 +605,22 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               ]
             : [
                 IconButton(
+                    tooltip: _byAdded
+                        ? '当前：按入库时间（点此切回拍摄时间）'
+                        : '刚上传的照片不在最前？切换为按入库时间',
+                    icon: Icon(_byAdded
+                        ? Icons.history
+                        : Icons.fiber_new_outlined),
+                    onPressed: () {
+                      setState(() => _byAdded = !_byAdded);
+                      _refresh();
+                    }),
+                IconButton(
                     tooltip: _month == null
                         ? '按月跳转'
                         : '当前：${_monthLabel(_month!)}',
                     icon: const Icon(Icons.calendar_month_outlined),
-                    onPressed: _pickMonth),
+                    onPressed: _byAdded ? null : _pickMonth),
                 IconButton(
                     tooltip: '新建精选专辑',
                     icon: const Icon(Icons.auto_awesome_mosaic_outlined),
@@ -753,7 +769,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 年月快滚轴（v0.11）：右缘竖排月份，直点跳月；月份数 ≥2 且非多选时显示。
   /// 只读 _months（initState 已静默预取），不自己发请求、不 setState 别人。
   Widget? _monthRail(bool selecting) {
-    if (selecting) return null;
+    if (selecting || _byAdded) return null;   // 入库序平铺视图不显示月份轴
     final months = _months;
     if (months == null || months.length < 2) return null;
     final entries = months.entries.toList()
@@ -852,13 +868,20 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 划走再回来全变转圈（真机实测复现）。Sliver 版只构建视口内格子，滚出
   /// 即廉价回收，回来只重建可见的十几个格且直接命中磁盘缓存；照片量不设限。
   Widget _buildTimeline(bool selecting) {
+    // v0.20 入库序：不按日分组，整列平铺（新上传永远置顶，日期头无意义）
     final groups = <(String, List<int>)>[];
-    for (var i = 0; i < _items.length; i++) {
-      final day = _items[i].taken;
-      if (groups.isNotEmpty && groups.last.$1 == day) {
-        groups.last.$2.add(i);
-      } else {
-        groups.add((day, [i]));
+    if (_byAdded) {
+      if (_items.isNotEmpty) {
+        groups.add(('', [for (var i = 0; i < _items.length; i++) i]));
+      }
+    } else {
+      for (var i = 0; i < _items.length; i++) {
+        final day = _items[i].taken;
+        if (groups.isNotEmpty && groups.last.$1 == day) {
+          groups.last.$2.add(i);
+        } else {
+          groups.add((day, [i]));
+        }
       }
     }
     final body = CustomScrollView(
@@ -867,8 +890,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         slivers: [
           for (final (day, flatIdx) in groups) ...[
             // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
-            // 很难看，真机反馈 0.4.5）
-            SliverToBoxAdapter(
+            // 很难看，真机反馈 0.4.5）；入库序无日期头
+            if (day.isNotEmpty)
+              SliverToBoxAdapter(
                 child: Align(
                     alignment: Alignment.centerLeft,
                     child: Container(

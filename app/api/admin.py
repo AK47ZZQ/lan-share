@@ -465,6 +465,44 @@ async def admin_test_webhook(request: Request, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
+class NotifyBody(BaseModel):
+    title: str
+    body: str = ""
+    user_ids: list[int] | None = None   # None/空 = 全体在职用户
+
+
+@app.post("/api/admin/notify")
+def admin_broadcast_notify(body: NotifyBody, request: Request,
+                           _admin=Depends(require_admin)):
+    """手动广播（v0.20，App/Web 管理面板对话框直发）：站内通知人手一条 +
+    已配置的站外 webhook 一起推。标题必填截 80，正文截 500。"""
+    title = body.title.strip()[:80]
+    text = body.body.strip()[:500]
+    if not title:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+    if body.user_ids:
+        targets = _db().execute(
+            "SELECT id, username, is_active FROM users WHERE is_active=1").fetchall()
+        want = set(body.user_ids)
+        targets = [t for t in targets if t["id"] in want]
+        if not targets:
+            raise HTTPException(status_code=404, detail="目标用户不存在或已停用")
+    else:
+        targets = _db().execute(
+            "SELECT id, username, is_active FROM users WHERE is_active=1").fetchall()
+    now = time.time()
+    with _db_lock:
+        _db().executemany(
+            "INSERT INTO notifications(user_id, type, title, body, created_at) "
+            "VALUES(?,?,?,?,?)",
+            [(t["id"], "admin", title, text, now) for t in targets])
+        _db().commit()
+    push_webhook(title, text)
+    audit("notify_broadcast", f"{len(targets)}人: {title[:40]}",
+          ip=client_ip(request))
+    return {"ok": True, "sent": len(targets), "webhook": bool(get_webhook_url())}
+
+
 # ─── 目录授权 ─────────────────────────────────────────────
 
 
@@ -504,6 +542,9 @@ def admin_create_grant(body: GrantBody, request: Request, _admin=Depends(require
         raise HTTPException(status_code=400, detail="私人空间不可授权")
     if not parts or any(s == ".." or s.startswith(".") for s in parts):
         raise HTTPException(status_code=400, detail="非法授权路径")
+    # v0.20：UI 端只提供一级目录选择（子目录随父级授权自动继承）；
+    # 服务端保留深路径兼容——目录移动/改名同步 grants 时会产生嵌套路径，
+    # 由 spaces.py 直接写库，不走本端点
     vkey = "shared/" + "/".join(parts)
     if not (SHARE_ROOT / "/".join(parts)).is_dir():
         raise HTTPException(status_code=404, detail="目录不存在")
