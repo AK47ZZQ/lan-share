@@ -36,11 +36,17 @@ git checkout v2.0 -- server.py      # 把某文件恢复到某标签版本
 服务实际运行的是本目录（`C:\lan-share` junction 指向此处），改代码 → 重启服务（README §常用运维）
 → 验证通过 → commit。**验证通过再提交**，避免把坏版本留在最新 commit 里。
 
-## 异地备份（未配置）
+## 异地备份（已配置）
 
-仓库目前仅本机一份。如需异地备份，建议：
+远端：`https://github.com/AK47ZZQ/lan-share.git`（GitHub Private）。仓库代码
+（不含 data/ 用户文件与私钥）已完整推送，2026-09-06 首次全量同步（30 提交 +
+v2.0 标签）。**每次提交后顺手 push**，保持远端与本地同 commit：
 
 ```bash
-# 方案：私有远端（GitHub Private / 自建 Gitea），数据文件不在库里，push 安全
-git remote add origin <url> && git push -u origin main --tags
+git push origin main --tags
+git status                                   # 看到 "ahead N" 即本地未推送
 ```
+
+恢复：从远端 clone 后按 `HANDOVER.md` §入口文件走；`data/` 与 `certs/*.pem`
+不入库，需从本机 `C:\lan-share-backup`（数据备份）与 `C:\lan-share\certs`
+（TLS 私钥）另行恢复——远端只保代码，不保运行数据。
