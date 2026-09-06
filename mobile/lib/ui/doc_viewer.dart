@@ -68,12 +68,14 @@ class _DocViewerPageState extends State<DocViewerPage> {
   Future<List<int>> _fetch({void Function(int, int?)? onProgress}) async {
     final dio = await ApiClient.I.dio();
     final enc = _enc(widget.path);
-    // Content-Length 预检（review P2-3）：别等全量进内存才发现超限。
-    // HEAD 被拒（405）或无 CL 时忽略，仍走下载后兜底校验
+    // 走 /preview/ 而非 /files/（v0.17.2）：Caddy 对 /files/* 挂了
+    // forward_auth→/authcheck，而 authcheck 只查 Cookie 会话不认 App 的
+    // Bearer——App 侧 /files 恒 401（还触发拦截器登出）。/preview 对
+    // 非图片直接回 FileResponse，且走正常反代（下载引擎同款通道）。
     final isPdf = widget.name.toLowerCase().endsWith('.pdf');
     final limit = isPdf ? _pdfLimit : _textLimit;
     try {
-      final head = await dio.head('/files/$enc');
+      final head = await dio.head('/preview/$enc');
       final cl = head.headers.value('content-length');
       if (cl != null && int.tryParse(cl) != null && int.parse(cl) > limit) {
         throw _TooLarge(limit);
@@ -83,9 +85,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
       final st = e.response?.statusCode;
       if (st != null && st >= 400 && st != 405) rethrow;
     }
-    // 下载端点是 /files/<path>（无 /api 前缀）——/api/files/ 是列目录端点，
-    // 对文件返回 400（v0.17 首发预览全挂的根因）
-    final r = await dio.get<List<int>>('/files/$enc',
+    final r = await dio.get<List<int>>('/preview/$enc',
         options: Options(responseType: ResponseType.bytes,
             receiveTimeout: const Duration(minutes: 15)),
         onReceiveProgress: onProgress);

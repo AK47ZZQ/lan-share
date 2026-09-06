@@ -339,8 +339,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     }
     try {
       final dio = await ApiClient.I.dio();
+      // /preview/ 通道（v0.17.2）：/files/ 被 Caddy forward_auth 拦
+      // （authcheck 只认 Cookie），App Bearer 必 401；/preview 对非图片
+      // 回 FileResponse，与下载引擎同款
       final r = await dio.get<List<int>>(
-          '/files/${_enc(_remotePath)}',   // 下载端点（无 /api 前缀）
+          '/preview/${_enc(_remotePath)}',
           options: Options(responseType: ResponseType.bytes));
       final text = utf8.decode(r.data ?? const [], allowMalformed: true);
       if (!mounted) return;

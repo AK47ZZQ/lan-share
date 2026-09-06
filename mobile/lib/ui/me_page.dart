@@ -696,14 +696,17 @@ class _MePageState extends ConsumerState<MePage> {
 
   Widget _avatarWidget(SessionState session, {double radius = 20}) {
     final path = session.avatarPath ?? '';
-    // _server 异步初始化完成前先占位（review P3）：否则首帧打 null.avatars/ 坏 URL
-    if (path.isNotEmpty && _server != null) {
+    // 头像统一走 /api/auth/avatar/<username>（v0.17.2）：DB 里的
+    // .avatars/<uid>.jpg 是服务端内部路径，不可路由——直接拼它 404，
+    // 头像永远显示不出来。auth 端点按 username 查库取最新头像
+    final name = session.username ?? '';
+    if (path.isNotEmpty && _server != null && name.isNotEmpty) {
       return CircleAvatar(
           radius: radius,
           child: ClipOval(
               child: AuthImage(
-                  // AuthImage 不解析相对路径（照片墙同款口径）：自己拼 base
-                  url: '$_server$path?t=$_avatarBust',
+                  url: '$_server/api/auth/avatar/'
+                      '${Uri.encodeComponent(name)}?t=$_avatarBust',
                   fit: BoxFit.cover,
                   placeholder: (_) => const ColoredBox(
                       color: Color(0x22000000),
@@ -757,12 +760,16 @@ class _MePageState extends ConsumerState<MePage> {
                 if (newAvatar != null)
                   CircleAvatar(
                       radius: 36, backgroundImage: FileImage(newAvatar!))
-                else if ((session.avatarPath ?? '').isNotEmpty)
+                else if ((session.avatarPath ?? '').isNotEmpty &&
+                    _server != null &&
+                    (session.username ?? '').isNotEmpty)
                   CircleAvatar(
                       radius: 36,
                       child: ClipOval(
                           child: AuthImage(
-                              url: '$_server${session.avatarPath}?t=$_avatarBust',
+                              url: '$_server/api/auth/avatar/'
+                                  '${Uri.encodeComponent(session.username!)}'
+                                  '?t=$_avatarBust',
                               fit: BoxFit.cover)))
                 else
                   CircleAvatar(
