@@ -58,6 +58,133 @@ class _HomePageState extends ConsumerState<HomePage> {
   int _notifUnread = 0; // 站内通知未读数（0.8.0，30s 一刷）
   Timer? _tick, _diskTick;
 
+  // ── 首页卡片布局自定义（v0.18）────────────────────────────
+  // 长按卡片拖动排序；「管理卡片」面板控制显隐；顺序/显隐存 prefs
+  // （本机偏好，不进服务端）。新版本新增的卡片自动补到末尾，下线的
+  // 卡片剔除（脏数据自愈）。
+  static const _cardIds = [
+    'recent', 'activity', 'backup', 'transfers', 'storage', 'quick', 'invite',
+  ];
+  static const _cardLabels = {
+    'recent': '最近上传',
+    'activity': '动态',
+    'backup': '自动备份',
+    'transfers': '传输',
+    'storage': '服务端存储',
+    'quick': '快捷入口',
+    'invite': '邀请码注册',
+  };
+  List<String> _order = _cardIds;
+  Set<String> _hidden = {};
+  bool _hintShown = false; // 拖动提示只弹一次
+
+  Future<void> _loadLayout() async {
+    final sp = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      final saved = sp.getStringList('home_cards_order');
+      final valid = saved?.where(_cardIds.contains).toList() ?? const [];
+      final missing = _cardIds.where((c) => !valid.contains(c)).toList();
+      _order = [...valid, ...missing];
+      _hidden = (sp.getStringList('home_cards_hidden') ?? const []).toSet();
+      _hintShown = sp.getBool('home_cards_hint') ?? false;
+    });
+  }
+
+  Future<void> _persistLayout() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList('home_cards_order', _order);
+    await sp.setStringList('home_cards_hidden', _hidden.toList());
+  }
+
+  void _onReorder(int oldI, int newI, int visibleCount) {
+    if (oldI < 0 || oldI >= visibleCount) return; // 管理入口等不可拖
+    if (newI >= visibleCount) newI = visibleCount - 1;
+    if (newI == oldI) return;
+    setState(() {
+      final visible = _order.where((c) => !_hidden.contains(c)).toList();
+      final moved = visible.removeAt(oldI);
+      visible.insert(newI, moved);
+      _order = [...visible, ..._order.where(_hidden.contains)];
+    });
+    _persistLayout();
+  }
+
+  Future<void> _dragHintOnce() async {
+    if (_hintShown) return;
+    _hintShown = true;
+    final sp = await SharedPreferences.getInstance();
+    if (sp.getBool('home_cards_hint') ?? false) return;
+    await sp.setBool('home_cards_hint', true);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('长按卡片拖动即可排序，底部「管理卡片」可隐藏/恢复'),
+        duration: Duration(seconds: 3)));
+  }
+
+  /// 管理面板（v0.18）：逐卡显隐开关 + 恢复默认排序
+  void _manageCards() {
+    final cs = Theme.of(context).colorScheme;
+    showModalBottomSheet(
+        context: context,
+        showDragHandle: true,
+        builder: (bctx) => StatefulBuilder(
+            builder: (bctx, setSheet) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('管理首页卡片',
+                                style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 4),
+                            Text('关闭的卡片随时可从这里重新打开；'
+                                '长按卡片拖动可排序。',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: cs.onSurfaceVariant)),
+                          ])),
+                  Flexible(
+                      child: ListView(shrinkWrap: true, children: [
+                    for (final id in _order)
+                      SwitchListTile(
+                          value: !_hidden.contains(id),
+                          title: Text(_cardLabels[id] ?? id),
+                          onChanged: (on) {
+                            setSheet(() {
+                              on
+                                  ? _hidden.remove(id)
+                                  : _hidden.add(id);
+                            });
+                            setState(() {});
+                            _persistLayout();
+                          }),
+                  ])),
+                  Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      child: Row(children: [
+                        TextButton.icon(
+                            onPressed: () {
+                              setSheet(() {
+                                _order = List.of(_cardIds);
+                                _hidden.clear();
+                              });
+                              setState(() {});
+                              _persistLayout();
+                            },
+                            icon: const Icon(Icons.restart_alt, size: 18),
+                            label: const Text('恢复默认')),
+                        const Spacer(),
+                        FilledButton(
+                            onPressed: () => Navigator.pop(bctx),
+                            child: const Text('完成')),
+                      ])),
+                ]))));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -75,6 +202,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _loadDisk();
     _loadRecent();
     _loadActivity();
+    _loadLayout();
     // 本地状态（备份开关/待备数/传输动态）轻，2s 一刷保证跨页回来也是新的；
     // 磁盘要服务端 rglob 统计，30s 一刷 + 下拉手动刷
     _tick = Timer.periodic(const Duration(seconds: 2), (_) => _loadLocal());
@@ -233,345 +361,390 @@ class _HomePageState extends ConsumerState<HomePage> {
         .toList();
     final cs = Theme.of(context).colorScheme;
 
+    // 首页卡片布局（v0.18）：按 _order 过滤隐藏项组装；数据未就绪的
+    // 卡片（最近上传/动态为空）跳过——onReorder 只在这份可见清单内工作
+    final layout = <_CardSpec>[];
+    for (final id in _order) {
+      if (_hidden.contains(id)) continue;
+      final w = _cardFor(id, cs,
+          tasks: tasks, active: active, speed: speed, recent: recent);
+      if (w != null) layout.add(_CardSpec(id, w));
+    }
+
     return RefreshIndicator(
         onRefresh: _refreshAll,
-        child: ListView(padding: EdgeInsets.zero, children: [
-          // 0.8.4 品牌头：渐变底 + 云朵 + 问候。
-          // 0.8.12 起铺满全宽（去 ListView 侧边距）并延伸进状态栏
-          // （topInset=状态栏高度，内容从状态栏下方开始，不重叠）
-          BrandHeader(
-            topInset: MediaQuery.of(context).padding.top,
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const BrandCloud(size: 44),
-                  const SizedBox(height: 12),
-                  Text(_greeting(username),
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 19,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  ValueListenableBuilder<String>(
-                      valueListenable: AutoSwitch.I.lastEvent,
-                      builder: (_, ev, _) {
-                        final auto = ev.isNotEmpty ? ' · 自动切换已生效' : '';
-                        return Text(
-                            '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
-                            style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.92),
-                                fontSize: 12));
-                      }),
-                ]),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-            child: Column(children: [
-          // 最近上传横滑条（0.6.0）：跨入口的媒体文件按修改时间倒排
-          if (_recent != null && _recent!.isNotEmpty)
-            _card(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  _cardTitle('最近上传',
-                      icon: Icons.history,
-                      trailing: TextButton(
-                          style: TextButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(horizontal: 4)),
-                          onPressed: () => Navigator.push(context,
-                              MaterialPageRoute(
-                                  builder: (_) => const RecentPage())),
-                          child: const Text('全部 ›',
-                              style: TextStyle(fontSize: 12)))),
-                  const SizedBox(height: 6),
-                  SizedBox(
-                      height: 92,
-                      child: ListView(scrollDirection: Axis.horizontal,
-                          children: [
-                            for (final it in _recent!)
-                              GestureDetector(
-                                  onTap: widget.onGoPhotos,
-                                  child: Padding(
-                                      padding: const EdgeInsets.only(right: 6),
-                                      child: Stack(children: [
-                                        ClipRRect(
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                            child: SizedBox(
-                                                width: 92,
-                                                height: 92,
-                                                child: AuthImage(
-                                                    url: '$_base/thumb/'
-                                                        '${it.path.split("/").map(Uri.encodeComponent).join("/")}'))),
-                                        if (it.isVideo)
-                                          const Positioned(
-                                              right: 4,
-                                              bottom: 4,
-                                              child: Icon(Icons.play_circle_fill,
-                                                  size: 18,
-                                                  color: Colors.white70)),
-                                      ]))),
-                          ])),
-                ])),
-          // 动态（0.6.3 由"家里动态"更名）：家庭可见的上传/分享/新成员事件流
-          if (_activity != null && _activity!.isNotEmpty)
-            _card(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  _cardTitle('动态',
-                      icon: Icons.newspaper_outlined,
-                      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                        // 站内通知（0.8.0）：定向分享被下载/新成员等，带未读徽标
-                        Stack(children: [
-                          IconButton(
-                              visualDensity: VisualDensity.compact,
-                              icon: const Icon(Icons.notifications_outlined,
-                                  size: 20),
-                              onPressed: () async {
-                                await Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                        builder: (_) =>
-                                            const NotificationsPage()));
-                                _loadActivity();
-                              }),
-                          if (_notifUnread > 0)
-                            Positioned(
-                                right: 6,
-                                top: 6,
-                                child: Container(
-                                    padding: const EdgeInsets.all(3),
-                                    decoration: const BoxDecoration(
-                                        color: Colors.red,
-                                        shape: BoxShape.circle),
-                                    child: Text(
-                                        _notifUnread > 99
-                                            ? '99+'
-                                            : '$_notifUnread',
-                                        style: const TextStyle(
-                                            fontSize: 9,
-                                            color: Colors.white)))),
-                        ]),
-                        TextButton(
-                            style: TextButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 4)),
-                            onPressed: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const ActivityPage())),
-                            child: const Text('全部 ›',
-                                style: TextStyle(fontSize: 12))),
-                      ])),
-                  const SizedBox(height: 2),
-                  for (final n in _activity!.take(5))
-                    Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Row(children: [
-                          Icon(_activityIcon(n.action),
-                              size: 15, color: cs.onSurfaceVariant),
-                          const SizedBox(width: 8),
-                          Expanded(
-                              child: Text(activityText(n),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 13))),
-                          const SizedBox(width: 6),
-                          Text(activityRelTime(n.ts),
-                              style: TextStyle(
-                                  fontSize: 11, color: cs.onSurfaceVariant)),
-                        ])),
-                ])),
-          _card(
+        child: ReorderableListView(
+            // 品牌头固定在列表头不参与排序（v0.18 卡片自定义）
+            header: BrandHeader(
+              topInset: MediaQuery.of(context).padding.top,
               child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _cardTitle('自动备份',
-                        icon: Icons.backup_outlined,
-                        trailing: _badge(_backupOn ? '已开启' : '已关闭',
-                            _backupOn ? Colors.green : cs.onSurfaceVariant)),
-                    const SizedBox(height: 6),
-                    Text(_backupText(),
-                        style: const TextStyle(fontSize: 13)),
-                    // 本轮实时进度（0.6.2）：引擎逐张回写，2s 轮询可见
-                    if (_progressTotal > 0) ...[
-                      const SizedBox(height: 4),
-                      Text('备份中 $_progressDone/$_progressTotal 项…',
-                          style: TextStyle(fontSize: 12, color: cs.primary)),
-                    ] else ...[
-                      // 最近一轮/排队状态（0.7.3）：排队等充电/Wi-Fi、失败原因
-                      // 不再是黑盒。排队提示优先（它说明"为什么没在跑"）
-                      Builder(builder: (_) {
-                        final v = queueView(_workerState) ??
-                            roundView(_lastRound);
-                        if (v == null) return const SizedBox.shrink();
-                        return Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(v.text,
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    color: v.warn
-                                        ? Colors.orange
-                                        : cs.onSurfaceVariant)));
-                      }),
-                    ],
-                    // 失败提示（0.6.2）：此前失败只能进账本页才知道
-                    if (_failed > 0) ...[
-                      const SizedBox(height: 4),
-                      InkWell(
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const BackupDetailsPage())),
-                          child: Text(
-                              '⚠️ 有 $_failed 项备份失败，点此查看详情',
-                              style: TextStyle(fontSize: 12, color: cs.error))),
-                    ],
-                    // 空间预警（0.6.0）：待备份量超过服务端剩余空间时提前提示
-                    if (_pendingBytes > 0 && _diskFree > 0 && _pendingBytes > _diskFree) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                          '⚠️ 待备份 ${humanSize(_pendingBytes)}，'
-                          '服务端仅剩 ${humanSize(_diskFree)}，请先清理空间',
-                          style: TextStyle(
-                              fontSize: 12, color: cs.error)),
-                    ],
-                    const SizedBox(height: 10),
-                    Row(children: [
-                      FilledButton.tonalIcon(
-                          onPressed: _backupOn
-                              ? () {
-                                  BackupBridge.runOnce();
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text('已触发一轮备份'),
-                                          duration: Duration(seconds: 2)));
-                                }
-                              : null,
-                          icon: const Icon(Icons.play_arrow, size: 18),
-                          label: const Text('立即备份')),
-                      const SizedBox(width: 8),
-                      TextButton(
-                          onPressed: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) =>
-                                      const BackupSettingsPage())),
-                          child: const Text('备份设置')),
-                    ]),
-                  ])),
-          _card(
-              child: InkWell(
-                  onTap: widget.onGoTransfers,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _cardTitle('传输',
-                            icon: Icons.swap_vert_circle_outlined,
-                            trailing: Text('全部 ›',
-                                style:
-                                    TextStyle(fontSize: 12, color: cs.onSurfaceVariant))),
-                        const SizedBox(height: 6),
-                        Text(
-                            active > 0
-                                ? '$active 个任务进行中 · ${_speedText(speed)}'
-                                : tasks.isEmpty
-                                    ? '暂无传输任务'
-                                    : '队列空闲 · 共 ${tasks.length} 个任务记录',
-                            style: const TextStyle(fontSize: 13)),
-                        if (recent.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          for (final t in recent)
-                            Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 2),
-                                child: Row(children: [
-                                  Icon(
-                                      t.kind == TransferKind.upload
-                                          ? Icons.upload_outlined
-                                          : Icons.download_outlined,
-                                      size: 15,
-                                      color: cs.onSurfaceVariant),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                      child: Text(t.name,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 12))),
-                                ])),
-                        ],
-                      ]))),
-          _card(
-              child: InkWell(
-                  onTap: () => Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const StorageDetailPage())),
-                  borderRadius: BorderRadius.circular(12),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    _cardTitle('服务端存储',
-                        icon: Icons.dns_outlined,
-                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Text('详情 ›',
+                    const BrandCloud(size: 44),
+                    const SizedBox(height: 12),
+                    Text(_greeting(username),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    ValueListenableBuilder<String>(
+                        valueListenable: AutoSwitch.I.lastEvent,
+                        builder: (_, ev, _) {
+                          final auto = ev.isNotEmpty ? ' · 自动切换已生效' : '';
+                          return Text(
+                              '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
                               style: TextStyle(
-                                  fontSize: 12, color: cs.onSurfaceVariant)),
-                        ])),
-                    const SizedBox(height: 10),
-                    LinearProgressIndicator(
-                        value: _diskTotal > 0 && _diskUsed <= _diskTotal
-                            ? _diskUsed / _diskTotal
-                            : null,
-                        minHeight: 6,
-                        borderRadius: BorderRadius.circular(3)),
+                                  color: Colors.white.withValues(alpha: 0.92),
+                                  fontSize: 12));
+                        }),
+                  ]),
+            ),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            buildDefaultDragHandles: false, // 长按卡片启动拖动（延迟监听器）
+            onReorderStart: (_) => _dragHintOnce(),
+            // v3.41+：onReorderItem 的 newIndex 已自适应移除项，无需 -1 修正
+            onReorderItem: (oldI, newI) => _onReorder(oldI, newI, layout.length),
+            proxyDecorator: (child, i, anim) => AnimatedBuilder(
+                animation: anim,
+                builder: (_, _) => Material(
+                    elevation: 6,
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                    child: child)),
+            children: [
+              for (var i = 0; i < layout.length; i++)
+                ReorderableDelayedDragStartListener(
+                    key: ValueKey(layout[i].id),
+                    index: i,
+                    child: layout[i].widget),
+              // 管理入口（常驻、不可拖动）：隐藏的卡片从这里加回
+              Center(
+                  key: const ValueKey('__manage__'),
+                  child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact),
+                      onPressed: _manageCards,
+                      icon: const Icon(Icons.tune, size: 18),
+                      label: const Text('管理卡片'))),
+            ]));
+  }
+
+  /// 卡片 id → 内容。数据未就绪（最近上传/动态为空）返回 null 跳过整卡。
+  Widget? _cardFor(String id, ColorScheme cs,
+      {required List<TransferTask> tasks, required int active,
+      required int speed, required List<TransferTask> recent}) {
+    switch (id) {
+      case 'recent':
+        if (_recent == null || _recent!.isEmpty) return null;
+        return _card(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              _cardTitle('最近上传',
+                  icon: Icons.history,
+                  trailing: TextButton(
+                      style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 4)),
+                      onPressed: () => Navigator.push(context,
+                          MaterialPageRoute(
+                              builder: (_) => const RecentPage())),
+                      child: const Text('全部 ›',
+                          style: TextStyle(fontSize: 12)))),
+              const SizedBox(height: 6),
+              SizedBox(
+                  height: 92,
+                  child: ListView(scrollDirection: Axis.horizontal,
+                      children: [
+                        for (final it in _recent!)
+                          GestureDetector(
+                              onTap: widget.onGoPhotos,
+                              child: Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: Stack(children: [
+                                    ClipRRect(
+                                        borderRadius:
+                                            BorderRadius.circular(8),
+                                        child: SizedBox(
+                                            width: 92,
+                                            height: 92,
+                                            child: AuthImage(
+                                                url: '$_base/thumb/'
+                                                    '${it.path.split("/").map(Uri.encodeComponent).join("/")}'))),
+                                    if (it.isVideo)
+                                      const Positioned(
+                                          right: 4,
+                                          bottom: 4,
+                                          child: Icon(Icons.play_circle_fill,
+                                              size: 18,
+                                              color: Colors.white70)),
+                                  ]))),
+                      ])),
+            ]));
+      case 'activity':
+        if (_activity == null || _activity!.isEmpty) return null;
+        return _card(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              _cardTitle('动态',
+                  icon: Icons.newspaper_outlined,
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    // 站内通知（0.8.0）：定向分享被下载/新成员等，带未读徽标
+                    Stack(children: [
+                      IconButton(
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.notifications_outlined,
+                              size: 20),
+                          onPressed: () async {
+                            await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        const NotificationsPage()));
+                            _loadActivity();
+                          }),
+                      if (_notifUnread > 0)
+                        Positioned(
+                            right: 6,
+                            top: 6,
+                            child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: const BoxDecoration(
+                                    color: Colors.red,
+                                    shape: BoxShape.circle),
+                                child: Text(
+                                    _notifUnread > 99
+                                        ? '99+'
+                                        : '$_notifUnread',
+                                    style: const TextStyle(
+                                        fontSize: 9,
+                                        color: Colors.white)))),
+                    ]),
+                    TextButton(
+                        style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 4)),
+                        onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const ActivityPage())),
+                        child: const Text('全部 ›',
+                            style: TextStyle(fontSize: 12))),
+                  ])),
+              const SizedBox(height: 2),
+              for (final n in _activity!.take(5))
+                Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(children: [
+                      Icon(_activityIcon(n.action),
+                          size: 15, color: cs.onSurfaceVariant),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: Text(activityText(n),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13))),
+                      const SizedBox(width: 6),
+                      Text(activityRelTime(n.ts),
+                          style: TextStyle(
+                              fontSize: 11, color: cs.onSurfaceVariant)),
+                    ])),
+            ]));
+      case 'backup':
+        return _card(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _cardTitle('自动备份',
+                      icon: Icons.backup_outlined,
+                      trailing: _badge(_backupOn ? '已开启' : '已关闭',
+                          _backupOn ? Colors.green : cs.onSurfaceVariant)),
+                  const SizedBox(height: 6),
+                  Text(_backupText(),
+                      style: const TextStyle(fontSize: 13)),
+                  // 本轮实时进度（0.6.2）：引擎逐张回写，2s 轮询可见
+                  if (_progressTotal > 0) ...[
+                    const SizedBox(height: 4),
+                    Text('备份中 $_progressDone/$_progressTotal 项…',
+                        style: TextStyle(fontSize: 12, color: cs.primary)),
+                  ] else ...[
+                    // 最近一轮/排队状态（0.7.3）：排队等充电/Wi-Fi、失败原因
+                    // 不再是黑盒。排队提示优先（它说明"为什么没在跑"）
+                    Builder(builder: (_) {
+                      final v = queueView(_workerState) ??
+                          roundView(_lastRound);
+                      if (v == null) return const SizedBox.shrink();
+                      return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(v.text,
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: v.warn
+                                      ? Colors.orange
+                                      : cs.onSurfaceVariant)));
+                    }),
+                  ],
+                  // 失败提示（0.6.2）：此前失败只能进账本页才知道
+                  if (_failed > 0) ...[
+                    const SizedBox(height: 4),
+                    InkWell(
+                        onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const BackupDetailsPage())),
+                        child: Text(
+                            '⚠️ 有 $_failed 项备份失败，点此查看详情',
+                            style: TextStyle(fontSize: 12, color: cs.error))),
+                  ],
+                  // 空间预警（0.6.0）：待备份量超过服务端剩余空间时提前提示
+                  if (_pendingBytes > 0 && _diskFree > 0 && _pendingBytes > _diskFree) ...[
                     const SizedBox(height: 6),
                     Text(
-                        _diskTotal > 0
-                            ? '已用 ${humanSize(_diskUsed)} / ${humanSize(_diskTotal)}'
-                                '${_shareSize.isEmpty ? "" : " · 文件库 $_shareSize"}'
-                                '（点按看构成）'
-                            : '磁盘信息加载中…',
-                        style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-                  ]))),
-          _card(
-              child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _quick(Icons.photo_outlined, '照片', widget.onGoPhotos),
-                    _quick(Icons.folder_outlined, '文件', widget.onGoFiles),
-                    _quick(Icons.edit_note_outlined, '笔记', () {
-                      Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const NotesPage()));
-                    }),
-                    _quick(Icons.delete_outline, '回收站', () {
-                      Navigator.push(context,
-                          MaterialPageRoute(builder: (_) => const TrashPage()));
-                    }),
-                    _quick(Icons.link_outlined, '我的分享', widget.onGoMe),
-                  ])),
-          // v0.15.2：邀请码注册入口——新成员凭码自助建号，管理端建码
-          // 在管理面板 → 邀请码（服务端 /api/invites/redeem 匿名可用）
-          _card(
-              child: InkWell(
-                  onTap: () => Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const InviteRedeemPage())),
-                  borderRadius: BorderRadius.circular(12),
-                  child: Row(children: [
-                    Icon(Icons.how_to_reg_outlined,
-                        size: 22, color: cs.primary),
-                    const SizedBox(width: 12),
-                    Expanded(
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                          const Text('邀请码注册',
-                              style: TextStyle(
-                                  fontSize: 14, fontWeight: FontWeight.w600)),
-                          const SizedBox(height: 2),
-                          Text('新成员凭邀请码自助建号，无需管理员代录',
-                              style: TextStyle(
-                                  fontSize: 12, color: cs.onSurfaceVariant)),
-                        ])),
-                    Text('去注册 ›',
-                        style:
-                            TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-                  ]))),
-            ])),
-        ]));
+                        '⚠️ 待备份 ${humanSize(_pendingBytes)}，'
+                        '服务端仅剩 ${humanSize(_diskFree)}，请先清理空间',
+                        style: TextStyle(
+                            fontSize: 12, color: cs.error)),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(children: [
+                    FilledButton.tonalIcon(
+                        onPressed: _backupOn
+                            ? () {
+                                BackupBridge.runOnce();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text('已触发一轮备份'),
+                                        duration: Duration(seconds: 2)));
+                              }
+                            : null,
+                        icon: const Icon(Icons.play_arrow, size: 18),
+                        label: const Text('立即备份')),
+                    const SizedBox(width: 8),
+                    TextButton(
+                        onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) =>
+                                    const BackupSettingsPage())),
+                        child: const Text('备份设置')),
+                  ]),
+                ]));
+      case 'transfers':
+        return _card(
+            child: InkWell(
+                onTap: widget.onGoTransfers,
+                borderRadius: BorderRadius.circular(12),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _cardTitle('传输',
+                          icon: Icons.swap_vert_circle_outlined,
+                          trailing: Text('全部 ›',
+                              style:
+                                  TextStyle(fontSize: 12, color: cs.onSurfaceVariant))),
+                      const SizedBox(height: 6),
+                      Text(
+                          active > 0
+                              ? '$active 个任务进行中 · ${_speedText(speed)}'
+                              : tasks.isEmpty
+                                  ? '暂无传输任务'
+                                  : '队列空闲 · 共 ${tasks.length} 个任务记录',
+                          style: const TextStyle(fontSize: 13)),
+                      if (recent.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        for (final t in recent)
+                          Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Row(children: [
+                                Icon(
+                                    t.kind == TransferKind.upload
+                                        ? Icons.upload_outlined
+                                        : Icons.download_outlined,
+                                    size: 15,
+                                    color: cs.onSurfaceVariant),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                    child: Text(t.name,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 12))),
+                              ])),
+                      ],
+                    ])));
+      case 'storage':
+        return _card(
+            child: InkWell(
+                onTap: () => Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const StorageDetailPage())),
+                borderRadius: BorderRadius.circular(12),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  _cardTitle('服务端存储',
+                      icon: Icons.dns_outlined,
+                      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Text('详情 ›',
+                            style: TextStyle(
+                                fontSize: 12, color: cs.onSurfaceVariant)),
+                      ])),
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(
+                      value: _diskTotal > 0 && _diskUsed <= _diskTotal
+                          ? _diskUsed / _diskTotal
+                          : null,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(3)),
+                  const SizedBox(height: 6),
+                  Text(
+                      _diskTotal > 0
+                          ? '已用 ${humanSize(_diskUsed)} / ${humanSize(_diskTotal)}'
+                              '${_shareSize.isEmpty ? "" : " · 文件库 $_shareSize"}'
+                              '（点按看构成）'
+                          : '磁盘信息加载中…',
+                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                ])));
+      case 'quick':
+        return _card(
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _quick(Icons.photo_outlined, '照片', widget.onGoPhotos),
+                  _quick(Icons.folder_outlined, '文件', widget.onGoFiles),
+                  _quick(Icons.edit_note_outlined, '笔记', () {
+                    Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const NotesPage()));
+                  }),
+                  _quick(Icons.delete_outline, '回收站', () {
+                    Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const TrashPage()));
+                  }),
+                  _quick(Icons.link_outlined, '我的分享', widget.onGoMe),
+                ]));
+      case 'invite':
+        // v0.15.2：邀请码注册入口——新成员凭码自助建号，管理端建码
+        // 在管理面板 → 邀请码（服务端 /api/invites/redeem 匿名可用）
+        return _card(
+            child: InkWell(
+                onTap: () => Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const InviteRedeemPage())),
+                borderRadius: BorderRadius.circular(12),
+                child: Row(children: [
+                  Icon(Icons.how_to_reg_outlined,
+                      size: 22, color: cs.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        const Text('邀请码注册',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text('新成员凭邀请码自助建号，无需管理员代录',
+                            style: TextStyle(
+                                fontSize: 12, color: cs.onSurfaceVariant)),
+                      ])),
+                  Text('去注册 ›',
+                      style:
+                          TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                ])));
+    }
+    return null;
   }
 
   String _base = '';
@@ -688,6 +861,12 @@ class _HomePageState extends ConsumerState<HomePage> {
           ])));
 }
 
+
+class _CardSpec {
+  final String id;
+  final Widget widget;
+  const _CardSpec(this.id, this.widget);
+}
 
 class _RecentUpload {
   final String path;

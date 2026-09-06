@@ -22,7 +22,8 @@ import '../transfer/transfer_task.dart' show humanSize;
 const _textLimit = 2 * 1024 * 1024;
 const _pdfLimit = 200 * 1024 * 1024;
 
-/// 按文件名判断是否可进文档预览器（files_page/recent_page 共用口径）
+/// 按文件名判断是否可进文档预览器（files_page/recent_page 共用口径）。
+/// v0.18 扩面：代码/配置类纯文本（yaml/xml/py/js/html…）都按文本预览。
 bool isDocPreviewable(String name) {
   final n = name.toLowerCase();
   return n.endsWith('.md') ||
@@ -32,7 +33,53 @@ bool isDocPreviewable(String name) {
       n.endsWith('.json') ||
       n.endsWith('.csv') ||
       n.endsWith('.pdf') ||
-      n.endsWith('.docx');
+      n.endsWith('.docx') ||
+      n.endsWith('.yaml') ||
+      n.endsWith('.yml') ||
+      n.endsWith('.xml') ||
+      n.endsWith('.ini') ||
+      n.endsWith('.conf') ||
+      n.endsWith('.cfg') ||
+      n.endsWith('.properties') ||
+      n.endsWith('.py') ||
+      n.endsWith('.js') ||
+      n.endsWith('.ts') ||
+      n.endsWith('.dart') ||
+      n.endsWith('.html') ||
+      n.endsWith('.htm') ||
+      n.endsWith('.css') ||
+      n.endsWith('.sh') ||
+      n.endsWith('.bat') ||
+      n.endsWith('.ps1') ||
+      n.endsWith('.sql') ||
+      n.endsWith('.srt');
+}
+
+/// 这些后缀同时可在预览页一键进笔记编辑器（v0.18：txt 及代码文本也行）
+bool isNoteEditable(String name) {
+  final n = name.toLowerCase();
+  return n.endsWith('.md') ||
+      n.endsWith('.markdown') ||
+      n.endsWith('.txt') ||
+      n.endsWith('.log') ||
+      n.endsWith('.json') ||
+      n.endsWith('.csv') ||
+      n.endsWith('.yaml') ||
+      n.endsWith('.yml') ||
+      n.endsWith('.xml') ||
+      n.endsWith('.ini') ||
+      n.endsWith('.conf') ||
+      n.endsWith('.py') ||
+      n.endsWith('.js') ||
+      n.endsWith('.ts') ||
+      n.endsWith('.dart') ||
+      n.endsWith('.html') ||
+      n.endsWith('.css') ||
+      n.endsWith('.sh') ||
+      n.endsWith('.bat') ||
+      n.endsWith('.ps1') ||
+      n.endsWith('.sql') ||
+      n.endsWith('.srt');
 }
 
 class DocViewerPage extends StatefulWidget {
@@ -182,16 +229,15 @@ class _DocViewerPageState extends State<DocViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isMd = widget.name.toLowerCase().endsWith('.md') ||
-        widget.name.toLowerCase().endsWith('.markdown');
+    // 可编辑文本（v0.17 md → v0.18 全文本）：预览页一键进编辑器
+    final editable = isNoteEditable(widget.name);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.name,
             style: const TextStyle(fontSize: 14,
                 overflow: TextOverflow.ellipsis)),
         actions: [
-          // md 笔记联动（v0.17）：预览页一键进编辑器
-          if (isMd)
+          if (editable)
             IconButton(
                 tooltip: '编辑',
                 icon: const Icon(Icons.edit_outlined),

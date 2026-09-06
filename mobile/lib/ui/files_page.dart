@@ -29,6 +29,7 @@ import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'dir_picker_page.dart';
 import 'photo_models.dart';
+import 'audio_viewer.dart';
 import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'recent_page.dart';
@@ -70,7 +71,9 @@ class Entry {
       !isDir && _vidExts.contains((ext ?? '').toLowerCase());
   // v0.17 预览大改：md/pdf/docx/txt 等文档类也可"点击即预览"
   bool get isDoc => !isDir && isDocPreviewable(name);
-  bool get previewable => isImage || isVideo || isDoc;
+  // v0.18 预览扩面：mp3/m4a/flac 等音频点击直接进内建播放器
+  bool get isAudio => !isDir && isAudioPreviewable(name);
+  bool get previewable => isImage || isVideo || isDoc || isAudio;
 }
 
 class _Dir {
@@ -694,6 +697,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       try {
         await Navigator.push(context, MaterialPageRoute(
             builder: (_) => DocViewerPage(path: e.path, name: e.name)));
+      } finally {
+        _opening = false;
+      }
+      return;
+    }
+    // v0.18：音频走内建播放器（media_proxy 通道，支持拖进度）
+    if (e.isAudio) {
+      _opening = true;
+      try {
+        await Navigator.push(context, MaterialPageRoute(
+            builder: (_) => AudioViewerPage(path: e.path, name: e.name)));
       } finally {
         _opening = false;
       }

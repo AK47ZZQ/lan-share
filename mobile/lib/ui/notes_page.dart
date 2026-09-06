@@ -1,18 +1,22 @@
-// MD 笔记（v0.17 新功能）：服务端任意目录下的 .md 文件即笔记。
-// · 列表：默认打开上次用的目录（prefs 记忆），可换目录（DirPickerPage）
+// MD 笔记（v0.17 新功能，v0.18 完善）：服务端任意目录下的 .md/.txt 即笔记。
+// · 列表：默认打开上次用的目录（prefs 记忆），可换目录（DirPickerPage）；
+//   顶部搜索按文件名过滤；长按条目可重命名/删除（服务端 rename/回收站）
 // · 新建：输标题 → 选目录 → 进编辑器（保存时 multipart 直传）
-// · 编辑：拉取远端内容 → 全屏 md 源码编辑 → 保存覆盖上传；脏态返回拦确认
-// · 预览联动：DocViewerPage 看 md 时点编辑笔进编辑器
+// · 编辑：拉取远端内容 → 全屏 md 源码编辑 → 保存覆盖上传；脏态返回拦确认；
+//   md 可在源码/渲染间切换；每次输入自动存本地草稿，崩溃/误退可恢复
+// · 预览联动：DocViewerPage 看文本时点编辑笔进编辑器
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
 import 'dir_picker_page.dart';
 
 const _kNotesLastDir = 'notes_last_dir';
+String _draftKey(String remotePath) => 'note_draft_$remotePath';
 
 /// 把笔记编辑器 push 出去的便捷入口（doc_viewer/notes_page 共用）
 Future<void> openNoteEditor(BuildContext context,
@@ -33,11 +37,27 @@ class _NotesPageState extends State<NotesPage> {
   List<_Note>? _notes;
   bool _loading = true;
   String? _error;
+  // v0.18：搜索（纯本地文件名过滤）与条目长按管理
+  bool _searching = false;
+  final _searchCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _restore();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<_Note> get _filtered {
+    final all = _notes ?? const <_Note>[];
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return all;
+    return all.where((n) => n.name.toLowerCase().contains(q)).toList();
   }
 
   Future<void> _restore() async {
@@ -183,6 +203,116 @@ class _NotesPageState extends State<NotesPage> {
     }
   }
 
+  /// 重命名（v0.18）：服务端 /api/rename，成功后刷新列表
+  Future<void> _rename(_Note n) async {
+    final ctrl = TextEditingController(text: n.name);
+    final newName = await showDialog<String>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+                title: const Text('重命名笔记'),
+                content: TextField(
+                    controller: ctrl,
+                    autofocus: true,
+                    maxLength: 120,
+                    decoration: const InputDecoration(
+                        labelText: '新文件名（含扩展名）')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(dctx, ctrl.text.trim()),
+                      child: const Text('确定')),
+                ]));
+    if (newName == null || newName.isEmpty || newName == n.name || !mounted) {
+      return;
+    }
+    try {
+      final dio = await ApiClient.I.dio();
+      await dio.post('/api/rename', data: {'path': n.path, 'new_name': newName});
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已重命名'), duration: Duration(seconds: 2)));
+      setState(() => _loading = true);
+      _load();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('重命名失败，请稍后重试')));
+    }
+  }
+
+  /// 删除（v0.18）：进服务端回收站，30 天内可在回收站恢复
+  Future<void> _deleteNote(_Note n) async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (dctx) => AlertDialog(
+                title: Text('删除「${n.name}」？'),
+                content: const Text('将进入服务端回收站，30 天内可随时恢复。'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dctx, false),
+                      child: const Text('取消')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(dctx, true),
+                      child: const Text('删除')),
+                ]));
+    if (ok != true || !mounted) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      final enc = n.path.split('/').map(Uri.encodeComponent).join('/');
+      await dio.delete('/api/files/$enc');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已删除（可在回收站恢复）'),
+              duration: Duration(seconds: 2)));
+      setState(() => _loading = true);
+      _load();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('删除失败，请稍后重试')));
+    }
+  }
+
+  /// 长按条目 → 管理（编辑/重命名/删除）
+  void _noteSheet(_Note n) {
+    showModalBottomSheet(context: context, builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('编辑'),
+              onTap: () {
+                Navigator.pop(ctx);
+                // ignore: discarded_futures
+                openNoteEditor(context, dir: _dir!, name: n.name)
+                    .then((_) {
+                  if (mounted) {
+                    setState(() => _loading = true);
+                    _load();
+                  }
+                });
+              }),
+          ListTile(
+              leading: const Icon(Icons.drive_file_rename_outline),
+              title: const Text('重命名'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _rename(n);
+              }),
+          ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('删除'),
+              iconColor: Theme.of(context).colorScheme.error,
+              textColor: Theme.of(context).colorScheme.error,
+              onTap: () {
+                Navigator.pop(ctx);
+                _deleteNote(n);
+              }),
+          const SizedBox(height: 8),
+        ])));
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -191,11 +321,38 @@ class _NotesPageState extends State<NotesPage> {
         title: Text(_dir == null || _dir!.isEmpty ? '笔记' : '笔记 · $_dir',
             style: const TextStyle(fontSize: 16)),
         actions: [
+          // 搜索（v0.18）：纯本地文件名过滤，不额外打服务端
+          IconButton(
+              tooltip: _searching ? '关闭搜索' : '搜索笔记',
+              icon: Icon(_searching ? Icons.search_off : Icons.search),
+              onPressed: () {
+                setState(() {
+                  _searching = !_searching;
+                  if (!_searching) _searchCtrl.clear();
+                });
+              }),
           IconButton(
               tooltip: '切换目录',
               icon: const Icon(Icons.folder_open),
               onPressed: _chooseDir),
         ],
+        bottom: _searching
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(52),
+                child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: TextField(
+                        controller: _searchCtrl,
+                        autofocus: true,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                            isDense: true,
+                            hintText: '按文件名过滤…',
+                            prefixIcon: const Icon(Icons.search, size: 20),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10))))),
+              )
+            : null,
       ),
       floatingActionButton: FloatingActionButton.extended(
           onPressed: _newNote,
@@ -239,22 +396,28 @@ class _NotesPageState extends State<NotesPage> {
                               },
                               child: const Text('重试'))),
                     ])
-                  : (_notes == null || _notes!.isEmpty)
-                      ? ListView(children: const [
-                          SizedBox(height: 120),
-                          Center(child: Text('这个目录还没有 .md / .txt 笔记')),
-                          SizedBox(height: 6),
+                  : (_filtered.isEmpty)
+                      ? ListView(children: [
+                          const SizedBox(height: 120),
                           Center(
-                              child: Text('点右下角「新建笔记」写第一篇',
-                                  style: TextStyle(
+                              child: Text(_searchCtrl.text.trim().isEmpty
+                                  ? '这个目录还没有 .md / .txt 笔记'
+                                  : '没有匹配「${_searchCtrl.text.trim()}」的笔记')),
+                          const SizedBox(height: 6),
+                          Center(
+                              child: Text(
+                                  _searchCtrl.text.trim().isEmpty
+                                      ? '点右下角「新建笔记」写第一篇'
+                                      : '换个关键词试试',
+                                  style: const TextStyle(
                                       fontSize: 12, color: Colors.grey))),
                         ])
                       : RefreshIndicator(
                           onRefresh: () async => _load(),
                           child: ListView.builder(
-                              itemCount: _notes!.length,
+                              itemCount: _filtered.length,
                               itemBuilder: (_, i) {
-                                final n = _notes![i];
+                                final n = _filtered[i];
                                 return ListTile(
                                   leading: Icon(Icons.description_outlined,
                                       color: cs.primary),
@@ -274,6 +437,7 @@ class _NotesPageState extends State<NotesPage> {
                                       _load();
                                     }
                                   },
+                                  onLongPress: () => _noteSheet(n),
                                 );
                               })),
     );
@@ -310,7 +474,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   bool _loading = true;
   bool _saving = false;
   bool _dirty = false;
+  bool _preview = false; // md 源码/渲染切换（v0.18）
   String? _error;
+
+  bool get _isMd =>
+      widget.name.toLowerCase().endsWith('.md') ||
+      widget.name.toLowerCase().endsWith('.markdown');
 
   @override
   void initState() {
@@ -335,6 +504,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       // onChanged 首次输入即置脏
       setState(() => _loading = false);
       _focus.requestFocus();
+      await _restoreDraft(remote: null);
       return;
     }
     try {
@@ -351,6 +521,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         _ctrl.text = text;
         _loading = false;
       });
+      await _restoreDraft(remote: text);
     } catch (e) {
       if (!mounted) return;
       final s = e.toString();
@@ -359,6 +530,47 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         _loading = false;
       });
     }
+  }
+
+  /// 草稿恢复（v0.18）：上次编辑没保存就退出/崩溃时，本地草稿优先
+  /// （比远端新才恢复）；给 SnackBar 一键丢弃。isNew 时 remote 传 null
+  Future<void> _restoreDraft({String? remote}) async {
+    final sp = await SharedPreferences.getInstance();
+    final draft = sp.getString(_draftKey(_remotePath));
+    if (draft == null || draft.isEmpty || !mounted) return;
+    if (remote != null && draft == remote) {
+      // 草稿与远端一致（上次其实保存过但清 key 失败）：静默清掉
+      // ignore: discarded_futures
+      sp.remove(_draftKey(_remotePath));
+      return;
+    }
+    setState(() {
+      _ctrl.text = draft;
+      _dirty = true;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('已恢复上次未保存的草稿'),
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+            label: '丢弃',
+            onPressed: () {
+              // ignore: discarded_futures
+              SharedPreferences.getInstance().then((sp) =>
+                  sp.remove(_draftKey(_remotePath)));
+              if (!mounted) return;
+              setState(() {
+                _ctrl.text = remote ?? '';
+                _dirty = false;
+              });
+            })));
+  }
+
+  void _onChanged(String v) {
+    if (!_dirty) setState(() => _dirty = true);
+    // 草稿即写（v0.18）：崩溃/误杀进程也不丢内容；保存成功后清除
+    // ignore: discarded_futures
+    SharedPreferences.getInstance()
+        .then((sp) => sp.setString(_draftKey(_remotePath), v));
   }
 
   String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
@@ -374,6 +586,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                 filename: widget.name),
           }));
       if (!mounted) return true;
+      // 保存成功清草稿（v0.18）
+      // ignore: discarded_futures
+      SharedPreferences.getInstance().then((sp) =>
+          sp.remove(_draftKey(_remotePath)));
       setState(() => _dirty = false);
       ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('已保存到 $_remotePath'),
@@ -424,6 +640,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           title: Text(widget.name,
               style: const TextStyle(fontSize: 14)),
           actions: [
+            // md 渲染切换（v0.18）：源码/预览一键切（编辑态切走也保留内容）
+            if (_isMd && !_loading && _error == null)
+              IconButton(
+                  tooltip: _preview ? '继续编辑' : '渲染预览',
+                  icon: Icon(_preview ? Icons.edit_outlined : Icons.visibility_outlined),
+                  onPressed: () => setState(() => _preview = !_preview)),
             if (_dirty && !_saving)
               Padding(
                   padding: const EdgeInsets.only(right: 4),
@@ -457,7 +679,21 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                             onPressed: _loadContent,
                             child: const Text('重试'))),
                   ])
-                : Padding(
+                : _preview
+                    ? Markdown(
+                        data: _ctrl.text,
+                        selectable: true,
+                        padding: const EdgeInsets.all(16),
+                        styleSheet: MarkdownStyleSheet(
+                          p: const TextStyle(fontSize: 15, height: 1.55),
+                          h1: const TextStyle(
+                              fontSize: 24, fontWeight: FontWeight.bold),
+                          h2: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.bold),
+                          h3: const TextStyle(
+                              fontSize: 17, fontWeight: FontWeight.w600),
+                        ))
+                    : Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: TextField(
                         controller: _ctrl,
@@ -466,7 +702,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                         expands: true,
                         textAlignVertical: TextAlignVertical.top,
                         keyboardType: TextInputType.multiline,
-                        onChanged: (_) => setState(() => _dirty = true),
+                        onChanged: _onChanged,
                         style: const TextStyle(
                             fontSize: 14.5,
                             height: 1.55,

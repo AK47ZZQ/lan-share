@@ -13,6 +13,7 @@ import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'photo_models.dart';
+import 'audio_viewer.dart';
 import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
@@ -50,9 +51,16 @@ class _RecentItem {
     '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt',
     '.md', '.csv', '.epub',
   };
-  // v0.17：DocViewerPage 实际支持的范围（与 isDocPreviewable/isDocPreviewable 口径一致）
+  // v0.17：DocViewerPage 实际支持的范围（与 isDocPreviewable 口径一致）
   static const _docPreviewExts = {
     '.md', '.markdown', '.txt', '.log', '.json', '.csv', '.pdf', '.docx',
+    '.yaml', '.yml', '.xml', '.ini', '.conf', '.cfg', '.properties', '.py',
+    '.js', '.ts', '.dart', '.html', '.htm', '.css', '.sh', '.bat', '.ps1',
+    '.sql', '.srt',
+  };
+  // v0.18：音频扩面（与 ui/audio_viewer.dart kAudioExts 同口径）
+  static const _audioExts = {
+    '.mp3', '.m4a', '.aac', '.flac', '.wav', '.ogg', '.oga', '.opus',
   };
 
   String get _ext => (ext ?? '').toLowerCase();
@@ -62,7 +70,8 @@ class _RecentItem {
   /// PhotoViewer 走图/视频通道；文档类（v0.17）走 DocViewerPage；
   /// 音频/压缩包等仍无内建查看器，弹操作面板
   bool get isDocPreviewable => _docPreviewExts.contains(_ext);
-  bool get previewable => isMedia || isDocPreviewable;
+  bool get isAudioPreviewable => _audioExts.contains(_ext);
+  bool get previewable => isMedia || isDocPreviewable || isAudioPreviewable;
   // 与文件页同语义的类型分组（筛选 chips 联动）
   String get typeGroup => isImage
       ? 'image'
@@ -241,6 +250,17 @@ class _RecentPageState extends ConsumerState<RecentPage> {
       try {
         await Navigator.push(context, MaterialPageRoute(
             builder: (_) => DocViewerPage(path: it.path, name: it.name)));
+      } finally {
+        _opening = false;
+      }
+      return;
+    }
+    // v0.18：音频直进内建播放器
+    if (it.isAudioPreviewable) {
+      _opening = true;
+      try {
+        await Navigator.push(context, MaterialPageRoute(
+            builder: (_) => AudioViewerPage(path: it.path, name: it.name)));
       } finally {
         _opening = false;
       }

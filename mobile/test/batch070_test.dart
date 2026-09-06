@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lanshare_app/ui/files_page.dart';
+import 'package:lanshare_app/ui/audio_viewer.dart';
+import 'package:lanshare_app/ui/doc_viewer.dart';
 import 'package:lanshare_app/state/settings.dart';
 
 Entry _e({String? ext, bool isDir = false}) => Entry(
@@ -50,13 +52,29 @@ void main() {
       expect(_e(ext: '.txt').previewable, isTrue);
     });
 
-    test('不可预览类型：目录/无扩展名/压缩包/音频', () {
+    test('不可预览类型：目录/无扩展名/压缩包', () {
       expect(_e(isDir: true, ext: null).previewable, isFalse);
       // 目录即使名字带图扩展名（如 "Photos.jpg" 文件夹）也不进预览
       expect(_e(isDir: true, ext: '.jpg').previewable, isFalse);
       expect(_e(ext: null).previewable, isFalse);
       expect(_e(ext: '.zip').previewable, isFalse);
-      expect(_e(ext: '.mp3').previewable, isFalse);
+    });
+
+    test('v0.18 预览扩面：音频可进播放器，文本家族可进文档预览', () {
+      expect(_e(ext: '.mp3').previewable, isTrue);
+      expect(_e(ext: '.m4a').previewable, isTrue);
+      expect(_e(ext: '.flac').previewable, isTrue);
+      expect(_e(ext: '.wav').previewable, isTrue);
+      // wma 这类 ExoPlayer 不吃的不进音频预览
+      expect(_e(ext: '.wma').previewable, isFalse);
+      // 音频不进图/视频轮播判定
+      expect(_e(ext: '.mp3').isAudio, isTrue);
+      expect(_e(ext: '.mp3').isVideo, isFalse);
+      // 文本家族扩面（doc_viewer isDocPreviewable）
+      expect(isDocPreviewable('config.yaml'), isTrue);
+      expect(isDocPreviewable('main.py'), isTrue);
+      expect(isDocPreviewable('style.css'), isTrue);
+      expect(isAudioPreviewable('song.MP3'), isTrue);
     });
   });
 
