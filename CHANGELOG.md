@@ -1,3 +1,23 @@
+## 2026-09-09 — v0.21.4+65：改进建议 9.9 全量修复批
+
+- **登录密码内存生命周期**：Token 换取结束（含失败路径）即清内存明文密码——
+  此前仅成功路径清理，网络失败时密码残留进程内存
+- **首页断网反馈**：三路轮询（磁盘/最近上传/动态）连续失败时显示
+  "连不上服务器，正在自动重试…"横幅，恢复后自动消失；仅无响应类失败计入，
+  4xx/5xx（服务器可达）不误报
+- **欢迎头折叠插值除零守卫**：分母为 0 的极端布局回落 t=0，防 NaN 透传 Opacity
+- **Keystore/备份关键路径留痕**：SecureStore 静默降级、备份引擎三处静默吞错
+  补 debugPrint——国产 ROM Keystore 间歇失败导致"反复掉登录"时终于有日志可查
+- shrinkWrap 九处经实地评估后保留：BottomSheet 内 Flexible+shrinkWrap 是紧凑
+  面板的正确写法，盲目移除属视觉回归
+- 配套服务端修复（同批）：WebDAV PROPFIND 线程池化（大目录不再冻结全站）、
+  DAV Basic 哑哈希等时（堵用户名时序枚举）、start.bat 钉 hermes venv python
+  （根治"守护拉起即死"）、APK sha256 按 mtime+size 缓存、_user_field 列名
+  白名单、/api/auth/me 容忍损坏 totp_rc、zip 打包票据上限 200、存量 mypy
+  三错修复；Web：401 豁免补 /up、成员视角预览登出即清、大文件上传提示去
+  硬编码地址、vite 显式 sourcemap:false
+- 门禁：pytest 175（+6 回归测试）/ Dart 144 / analyze 0 全绿
+
 ## 2026-09-09 — v0.21.3+64：欢迎头色带根治（真机反馈第三轮）
 
 - **色带根因**：FlexibleSpaceBar 背景按展开高绘制，SliverAppBar.backgroundColor
