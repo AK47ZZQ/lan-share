@@ -19,7 +19,7 @@ def test_dav_unknown_user_fills_dummy_hash():
     必须用无会话 Cookie 的裸客户端，否则 DAV 认证走 Cookie 分支到不了 Basic。"""
     from fastapi.testclient import TestClient
 
-    from app.api import auth as auth_mod
+    from app.services import passwords as auth_mod
     auth_mod._DUMMY_HASH = None
     c = TestClient(app, base_url="https://testserver")
     cred = base64.b64encode(b"nosuchuser9f3c:wrongpass").decode()

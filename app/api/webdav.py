@@ -21,7 +21,7 @@ from app.security import (audit, allow_rate, client_ip, get_session_user, is_pub
                           login_locked_remaining, record_login_fail)
 from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve, sync_grants_on_move
-from app.api.auth import _verify_pw_with_dummy
+from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy
 from app.filetools import move_to_trash
 from app.spaces import cross_space_guard, is_own_private_root
 

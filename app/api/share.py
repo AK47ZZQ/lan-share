@@ -22,6 +22,7 @@ from app.security import (audit, client_ip, get_bearer_user, get_session_user,
 from app.filetools import human_size, safe_path
 from app.store.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
+from app.services import cleanup
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
 from app.api.notify import insert_notification, push_webhook
@@ -120,6 +121,16 @@ def _get_active_share(token: str) -> sqlite3.Row:
 
 
 _share_fails: dict[str, list[float]] = {}
+
+
+def sweep_tickets() -> None:
+    """过期分享取件票据回收（原散落在 system._cleanup_db 尾部，经 cleanup 注册调度）。"""
+    with _tickets_lock:
+        for k in [k for k, v in _tickets.items() if v["exp"] < time.time()]:
+            del _tickets[k]
+
+
+cleanup.register_sweep("share_tickets", sweep_tickets)
 
 
 def reset_share_state() -> None:

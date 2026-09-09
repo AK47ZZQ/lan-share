@@ -2,7 +2,6 @@
 
 权限：除 /api/invites/redeem（凭邀请码匿名）外全部 require_admin。
 """
-import re
 import secrets
 import time
 from urllib.parse import urlsplit
@@ -16,26 +15,18 @@ from app.db import _db, _db_lock, is_unique_violation
 from app.filetools import human_size
 from app.security import (audit, client_ip, hash_password, require_admin, require_user,
                           reset_netloc_cache)
-from app.spaces import (RESERVED_USERNAMES, _normcase_eq, invalidate_grants_cache,
+from app.spaces import (_normcase_eq, invalidate_grants_cache,
                         visible)
 from app.api.notify import get_webhook_url, push_webhook, webhook_send
 from app.store.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
                                 PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT,
                                 get_setting, set_setting)
+from app.services.accounts import (clean_username as _clean_username,
+                                   rename_user_everywhere)
 
 
-def _clean_username(name: str) -> str:
-    from app.filetools import _RESERVED_NAME
-    n = (name or "").strip()
-    if not n or len(n) > 64 or re.search(r"[\s\u0000-\u001f\u007f]", n):
-        raise HTTPException(status_code=400, detail="用户名不能含空白/控制字符，且不超过 64 字符")
-    if n.lower() in RESERVED_USERNAMES:
-        raise HTTPException(status_code=400, detail="该用户名是保留名")
-    if re.search(r"[/\\:]", n):
-        raise HTTPException(status_code=400, detail="用户名不能含路径分隔符或冒号")
-    if _RESERVED_NAME.match(n):
-        raise HTTPException(status_code=400, detail="该用户名是 Windows 设备保留名")
-    return n
+# 用户名校验收口 services/accounts.clean_username（07 批次 3C：auth/admin 同源）
+# _clean_username 别名见顶部 import；原内联实现已删除
 
 
 # ─── 成员管理 ─────────────────────────────────────────────
@@ -131,43 +122,8 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
     new_name = _clean_username(body.value)
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
-    with _db_lock:
-        # 占用检查与 UPDATE 同锁（检查在锁外时并发两次改名可双双通过、第二个撞唯一约束 500）
-        if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
-                         (new_name,)).fetchone():
-            raise HTTPException(status_code=409, detail="该用户名已被占用")
-        _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, uid))
-        _db().commit()
-    from app.api.albums import rename_album_owner
-    rename_album_owner(row["username"], new_name)   # 精选专辑归属跟随（R2-P2-3）
-    old_dir = SHARE_ROOT / "private" / row["username"]
-    new_dir = SHARE_ROOT / "private" / new_name
-    import os
-    if old_dir.exists() and not os.path.normcase(str(old_dir)) == os.path.normcase(str(new_dir)):
-        new_dir.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            old_dir.rename(new_dir)
-        except OSError:
-            # 目录改名失败时回滚用户名：否则 users.username 与私人目录永久错位，
-            # 用户私人数据"消失"（P2 边界）。DB 已提交但目录占用可重试整个改名。
-            # 专辑归属同步翻回（R3-P1：rename_album_owner 已在尝试前执行）
-            with _db_lock:
-                _db().execute("UPDATE users SET username=? WHERE id=?", (row["username"], uid))
-                _db().commit()
-            from app.api.albums import rename_album_owner
-            rename_album_owner(new_name, row["username"])
-            audit("admin_dir_rename_fail", f"{row['username']} → {new_name}", ip=client_ip(request))
-            raise HTTPException(status_code=500,
-                                detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")
-    # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
-    old_inc = SHARE_ROOT / "incoming" / row["username"]
-    new_inc = SHARE_ROOT / "incoming" / new_name
-    if old_inc.exists() and not os.path.normcase(str(old_inc)) == os.path.normcase(str(new_inc)):
-        try:
-            old_inc.rename(new_inc)
-        except OSError:
-            audit("admin_incoming_rename_fail", f"{row['username']} → {new_name}",
-                  ip=client_ip(request))
+    rename_user_everywhere(uid, row["username"], new_name, "admin",
+                           client_ip(request))
     audit("admin_rename_user", f"{row['username']} → {new_name}", ip=client_ip(request))
     return {"ok": True, "username": new_name}
 

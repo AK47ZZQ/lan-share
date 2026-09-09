@@ -23,7 +23,6 @@ from app.security import (audit, allow_rate, clear_login_fails, client_ip, creat
                           get_bearer_user, get_session_user, hash_password, is_https,
                           is_public_entry, login_locked_remaining, record_login_fail,
                           require_user, verify_password, _sha)
-from app.spaces import RESERVED_USERNAMES, _normcase_eq
 
 class AuthBody(BaseModel):
     username: str
@@ -80,10 +79,10 @@ async def setup(body: AuthBody, request: Request, response: Response):
     # setup 是引导入口：放行 admin/administrator/root/system 等管理语义保留名
     # （测试夹具与存量惯例），但路径段冲突名（shared/private/incoming/tmp）、
     # 分隔符与设备名仍然拒绝
-    from app.api.admin import _clean_username
+    from app.services.accounts import clean_username
     username = body.username.strip()
     if username.lower() not in {"admin", "administrator", "root", "system"}:
-        username = _clean_username(username)
+        username = clean_username(username)
     else:
         if len(username) > 64 or re.search(r"[\s\u0000-\u001f\u007f]", username):
             raise HTTPException(status_code=400, detail="用户名不能含空白/控制字符，且不超过 64 字符")
@@ -122,22 +121,11 @@ def _login_gate(username: str, request: Request):
     return row
 
 
-async def _verify_pw(pw: str, stored: str) -> bool:
-    return await run_in_threadpool(verify_password, pw, stored)
-
-
-# 用户名不存在时也跑一次等价 scrypt（懒初始化哑哈希）：消除"不存在用户 0ms /
-# 存在用户 300ms"的登录时序用户名枚举（R1-P3-2）
-_DUMMY_HASH: str | None = None
-
-
-async def _verify_pw_with_dummy(pw: str, stored: str | None) -> bool:
-    global _DUMMY_HASH
-    if stored is None:
-        if _DUMMY_HASH is None:
-            _DUMMY_HASH = await run_in_threadpool(hash_password, secrets.token_urlsafe(16))
-        stored = _DUMMY_HASH
-    return await _verify_pw(pw, stored)
+# 密码校验家族已收口 services/passwords（07 批次 3C）：登录/DAV/改密共用
+# 同一套 scrypt + 哑哈希等时策略；本地别名保持调用点稳定
+from app.services.passwords import verify_pw as _verify_pw  # noqa: E402
+from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy  # noqa: E402
+from app.services.accounts import clean_username, rename_user_everywhere  # noqa: E402
 
 
 @router.post("/api/login")
@@ -594,58 +582,11 @@ async def change_username(request: Request, body: UsernameBody,
         record_login_fail(row["username"], pub)
         audit("username_change_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="密码错误")
-    new_name = body.new_username.strip()
-    if not new_name:
-        raise HTTPException(status_code=400, detail="用户名不能为空")
-    if len(new_name) > 64 or re.search(r"[\s\u0000-\u001f\u007f]", new_name):
-        raise HTTPException(status_code=400,
-                            detail="用户名不能含空白/控制字符，且不超过 64 字符")
+    new_name = clean_username(body.new_username.strip())
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
-    if new_name.lower() in RESERVED_USERNAMES:
-        raise HTTPException(status_code=400, detail="该用户名是保留名")
-    # 路径分隔符/..段/冒号/设备保留名校验（R1-P0-2：缺此校验时 "a/../../b"
-    # 可把私人目录 rename 出数据根，路径穿越写）；与管理端 _clean_username 对齐
-    from app.api.admin import _clean_username
-    _clean_username(new_name)
-    # 重名检查与 UPDATE 同锁（否则并发改名可双双通过检查）
-    with _db_lock:
-        if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
-                         (new_name,)).fetchone():
-            raise HTTPException(status_code=409, detail="该用户名已被占用")
-        _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, row["id"]))
-        _db().commit()
-    # 私人空间目录跟随用户名迁移（Windows 大小写不敏感：仅大小写变化时 rename 会变 no-op）
-    old_dir = SHARE_ROOT / "private" / row["username"]
-    new_dir = SHARE_ROOT / "private" / new_name
-    from app.api.albums import rename_album_owner
-    rename_album_owner(row["username"], new_name)   # 精选专辑归属跟随（R2-P2-3）
-    if old_dir.exists() and not _normcase_eq(str(old_dir), str(new_dir)):
-        new_dir.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            old_dir.rename(new_dir)
-        except OSError:
-            # 目录改名失败时回滚用户名：否则 username 与私人目录永久错位、
-            # 本人数据"消失"（R1-P2-4）。专辑归属也要改回去（R3-P1：已在
-            # rename 尝试前翻成新名，不回滚则创建者失去编辑权）
-            with _db_lock:
-                _db().execute("UPDATE users SET username=? WHERE id=?",
-                              (row["username"], row["id"]))
-                _db().commit()
-            rename_album_owner(new_name, row["username"])
-            audit("username_dir_rename_fail", f"{row['username']} → {new_name}",
-                  ip=client_ip(request))
-            raise HTTPException(status_code=500,
-                                detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")
-    # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
-    old_inc = SHARE_ROOT / "incoming" / row["username"]
-    new_inc = SHARE_ROOT / "incoming" / new_name
-    if old_inc.exists() and not _normcase_eq(str(old_inc), str(new_inc)):
-        try:
-            old_inc.rename(new_inc)
-        except OSError:
-            audit("incoming_dir_rename_fail", f"{row['username']} → {new_name}",
-                  ip=client_ip(request))
+    rename_user_everywhere(row["id"], row["username"], new_name, "user",
+                           client_ip(request))
     # 会话按 user_id 关联，改名不影响登录态；旧用户名的防爆破计数自然失效
     audit("username_change", row["username"], f"→ {new_name}", client_ip(request))
     return {"ok": True, "username": new_name}

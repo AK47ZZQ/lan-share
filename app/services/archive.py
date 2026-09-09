@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from app.config import SHARE_ROOT, ZIP_TTL
+from app.services import cleanup
 
 _tickets: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -76,3 +77,6 @@ def sweep_expired() -> None:
         now = time.time()
         for k in [k for k, v in _tickets.items() if v["exp"] < now]:
             del _tickets[k]
+
+
+cleanup.register_sweep("zip_tickets", sweep_expired)

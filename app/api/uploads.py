@@ -15,7 +15,9 @@ import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
-from app.config import MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE, SHARE_ROOT, chunk_size_for
+from app.config import (MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE, SHARE_ROOT, UPLOAD_SESSION_TTL,
+                        chunk_size_for)
+from app.services import cleanup
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, require_user
 from app.filetools import clean_filename, human_size, move_to_trash, save_upload
@@ -63,6 +65,30 @@ class UploadInitBody(BaseModel):
 
 def _chunk_dir(sid: str) -> Path:
     return SHARE_ROOT / ".chunks" / sid
+
+
+def sweep_sessions() -> None:
+    """过期上传会话回收（TTL 见 UPLOAD_SESSION_TTL）+ 孤儿分块目录清理。
+    （原 system._cleanup_uploads，归位到状态所有者；经 cleanup 注册调度）"""
+    with _db_lock:
+        stale = _db().execute("SELECT id FROM upload_sessions WHERE created_at < ?",
+                              (time.time() - UPLOAD_SESSION_TTL,)).fetchall()
+        if stale:
+            _db().execute("DELETE FROM upload_sessions WHERE created_at < ?",
+                          (time.time() - UPLOAD_SESSION_TTL,))
+            _db().commit()
+    for r in stale:
+        shutil.rmtree(_chunk_dir(r["id"]), ignore_errors=True)
+    # 孤儿分块目录（无会话记录）
+    chunks_root = SHARE_ROOT / ".chunks"
+    if chunks_root.exists():
+        known = {r["id"] for r in _db().execute("SELECT id FROM upload_sessions").fetchall()}
+        for d in chunks_root.iterdir():
+            if d.is_dir() and d.name not in known:
+                shutil.rmtree(d, ignore_errors=True)
+
+
+cleanup.register_sweep("upload_sessions", sweep_sessions)
 
 @router.post("/api/upload/init")
 async def upload_init(request: Request, body: UploadInitBody, _user=Depends(require_user)):
