@@ -2,6 +2,48 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — v0.22.0+66：架构审查重构第一批（P0 分片契约 + 事实源五件套）
+
+依据《07-内聚耦合与可维护性审查》与《06-全量测试与审查报告》合并排期执行：
+
+- **P0 分片契约冲突根治**（App >5GB 文件上传必败）：服务端
+  `config.py` 立 `MAX_CHUNK_SIZE = 64MB` 单一事实源并随 /api/upload/init、
+  /state 响应下发 `max_chunk_size`；移动端 transfer_engine/backup_engine 两
+  引擎防御 clamp 从写死 16MB 改为引用协议常量（新 `data/api/protocol.dart`
+  `kMaxChunkSize`）；+3 契约测试钉住 `chunk_size_for` 输出范围与响应字段
+  （test_largefile.py）
+- **06-P1-1 管理端专辑非原子**：system.py create/delete_album 从裸
+  `_load+_save` 改走 `_mutate_albums` 锁内读-改-写（与 social.py 成员侧对
+  齐），50 条上限由静默截断改显式 400、重复月份 409 保持
+- **06-P1-2 share_download 防御纵深**：读侧补 `safe_path()` 闸门——shares
+  表路径若被污染含 `..`/点前缀即 403，不再直接拼 SHARE_ROOT
+- **Web admin 路由守卫**（06-P2-1/07 §3.3）：App.vue watchEffect 消费
+  `route.meta.admin`，非 admin 直达 /admin 即时重定向，不再短暂渲染管理页
+  结构；closeMenu 的 document 监听器补 onUnmounted 清理（06-P2-2）
+- **事实源① settings**：新增 `app/store/settings.py`（get_setting/
+  set_setting + 全部 key 常量），收编 admin/appver/healthreport/notify/
+  security/share 六文件 8 份重复 helper 与 17 处裸 SQL；专辑 key 同步收编
+- **事实源② 服务端扩展名**：IMG_EXTS/VID_EXTS 定于 `filetools.py`
+  （.gif 进时间线、.m4v/.3gp 获缩略图能力），files.py 与 system.py 共用，
+  顺带消除 system→files 的 `from app.api.files import IMG_EXTS` 反向依赖；
+  .svg 有意不收（内联预览 XSS 面），注释言明
+- **事实源③ Web filekinds 漂移修复**：filekinds.ts 新增 THUMB_EXTS（派生
+  集合，自带 .svg 排除）与 .m4v/.3gp/.opus 对齐；HomeView thumbOf 弃 14 个
+  手写扩展名改引用、fileIcon 委托 ui.iconForName（.ogg 此前显示 📄）；
+  FileViewer thumbOf 停止给 svg 发必 404 的缩略图请求；PhotosView 扩展名
+  正则收编 extOfName
+- **事实源④ App media_kinds**：新增 `data/media_kinds.dart`
+  （kImgExts/kVidExts/kAudExts + extOfName），收编 files_page/transfers_page/
+  photos_page/home_page/local_files/app_theme 六处手写集合——根治"文件页不
+  识别 .m4v 为视频、传输页识别"漂移，文件页 .m4v/.3gp 顺带获得缩略图
+- **事实源⑤ App 备份 prefs 键**：新增 `backup/backup_keys.dart`
+  （BackupKeys 16 键），收编 engine/config/settings/home/main 五文件 49 处
+  裸字符串——跨 isolate 隐性契约转显式常量（Kotlin 侧共读的
+  backup_enabled/backup_worker_state 在注释言明双端约束）
+- 门禁：pytest **178**（175+3 契约）/ ruff+mypy 全绿 / dart analyze 0 /
+  flutter test 144 / vue-tsc+build 绿。服务 v3.32 / App v0.22.0+66
+
+
 ## 2026-09-10 — 9.9 复审收尾批（P3 清尾 + 备份链路加固）
 
 - **备份链路可验证**（挂账"恢复演练"的软件侧落地）：backup.bat 每次备份
