@@ -2,7 +2,7 @@
 
 > **App 子模块技术文档**：工程结构 / 传输协议 / 备份与分享机制 / 构建签名。
 > 功能总览、里程碑状态与版本历史见根目录 `README.md` 与 `CHANGELOG.md`
-> （当前 **v0.21.1+62**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
+> （当前 **v0.21.2+63**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
 
 家庭网盘 LAN Share 的原生移动客户端。需求见 `docs/DESIGN-v3/APP-REQUIREMENTS.md`，
 技术方案见 `docs/DESIGN-v3/APP-DESIGN.md`。

@@ -13,7 +13,6 @@ import '../data/activity.dart';
 import '../data/api/api_client.dart';
 import '../data/auto_switch.dart';
 import '../data/local/prefs.dart';
-import '../data/net.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
@@ -378,10 +377,11 @@ class _HomePageState extends ConsumerState<HomePage> {
         child: CustomScrollView(slivers: [
           SliverAppBar(
               pinned: true,
-              // 内容高度：状态栏+20 顶距+问候行40+4+副行18+10+胶囊51+18 底距
-              // （v0.21.1 收紧：此前 196 导致内容下方一大段空渐变）
-              expandedHeight: topInset + 170,
-              // 收起后的工具条底色取渐变首色（纯色近似，白字同源）
+              // v0.21.2 减法瘦身：欢迎头只留"问候+头像"——微数据与下方
+              // "服务端存储"卡重复（已用空间出现两次）、入口副行价值低，
+              // 都删掉；首屏空间还给内容卡片
+              toolbarHeight: 48,
+              expandedHeight: topInset + 78,
               backgroundColor: PaletteScope.of(context).gradient.first,
               foregroundColor: Colors.white,
               centerTitle: false,
@@ -393,47 +393,16 @@ class _HomePageState extends ConsumerState<HomePage> {
                     BrandHeader(
                         bottomRadius: 0,
                         topInset: topInset,
-                        bottomPadding: 18,
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(children: [
-                                Expanded(
-                                    child: Text(_greeting(username),
-                                        style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.w700))),
-                                _headAvatar(session),
-                              ]),
-                              const SizedBox(height: 4),
-                              ValueListenableBuilder<String>(
-                                  valueListenable: AutoSwitch.I.lastEvent,
-                                  builder: (_, ev, _) {
-                                    final auto =
-                                        ev.isNotEmpty ? ' · 自动切换已生效' : '';
-                                    return Text(
-                                        '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
-                                        style: TextStyle(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.92),
-                                            fontSize: 12));
-                                  }),
-                              const SizedBox(height: 10),
-                              Row(children: [
-                                _headStat('服务端已用', humanSize(_diskUsed)),
-                                const SizedBox(width: 8),
-                                _headStat(
-                                    '待备份',
-                                    _pending < 0
-                                        ? '统计中'
-                                        : _pending == 0
-                                            ? '全部就绪'
-                                            : '$_pending 项'),
-                                const SizedBox(width: 8),
-                                _headStat('剩余空间', humanSize(_diskFree)),
-                              ]),
-                            ])),
+                        bottomPadding: 16,
+                        child: Row(children: [
+                          Expanded(
+                              child: Text(_greeting(username),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w700))),
+                          _headAvatar(session),
+                        ])),
                     // 收起态工具条（LAN Share + 云朵）：随折叠淡入，
                     // 展开时完全透明不与问候语叠加
                     Positioned(
@@ -443,7 +412,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                         child: _collapsedToolbar(topInset: topInset)),
                   ]))),
           SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
               sliver: SliverReorderableList(
               onReorderStart: (_) => _dragHintOnce(),
               // v3.41+：onReorderItem 的 newIndex 已自适应移除项，无需 -1 修正
@@ -481,7 +450,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   /// 完全展开时 0（不遮挡问候语），完全收起时 1（替代 title）。
   Widget _collapsedToolbar({required double topInset}) {
     return SizedBox(
-        height: kToolbarHeight + topInset,
+        height: 48 + topInset,
         child: LayoutBuilder(builder: (context, _) {
           final s = context
               .dependOnInheritedWidgetOfExactType<FlexibleSpaceBarSettings>();
@@ -494,7 +463,8 @@ class _HomePageState extends ConsumerState<HomePage> {
           return Opacity(
               opacity: t,
               child: Padding(
-                  padding: EdgeInsets.fromLTRB(16, topInset + 10, 16, 0),
+                  // 48dp 工具条内垂直居中（标题行高 ~24）
+                  padding: EdgeInsets.fromLTRB(16, topInset + 12, 16, 0),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     Icon(Brand.cloud, size: 18, color: Colors.white),
                     const SizedBox(width: 6),
@@ -532,33 +502,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                         color: Colors.white,
                         fontSize: 16,
                         fontWeight: FontWeight.w700))));
-  }
-
-  /// 渐变头微数据胶囊（白 14% 底，深浅主题都在渐变上可读）
-  Widget _headStat(String label, String value) {
-    return Expanded(
-        child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(10)),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(label,
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          fontSize: 11)),
-                ])));
   }
 
   /// 卡片 id → 内容。数据未就绪（最近上传/动态为空）返回 null 跳过整卡。
@@ -922,12 +865,6 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   String _base = '';
 
-
-  /// 当前入口标注：null=尚未取到地址（副标题不显示入口字样）
-  String? get _serverPublic {
-    if (_base.isEmpty) return null;
-    return isPublicAddress(_base) ? '公网' : '局域网';
-  }
   String _greeting(String username) {
     final h = DateTime.now().hour;
     final hi = h < 6
