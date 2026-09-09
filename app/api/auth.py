@@ -618,7 +618,7 @@ async def change_username(request: Request, body: UsernameBody,
     # 私人空间目录跟随用户名迁移（Windows 大小写不敏感：仅大小写变化时 rename 会变 no-op）
     old_dir = SHARE_ROOT / "private" / row["username"]
     new_dir = SHARE_ROOT / "private" / new_name
-    from app.api.system import rename_album_owner
+    from app.api.albums import rename_album_owner
     rename_album_owner(row["username"], new_name)   # 精选专辑归属跟随（R2-P2-3）
     if old_dir.exists() and not _normcase_eq(str(old_dir), str(new_dir)):
         new_dir.parent.mkdir(parents=True, exist_ok=True)

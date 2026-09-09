@@ -138,7 +138,7 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
             raise HTTPException(status_code=409, detail="该用户名已被占用")
         _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, uid))
         _db().commit()
-    from app.api.system import rename_album_owner
+    from app.api.albums import rename_album_owner
     rename_album_owner(row["username"], new_name)   # 精选专辑归属跟随（R2-P2-3）
     old_dir = SHARE_ROOT / "private" / row["username"]
     new_dir = SHARE_ROOT / "private" / new_name
@@ -154,7 +154,7 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
             with _db_lock:
                 _db().execute("UPDATE users SET username=? WHERE id=?", (row["username"], uid))
                 _db().commit()
-            from app.api.system import rename_album_owner
+            from app.api.albums import rename_album_owner
             rename_album_owner(new_name, row["username"])
             audit("admin_dir_rename_fail", f"{row['username']} → {new_name}", ip=client_ip(request))
             raise HTTPException(status_code=500,
@@ -606,7 +606,7 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
     import zipfile
     from datetime import datetime
 
-    from app.api.files import ZIP_TTL, _zips, _zips_lock
+    from app.services import archive
 
     username = row["username"]
     roots = [("private", SHARE_ROOT / "private" / username),
@@ -651,9 +651,7 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
         z.writestr("manifest.json",
                    json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
 
-    token = secrets.token_urlsafe(16)
-    with _zips_lock:
-        _zips[token] = {"path": zpath, "exp": time.time() + ZIP_TTL}
+    token = archive.issue_ticket(zpath)
     audit("export", f"{username} files={file_count} bytes={file_bytes}",
           ip=client_ip(request))
     return {"ok": True, "url": f"/api/zip/{token}",

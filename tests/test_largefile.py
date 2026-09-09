@@ -39,19 +39,19 @@ def test_chunk_rejects_wrong_body_size(auth):
         # index=0 应收满 5MB；只发 1MB → 400，且不产生 part-000000
         resp = auth.post(f"/api/upload/chunk/{sid}?index=0", content=b"x" * (1024 * 1024))
         assert resp.status_code == 400
-        from app.api.files import _chunk_dir
+        from app.api.uploads import _chunk_dir
         assert not (_chunk_dir(sid) / "part-000000").exists()
         st = auth.get(f"/api/upload/state/{sid}").json()
         assert 0 not in st["received"]
         # 补发整块 → 成功落 part 且无 _tmp_ 残留（原子写）
         ok = auth.post(f"/api/upload/chunk/{sid}?index=0", content=b"x" * (5 * 1024 * 1024))
         assert ok.status_code == 200
-        from app.api.files import _chunk_dir
+        from app.api.uploads import _chunk_dir
         assert (_chunk_dir(sid) / "part-000000").exists()
         assert not (_chunk_dir(sid) / "_tmp_000000").exists()
     finally:
         from app.db import _db, _db_lock
-        from app.api.files import _chunk_dir
+        from app.api.uploads import _chunk_dir
         import shutil
         with _db_lock:
             _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
@@ -97,7 +97,7 @@ def test_chunk_index_bound_uses_adaptive_size(auth):
         from app.db import _db, _db_lock
         import shutil
         from app.config import SHARE_ROOT
-        from app.api.files import _chunk_dir
+        from app.api.uploads import _chunk_dir
         with _db_lock:
             _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
             _db().commit()
@@ -113,7 +113,7 @@ def test_state_reports_adaptive_chunk_size(auth):
         assert st["chunk_size"] == 32 * 1024 * 1024
     finally:
         from app.db import _db, _db_lock
-        from app.api.files import _chunk_dir
+        from app.api.uploads import _chunk_dir
         import shutil
         with _db_lock:
             _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))

@@ -17,7 +17,7 @@ from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
 from app.db import _db
 from app.main import app
-import app.api.system as system_mod
+import app.api.photos as system_mod
 
 
 def _rand() -> str:
@@ -334,7 +334,7 @@ def test_preview_range_resume_contract(client, auth, workdir):
 # ── ⑩ 手机相册落点的拍摄者归属（App 0.4.2 统一落 照片/手机相册/<u>/）────
 
 def test_photo_uploader_phone_album(client, auth, workdir):
-    from app.api.system import _photo_uploader
+    from app.api.photos import _photo_uploader
     # 新统一落点：照片/手机相册/<u>/file → 归属 <u>
     assert _photo_uploader("照片/手机相册/debug/IMG_1.jpg") == "debug"
     # 共享相册目录不受影响：照片/<自定义相册>/file 仍是共享空间
@@ -348,7 +348,7 @@ def test_photo_uploader_phone_album(client, auth, workdir):
 # ── ⑩-b 0.7.0 相册子目录落点的拍摄者归属（照片|视频/<u>/<相册>/…）────
 
 def test_photo_uploader_album_layout(client, auth, workdir):
-    from app.api.system import _photo_uploader
+    from app.api.photos import _photo_uploader
     users = {"debug", "user@example.com"}
     # 新落点：照片/<u>/<相册>/file、视频/<u>/<相册>/file → 归属 <u>
     assert _photo_uploader("照片/debug/LSTest1/a.jpg", users) == "debug"

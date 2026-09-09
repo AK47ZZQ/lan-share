@@ -129,12 +129,12 @@ def test_photos_sort_added(auth, workdir):
 
 
 def test_upload_bumps_photo_scan_throttle(auth, workdir):
-    import app.api.system as system
-    system._last_photo_scan = 12345.0
-    system._last_force_scan = 12345.0
+    import app.api.photos as photos_mod
+    photos_mod._last_photo_scan = 12345.0
+    photos_mod._last_force_scan = 12345.0
     r = auth.post(
         f"/api/upload?path={workdir}",
         files={"file": ("bump.jpg", b"\xff\xd8fakejpg", "image/jpeg")})
     assert r.status_code == 200, r.text
-    assert system._last_photo_scan == 0.0
-    assert system._last_force_scan == 0.0
+    assert photos_mod._last_photo_scan == 0.0
+    assert photos_mod._last_force_scan == 0.0

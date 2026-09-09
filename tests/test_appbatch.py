@@ -197,7 +197,7 @@ def test_photos_timeline_includes_videos(auth, workdir):
     r = auth.post(f"/api/upload/{workdir}",
                   files={"file": ("p0.jpg", b"not-a-real-jpg", "image/jpeg")})
     assert r.status_code == 200, r.text
-    import app.api.system as system_mod
+    import app.api.photos as system_mod
     system_mod._last_photo_scan = 0
     r = auth.get("/api/photos?limit=500&refresh=true")
     assert r.status_code == 200, r.text

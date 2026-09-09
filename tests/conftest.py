@@ -21,7 +21,7 @@ os.environ["SHARE_ROOT"] = _ROOT
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.api import auth as _auth, share as _share, system as _system  # noqa: E402
+from app.api import auth as _auth, photos as _photos, share as _share  # noqa: E402
 from app.security import reset_auth_gates  # noqa: E402
 
 ADMIN_USER = "admin"
@@ -46,7 +46,7 @@ def _reset_in_memory_state():
     reset_auth_gates()
     _share.reset_share_state()
     _auth.reset_pair_codes()
-    _system.reset_scan_throttle()
+    _photos.reset_scan_throttle()
     yield
     reset_auth_gates()
     _share.reset_share_state()

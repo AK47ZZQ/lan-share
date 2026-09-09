@@ -21,6 +21,7 @@ from app.security import (audit, client_ip, get_bearer_user, get_session_user,
                           preview_user, require_user)
 from app.filetools import human_size, safe_path
 from app.store.settings import PUBLIC_BASE_URL, get_setting
+from app.api.qr import qr_svg_response
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
 from app.api.notify import insert_notification, push_webhook
@@ -268,7 +269,6 @@ def share_qr(token: str, request: Request, _user=Depends(require_user)):
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
         host = request.headers.get("host") or request.url.netloc
         url = f"{proto}://{host}/s/{token}"
-    from app.api.system import qr_svg_response
     return qr_svg_response(url)
 
 

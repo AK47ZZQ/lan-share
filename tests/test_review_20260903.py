@@ -10,7 +10,7 @@
 目录）；授权 vkey = "shared/" + 物理相对路径。要观察到 move 的授权同步，
 必须把目录移进子目录（移到根的 rel 不变 → vkey 本就不变）。
 """
-import app.api.system as _system
+import app.api.photos as _system
 from app.main import app
 from fastapi.testclient import TestClient
 

@@ -102,16 +102,16 @@ def test_apk_sha256_cached(tmp_path):
 
 def test_zip_ticket_cap_rejects(auth):
     """票据字典打满后 /api/zip 应回 429，且不再占用 busy 位。"""
-    from app.api.files import _zips, _zips_lock
+    from app.services import archive
     fake = [f"fake-token-{i}" for i in range(200)]
-    with _zips_lock:
-        saved = dict(_zips)
+    with archive._lock:
+        saved = dict(archive._tickets)
         for t in fake:
-            _zips[t] = {"path": None, "exp": 9e15}
+            archive._tickets[t] = {"path": None, "exp": 9e15}
     try:
         r = auth.post("/api/zip", json={"paths": ["whatever.txt"]})
         assert r.status_code == 429, r.text
     finally:
-        with _zips_lock:
-            _zips.clear()
-            _zips.update(saved)
+        with archive._lock:
+            archive._tickets.clear()
+            archive._tickets.update(saved)

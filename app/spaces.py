@@ -294,3 +294,38 @@ def visible(user, rel_parts) -> bool:
         vkey = "shared/" + "/".join(parts)
         return _grant_hit(user["user_id"], vkey, "read")
     return True
+
+
+# ─── 私人空间守卫（07 批次 3A 从 api/files.py 上收为公共 API：
+# webdav/files 之前各自 import 对方的下划线私有，这里归安全核心所有）───
+
+def is_own_private_root(user, target: Path) -> bool:
+    """目标是否是请求者本人的私人空间根目录（该目录不可删除/重命名/移出）。"""
+    try:
+        rel = target.relative_to(SHARE_ROOT)
+    except ValueError:
+        return False
+    return bool(rel.parts and rel.parts[0].lower() == "private" and len(rel.parts) == 2
+                and rel.parts[1].lower() == user["username"].lower())
+
+
+def under_private(path: Path, username: str) -> bool:
+    try:
+        rel = path.relative_to(SHARE_ROOT)
+    except ValueError:
+        return False
+    return bool(rel.parts and rel.parts[0].lower() == "private"
+                and len(rel.parts) > 1
+                and rel.parts[1].lower() == username.lower())
+
+
+def cross_space_guard(user, src: Path, dest: Path):
+    """E9：成员不得把文件移入/移出私人空间与共享空间之间（admin 不限）。
+    私人空间内部的移动不受限。"""
+    if user["role"] == "admin":
+        return
+    src_priv = under_private(src, user["username"])
+    dest_priv = under_private(dest, user["username"])
+    if src_priv != dest_priv:
+        raise HTTPException(status_code=400,
+                            detail="共享空间与私人空间之间不能移动（可复制后删除）")

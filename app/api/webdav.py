@@ -22,7 +22,8 @@ from app.security import (audit, allow_rate, client_ip, get_session_user, is_pub
 from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve, sync_grants_on_move
 from app.api.auth import _verify_pw_with_dummy
-from app.api.files import _cross_space_guard, _is_own_private_root, _move_to_trash
+from app.filetools import move_to_trash
+from app.spaces import cross_space_guard, is_own_private_root
 
 # ─── WebDAV ───────────────────────────────────────────────
 # 挂载为网络磁盘：RaiDrive / WinSCP / Cyberduck / ES文件管理器等客户端连 https://<host>:8765/dav/
@@ -225,7 +226,7 @@ async def dav_handler(request: Request, path: str = ""):
         if exists:
             # 覆盖的旧版本进回收站，而不是直接丢失（.trash 在 private 树外，
             # 不计入配额扫描；先移走旧文件，下一步的配额扫描即为最终占用）
-            _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
+            move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
         # 配额计价：此刻 private 树里已有 tmp（=即将落位的最终内容），旧版已
         # 移出——扫描值即落位后的占用，incoming 传 0 才是精确校验。传 size 会
         # 把 tmp 双计、误报配额不足。失败必须清掉 tmp 再抛，别留半截残留。
@@ -264,10 +265,10 @@ async def dav_handler(request: Request, path: str = ""):
             raise HTTPException(status_code=404)
         if target == SHARE_ROOT:
             raise HTTPException(status_code=403)
-        if _is_own_private_root(user, target):
+        if is_own_private_root(user, target):
             raise HTTPException(status_code=403, detail="私人空间根目录不可删除")
         # 与界面删除一致：进回收站（登记物理相对路径）
-        _move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
+        move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
         audit("dav_delete", path, ip=client_ip(request))
         return Response(status_code=204)
 
@@ -287,16 +288,16 @@ async def dav_handler(request: Request, path: str = ""):
         def _do_transfer() -> int:
             if method == "MOVE":
                 # 与界面 /api/move 同款守卫：私人根不可移动、成员不得跨空间搬运（E9）
-                if _is_own_private_root(user, target):
+                if is_own_private_root(user, target):
                     raise HTTPException(status_code=403, detail="私人空间根目录不可移动")
-                _cross_space_guard(user, target, dest)
+                cross_space_guard(user, target, dest)
             else:
                 enforce_quota(user, dest, _dav_tree_size(target))
             if dest.exists():
                 if not overwrite:
                     raise HTTPException(status_code=412, detail="Destination exists")
                 # 被覆盖的旧目标进回收站，与界面行为一致
-                _move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+                move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
             if method == "MOVE":
                 shutil.move(str(target), str(dest))
                 # 与界面 /api/move 同步授权路径（红队 P2-4）：挂载盘改名已授权

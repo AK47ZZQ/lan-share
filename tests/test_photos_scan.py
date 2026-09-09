@@ -15,8 +15,9 @@ from pathlib import Path
 
 import pytest
 
-import app.api.system as system
+import app.api.photos as photos
 from app.config import SHARE_ROOT
+from app.db import _db, _db_lock
 
 
 def _root() -> Path:
@@ -33,18 +34,18 @@ def _mk(rel: str) -> Path:
 def _rows(*likes):
     out = []
     for like in likes:
-        out += system._db().execute(
+        out += _db().execute(
             "SELECT path FROM photos WHERE path LIKE ?", (f"%{like}%",)
         ).fetchall()
     return out
 
 
 def _cleanup(*likes):
-    with system._db_lock:
+    with _db_lock:
         for like in likes:
-            system._db().execute("DELETE FROM photos WHERE path LIKE ?",
+            _db().execute("DELETE FROM photos WHERE path LIKE ?",
                                  (f"%{like}%",))
-        system._db().commit()
+        _db().commit()
     for like in likes:
         d = _root() / like.split("/")[0]
         if d.exists():
@@ -59,8 +60,8 @@ def _cleanup(*likes):
 @pytest.fixture()
 def photos_env():
     """扫描时间戳归零 + 结束后清掉本批测试文件与库行（测试库会话级共享）。"""
-    system._last_photo_scan = 0.0
-    system._last_force_scan = 0.0
+    photos._last_photo_scan = 0.0
+    photos._last_force_scan = 0.0
     yield
     _cleanup("照片/随手拍", "照片/节流验证", "照片/admin/2026-旅行",
              "照片/家庭合影", "随手新建")
@@ -71,9 +72,9 @@ def test_force_scan_not_starved_by_plain_hits(client, photos_env):
     这是 App 备份完成/脉搏轮询强刷的确定性保证（0.7.2 前共用时间戳，
     网页正刷照片墙时 App 强刷常被顶掉）。"""
     p = _mk("照片/随手拍/a.jpg")
-    system._last_photo_scan = time.time()  # 模拟普通请求刚扫过
-    system._last_force_scan = 0.0
-    system._scan_photos(force=True)
+    photos._last_photo_scan = time.time()  # 模拟普通请求刚扫过
+    photos._last_force_scan = 0.0
+    photos._scan_photos(force=True)
     assert _rows("随手拍"), "force 被普通扫描时间戳顶掉 = App 强刷扫了个寂寞"
     assert p.exists()
 
@@ -81,11 +82,11 @@ def test_force_scan_not_starved_by_plain_hits(client, photos_env):
 def test_plain_scan_respects_60s_floor(client, photos_env):
     """普通请求仍守 60s 节流：高频浏览不会反复全盘 rglob。"""
     _mk("照片/节流验证/b.jpg")
-    system._last_photo_scan = time.time()
-    system._scan_photos()
+    photos._last_photo_scan = time.time()
+    photos._scan_photos()
     assert not _rows("节流验证"), "60s 节流失效 = 每个普通请求都在全盘扫描"
-    system._last_photo_scan = 0.0
-    system._scan_photos()
+    photos._last_photo_scan = 0.0
+    photos._scan_photos()
     assert len(_rows("节流验证")) == 1
 
 
