@@ -13,12 +13,11 @@ import json
 import re
 from pathlib import Path
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.config import PROJECT_ROOT, SHARE_ROOT
 from app.filetools import human_size
-from app.main import app
 from app.security import audit, client_ip, require_user
 from app.store.settings import PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT, get_setting
 
@@ -73,7 +72,11 @@ def _apk_sha256(apk: Path) -> str:
     return _apk_sha_cache[0]
 
 
-@app.get("/api/app/latest")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/api/app/latest")
 def app_latest(_user=Depends(require_user)):
     data = _load_version()
     apk = _apk_path(data)
@@ -124,13 +127,13 @@ def _load_history() -> list:
     return out
 
 
-@app.get("/api/app/history")
+@router.get("/api/app/history")
 def app_history(_user=Depends(require_user)):
     """App 更新历史（App安装包/versions.json，发版时随 notes 一起维护）。"""
     return {"items": _load_history()}
 
 
-@app.get("/api/app/download")
+@router.get("/api/app/download")
 def app_download(request: Request, _user=Depends(require_user)):
     data = _load_version()
     apk = _apk_path(data)
@@ -165,7 +168,7 @@ def _cert_fingerprint() -> str:
     return fp
 
 
-@app.get("/api/app/entries")
+@router.get("/api/app/entries")
 def app_entries():
     """主/备公网入口 + 证书指纹。地址为 null 表示未配置对应隧道；
     App 端只展示非空项，主备切换、指纹预校验都以此为准。"""

@@ -6,7 +6,6 @@ Caddy 反代使内外网 client_ip 都是 127.0.0.1——不改桶分账则全�
 """
 
 from conftest import ADMIN_PASS, ADMIN_USER
-import server
 
 PUBLIC_HOST = "frp-test.example.com:35391"
 LAN_HOST = "lan.local:8765"

@@ -188,6 +188,14 @@ _rate: dict[str, list[float]] = {}
 _rate_lock = threading.Lock()
 _login_fails: dict[str, list[float]] = {}
 
+
+def reset_auth_gates() -> None:
+    """清空进程内限速/登录防爆破状态（测试专用接口，07 审查批次 2 测试解钉：
+    conftest 改调本函数而非直掏 _rate/_login_fails 字典）。"""
+    with _rate_lock:
+        _rate.clear()
+        _login_fails.clear()
+
 # ─── 公网入口判定 ─────────────────────────────────────────
 # FRP 隧道使公网流量 client_ip 全为 127.0.0.1，无法按 IP 区分内外，只能靠 Host
 # （Caddy 对 8765/8767 都透传原始 Host：局域网=192.168.x:8765，公网=frp 域名）。

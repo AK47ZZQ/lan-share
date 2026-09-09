@@ -5,7 +5,9 @@ APK sha256 缓存、zip 打包票据上限。"""
 import base64
 import hashlib
 
-from conftest import server
+from app.db import _db
+from app.main import app
+
 
 
 # ── P1-2：DAV Basic 认证哑哈希（用户名枚举等时） ─────────────
@@ -19,7 +21,7 @@ def test_dav_unknown_user_fills_dummy_hash():
 
     from app.api import auth as auth_mod
     auth_mod._DUMMY_HASH = None
-    c = TestClient(server.app, base_url="https://testserver")
+    c = TestClient(app, base_url="https://testserver")
     cred = base64.b64encode(b"nosuchuser9f3c:wrongpass").decode()
     r = c.request("PROPFIND", "/dav/",
                   headers={"Authorization": f"Basic {cred}", "Depth": "0"})
@@ -59,20 +61,20 @@ def test_user_field_rejects_nonwhitelisted_column(auth):
 
 def test_me_tolerates_corrupted_totp_rc(auth):
     """totp_rc 字段损坏（非合法 JSON）时 /api/auth/me 应回 200 且 rc_left=0。"""
-    row = server._db().execute("SELECT totp_rc FROM users WHERE username=?",
+    row = _db().execute("SELECT totp_rc FROM users WHERE username=?",
                                (auth.username,)).fetchone()
     original = row["totp_rc"]
     try:
-        server._db().execute("UPDATE users SET totp_rc='{bad-json' WHERE username=?",
+        _db().execute("UPDATE users SET totp_rc='{bad-json' WHERE username=?",
                              (auth.username,))
-        server._db().commit()
+        _db().commit()
         r = auth.get("/api/auth/me")
         assert r.status_code == 200, r.text
         assert r.json()["totp_rc_left"] == 0
     finally:
-        server._db().execute("UPDATE users SET totp_rc=? WHERE username=?",
+        _db().execute("UPDATE users SET totp_rc=? WHERE username=?",
                              (original, auth.username))
-        server._db().commit()
+        _db().commit()
 
 
 # ── P2：APK sha256 按 mtime+size 缓存 ───────────────────────

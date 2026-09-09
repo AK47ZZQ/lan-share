@@ -10,7 +10,7 @@ from typing import Optional
 
 import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
-from fastapi import (Depends, Form, HTTPException, Request)
+from fastapi import (APIRouter, Depends, Form, HTTPException, Request)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -24,9 +24,12 @@ from app.store.settings import PUBLIC_BASE_URL, get_setting
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
 from app.api.notify import insert_notification, push_webhook
-from app.main import app
 
-@app.post("/api/share")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.post("/api/share")
 async def create_share(request: Request, path: str = Form(...), expires_hours: int = Form(default=72),
                        password: Optional[str] = Form(default=None),
                        max_downloads: Optional[int] = Form(default=None),
@@ -116,6 +119,14 @@ def _get_active_share(token: str) -> sqlite3.Row:
 
 
 _share_fails: dict[str, list[float]] = {}
+
+
+def reset_share_state() -> None:
+    """清空进程内分享票据与防爆破状态（测试专用接口，07 审查批次 2 测试解钉）。"""
+    with _tickets_lock:
+        _tickets.clear()
+    with _share_fails_lock:
+        _share_fails.clear()
 _share_fails_lock = threading.Lock()
 
 
@@ -156,7 +167,7 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
         _share_fails.pop(token, None)
 
 
-@app.get("/api/share/meta/{token}")
+@router.get("/api/share/meta/{token}")
 def share_meta(token: str, request: Request):
     s = _get_active_share(token)
     is_target = _target_guard(s, request)
@@ -177,7 +188,7 @@ _tickets: dict[str, dict] = {}
 _tickets_lock = threading.Lock()
 
 
-@app.post("/api/share/{token}/prepare")
+@router.post("/api/share/{token}/prepare")
 def share_prepare(request: Request, token: str, body: SharePrepareBody):
     s = _get_active_share(token)
     is_target = _target_guard(s, request)
@@ -221,7 +232,7 @@ def _share_download_done(token: str, path: str, ip: str, tkt: str = ""):
     audit("share_download", path, ip=ip)
 
 
-@app.get("/api/share/{token}/dl")
+@router.get("/api/share/{token}/dl")
 async def share_download(request: Request, token: str, tkt: str):
     # 票据在 TTL 内可复用（大文件断线后浏览器重试/Range 续传不至于 403），过期由清理任务回收
     with _tickets_lock:
@@ -244,7 +255,7 @@ async def share_download(request: Request, token: str, tkt: str):
                             _share_download_done, token, s["path"], client_ip(request), tkt))
 
 
-@app.get("/api/share/{token}/qr")
+@router.get("/api/share/{token}/qr")
 def share_qr(token: str, request: Request, _user=Depends(require_user)):
     if not _db().execute("SELECT 1 FROM shares WHERE token=?", (token,)).fetchone():
         raise HTTPException(status_code=404, detail="Share not found")
@@ -261,7 +272,7 @@ def share_qr(token: str, request: Request, _user=Depends(require_user)):
     return qr_svg_response(url)
 
 
-@app.get("/api/shares")
+@router.get("/api/shares")
 def list_shares(request: Request, _user=Depends(require_user)):
     now = time.time()
     with _db_lock:
@@ -300,7 +311,7 @@ def list_shares(request: Request, _user=Depends(require_user)):
     return active
 
 
-@app.get("/api/shares/{token}/history")
+@router.get("/api/shares/{token}/history")
 def share_history(token: str, _user=Depends(require_user)):
     """某分享的取件记录（下载成功 + 密码错误尝试）。仅创建者与 admin。"""
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
@@ -317,7 +328,7 @@ def share_history(token: str, _user=Depends(require_user)):
              "ip": r["ip"], "action": r["action"]} for r in rows]
 
 
-@app.delete("/api/shares/{token}")
+@router.delete("/api/shares/{token}")
 def revoke_share(request: Request, token: str, _user=Depends(require_user)):
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
@@ -339,7 +350,7 @@ class ShareEditBody(BaseModel):
     max_downloads: Optional[int] = None
 
 
-@app.patch("/api/shares/{token}")
+@router.patch("/api/shares/{token}")
 def edit_share(request: Request, token: str, body: ShareEditBody,
                _user=Depends(require_user)):
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()

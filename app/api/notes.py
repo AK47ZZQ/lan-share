@@ -16,13 +16,12 @@ import re
 import time
 from typing import cast
 
-from fastapi import Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.config import SHARE_ROOT
 from app.filetools import human_size
 from app.security import require_user
 from app.spaces import resolve
-from app.main import app
 
 NOTE_EXTS = {".md", ".markdown", ".txt", ".html", ".htm"}
 MAX_NOTES = 2000
@@ -49,7 +48,11 @@ def _summary_of(p, ext: str) -> str:
     return _ws_re.sub(" ", text).strip()[:_SUMMARY_LEN]
 
 
-@app.get("/api/notes/list")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/api/notes/list")
 def list_notes(request: Request, path: str = Query(..., min_length=1),
                q: str = Query(default="", max_length=80),
                sort: str = Query(default="modified"),

@@ -6,7 +6,7 @@ FRP 隧道使公网流量 client_ip 恒为 127.0.0.1，只能靠 Host 区分入�
 """
 
 from conftest import ADMIN_PASS, ADMIN_USER
-import server
+from app.main import app
 
 PUBLIC_HOST = "frp-test.example.com:35391"   # 测试中的"公网"入口
 LAN_HOST = "lan.local:8765"                  # 测试中的"局域网"入口
@@ -15,7 +15,7 @@ LAN_HOST = "lan.local:8765"                  # 测试中的"局域网"入口
 def _sub(client):
     """独立子客户端：成功登录的会话 cookie 不能落进 session 级共享的 client
     （否则污染后续测试的"匿名"断言——conftest 仅在进程启动时清一次罐）。"""
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _set_public(auth, url: str):

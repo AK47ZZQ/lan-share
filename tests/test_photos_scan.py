@@ -16,11 +16,11 @@ from pathlib import Path
 import pytest
 
 import app.api.system as system
-import server
+from app.config import SHARE_ROOT
 
 
 def _root() -> Path:
-    return Path(server.SHARE_ROOT)
+    return Path(SHARE_ROOT)
 
 
 def _mk(rel: str) -> Path:

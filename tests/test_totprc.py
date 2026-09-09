@@ -9,7 +9,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
-import server
+from app.db import _db, _db_lock
+from app.main import app
 import app.api.auth as _auth
 
 
@@ -18,11 +19,11 @@ def _totp_cleanup():
     """users 表是会话级共享的（conftest 只清内存态）：用例中途失败也会把
     admin 的两步验证状态擦干净，免得串进后续用例（login 变两步 → 401）。"""
     yield
-    with server._db_lock:
-        server._db().execute(
+    with _db_lock:
+        _db().execute(
             "UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL "
             "WHERE username=?", (ADMIN_USER,))
-        server._db().commit()
+        _db().commit()
 
 
 def _rand() -> str:
@@ -30,7 +31,7 @@ def _rand() -> str:
 
 
 def _bare(client):
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _admin(client):
@@ -63,7 +64,7 @@ def test_enable_returns_ten_unique_hashes_not_plaintext(client):
     assert len(codes) == 10 and len(set(codes)) == 10
     assert all(_auth._RC_RE.match(c) for c in codes)
     # 库内只存 SHA256：明文不入库，哈希可对上
-    row = server._db().execute(
+    row = _db().execute(
         "SELECT totp_rc FROM users WHERE username=?", (ADMIN_USER,)).fetchone()
     stored = json.loads(row["totp_rc"])
     assert codes[0] not in stored and len(stored) == 10
@@ -108,7 +109,7 @@ def test_recovery_code_miss_and_garbage_counted_as_fail(client):
         "username": ADMIN_USER, "password": ADMIN_PASS,
         "code": "zz!!"}).status_code == 401
     # 已用过的码复用 → 401
-    codes = json.loads(server._db().execute(
+    codes = json.loads(_db().execute(
         "SELECT totp_rc FROM users WHERE username=?", (ADMIN_USER,)).fetchone()["totp_rc"])
     assert len(codes) == 10  # 两次失败均未消费库存
 
@@ -140,7 +141,7 @@ def test_admin_totp_disable_surgical(client):
     admin = _admin(client)
     mname = "rcadm-" + _rand()
     _mk_member(client, mname)
-    member = client.__class__(server.app, base_url="https://testserver")
+    member = client.__class__(app, base_url="https://testserver")
     assert member.post("/api/login", json={
         "username": mname, "password": MEMBER_PASS}).status_code == 200
     _enable(member, mname, MEMBER_PASS)

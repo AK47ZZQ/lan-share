@@ -11,7 +11,7 @@
 必须把目录移进子目录（移到根的 rel 不变 → vkey 本就不变）。
 """
 import app.api.system as _system
-import server
+from app.main import app
 from fastapi.testclient import TestClient
 
 
@@ -20,7 +20,7 @@ def _mk_user(auth, name, role):
     inv = [i for i in auth.get("/api/admin/invites").json() if not i["used"]][0]["code"]
     assert auth.post("/api/invites/redeem", json={"code": inv, "username": name,
                                                   "password": "member-pass-123"}).status_code == 200
-    c = TestClient(server.app, base_url="https://testserver")
+    c = TestClient(app, base_url="https://testserver")
     assert c.post("/api/login", json={"username": name, "password": "member-pass-123"}).status_code == 200
     uid = [u["id"] for u in auth.get("/api/admin/users").json() if u["username"] == name][0]
     return c, uid

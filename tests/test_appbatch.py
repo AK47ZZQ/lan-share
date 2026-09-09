@@ -11,7 +11,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER
 
-import server
+from app.config import SHARE_ROOT
+from app.main import app
 
 
 def _rand() -> str:
@@ -19,7 +20,7 @@ def _rand() -> str:
 
 
 def _bare(client):
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _admin(client):
@@ -33,7 +34,7 @@ def _admin(client):
 
 
 def _mk_share(auth, workdir, name="a.txt", **form):
-    path = os.path.join(server.SHARE_ROOT, workdir)
+    path = os.path.join(SHARE_ROOT, workdir)
     with open(os.path.join(path, name), "w", encoding="utf-8") as f:
         f.write("hello share edit")
     r = auth.post("/api/share", data={"path": f"{workdir}/{name}",
@@ -75,8 +76,8 @@ def test_share_edit_owner_guard_and_validation(auth, workdir):
 
 
 def test_copy_file_and_conflict_rename(auth, workdir):
-    src = os.path.join(server.SHARE_ROOT, workdir, "c.txt")
-    sub = os.path.join(server.SHARE_ROOT, workdir, "sub")
+    src = os.path.join(SHARE_ROOT, workdir, "c.txt")
+    sub = os.path.join(SHARE_ROOT, workdir, "sub")
     os.makedirs(sub, exist_ok=True)
     with open(src, "w", encoding="utf-8") as f:
         f.write("copy me")
@@ -95,8 +96,8 @@ def test_copy_file_and_conflict_rename(auth, workdir):
 
 
 def test_copy_directory(auth, workdir):
-    d1 = os.path.join(server.SHARE_ROOT, workdir, "dirA")
-    d2 = os.path.join(server.SHARE_ROOT, workdir, "dirB")
+    d1 = os.path.join(SHARE_ROOT, workdir, "dirA")
+    d2 = os.path.join(SHARE_ROOT, workdir, "dirB")
     os.makedirs(os.path.join(d1, "inner"), exist_ok=True)
     os.makedirs(d2, exist_ok=True)
     with open(os.path.join(d1, "inner", "x.txt"), "w", encoding="utf-8") as f:
@@ -108,7 +109,7 @@ def test_copy_directory(auth, workdir):
 
 
 def test_copy_guards(auth, workdir):
-    os.makedirs(os.path.join(server.SHARE_ROOT, workdir, "d"), exist_ok=True)
+    os.makedirs(os.path.join(SHARE_ROOT, workdir, "d"), exist_ok=True)
     # 复制到自身子目录 400
     r = auth.post("/api/copy", json={"sources": [f"{workdir}/d"],
                                      "dest_dir": f"{workdir}/d"})
@@ -131,7 +132,7 @@ def test_copy_guards(auth, workdir):
 def app_dist():
     """在共享空间根造 App安装包/（版本+假 APK），用完即清。"""
     tag = _rand()
-    dist = os.path.join(server.SHARE_ROOT, "App安装包")
+    dist = os.path.join(SHARE_ROOT, "App安装包")
     os.makedirs(dist, exist_ok=True)
     vj = os.path.join(dist, "version.json")
     apk = os.path.join(dist, f"test-{tag}.apk")
@@ -191,7 +192,7 @@ def _make_mp4(path: str):
 
 
 def test_photos_timeline_includes_videos(auth, workdir):
-    mp4 = os.path.join(server.SHARE_ROOT, workdir, "v0.mp4")
+    mp4 = os.path.join(SHARE_ROOT, workdir, "v0.mp4")
     real = _make_mp4(mp4)
     r = auth.post(f"/api/upload/{workdir}",
                   files={"file": ("p0.jpg", b"not-a-real-jpg", "image/jpeg")})
@@ -215,6 +216,6 @@ def test_photos_timeline_includes_videos(auth, workdir):
 
 
 def test_photos_video_filter_excludes_photos(auth, workdir):
-    _make_mp4(os.path.join(server.SHARE_ROOT, workdir, "v1.mp4"))
+    _make_mp4(os.path.join(SHARE_ROOT, workdir, "v1.mp4"))
     r = auth.get("/api/photos?limit=500&media_type=photo")
     assert all(it["media_type"] == "photo" for it in r.json()["items"])

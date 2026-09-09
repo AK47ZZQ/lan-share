@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 import aiofiles
-from fastapi import HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
@@ -23,7 +23,6 @@ from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve, sync_grants_on_move
 from app.api.auth import _verify_pw_with_dummy
 from app.api.files import _cross_space_guard, _is_own_private_root, _move_to_trash
-from app.main import app
 
 # ─── WebDAV ───────────────────────────────────────────────
 # 挂载为网络磁盘：RaiDrive / WinSCP / Cyberduck / ES文件管理器等客户端连 https://<host>:8765/dav/
@@ -136,8 +135,12 @@ def _dav_tree_size(p: Path) -> int:
 _READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNLOCK"}
 
 
-@app.api_route("/dav", methods=DAV_METHODS)
-@app.api_route("/dav/{path:path}", methods=DAV_METHODS)
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.api_route("/dav", methods=DAV_METHODS)
+@router.api_route("/dav/{path:path}", methods=DAV_METHODS)
 async def dav_handler(request: Request, path: str = ""):
     user = await _dav_auth(request)
     method = request.method

@@ -7,7 +7,7 @@ import secrets
 import time
 from urllib.parse import urlsplit
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -22,7 +22,6 @@ from app.api.notify import get_webhook_url, push_webhook, webhook_send
 from app.store.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
                                 PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT,
                                 get_setting, set_setting)
-from app.main import app
 
 
 def _clean_username(name: str) -> str:
@@ -42,7 +41,11 @@ def _clean_username(name: str) -> str:
 # ─── 成员管理 ─────────────────────────────────────────────
 
 
-@app.get("/api/admin/users")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/api/admin/users")
 def admin_list_users(_admin=Depends(require_admin)):
     rows = _db().execute(
         "SELECT id, username, role, is_active, quota_bytes, created_at, webdav_password_hash, "
@@ -74,7 +77,7 @@ def _last_admin_guard(conn, uid: int):
         raise HTTPException(status_code=400, detail="不能停用/降级最后一个管理员")
 
 
-@app.patch("/api/admin/users/{uid}")
+@router.patch("/api/admin/users/{uid}")
 def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
                      _admin=Depends(require_admin)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
@@ -118,7 +121,7 @@ class AdminCredBody(BaseModel):
     value: str
 
 
-@app.post("/api/admin/users/{uid}/username")
+@router.post("/api/admin/users/{uid}/username")
 def admin_set_username(uid: int, body: AdminCredBody, request: Request,
                        _admin=Depends(require_admin)):
     """管理员直接改成员用户名（同步私人目录改名；成员会话保持）。"""
@@ -169,7 +172,7 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
     return {"ok": True, "username": new_name}
 
 
-@app.post("/api/admin/users/{uid}/password")
+@router.post("/api/admin/users/{uid}/password")
 def admin_set_password(uid: int, body: AdminCredBody, request: Request,
                        _admin=Depends(require_admin)):
     """管理员直接重置成员密码（成员全部会话吊销，需用新密码重新登录）。"""
@@ -192,7 +195,7 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
     return {"ok": True}
 
 
-@app.post("/api/admin/users/{uid}/totp-disable")
+@router.post("/api/admin/users/{uid}/totp-disable")
 def admin_totp_disable(uid: int, request: Request, _admin=Depends(require_admin)):
     """仅解除成员的两步验证（含恢复码）：不动密码、不吊销会话。
     成员认证器不可用、又无法自助关闭（关闭需原密码）时的管理端精准通道。"""
@@ -209,7 +212,7 @@ def admin_totp_disable(uid: int, request: Request, _admin=Depends(require_admin)
     return {"ok": True}
 
 
-@app.post("/api/admin/users/{uid}/webdav-password")
+@router.post("/api/admin/users/{uid}/webdav-password")
 def admin_set_webdav_password(uid: int, body: AdminCredBody, request: Request,
                               _admin=Depends(require_admin)):
     """管理员重置/清除成员的 WebDAV 独立密码。value 空 = 清除（回退登录密码挂载）。
@@ -231,7 +234,7 @@ def admin_set_webdav_password(uid: int, body: AdminCredBody, request: Request,
     return {"ok": True, "set": bool(new_hash)}
 
 
-@app.get("/api/members")
+@router.get("/api/members")
 def list_members(_user=Depends(require_user)):
     """在用成员名单（定向分享选择收件人用；用户名经动态流已互相可见，非敏感）。"""
     rows = _db().execute(
@@ -240,7 +243,7 @@ def list_members(_user=Depends(require_user)):
     return [{"id": r["id"], "username": r["username"], "role": r["role"]} for r in rows]
 
 
-@app.delete("/api/admin/users/{uid}")
+@router.delete("/api/admin/users/{uid}")
 def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin)):
     """删号（E7）：grants/会话 CASCADE；私人目录改名 .orphaned/<uid>-<名>/ 防复用占坑。"""
     if uid == _admin["user_id"]:
@@ -282,7 +285,7 @@ class InviteBody(BaseModel):
     hours: int = 72
 
 
-@app.post("/api/admin/invites")
+@router.post("/api/admin/invites")
 def admin_create_invite(body: InviteBody, request: Request, _admin=Depends(require_admin)):
     if body.role not in ("member", "guest"):
         raise HTTPException(status_code=400, detail="邀请角色只能是 member/guest")
@@ -300,7 +303,7 @@ def admin_create_invite(body: InviteBody, request: Request, _admin=Depends(requi
             "expires_at": time.time() + body.hours * 3600}
 
 
-@app.get("/api/admin/invites")
+@router.get("/api/admin/invites")
 def admin_list_invites(_admin=Depends(require_admin)):
     rows = _db().execute(
         "SELECT code, role, created_at, expires_at, used_by, used_at "
@@ -313,7 +316,7 @@ def admin_list_invites(_admin=Depends(require_admin)):
     } for r in rows]
 
 
-@app.delete("/api/admin/invites/{code}")
+@router.delete("/api/admin/invites/{code}")
 def admin_delete_invite(code: str, request: Request, _admin=Depends(require_admin)):
     with _db_lock:
         cur = _db().execute("DELETE FROM invites WHERE code=?", (code,))
@@ -330,7 +333,7 @@ class RedeemBody(BaseModel):
     password: str
 
 
-@app.post("/api/invites/redeem")
+@router.post("/api/invites/redeem")
 def invite_redeem(body: RedeemBody, request: Request):
     """凭邀请码建号（匿名入口，走 /api/* 常规限速；防爆破复用按 code 记失败审计）。"""
     row = _db().execute("SELECT * FROM invites WHERE code=?", (body.code,)).fetchone()
@@ -389,20 +392,20 @@ def invite_redeem(body: RedeemBody, request: Request):
 # ─── 公网访问地址（分享链接双地址用）───────────────────────
 
 
-@app.get("/api/admin/public-url")
+@router.get("/api/admin/public-url")
 def get_public_url(_admin=Depends(require_admin)):
     return {"public_base_url": get_setting(PUBLIC_BASE_URL),
             "public_base_url_alt": get_setting(PUBLIC_BASE_URL_ALT)}
 
 
-@app.get("/api/public-url")
+@router.get("/api/public-url")
 def get_public_url_user(_user=Depends(require_user)):
     """公网访问地址：全员可读（分享/直传多地址复制用，非敏感）。"""
     return {"public_base_url": get_setting(PUBLIC_BASE_URL),
             "public_base_url_alt": get_setting(PUBLIC_BASE_URL_ALT)}
 
 
-@app.post("/api/admin/public-url")
+@router.post("/api/admin/public-url")
 def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
     url = (body.get("url") or "").strip().rstrip("/")
     url_alt = (body.get("url_alt") or "").strip().rstrip("/")
@@ -421,12 +424,12 @@ def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
 # ─── 事件推送（通知 bot）──────────────────────────────────
 
 
-@app.get("/api/admin/webhook")
+@router.get("/api/admin/webhook")
 def admin_get_webhook(_admin=Depends(require_admin)):
     return {"url": get_webhook_url()}
 
 
-@app.post("/api/admin/webhook")
+@router.post("/api/admin/webhook")
 def admin_set_webhook(body: dict, request: Request, _admin=Depends(require_admin)):
     url = (body.get("url") or "").strip()
     if url:
@@ -440,7 +443,7 @@ def admin_set_webhook(body: dict, request: Request, _admin=Depends(require_admin
     return {"ok": True, "url": url}
 
 
-@app.post("/api/admin/webhook/test")
+@router.post("/api/admin/webhook/test")
 async def admin_test_webhook(request: Request, _admin=Depends(require_admin)):
     """同步发一条测试消息，失败原样带回错误（配置排错用）。走线程池执行网络请求，
     不长期占用事件循环。"""
@@ -473,7 +476,7 @@ class GrantBody(BaseModel):
     expires_hours: int | None = None
 
 
-@app.get("/api/admin/grants")
+@router.get("/api/admin/grants")
 def admin_list_grants(user_id: int | None = None, _admin=Depends(require_admin)):
     if user_id:
         rows = _db().execute("SELECT * FROM grants WHERE user_id=?", (user_id,)).fetchall()
@@ -486,7 +489,7 @@ def admin_list_grants(user_id: int | None = None, _admin=Depends(require_admin))
     } for r in rows]
 
 
-@app.post("/api/admin/grants")
+@router.post("/api/admin/grants")
 def admin_create_grant(body: GrantBody, request: Request, _admin=Depends(require_admin)):
     """授权路径仅限 shared 空间（shared:<dir> 或裸相对路径），规范为 'shared/<dir>'。"""
     target = _db().execute("SELECT username FROM users WHERE id=?",
@@ -522,7 +525,7 @@ def admin_create_grant(body: GrantBody, request: Request, _admin=Depends(require
     return {"ok": True, "path": vkey}
 
 
-@app.delete("/api/admin/grants/{gid}")
+@router.delete("/api/admin/grants/{gid}")
 def admin_delete_grant(gid: int, request: Request, _admin=Depends(require_admin)):
     with _db_lock:
         owner = _db().execute("SELECT user_id FROM grants WHERE id=?", (gid,)).fetchone()
@@ -538,7 +541,7 @@ def admin_delete_grant(gid: int, request: Request, _admin=Depends(require_admin)
 # ─── 家庭动态流（M4-lite：审计衍生）───────────────────────
 
 
-@app.post("/api/activity/clear")
+@router.post("/api/activity/clear")
 def activity_clear(_admin=Depends(require_admin)):
     """清空动态（软清空：记水位，审计历史仍完整保留）。"""
     import time as _t
@@ -547,7 +550,7 @@ def activity_clear(_admin=Depends(require_admin)):
     return {"ok": True}
 
 
-@app.get("/api/activity")
+@router.get("/api/activity")
 def activity(limit: int = 50, user=Depends(require_user)):
     """动态流：审计日志过滤为家庭可见事件。private 路径仅本人可见（E7/E8 折衷）。
     同人同类动作在 10 分钟窗口内聚合为一条（count 表示合并条数）。"""
@@ -587,7 +590,7 @@ class ExportBody(BaseModel):
     username: str
 
 
-@app.post("/api/admin/export")
+@router.post("/api/admin/export")
 def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admin)):
     """导出成员数据：私人空间 + 直传(incoming)子树全量 zip，附 manifest.json
     （账号信息/分享/设备/通知统计）。

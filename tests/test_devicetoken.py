@@ -9,7 +9,8 @@ import time
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
-import server
+from app.db import _db
+from app.main import app
 
 
 def _rand() -> str:
@@ -17,7 +18,7 @@ def _rand() -> str:
 
 
 def _bare(client):
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _admin(client):
@@ -66,7 +67,7 @@ def test_device_token_full_lifecycle(client):
     assert bare.get("/api/auth/devices", headers=h).status_code == 401
 
     # 审计：签发与吊销都留痕
-    actions = {r["action"] for r in server._db().execute(
+    actions = {r["action"] for r in _db().execute(
         "SELECT action FROM audit_log WHERE action LIKE 'device%'").fetchall()}
     assert {"device_token_create", "device_revoke"} <= actions
 
@@ -80,24 +81,24 @@ def test_device_token_expiry_and_disabled_account(client):
     assert bare.get("/api/files/", headers=h).status_code == 200
 
     # 手工置为已过期 → 401
-    server._db().execute("UPDATE device_tokens SET expires_at=? WHERE name='d2'",
+    _db().execute("UPDATE device_tokens SET expires_at=? WHERE name='d2'",
                          (time.time() - 1,))
-    server._db().commit()
+    _db().commit()
     assert bare.get("/api/files/", headers=h).status_code == 401
 
     # 停用账号 → 该账号所有 Bearer 即刻失效（JOIN users 过滤）
     tok2 = admin.post("/api/auth/token", json={"name": "d3"}).json()["token"]
     h2 = {"Authorization": f"Bearer {tok2}"}
     assert bare.get("/api/files/", headers=h2).status_code == 200
-    uid = server._db().execute(
+    uid = _db().execute(
         "SELECT id FROM users WHERE username=?", (ADMIN_USER,)).fetchone()["id"]
     try:
-        server._db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
-        server._db().commit()
+        _db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
+        _db().commit()
         assert bare.get("/api/files/", headers=h2).status_code == 401
     finally:
-        server._db().execute("UPDATE users SET is_active=1 WHERE id=?", (uid,))
-        server._db().commit()
+        _db().execute("UPDATE users SET is_active=1 WHERE id=?", (uid,))
+        _db().commit()
     assert bare.get("/api/files/", headers=h2).status_code == 200
 
 
@@ -108,12 +109,12 @@ def test_device_token_sliding_renewal(client):
     h = {"Authorization": f"Bearer {tok}"}
 
     # 距过期只剩 10 天（< 90-1 天窗口）→ 一次请求滑动续期回 ~90 天
-    server._db().execute(
+    _db().execute(
         "UPDATE device_tokens SET expires_at=? WHERE name='slide'",
         (time.time() + 10 * 86400,))
-    server._db().commit()
+    _db().commit()
     assert bare.get("/api/files/", headers=h).status_code == 200
-    row = server._db().execute(
+    row = _db().execute(
         "SELECT expires_at FROM device_tokens WHERE name='slide'").fetchone()
     assert row["expires_at"] > time.time() + 80 * 86400
 

@@ -281,7 +281,8 @@ def test_preview_chinese_filename(auth, workdir):
 
 def test_share_range_requests_count_once(auth, workdir):
     """Regression: download managers send parallel Range requests; one ticket = one count."""
-    import server as _s
+    from app.db import _db as _s_db
+    from app.main import app as _s_app
     auth.post(f"/api/upload/{workdir}",
               files={"file": ("big.apk", b"x" * 3000, "application/octet-stream")})
     r = auth.post("/api/share", data={"path": f"{workdir}/big.apk", "max_downloads": "3"})
@@ -290,7 +291,7 @@ def test_share_range_requests_count_once(auth, workdir):
     for rng in ("bytes=0-999", "bytes=1000-1999", "bytes=2000-2999", "bytes=0-"):
         resp = auth.get(url, headers={"Range": rng})
         assert resp.status_code in (200, 206)
-    row = _s._db().execute("SELECT downloads FROM shares WHERE token=?", (token,)).fetchone()
+    row = _s_db().execute("SELECT downloads FROM shares WHERE token=?", (token,)).fetchone()
     assert row["downloads"] == 1, "should count exactly once"
 
 

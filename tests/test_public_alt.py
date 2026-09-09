@@ -8,7 +8,7 @@
 import re
 
 from conftest import ADMIN_PASS, ADMIN_USER
-import server
+from app.main import app
 
 PRIMARY_HOST = "frp-main.example.com:35391"
 ALT_HOST = "frp-alt.example.com:35390"
@@ -65,7 +65,7 @@ def test_entries_null_when_unset(client, auth):
 
 def test_login_still_works_after_alt_set(client):
     """备用地址配置不干扰正常登录（settings 双键写入的回归保护）。"""
-    c = client.__class__(server.app, base_url="https://testserver")
+    c = client.__class__(app, base_url="https://testserver")
     r = c.post("/api/login", json={"username": ADMIN_USER, "password": ADMIN_PASS},
                headers={"Host": LAN_HOST})
     assert r.status_code == 200 and r.json()["ok"] is True

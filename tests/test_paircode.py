@@ -10,7 +10,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER
 
-import server
+from app.db import _db
+from app.main import app
 import app.api.auth as _auth
 
 
@@ -25,7 +26,7 @@ def clean_devices(client):
 
 
 def _bare(client):
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _admin(client):
@@ -103,7 +104,7 @@ def test_pair_code_validation_and_authz(client):
     assert bare.post("/api/pair/claim", json={"code": "000000"}).status_code == 429
 
     # 审计留痕
-    actions = {r["action"] for r in server._db().execute(
+    actions = {r["action"] for r in _db().execute(
         "SELECT action FROM audit_log WHERE action LIKE 'pair%'").fetchall()}
     assert {"pair_code_create", "pair_claim", "pair_claim_fail"} <= actions
 

@@ -15,7 +15,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
-import server
+from app.db import _db
+from app.main import app
 import app.api.system as system_mod
 
 
@@ -25,7 +26,7 @@ def _rand() -> str:
 
 def _bare(client):
     """无 Cookie 的干净客户端。"""
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _admin(client):
@@ -146,7 +147,7 @@ def test_admin_reset_and_clear_webdav_password(client):
                     json={"current_password": MEMBER_PASS, "webdav_password": "oldpass-123"})
     assert r.status_code == 200
 
-    uid = server._db().execute(
+    uid = _db().execute(
         "SELECT id FROM users WHERE username=?", (uname,)).fetchone()["id"]
     users = admin.get("/api/admin/users").json()
     assert next(u for u in users if u["id"] == uid)["webdav_set"] is True

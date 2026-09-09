@@ -14,14 +14,13 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db import _db, _db_lock
 from app.security import audit, require_admin, require_user
 from app.store.settings import (NOTIFY_PREFS_PREFIX, NOTIFY_WEBHOOK_URL,
                                 get_setting, set_setting)
-from app.main import app
 
 
 def _pref_key(uid: int) -> str:
@@ -61,7 +60,11 @@ def insert_notification(user_id: int, type: str, title: str, body: str = "",
     return True
 
 
-@app.get("/api/notifications")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/api/notifications")
 def list_notifications(user=Depends(require_user)):
     uid = user["user_id"]
     unread = _db().execute(
@@ -77,7 +80,7 @@ def list_notifications(user=Depends(require_user)):
     } for r in rows]}
 
 
-@app.post("/api/notifications/read")
+@router.post("/api/notifications/read")
 def mark_notifications_read(user=Depends(require_user)):
     with _db_lock:
         _db().execute(
@@ -87,7 +90,7 @@ def mark_notifications_read(user=Depends(require_user)):
     return {"ok": True}
 
 
-@app.post("/api/notifications/{nid}/read")
+@router.post("/api/notifications/{nid}/read")
 def mark_one_read(nid: int, user=Depends(require_user)):
     with _db_lock:
         cur = _db().execute(
@@ -97,7 +100,7 @@ def mark_one_read(nid: int, user=Depends(require_user)):
     return {"ok": True, "changed": cur.rowcount}
 
 
-@app.delete("/api/notifications/{nid}")
+@router.delete("/api/notifications/{nid}")
 def delete_notification(nid: int, user=Depends(require_user)):
     with _db_lock:
         _db().execute("DELETE FROM notifications WHERE id=? AND user_id=?",
@@ -114,12 +117,12 @@ class PrefsBody(BaseModel):
     system: bool | None = None
 
 
-@app.get("/api/notifications/prefs")
+@router.get("/api/notifications/prefs")
 def read_prefs(user=Depends(require_user)):
     return get_prefs(user["user_id"])
 
 
-@app.put("/api/notifications/prefs")
+@router.put("/api/notifications/prefs")
 def write_prefs(body: PrefsBody, user=Depends(require_user)):
     prefs = get_prefs(user["user_id"])
     for k in ("share", "admin", "system"):
@@ -168,7 +171,7 @@ def _deliver_broadcast(bid: str, title: str, text: str,
     return sent
 
 
-@app.post("/api/admin/notify")
+@router.post("/api/admin/notify")
 def admin_broadcast_notify(body: NotifyBody, _admin=Depends(require_admin)):
     title = body.title.strip()[:80]
     text = (body.body or "").strip()[:500]
@@ -191,7 +194,7 @@ def admin_broadcast_notify(body: NotifyBody, _admin=Depends(require_admin)):
             "broadcast_id": bid}
 
 
-@app.get("/api/admin/notifications/sent")
+@router.get("/api/admin/notifications/sent")
 def admin_list_broadcasts(_admin=Depends(require_admin)):
     """发送记录 + 草稿/定时箱：含每条的未读/已读统计与撤回状态。"""
     rows = _db().execute(
@@ -221,7 +224,7 @@ def admin_list_broadcasts(_admin=Depends(require_admin)):
     return {"items": items}
 
 
-@app.post("/api/admin/notifications/broadcast/{bid}/withdraw")
+@router.post("/api/admin/notifications/broadcast/{bid}/withdraw")
 def admin_withdraw_broadcast(bid: str, _admin=Depends(require_admin)):
     """撤回：删该广播全部未读站内行（已读的保留为历史），记录标记撤回。"""
     with _db_lock:
@@ -235,7 +238,7 @@ def admin_withdraw_broadcast(bid: str, _admin=Depends(require_admin)):
     return {"ok": True, "removed": cur.rowcount}
 
 
-@app.post("/api/admin/notifications/broadcast/{bid}/remind")
+@router.post("/api/admin/notifications/broadcast/{bid}/remind")
 def admin_remind_broadcast(bid: str, _admin=Depends(require_admin)):
     """提醒未读：对仍处未读的成员再推一次站外 webhook（站内不重复落）。"""
     row = _db().execute("SELECT * FROM admin_broadcasts WHERE id=?", (bid,)).fetchone()
@@ -262,7 +265,7 @@ class DraftBody(BaseModel):
     scheduled_at: float | None = None   # 非空 = 定时发送（unix 秒）
 
 
-@app.post("/api/admin/notifications/draft")
+@router.post("/api/admin/notifications/draft")
 def admin_save_draft(body: DraftBody, _admin=Depends(require_admin)):
     title = body.title.strip()[:80]
     if not title:
@@ -280,7 +283,7 @@ def admin_save_draft(body: DraftBody, _admin=Depends(require_admin)):
     return {"ok": True, "id": bid}
 
 
-@app.post("/api/admin/notifications/draft/{bid}/send")
+@router.post("/api/admin/notifications/draft/{bid}/send")
 def admin_send_draft(bid: str, _admin=Depends(require_admin)):
     row = _db().execute(
         "SELECT * FROM admin_broadcasts WHERE id=? AND withdrawn_at IS NULL",
@@ -300,7 +303,7 @@ def admin_send_draft(bid: str, _admin=Depends(require_admin)):
     return {"ok": True, "sent": sent}
 
 
-@app.delete("/api/admin/notifications/draft/{bid}")
+@router.delete("/api/admin/notifications/draft/{bid}")
 def admin_delete_draft(bid: str, _admin=Depends(require_admin)):
     with _db_lock:
         _db().execute(
@@ -310,7 +313,7 @@ def admin_delete_draft(bid: str, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
-@app.on_event("startup")
+@router.on_event("startup")
 async def start_scheduled_broadcasts():
     """定时广播：周期扫描到期的 scheduled 记录并发送（与清理循环同款
     线程池模式——同步 DB IO 不进事件循环）。"""

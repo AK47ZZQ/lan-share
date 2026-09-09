@@ -14,7 +14,7 @@ from pathlib import Path
 
 import qrcode
 import qrcode.image.svg
-from fastapi import Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -27,11 +27,14 @@ from app.api.files import _chunk_dir, _zips, _zips_lock
 from app.api.share import _tickets, _tickets_lock
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support
 from app.store.settings import FEATURED_ALBUMS
-from app.main import app
 
 ensure_heif_support()   # HEIC/HEIF 解码注册（照片时间线 EXIF/元数据需要）
 
-@app.on_event("startup")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.on_event("startup")
 async def start_cleanup():
     def _run_all():
         _cleanup_tmp()
@@ -181,6 +184,13 @@ def _cleanup_db():
 # 手机备份的视频在照片墙完全不可见。类型由扩展名推导（media_type），不建列。
 _last_photo_scan = 0.0
 _last_force_scan = 0.0
+
+
+def reset_scan_throttle() -> None:
+    """重置照片扫描节流水位（测试专用接口，07 审查批次 2 测试解钉）。"""
+    global _last_photo_scan, _last_force_scan
+    _last_photo_scan = 0.0
+    _last_force_scan = 0.0
 _photo_scan_lock = threading.Lock()
 
 
@@ -415,7 +425,7 @@ def _photo_uploader(rel: str, users: set[str] | None = None) -> str:
     return "共享空间"
 
 
-@app.get("/api/photos")
+@router.get("/api/photos")
 def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
                 offset: int = Query(default=0, ge=0),
                 month: str | None = Query(default=None),
@@ -514,7 +524,7 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     }
 
 
-@app.get("/api/photos/facets")
+@router.get("/api/photos/facets")
 def photo_facets(request: Request, _user=Depends(require_user)):
     """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。"""
     user = preview_user(request, _user)   # admin 成员视角预览
@@ -613,7 +623,7 @@ def _visible_album_items(user, items: list) -> list[str]:
     return [p for p in items if isinstance(p, str) and visible(user, p.split("/"))]
 
 
-@app.get("/api/albums")
+@router.get("/api/albums")
 def list_albums(request: Request, _user=Depends(require_user)):
     # v0.14：items 不随列表下发（50 专辑 × 500 路径会把时间线首页拖肥），
     # 列表只给 count/cover，全量条目走 GET /api/albums/{id}。
@@ -635,7 +645,7 @@ class AlbumBody(BaseModel):
     month: str
 
 
-@app.post("/api/admin/albums")
+@router.post("/api/admin/albums")
 def create_album(body: AlbumBody, _admin=Depends(require_admin)):
     title = body.title.strip()
     if not title or len(title) > 40:
@@ -664,7 +674,7 @@ def create_album(body: AlbumBody, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
-@app.delete("/api/admin/albums/{album_id}")
+@router.delete("/api/admin/albums/{album_id}")
 def delete_album(album_id: str, _admin=Depends(require_admin)):
     err: list[tuple[int, str]] = []
 
@@ -682,7 +692,7 @@ def delete_album(album_id: str, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
-@app.get("/api/photo/meta")
+@router.get("/api/photo/meta")
 def photo_meta(request: Request, path: str = Query(..., min_length=1),
                _user=Depends(require_user)):
     """图片元数据：原始尺寸 + 拍摄设备（EXIF）。预览信息面板用。"""
@@ -733,14 +743,14 @@ def qr_svg_response(text: str) -> Response:
     return Response(content=svg, media_type="image/svg+xml")
 
 
-@app.get("/api/qr")
+@router.get("/api/qr")
 async def generic_qr(text: str = Query(..., min_length=1, max_length=512),
                      _user=Depends(require_user)):
     """任意文本的 QR 码 SVG（登录后可用，如手机上传页二维码）。"""
     return qr_svg_response(text)
 
 
-@app.get("/healthz")
+@router.get("/healthz")
 def healthz():
     """免认证健康探针（M5）：进程存活 + DB 连通 + 数据目录可写 + 磁盘水位。"""
     import shutil as _shutil

@@ -12,12 +12,11 @@
 import re
 import time
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.security import audit, client_ip, require_user
 from app.spaces import visible
-from app.main import app
 
 
 def _visible_photo(user, path: str) -> str:
@@ -56,7 +55,11 @@ class AlbumBody(BaseModel):
     items: list[str] = []
 
 
-@app.post("/api/albums")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.post("/api/albums")
 def create_album(body: AlbumBody, request: Request, _user=Depends(require_user)):
     if _user["role"] == "guest":
         raise HTTPException(status_code=403, detail="访客不能创建专辑")
@@ -102,7 +105,7 @@ def create_album(body: AlbumBody, request: Request, _user=Depends(require_user))
     return {"ok": True, "id": album["id"]}
 
 
-@app.get("/api/albums/{album_id}")
+@router.get("/api/albums/{album_id}")
 def get_album(album_id: str, _user=Depends(require_user)):
     from app.api.system import _load_albums, _visible_album_items
     hit = _album_hit(_load_albums(), album_id)
@@ -120,7 +123,7 @@ class AlbumItemsBody(BaseModel):
     remove: list[str] = []
 
 
-@app.put("/api/albums/{album_id}/items")
+@router.put("/api/albums/{album_id}/items")
 def update_album_items(album_id: str, body: AlbumItemsBody, request: Request,
                        _user=Depends(require_user)):
     if _user["role"] == "guest":
@@ -172,7 +175,7 @@ def update_album_items(album_id: str, body: AlbumItemsBody, request: Request,
     return {"ok": True, "items": result}
 
 
-@app.delete("/api/albums/{album_id}")
+@router.delete("/api/albums/{album_id}")
 def delete_album(album_id: str, request: Request, _user=Depends(require_user)):
     from app.api.system import _mutate_albums
     err: list[tuple[int, str]] = []

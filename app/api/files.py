@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import aiofiles
-from fastapi import (Depends, File, HTTPException, Query, Request, UploadFile,
+from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request, UploadFile,
                      Response)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
@@ -27,7 +27,6 @@ from app.security import audit, client_ip, preview_user, require_user, require_a
 from app.filetools import (_file_dict, clean_filename, dir_tree, ensure_heif_support,
                            human_size, IMG_EXTS, move_to_trash, save_upload, VID_EXTS)
 from app.spaces import enforce_quota, resolve, sample_readable, sync_grants_on_move, visible
-from app.main import app
 
 ensure_heif_support()   # HEIC/HEIF 解码注册（iPhone 默认照片格式）
 
@@ -69,8 +68,12 @@ def _cross_space_guard(user, src: Path, dest: Path):
         raise HTTPException(status_code=400,
                             detail="共享空间与私人空间之间不能移动（可复制后删除）")
 
-@app.get("/files/{path:path}")
-@app.get("/files")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/files/{path:path}")
+@router.get("/files")
 def download_file(path: str = "", _user=Depends(require_user)):
     """静态直连下载（Caddy /files/* 反代至此）：与 /preview 同样走 resolve() 判权。
     Caddyfile 不再直接 file_server 挂 SHARE_ROOT（越权旁路，review 2026-09-02 P0-1）；
@@ -85,8 +88,8 @@ def download_file(path: str = "", _user=Depends(require_user)):
                         filename=target.name)
 
 
-@app.get("/api/files/{path:path}")
-@app.get("/api/files")
+@router.get("/api/files/{path:path}")
+@router.get("/api/files")
 def list_files(request: Request, path: str = "", _user=Depends(require_user)):
     user = preview_user(request, _user)   # admin 成员视角预览（X-As-User，只读）
     target = resolve(user, path, "read")
@@ -141,7 +144,7 @@ def _chunk_dir(sid: str) -> Path:
     return SHARE_ROOT / ".chunks" / sid
 
 
-@app.post("/api/upload/init")
+@router.post("/api/upload/init")
 async def upload_init(request: Request, body: UploadInitBody, _user=Depends(require_user)):
     dest_dir = resolve(_user, body.dest_dir, "write")
     dest = dest_dir / clean_filename(body.filename)
@@ -216,7 +219,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             "max_chunk_size": MAX_CHUNK_SIZE, "received": []}
 
 
-@app.get("/api/upload/state/{sid}")
+@router.get("/api/upload/state/{sid}")
 async def upload_state(sid: str, _user=Depends(require_user)):
     """断点续传：查询已收到的块序号。"""
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
@@ -229,7 +232,7 @@ async def upload_state(sid: str, _user=Depends(require_user)):
             "max_chunk_size": MAX_CHUNK_SIZE, "received": received}
 
 
-@app.post("/api/upload/chunk/{sid}")
+@router.post("/api/upload/chunk/{sid}")
 async def upload_chunk(request: Request, sid: str, index: int = Query(...),
                        _user=Depends(require_user)):
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
@@ -276,7 +279,7 @@ def _destroy_upload_session(sid: str, d: Path):
         _db().commit()
 
 
-@app.post("/api/upload/finish/{sid}")
+@router.post("/api/upload/finish/{sid}")
 async def upload_finish(request: Request, sid: str, _user=Depends(require_user)):
     row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
     if not row:
@@ -354,8 +357,8 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
             "sha256": real_sha, "deduped": deduped}
 
 
-@app.post("/api/upload/{path:path}")
-@app.post("/api/upload")
+@router.post("/api/upload/{path:path}")
+@router.post("/api/upload")
 async def upload_file(request: Request, path: str = "", file: UploadFile = File(...),
                       on_dup: str = Query(default="trash"),
                       _user=Depends(require_user)):
@@ -374,7 +377,7 @@ async def upload_file(request: Request, path: str = "", file: UploadFile = File(
     return {"ok": True, "deduped": deduped, **result}
 
 
-@app.post("/api/mkdir/{path:path}")
+@router.post("/api/mkdir/{path:path}")
 async def create_directory(request: Request, path: str, _user=Depends(require_user)):
     if not path.strip():
         raise HTTPException(status_code=400, detail="Invalid directory name")
@@ -393,7 +396,7 @@ class MoveBody(BaseModel):
     dest_dir: str = ""
 
 
-@app.post("/api/move")
+@router.post("/api/move")
 async def move_items(request: Request, body: MoveBody, _user=Depends(require_user)):
     """批量移动到目标目录。同盘 rename，硬链接去重与秒传指纹不受影响。"""
     if not body.sources:
@@ -460,7 +463,7 @@ def _move_to_trash(target: Path, orig_path: str):
     move_to_trash(target, orig_path)
 
 
-@app.post("/api/copy")
+@router.post("/api/copy")
 def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
     """批量复制到目标目录（App v0.6.0 文件管理补齐）。与 move 的差别：
     复制不删源——源只需读权；文件 copy2、目录 copytree；重名自动 "name (n)"。
@@ -529,7 +532,7 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
     return {"ok": True, "results": results}
 
 
-@app.delete("/api/files/{path:path}")
+@router.delete("/api/files/{path:path}")
 async def delete_file(request: Request, path: str, _user=Depends(require_user)):
     target = resolve(_user, path, "write")
     if _is_own_private_root(_user, target):
@@ -562,7 +565,7 @@ def _trash_rel_parts(orig_path: str) -> list[str] | None:
     return [s for s in raw.split("/") if s not in ("", ".")]
 
 
-@app.get("/api/trash")
+@router.get("/api/trash")
 async def list_trash(_user=Depends(require_user)):
     rows = _db().execute("SELECT * FROM trash ORDER BY deleted_at DESC").fetchall()
     is_admin = _user["role"] == "admin"
@@ -586,7 +589,7 @@ async def list_trash(_user=Depends(require_user)):
     return items
 
 
-@app.post("/api/trash/{trash_id}/restore")
+@router.post("/api/trash/{trash_id}/restore")
 async def restore_trash(request: Request, trash_id: int, _user=Depends(require_user)):
     row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
     if not row:
@@ -618,7 +621,7 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     return {"ok": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")}
 
 
-@app.delete("/api/trash/{trash_id}")
+@router.delete("/api/trash/{trash_id}")
 async def delete_trash_item(request: Request, trash_id: int, _user=Depends(require_user)):
     row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
     if not row:
@@ -642,7 +645,7 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     return {"ok": True}
 
 
-@app.delete("/api/trash")
+@router.delete("/api/trash")
 async def empty_trash(request: Request, _admin=Depends(require_admin)):
     trash_root = SHARE_ROOT / ".trash"
     if trash_root.exists():
@@ -676,7 +679,7 @@ def _snap_w(w: int) -> int:
     return PREVIEW_W_LADDER[-1]
 
 
-@app.get("/preview/{path:path}")
+@router.get("/preview/{path:path}")
 async def preview_file(path: str, w: int | None = Query(default=None),
                        _user=Depends(require_user)):
     """文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/，
@@ -731,7 +734,7 @@ _zip_busy: set[str] = set()   # 在途打包的用户名（红队 P2：打包与
                               # 不限并发则单成员可打瘫全站 + 30min 回收窗内灌满磁盘）
 
 
-@app.post("/api/zip")
+@router.post("/api/zip")
 def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
     """打包选中文件/目录为 zip，返回短时效下载 URL。"""
     if not body.paths or len(body.paths) > 500:
@@ -798,7 +801,7 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
             _zip_busy.discard(_user["username"])
 
 
-@app.get("/api/zip/{token}")
+@router.get("/api/zip/{token}")
 async def download_zip(token: str, _user=Depends(require_user)):
     with _zips_lock:
         info = _zips.pop(token, None)
@@ -817,7 +820,7 @@ class RenameBody(BaseModel):
     new_name: str
 
 
-@app.post("/api/rename")
+@router.post("/api/rename")
 async def rename_path(request: Request, body: RenameBody, _user=Depends(require_user)):
     target = resolve(_user, body.path, "write")
     if target == SHARE_ROOT:
@@ -851,7 +854,7 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
 # IMG_EXTS/VID_EXTS 单一事实源在 filetools（07 审查 §5.1-3），与照片时间线共用
 
 
-@app.get("/thumb/{path:path}")
+@router.get("/thumb/{path:path}")
 def thumb_file(request: Request, path: str, _user=Depends(require_user)):
     """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。
     ETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存
@@ -913,7 +916,7 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
     return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)
 
 
-@app.get("/api/search")
+@router.get("/api/search")
 def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user)):
     results = []
     for f in SHARE_ROOT.rglob("*"):
@@ -927,7 +930,7 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
     return results
 
 
-@app.get("/api/recent")
+@router.get("/api/recent")
 def recent_files(limit: int = Query(default=20, ge=0, le=100), _user=Depends(require_user)):
     files = []
     for f in SHARE_ROOT.rglob("*"):
@@ -974,7 +977,7 @@ def _scan_share_sizes():
     return physical, categories
 
 
-@app.get("/api/disk")
+@router.get("/api/disk")
 def disk_info(_user=Depends(require_user)):
     # 同步 def：FastAPI 自动放线程池，rglob 扫描不阻塞事件循环（大目录时尤其重要）
     usage = shutil.disk_usage(str(SHARE_ROOT))
@@ -991,7 +994,7 @@ def disk_info(_user=Depends(require_user)):
     }
 
 
-@app.get("/api/disk/detail")
+@router.get("/api/disk/detail")
 def disk_detail(user=Depends(require_user)):
     """存储详情：磁盘总况全员可见；分目录构成仅 admin；
     成员返回自己的配额用量（private 空间逻辑字节）。"""

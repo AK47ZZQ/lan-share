@@ -9,7 +9,8 @@ import pytest
 
 from conftest import ADMIN_PASS, ADMIN_USER
 
-import server
+from app.config import SHARE_ROOT
+from app.main import app
 
 
 def _rand() -> str:
@@ -17,7 +18,7 @@ def _rand() -> str:
 
 
 def _bare(client):
-    return client.__class__(server.app, base_url="https://testserver")
+    return client.__class__(app, base_url="https://testserver")
 
 
 def _admin(client):
@@ -29,7 +30,7 @@ def _admin(client):
 
 @pytest.fixture
 def dist_dir():
-    d = os.path.join(server.SHARE_ROOT, "App安装包")
+    d = os.path.join(SHARE_ROOT, "App安装包")
     os.makedirs(d, exist_ok=True)
     vj = os.path.join(d, "versions.json")
     backup = open(vj, "rb").read() if os.path.exists(vj) else None
@@ -94,7 +95,7 @@ def test_qr_has_center_cloud_logo(client):
 def test_share_qr_same_logo(client):
     """分享二维码同样带 logo（同源助手）。自建文件→分享→删，绝不碰真实数据。"""
     c = _admin(client)
-    probe = os.path.join(server.SHARE_ROOT, "qr-logo-e2e.txt")
+    probe = os.path.join(SHARE_ROOT, "qr-logo-e2e.txt")
     with open(probe, "w", encoding="utf-8") as f:
         f.write("qr-logo-test")
     try:

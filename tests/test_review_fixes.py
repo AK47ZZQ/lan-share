@@ -10,7 +10,10 @@ import pyotp
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import ADMIN_PASS, MEMBER_PASS2, server
+from conftest import ADMIN_PASS, MEMBER_PASS2
+from app.config import SHARE_ROOT
+from app.db import _db, _db_lock
+from app.main import app
 
 
 @pytest.fixture()
@@ -26,7 +29,7 @@ def make_user(auth, client):
         r = client.post("/api/invites/redeem", json={
             "code": code, "username": username, "password": MEMBER_PASS2})
         assert r.status_code == 200, r.text
-        c = TestClient(server.app, base_url="https://testserver")
+        c = TestClient(app, base_url="https://testserver")
         r = c.post("/api/login", json={"username": username, "password": MEMBER_PASS2})
         assert r.status_code == 200, r.text
         c.username = username
@@ -35,18 +38,18 @@ def make_user(auth, client):
 
     yield _make
     for username in created:
-        row = server._db().execute("SELECT id FROM users WHERE username=?",
+        row = _db().execute("SELECT id FROM users WHERE username=?",
                                    (username,)).fetchone()
         if row:
-            server._db().execute("DELETE FROM users WHERE id=?", (row["id"],))
-            server._db().commit()
+            _db().execute("DELETE FROM users WHERE id=?", (row["id"],))
+            _db().commit()
 
 
 # ── P0-2：特殊段大小写变体 ─────────────────────────────────
 
 
 def _plant_private_file(username: str, name: str, content: str):
-    d = os.path.join(server.SHARE_ROOT, "private", username)
+    d = os.path.join(SHARE_ROOT, "private", username)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, name), "w", encoding="utf-8") as f:
         f.write(content)
@@ -68,7 +71,7 @@ def test_case_variant_private_blocked_for_member(auth, make_user):
 
 
 def test_case_variant_incoming_blocked_for_member(auth, make_user):
-    d = os.path.join(server.SHARE_ROOT, "incoming", auth.username)
+    d = os.path.join(SHARE_ROOT, "incoming", auth.username)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "inc-r2.txt"), "w", encoding="utf-8") as f:
         f.write("inc-secret")
@@ -86,7 +89,7 @@ def test_files_route_requires_auth(client):
 
 
 def test_files_route_permission_model(auth, make_user, workdir):
-    p = os.path.join(server.SHARE_ROOT, workdir, "pub-r2.txt")
+    p = os.path.join(SHARE_ROOT, workdir, "pub-r2.txt")
     with open(p, "w", encoding="utf-8") as f:
         f.write("shared-hello")
     member = make_user("member")
@@ -121,25 +124,25 @@ def test_restore_other_private_trash_denied(make_user):
 def test_legacy_vpath_trash_member_denied(make_user):
     """存量 vpath 形态（private:<名>，无用户段）条目：成员不可见不可恢复。"""
     member = make_user("member")
-    tp = os.path.join(server.SHARE_ROOT, ".trash", "9999999999_legacy-r2.txt")
+    tp = os.path.join(SHARE_ROOT, ".trash", "9999999999_legacy-r2.txt")
     os.makedirs(os.path.dirname(tp), exist_ok=True)
     with open(tp, "w", encoding="utf-8") as f:
         f.write("x")
-    with server._db_lock:
-        server._db().execute(
+    with _db_lock:
+        _db().execute(
             "INSERT INTO trash(orig_path, trash_path, name, size, deleted_at) VALUES(?,?,?,?,?)",
             ("private:legacy-r2.txt", ".trash/9999999999_legacy-r2.txt",
              "legacy-r2.txt", 1, _time.time()))
-        server._db().commit()
-    tid = server._db().execute(
+        _db().commit()
+    tid = _db().execute(
         "SELECT id FROM trash WHERE orig_path='private:legacy-r2.txt'").fetchone()["id"]
     try:
         assert tid not in [x["id"] for x in member.get("/api/trash").json()]
         assert member.post(f"/api/trash/{tid}/restore").status_code == 403
     finally:
-        with server._db_lock:
-            server._db().execute("DELETE FROM trash WHERE id=?", (tid,))
-            server._db().commit()
+        with _db_lock:
+            _db().execute("DELETE FROM trash WHERE id=?", (tid,))
+            _db().commit()
         os.unlink(tp)
 
 
@@ -154,7 +157,7 @@ def _mk_token(c):
 
 def _bearer(_c, tok):
     """无 Cookie 裸客户端：只验 Bearer 本身（改密会重发会话 Cookie，会掩盖 401）。"""
-    bare = TestClient(server.app, base_url="https://testserver")
+    bare = TestClient(app, base_url="https://testserver")
     return bare.get("/api/auth/me", headers={"Authorization": f"Bearer {tok}"})
 
 
@@ -162,7 +165,7 @@ def test_admin_password_reset_revokes_device_token(auth, make_user):
     u = make_user("member")
     tok = _mk_token(u)
     assert _bearer(u, tok).status_code == 200
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (u.username,)).fetchone()["id"]
     r = auth.post(f"/api/admin/users/{uid}/password", json={"value": "brand-new-pass-1"})
     assert r.status_code == 200, r.text
@@ -172,7 +175,7 @@ def test_admin_password_reset_revokes_device_token(auth, make_user):
 def test_deactivate_revokes_device_token_and_stays_dead(auth, make_user):
     u = make_user("member")
     tok = _mk_token(u)
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (u.username,)).fetchone()["id"]
     assert auth.patch(f"/api/admin/users/{uid}",
                       json={"is_active": False}).status_code == 200
@@ -208,13 +211,13 @@ def test_chunk_overflow_rejected(auth):
 
 
 def test_legacy_ownerless_share_admin_only(auth, make_user):
-    with server._db_lock:
-        server._db().execute(
+    with _db_lock:
+        _db().execute(
             "INSERT INTO shares(token, path, name, size, created_at, expires_at, owner_id) "
             "VALUES(?,?,?,?,?,?,NULL)",
             ("legacy-r2-tok", "legacy.txt", "legacy.txt", 1, _time.time(),
              _time.time() + 3600))
-        server._db().commit()
+        _db().commit()
     try:
         member = make_user("member")
         assert "legacy-r2-tok" not in member.get("/api/shares").json()
@@ -223,9 +226,9 @@ def test_legacy_ownerless_share_admin_only(auth, make_user):
         assert member.patch("/api/shares/legacy-r2-tok",
                             json={"expires_hours": 5}).status_code == 403
     finally:
-        with server._db_lock:
-            server._db().execute("DELETE FROM shares WHERE token=?", ("legacy-r2-tok",))
-            server._db().commit()
+        with _db_lock:
+            _db().execute("DELETE FROM shares WHERE token=?", ("legacy-r2-tok",))
+            _db().commit()
 
 
 # ── P3：TOTP 动态码防重放 ──────────────────────────────────
@@ -238,7 +241,7 @@ def test_totp_code_replay_blocked(auth):
     code = pyotp.TOTP(secret).now()
     assert auth.post("/api/auth/totp/enable", json={"code": code}).status_code == 200
     try:
-        c = TestClient(server.app, base_url="https://testserver")
+        c = TestClient(app, base_url="https://testserver")
         body = {"username": auth.username, "password": ADMIN_PASS, "code": code}
         r1 = c.post("/api/login/totp", json=body)
         assert r1.status_code == 200, r1.text

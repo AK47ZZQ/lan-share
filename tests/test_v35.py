@@ -11,7 +11,7 @@ import pyotp
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
-import server
+from app.main import app
 
 
 def _rand() -> str:
@@ -19,14 +19,14 @@ def _rand() -> str:
 
 
 def _member_session(client, username: str, password: str = MEMBER_PASS):
-    c = client.__class__(server.app, base_url="https://testserver")
+    c = client.__class__(app, base_url="https://testserver")
     r = c.post("/api/login", json={"username": username, "password": password})
     assert r.status_code == 200
     return c
 
 
 def _admin(client):
-    c = client.__class__(server.app, base_url="https://testserver")
+    c = client.__class__(app, base_url="https://testserver")
     r = c.post("/api/login", json={"username": ADMIN_USER, "password": ADMIN_PASS})
     assert r.status_code == 200
     return c
@@ -191,7 +191,7 @@ def test_totp_full_flow(client):
     member.post("/api/auth/totp/enable", json={"code": pyotp.TOTP(msecret).now()})
     uid = [u for u in admin.get("/api/admin/users").json() if u["username"] == mname][0]["id"]
     assert admin.post(f"/api/admin/users/{uid}/password", json={"value": "reset-pass-123"}).status_code == 200
-    c = client.__class__(server.app, base_url="https://testserver")
+    c = client.__class__(app, base_url="https://testserver")
     r = c.post("/api/login", json={"username": mname, "password": "reset-pass-123"})
     assert r.json().get("ok") is True  # 未要求 TOTP → 已被清除
 

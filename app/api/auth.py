@@ -11,7 +11,7 @@ import time
 from typing import Optional
 
 import pyotp
-from fastapi import Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
@@ -24,7 +24,6 @@ from app.security import (audit, allow_rate, clear_login_fails, client_ip, creat
                           is_public_entry, login_locked_remaining, record_login_fail,
                           require_user, verify_password, _sha)
 from app.spaces import RESERVED_USERNAMES, _normcase_eq
-from app.main import app
 
 class AuthBody(BaseModel):
     username: str
@@ -60,7 +59,11 @@ def set_session_cookie(response: Response, request: Request, user_id: int):
         httponly=True, samesite="lax", secure=is_https(request))
 
 
-@app.get("/api/auth/state")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/api/auth/state")
 async def auth_state(request: Request):
     user = await run_in_threadpool(get_session_user, request)
     return {"needs_setup": user_count() == 0,
@@ -68,7 +71,7 @@ async def auth_state(request: Request):
             "username": user["username"] if user else None}
 
 
-@app.post("/api/setup")
+@router.post("/api/setup")
 async def setup(body: AuthBody, request: Request, response: Response):
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="密码至少 8 位")
@@ -137,7 +140,7 @@ async def _verify_pw_with_dummy(pw: str, stored: str | None) -> bool:
     return await _verify_pw(pw, stored)
 
 
-@app.post("/api/login")
+@router.post("/api/login")
 async def login(body: AuthBody, request: Request, response: Response):
     pub = is_public_entry(request)
     row = await run_in_threadpool(_login_gate, body.username, request)
@@ -168,7 +171,7 @@ def _totp_match_step(secret: str, code: str) -> int | None:
     return None
 
 
-@app.post("/api/login/totp")
+@router.post("/api/login/totp")
 async def login_totp(body: TotpLoginBody, request: Request, response: Response):
     """登录第二步：密码 + 动态验证码（复用按账号防爆破；验证码错误同样计入锁定）。
     认证器不可用时可用开通时下发的一次性恢复码顶替（用一枚销一枚）。"""
@@ -222,7 +225,7 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
     return {"ok": True, "username": row["username"]}
 
 
-@app.post("/api/logout")
+@router.post("/api/logout")
 async def logout(request: Request, response: Response):
     tok = request.cookies.get(COOKIE_NAME)
     if tok:
@@ -234,7 +237,7 @@ async def logout(request: Request, response: Response):
     return {"ok": True}
 
 
-@app.get("/authcheck")
+@router.get("/authcheck")
 async def authcheck(request: Request):
     """Caddy forward_auth 子请求入口：会话有效 200，否则 401。"""
     if await run_in_threadpool(get_session_user, request):
@@ -242,7 +245,7 @@ async def authcheck(request: Request):
     raise HTTPException(status_code=401, detail="Not authenticated")
 
 
-@app.get("/api/auth/me")
+@router.get("/api/auth/me")
 async def me(request: Request):
     # Cookie 会话与 App Bearer 设备 Token 并存（App 登录后用它确认身份）。
     # nickname/avatar_path 不在会话行里（security SELECT 列受限），按 uid 回查
@@ -296,7 +299,7 @@ def _user_field(user, col: str):
     return row[col] if row else None
 
 
-@app.post("/api/auth/verify-password")
+@router.post("/api/auth/verify-password")
 async def verify_password_ep(body: VerifyPwBody, request: Request,
                              user=Depends(require_user)):
     """高危操作前的本人口令复核（清空服务端备份等）：对当前会话/Bearer
@@ -342,7 +345,7 @@ class ProfileBody(BaseModel):
     nickname: str
 
 
-@app.patch("/api/auth/profile")
+@router.patch("/api/auth/profile")
 async def update_profile(body: ProfileBody, request: Request,
                          user=Depends(require_user)):
     nick = _clean_nickname(body.nickname)
@@ -359,7 +362,7 @@ async def update_profile(body: ProfileBody, request: Request,
     return {"ok": True, "nickname": nick}
 
 
-@app.post("/api/auth/avatar")
+@router.post("/api/auth/avatar")
 async def upload_avatar(request: Request, file: UploadFile = File(...),
                         user=Depends(require_user)):
     """上传/替换头像：PIL 解码（60MP 钳制）→ 中心裁方 → 512px JPEG 落盘。
@@ -421,7 +424,7 @@ async def upload_avatar(request: Request, file: UploadFile = File(...),
     return {"ok": True, "avatar_path": rel}
 
 
-@app.get("/api/auth/avatar/{username}")
+@router.get("/api/auth/avatar/{username}")
 def get_avatar(username: str, _user=Depends(require_user)):
     # def（非 async）：DB 往返与磁盘 stat 进线程池，不阻塞事件循环（项目规范）
     row = _db().execute("SELECT id, avatar_path FROM users WHERE username=?",
@@ -464,7 +467,7 @@ class TotpRcBody(BaseModel):
     old_password: str
 
 
-@app.post("/api/auth/totp/setup")
+@router.post("/api/auth/totp/setup")
 def totp_setup(user=Depends(require_user)):
     """生成 TOTP 密钥（未验证前不生效），返回密钥与 otpauth:// URI（前端转二维码）。"""
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
@@ -479,7 +482,7 @@ def totp_setup(user=Depends(require_user)):
     return {"secret": secret, "otpauth": uri}
 
 
-@app.post("/api/auth/totp/enable")
+@router.post("/api/auth/totp/enable")
 def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
     """用动态验证码确认开通（证明认证器已正确录入）。开通时生成一次性恢复码，
     明文仅本响应返回一次，供认证器不可用时顶替第二因子。"""
@@ -501,7 +504,7 @@ def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
     return {"ok": True, "recovery_codes": codes}
 
 
-@app.post("/api/auth/totp/rc")
+@router.post("/api/auth/totp/rc")
 async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require_user)):
     """重新生成恢复码（需原密码）：旧码全部作废。用于码没用过却弄丢了的情况。"""
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
@@ -518,7 +521,7 @@ async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require
     return {"ok": True, "recovery_codes": codes}
 
 
-@app.post("/api/auth/totp/disable")
+@router.post("/api/auth/totp/disable")
 async def totp_disable(request: Request, body: TotpDisableBody, user=Depends(require_user)):
     """关闭两步验证：需原密码确认（会话被劫持时不能随手关掉）。"""
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
@@ -539,7 +542,7 @@ class PasswordBody(BaseModel):
     new_password: str
 
 
-@app.post("/api/auth/password")
+@router.post("/api/auth/password")
 async def change_password(request: Request, response: Response, body: PasswordBody,
                           user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
@@ -575,7 +578,7 @@ class UsernameBody(BaseModel):
     password: str
 
 
-@app.post("/api/auth/username")
+@router.post("/api/auth/username")
 async def change_username(request: Request, body: UsernameBody,
                           user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
@@ -655,7 +658,7 @@ class WebDavPasswordBody(BaseModel):
     webdav_password: str = ""   # 空串 = 清除（回退为登录密码挂载）
 
 
-@app.get("/api/auth/webdav-password")
+@router.get("/api/auth/webdav-password")
 def webdav_password_status(user=Depends(require_user)):
     """只暴露是否已设置，绝不回传哈希。"""
     row = _db().execute("SELECT webdav_password_hash FROM users WHERE id=?",
@@ -663,7 +666,7 @@ def webdav_password_status(user=Depends(require_user)):
     return {"set": bool(row and row["webdav_password_hash"])}
 
 
-@app.post("/api/auth/webdav-password")
+@router.post("/api/auth/webdav-password")
 async def set_webdav_password(request: Request, body: WebDavPasswordBody,
                               user=Depends(require_user)):
     row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
@@ -700,7 +703,7 @@ class DeviceTokenBody(BaseModel):
     name: str
 
 
-@app.post("/api/auth/token")
+@router.post("/api/auth/token")
 async def create_device_token(request: Request, body: DeviceTokenBody,
                               user=Depends(require_user)):
     """登录会话（Cookie）换长效设备 Token。明文仅本次响应返回一次，库内只存
@@ -761,7 +764,7 @@ def _issue_device_token(user_id: int, name: str) -> tuple[str, int]:
     return token, device_id
 
 
-@app.get("/api/auth/devices")
+@router.get("/api/auth/devices")
 def list_devices(request: Request, user=Depends(require_user)):
     """本账号的设备列表（他人不可见）。current 标记本次请求所用的 Bearer 设备。"""
     auth = request.headers.get("authorization", "")
@@ -776,7 +779,7 @@ def list_devices(request: Request, user=Depends(require_user)):
     } for r in rows]}
 
 
-@app.delete("/api/auth/devices/{device_id}")
+@router.delete("/api/auth/devices/{device_id}")
 def revoke_device(device_id: int, request: Request, user=Depends(require_user)):
     """吊销本人设备（被吊销端下次请求即 401）。"""
     row = _db().execute("SELECT * FROM device_tokens WHERE id=? AND user_id=?",
@@ -803,10 +806,15 @@ class PairClaimBody(BaseModel):
 _PAIR_TTL = 180.0  # 3 分钟：留足"拿起另一台设备→解锁→找到入口→输码"的时间；6 位码 + 一码一用 + claim 限速下不放大爆破面
 # 进程内存态即可：本项目 NSSM 单 worker 部署；重启即全失效（重生成即可）
 _pair_codes: dict[str, tuple[int, float]] = {}
+
+
+def reset_pair_codes() -> None:
+    """清空进程内配对码状态（测试专用接口，07 审查批次 2 测试解钉）。"""
+    _pair_codes.clear()
 _pair_lock = threading.Lock()
 
 
-@app.post("/api/pair/code")
+@router.post("/api/pair/code")
 async def pair_code_create(request: Request, user=Depends(require_user)):
     """已登录方（Web 会话或 Bearer）生成一次性配对码；同一账号只保留最新一枚。"""
     if not allow_rate(f"paircode:{user['user_id']}", 10, 60):
@@ -822,7 +830,7 @@ async def pair_code_create(request: Request, user=Depends(require_user)):
     return {"code": code, "expires_in": int(_PAIR_TTL)}
 
 
-@app.post("/api/pair/claim")
+@router.post("/api/pair/claim")
 async def pair_claim(request: Request, body: PairClaimBody):
     """手机提交配对码换设备 Token（免账号密码）。凭据规则与 /api/auth/token
     完全一致（同名轮换、上限、TTL），签出的 Token 也能随时在 Web 端吊销。"""

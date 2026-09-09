@@ -9,7 +9,9 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import MEMBER_PASS2, server
+from conftest import MEMBER_PASS2
+from app.db import _db
+from app.main import app
 
 
 @pytest.fixture()
@@ -25,7 +27,7 @@ def make_user(auth, client):
         r = client.post("/api/invites/redeem", json={
             "code": code, "username": username, "password": MEMBER_PASS2})
         assert r.status_code == 200, r.text
-        c = TestClient(server.app, base_url="https://testserver")
+        c = TestClient(app, base_url="https://testserver")
         r = c.post("/api/login", json={"username": username, "password": MEMBER_PASS2})
         assert r.status_code == 200, r.text
         c.username = username
@@ -35,11 +37,11 @@ def make_user(auth, client):
     yield _make
     # 清理：删号（同时验证删号链路不会炸）
     for username in created:
-        row = server._db().execute("SELECT id FROM users WHERE username=?",
+        row = _db().execute("SELECT id FROM users WHERE username=?",
                                    (username,)).fetchone()
         if row:
-            server._db().execute("DELETE FROM users WHERE id=?", (row["id"],))
-            server._db().commit()
+            _db().execute("DELETE FROM users WHERE id=?", (row["id"],))
+            _db().commit()
 
 
 # ── 邀请与建号（E11）──────────────────────────────────────
@@ -116,7 +118,7 @@ def test_member_shared_readonly_until_granted(auth, make_user, workdir):
     assert r.status_code == 403
 
     # 管理员授予该目录写权
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (member.username,)).fetchone()["id"]
     r = auth.post("/api/admin/grants", json={
         "user_id": uid, "path": f"{workdir}/docs", "can_read": True, "can_write": True})
@@ -132,7 +134,7 @@ def test_grant_is_prefix_segment_scoped(auth, make_user, workdir):
     auth.post(f"/api/mkdir/{workdir}/docs")
     auth.post(f"/api/mkdir/{workdir}/docs2")
     member = make_user("member")
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (member.username,)).fetchone()["id"]
     auth.post("/api/admin/grants", json={
         "user_id": uid, "path": f"{workdir}/docs", "can_read": True, "can_write": True})
@@ -143,7 +145,7 @@ def test_grant_is_prefix_segment_scoped(auth, make_user, workdir):
 
 def test_grant_backslash_and_dotdot_paths_rejected(auth, make_user, workdir):
     member = make_user("member")
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (member.username,)).fetchone()["id"]
     for evil in ("private/x", "../x", ".trash", "shared:../../x"):
         r = auth.post("/api/admin/grants", json={
@@ -159,7 +161,7 @@ def test_guest_no_default_read(auth, make_user, workdir):
     guest = make_user("guest")
     assert guest.get(f"/api/files/{workdir}/docs").status_code == 403
 
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (guest.username,)).fetchone()["id"]
     auth.post("/api/admin/grants", json={
         "user_id": uid, "path": f"{workdir}/docs", "can_read": True, "can_write": False})
@@ -175,7 +177,7 @@ def test_guest_no_default_read(auth, make_user, workdir):
 
 def test_quota_blocks_private_upload(auth, make_user):
     member = make_user("member")
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (member.username,)).fetchone()["id"]
     r = auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": 1000})
     assert r.status_code == 200, r.text
@@ -197,7 +199,7 @@ def test_quota_blocks_private_upload(auth, make_user):
 def test_member_cannot_move_between_private_and_shared(auth, make_user, workdir):
     auth.post(f"/api/mkdir/{workdir}/teamdocs")
     member = make_user("member")
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (member.username,)).fetchone()["id"]
     auth.post("/api/admin/grants", json={
         "user_id": uid, "path": f"{workdir}/teamdocs", "can_read": True,
@@ -274,7 +276,7 @@ def test_member_shares_own_private_file(auth, client, make_user):
 def test_disabled_account_sessions_revoked(auth, make_user):
     member = make_user("member")
     assert member.get("/api/auth/me").status_code == 200
-    uid = server._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
                                (member.username,)).fetchone()["id"]
     r = auth.patch(f"/api/admin/users/{uid}", json={"is_active": False})
     assert r.status_code == 200, r.text
@@ -314,9 +316,10 @@ def test_webdav_member_can_read_shared_not_private_others(auth, make_user):
 
 def test_admin_can_rename_and_reset_member(auth, make_user):
     """管理员直接改成员用户名/重置密码。"""
-    import server as _s
+    from app.db import _db as _s_db
+    from app.main import app as _s_app
     member = make_user("member")
-    uid = _s._db().execute("SELECT id FROM users WHERE username=?",
+    uid = _s_db().execute("SELECT id FROM users WHERE username=?",
                            (member.username,)).fetchone()["id"]
     member.get("/api/files/private")  # 建私人目录
 
@@ -336,7 +339,7 @@ def test_admin_can_rename_and_reset_member(auth, make_user):
     assert r.status_code == 200, r.text
     assert member.get("/api/auth/me").status_code == 401
     from fastapi.testclient import TestClient
-    c = TestClient(_s.app, base_url="https://x")
+    c = TestClient(_s_app, base_url="https://x")
     assert c.post("/api/login", json={"username": "renamed-member-x",
                                       "password": "brand-new-pass-1"}).status_code == 200
 

@@ -10,7 +10,8 @@ import secrets
 
 import pytest
 
-import server
+from app.db import _db, _db_lock
+from app.config import SHARE_ROOT
 from test_multiuser import make_user  # 跨文件复用建号工厂 fixture
 
 
@@ -74,7 +75,7 @@ def test_grant_first_level_covers_subdirs(auth, make_user, workdir):
             assert guest.get(f"/api/files/{other}").status_code == 403
         finally:
             import shutil
-            shutil.rmtree(server.SHARE_ROOT / other, ignore_errors=True)
+            shutil.rmtree(SHARE_ROOT / other, ignore_errors=True)
     finally:
         for g in auth.get("/api/admin/grants").json():
             if g["user_id"] == uid and g["path"] == f"shared/{workdir}":
@@ -86,21 +87,21 @@ def test_grant_first_level_covers_subdirs(auth, make_user, workdir):
 def test_photos_sort_added(auth, workdir):
     # 先落两个真实文件并强制扫描入库（扫描的 gone 回收会清掉无文件的行）
     for name in ("old.jpg", "new.jpg"):
-        (server.SHARE_ROOT / workdir / name).write_bytes(b"\xff\xd8fakejpg")
+        (SHARE_ROOT / workdir / name).write_bytes(b"\xff\xd8fakejpg")
     assert auth.get("/api/photos", params={"refresh": "1"}).status_code == 200
-    rows = [r["path"] for r in server._db().execute(
+    rows = [r["path"] for r in _db().execute(
         "SELECT path FROM photos WHERE path LIKE ?", (f"{workdir}/%",)).fetchall()]
     assert rows, "扫描未入库（测试前置失败）"
     # 摆拍：old.jpg 拍摄早、入库早；new.jpg 拍摄更早、入库晚——
     # 拍摄序 old 在前，入库序 new 在最前（核心断言）
-    with server._db_lock:
-        server._db().execute(
+    with _db_lock:
+        _db().execute(
             "UPDATE photos SET taken_at=?, added_at=? WHERE path=?",
             ("2020-01-01", 1000.0, f"{workdir}/old.jpg"))
-        server._db().execute(
+        _db().execute(
             "UPDATE photos SET taken_at=?, added_at=? WHERE path=?",
             ("2019-01-01", 2000.0, f"{workdir}/new.jpg"))
-        server._db().commit()
+        _db().commit()
     try:
         taken = [i["path"] for i in auth.get(
             "/api/photos", params={"sort": "taken"}).json()["items"]
@@ -111,20 +112,20 @@ def test_photos_sort_added(auth, workdir):
         assert taken.index(f"{workdir}/old.jpg") < taken.index(f"{workdir}/new.jpg")
         assert added[0] == f"{workdir}/new.jpg"
         # added_at 为空的存量行沉底
-        with server._db_lock:
-            server._db().execute(
+        with _db_lock:
+            _db().execute(
                 "UPDATE photos SET added_at=NULL WHERE path=?",
                 (f"{workdir}/new.jpg",))
-            server._db().commit()
+            _db().commit()
         added2 = [i["path"] for i in auth.get(
             "/api/photos", params={"sort": "added"}).json()["items"]
             if i["path"].startswith(f"{workdir}/")]
         assert added2[-1] == f"{workdir}/new.jpg"
     finally:
-        with server._db_lock:
-            server._db().execute("DELETE FROM photos WHERE path LIKE ?",
+        with _db_lock:
+            _db().execute("DELETE FROM photos WHERE path LIKE ?",
                                  (f"{workdir}/%",))
-            server._db().commit()
+            _db().commit()
 
 
 def test_upload_bumps_photo_scan_throttle(auth, workdir):

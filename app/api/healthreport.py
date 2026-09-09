@@ -16,7 +16,7 @@ import ssl
 import time
 from pathlib import Path
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from app.config import PROJECT_ROOT, SHARE_ROOT
@@ -24,7 +24,6 @@ from app.db import _db
 from app.security import audit, client_ip, require_admin
 from app.store.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
                                 NOTIFY_WEBHOOK_URL, get_setting, set_setting)
-from app.main import app
 
 # 备份产物目录：backup.bat（Task Scheduler 03:30 独立跑）的落点，服务端只读状态
 BACKUP_DEST = Path(os.environ.get("BACKUP_DEST", "C:/lan-share-backup"))
@@ -160,14 +159,18 @@ def format_report(d: dict) -> tuple[str, bool]:
 
 # ─── 管理端配置与手动触发 ──────────────────────────────────
 
-@app.get("/api/admin/healthreport")
+# 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
+router = APIRouter()
+
+
+@router.get("/api/admin/healthreport")
 def admin_get_healthreport(_admin=Depends(require_admin)):
     cfg = get_report_config()
     cfg["webhook_set"] = bool(get_setting(NOTIFY_WEBHOOK_URL))
     return cfg
 
 
-@app.post("/api/admin/healthreport")
+@router.post("/api/admin/healthreport")
 def admin_set_healthreport(body: dict, request: Request, _admin=Depends(require_admin)):
     enabled = "1" if body.get("enabled") else "0"
     hhmm = _parse_hhmm(str(body.get("time") or _DEFAULT_TIME))
@@ -179,7 +182,7 @@ def admin_set_healthreport(body: dict, request: Request, _admin=Depends(require_
 
 
 
-@app.post("/api/admin/healthreport/test")
+@router.post("/api/admin/healthreport/test")
 async def admin_test_healthreport(request: Request, _admin=Depends(require_admin)):
     """立即采集并推送一次，返回报告全文（Webhook 没配也能先看内容）。"""
     from app.api.notify import get_webhook_url, webhook_send
@@ -201,7 +204,7 @@ async def admin_test_healthreport(request: Request, _admin=Depends(require_admin
 
 # ─── 每日调度（startup 起线程，模式同 system.cleanup_loop）────────
 
-@app.on_event("startup")
+@router.on_event("startup")
 async def start_healthreport():
     import asyncio
     import logging
