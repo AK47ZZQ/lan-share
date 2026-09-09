@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -372,45 +373,24 @@ class _HomePageState extends ConsumerState<HomePage> {
     // （问候+头像+微数据，从状态栏铺满），滚动收窄为纯色工具条
     final topInset = MediaQuery.of(context).padding.top;
     final session = ref.watch(sessionProvider);
-    return RefreshIndicator(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light,
+        child: RefreshIndicator(
         onRefresh: _refreshAll,
         child: CustomScrollView(slivers: [
-          SliverAppBar(
+          // v0.21.3 自绘欢迎头（SliverPersistentHeader 替代 SliverAppBar+
+          // FlexibleSpaceBar）：渐变永远铺满当前实际高度——此前 FlexibleSpace
+          // 的 background 按展开高绘制、SliverAppBar.backgroundColor 按收起高
+          // 露底，两者高度差在下拉回弹/收缩中露出一条纯色色带；自绘后交叉
+          // 淡入淡出也完全由 shrinkOffset 驱动，无残影无遮挡
+          SliverPersistentHeader(
               pinned: true,
-              // v0.21.2 减法瘦身：欢迎头只留"问候+头像"——微数据与下方
-              // "服务端存储"卡重复（已用空间出现两次）、入口副行价值低，
-              // 都删掉；首屏空间还给内容卡片
-              toolbarHeight: 48,
-              expandedHeight: topInset + 78,
-              backgroundColor: PaletteScope.of(context).gradient.first,
-              foregroundColor: Colors.white,
-              centerTitle: false,
-              // title 留空：标题画进下方 flexibleSpace 的收起态层——
-              // SliverAppBar.title 展开时也渲染，会与问候语重叠（v0.21.1 遮挡根因）
-              title: const SizedBox.shrink(),
-              flexibleSpace: FlexibleSpaceBar(
-                  background: Stack(children: [
-                    BrandHeader(
-                        bottomRadius: 0,
-                        topInset: topInset,
-                        bottomPadding: 16,
-                        child: Row(children: [
-                          Expanded(
-                              child: Text(_greeting(username),
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w700))),
-                          _headAvatar(session),
-                        ])),
-                    // 收起态工具条（LAN Share + 云朵）：随折叠淡入，
-                    // 展开时完全透明不与问候语叠加
-                    Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: _collapsedToolbar(topInset: topInset)),
-                  ]))),
+              delegate: _WelcomeHeaderDelegate(
+                topInset: topInset,
+                greeting: _greeting(username),
+                avatar: _headAvatar(session),
+                gradient: PaletteScope.of(context).gradient,
+              )),
           SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
               sliver: SliverReorderableList(
@@ -442,39 +422,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     key: ValueKey(layout[i].id),
                     index: i,
                     child: layout[i].widget);
-              }))]));
-  }
-
-  /// 收起态工具条：LAN Share + 云朵，透明度 = 折叠进度。
-  /// FlexibleSpaceBarSettings.currentExtent 由 SliverAppBar 驱动，
-  /// 完全展开时 0（不遮挡问候语），完全收起时 1（替代 title）。
-  Widget _collapsedToolbar({required double topInset}) {
-    return SizedBox(
-        height: 48 + topInset,
-        child: LayoutBuilder(builder: (context, _) {
-          final s = context
-              .dependOnInheritedWidgetOfExactType<FlexibleSpaceBarSettings>();
-          final t = s == null
-              ? 0.0
-              : (1 -
-                      ((s.currentExtent - s.minExtent) /
-                          (s.maxExtent - s.minExtent)))
-                  .clamp(0.0, 1.0);
-          return Opacity(
-              opacity: t,
-              child: Padding(
-                  // 48dp 工具条内垂直居中（标题行高 ~24）
-                  padding: EdgeInsets.fromLTRB(16, topInset + 12, 16, 0),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Brand.cloud, size: 18, color: Colors.white),
-                    const SizedBox(width: 6),
-                    const Text('LAN Share',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700)),
-                  ])));
-        }));
+              }))])));
   }
 
   /// 渐变头右上角头像：有头像走 AuthImage（服务端 /api/auth/avatar），无头像
@@ -1028,4 +976,87 @@ class _RecentUpload {
         return Icons.insert_drive_file;
     }
   }
+}
+
+
+/// 首页欢迎头（v0.21.3 自绘 delegate）：渐变铺满当前实际高度——
+/// 收缩/回弹/过滚任何状态都不露底色；问候行随折叠淡出、收起标题淡入。
+class _WelcomeHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final double topInset;
+  final String greeting;
+  final Widget avatar;
+  final List<Color> gradient;
+
+  _WelcomeHeaderDelegate({
+    required this.topInset,
+    required this.greeting,
+    required this.avatar,
+    required this.gradient,
+  });
+
+  @override
+  double get minExtent => topInset + 48;
+
+  @override
+  double get maxExtent => topInset + 78;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    // t=0 完全展开（问候可见）；t=1 完全收起（标题可见）
+    final t = (shrinkOffset / (maxExtent - minExtent)).clamp(0.0, 1.0);
+    return Stack(children: [
+      // 渐变铺满当前实际高度（overscroll 拉伸时 extent 变大也照样填满）
+      Positioned.fill(
+          child: DecoratedBox(
+              decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: gradient)))),
+      // 问候行 + 头像：随折叠淡出（8% 黑罩提对比，与 BrandHeader 同款）
+      Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Opacity(
+              opacity: 1 - t,
+              child: Container(
+                  padding: EdgeInsets.fromLTRB(20, 18 + topInset, 20, 16),
+                  foregroundDecoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.08 * (1 - t))),
+                  child: Row(children: [
+                    Expanded(
+                        child: Text(greeting,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700))),
+                    avatar,
+                  ])))),
+      // 收起态标题：随折叠淡入（48dp 工具条内垂直居中）
+      Positioned(
+          left: 16,
+          right: 16,
+          top: topInset + 12,
+          child: Opacity(
+              opacity: t,
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Brand.cloud, size: 18, color: Colors.white),
+                const SizedBox(width: 6),
+                const Text('LAN Share',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+              ]))),
+    ]);
+  }
+
+  @override
+  bool shouldRebuild(_WelcomeHeaderDelegate oldDelegate) =>
+      oldDelegate.greeting != greeting ||
+      oldDelegate.topInset != topInset ||
+      oldDelegate.avatar != avatar;
 }

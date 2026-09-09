@@ -1,3 +1,12 @@
+## 2026-09-09 — v0.21.3+64：欢迎头色带根治（真机反馈第三轮）
+
+- **色带根因**：FlexibleSpaceBar 背景按展开高绘制，SliverAppBar.backgroundColor
+  按收起高露底——两者高度差在下拉回弹/收缩中露出一条纯色色带
+- **根治**：欢迎头改 `SliverPersistentHeader` + 自绘 delegate——渐变永远铺满
+  当前实际高度（收缩/回弹/过滚任何状态都不露底色），问候行与收起标题随
+  shrinkOffset 交叉淡入淡出；`AnnotatedRegion<SystemUiOverlayStyle.light>`
+  显式保持状态栏白图标（此前由 AppBar 自动管理）
+
 ## 2026-09-09 — v0.21.2+63：首页欢迎头减法瘦身（真机反馈第二轮）
 
 - **欢迎头只留"问候+头像"**：三枚微数据胶囊与下方「服务端存储」卡信息完全
