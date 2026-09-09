@@ -2,6 +2,7 @@
 // 登录/登出必须经此模块更新，否则壳层守卫会把用户弹回登录页
 import { ref } from 'vue'
 import { api, type Me } from './api'
+import { previewAs, setPreviewAs } from './previewAs'
 
 export const me = ref<Me | null>(null)
 // 头像缓存戳：上传/替换后 +1，让 avatarUrl 的 ?t= 变化绕过 300s 浏览器缓存
@@ -30,4 +31,7 @@ export async function login(username: string, password: string): Promise<Me | { 
 export async function logout(): Promise<void> {
   await api.logout()
   me.value = null
+  // 成员视角预览随登出清掉（9.9 复审 P2）：否则同浏览器下一个管理员
+  // 登录后顶栏残留上一个被预览成员的横幅
+  if (previewAs.value) setPreviewAs('')
 }

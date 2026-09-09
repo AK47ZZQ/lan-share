@@ -36,10 +36,12 @@ export interface Album { id: string; title: string; month?: string; created_by?:
 
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
-    // 会话过期：整页跳登录（带 next 回跳）。公开页（/s/ 分享、/login）与
-    // 登录态探测 /api/auth/me 不触发——否则未登录访客会被误弹登录页
-    const onPublicPage = location.pathname.startsWith('/s/') || location.pathname === '/login'
-    if (!onPublicPage && !location.pathname.startsWith('/login')) {
+    // 会话过期：整页跳登录（带 next 回跳）。公开页（/s/ 分享、/up 直传、/login）
+    // 与登录态探测 /api/auth/me 不触发——否则未登录访客会被误弹登录页
+    // （/up 与 App.vue 的 publicRoute 保持一致，9.9 复审 P2）
+    const onPublicPage = location.pathname === '/login' || location.pathname === '/up'
+      || location.pathname.startsWith('/s/')
+    if (!onPublicPage) {
       location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search)
     }
     throw Object.assign(new Error('未登录'), { unauthorized: true })
@@ -250,7 +252,7 @@ export async function confirmLargeUpload(file: File): Promise<boolean> {
   const est = fmtDur(file.size / (3.75 * 1024 * 1024)) // 按家庭上行 30Mbps ≈ 3.75MB/s 估算
   let tip: string
   if (file.size >= 10 * GB) {
-    tip = `这是一个 ${gb} GB 的大文件，当前正在通过公网上传，预计需要 ${est} 甚至更久（家庭上行带宽通常远低于局域网）。中断后可断点续传，但强烈建议回到局域网（http://192.168.1.100:8765）再传。`
+    tip = `这是一个 ${gb} GB 的大文件，当前正在通过公网上传，预计需要 ${est} 甚至更久（家庭上行带宽通常远低于局域网）。中断后可断点续传，但强烈建议等回到局域网 Wi-Fi 再传。`
   } else if (file.size >= 5 * GB) {
     tip = `这是一个 ${gb} GB 的大文件，当前正在通过公网上传，预计需要 ${est} 左右（按上行 30Mbps 估算）。回到局域网内传输会快得多，确定现在继续吗？`
   } else {
