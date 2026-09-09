@@ -7,6 +7,7 @@ import 'package:dio/dio.dart' show DioException, Options;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../backup/backup_keys.dart';
 import '../backup/backup_bridge.dart';
 import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
@@ -61,8 +62,8 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
       _cfg = cfg;
       _batteryIgnoring = ign;
       _diag = diag;
-      _lastRound = sp.getString('backup_last_round');
-      _workerState = sp.getString('backup_worker_state');
+      _lastRound = sp.getString(BackupKeys.lastRound);
+      _workerState = sp.getString(BackupKeys.workerState);
     });
     await _loadStats();
   }
@@ -98,9 +99,9 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
       final sp = await SharedPreferences.getInstance();
       if (mounted) {
         setState(() {
-          _progDone = sp.getInt('backup_progress_done') ?? 0;
-          _progTotal = sp.getInt('backup_progress_total') ?? 0;
-          _progCurrent = sp.getString('backup_progress_current') ?? '';
+          _progDone = sp.getInt(BackupKeys.progressDone) ?? 0;
+          _progTotal = sp.getInt(BackupKeys.progressTotal) ?? 0;
+          _progCurrent = sp.getString(BackupKeys.progressCurrent) ?? '';
         });
       }
     } catch (_) {}
@@ -396,8 +397,8 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     // 清空窗口（finish 先到=随树误删，后到=清空后长出残留）。轮次进行中
     // 先拒了，等本轮结束再来；引擎被杀残留的 total>0 由"重启 App"兜底
     final sp = await SharedPreferences.getInstance();
-    final inFlight = (sp.getInt('backup_progress_total') ?? 0) -
-        (sp.getInt('backup_progress_done') ?? 0);
+    final inFlight = (sp.getInt(BackupKeys.progressTotal) ?? 0) -
+        (sp.getInt(BackupKeys.progressDone) ?? 0);
     if (inFlight > 0) {
       if (!mounted) return;
       _toast('正在备份中（约 $inFlight 项），请等本轮完成后再清空；'
@@ -415,7 +416,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
     try {
       if (wasEnabled) {
         final off = cfg.copyWith(enabled: false);
-        await sp.setString('wipe_backup_paused', '1');
+        await sp.setString(BackupKeys.wipePaused, '1');
         await off.save();
         await BackupBridge.applySchedule(off);
       }
@@ -453,7 +454,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
       if (wasEnabled) {
         try {
           await cfg.save();
-          await sp.remove('wipe_backup_paused');
+          await sp.remove(BackupKeys.wipePaused);
           await BackupBridge.applySchedule(cfg);
         } catch (_) {
           // 恢复失败不静默：标记还留着，下次登录 _recoverWipePause 会兜底
@@ -864,10 +865,10 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
       final sp = await SharedPreferences.getInstance();
       if (!mounted) return;
       setState(() {
-        _progDone = sp.getInt('backup_progress_done') ?? 0;
-        _progTotal = sp.getInt('backup_progress_total') ?? 0;
-        _progCurrent = sp.getString('backup_progress_current') ?? '';
-        _lastRound = sp.getString('backup_last_round');
+        _progDone = sp.getInt(BackupKeys.progressDone) ?? 0;
+        _progTotal = sp.getInt(BackupKeys.progressTotal) ?? 0;
+        _progCurrent = sp.getString(BackupKeys.progressCurrent) ?? '';
+        _lastRound = sp.getString(BackupKeys.lastRound);
       });
     } catch (_) {}
   }

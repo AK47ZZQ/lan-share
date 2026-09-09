@@ -2,6 +2,7 @@
 // 约束开关默认值与需求一致：仅 Wi-Fi、充电时均默认开；视频默认关（已与用户确认）。
 // enabled 同时被 Kotlin 侧读取（WorkManager Worker 前置检查 +
 // ContentObserver 即时触发判定），键名不可改：flutter.backup_enabled。
+import 'backup_keys.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class BackupConfig {
@@ -80,10 +81,10 @@ class BackupConfig {
     await sp.setStringList(_kExcluded, excludedBuckets);
     // 约束/范围变化会改变待备集合（如开启视频），pending 计数归 -1 让下个
     // 周期强制跑一轮，别被 Worker 的"空跑跳过"捷径挡住
-    await sp.setInt('backup_pending_count', -1);
+    await sp.setInt(BackupKeys.pendingCount, -1);
   }
 
-  static const _kEnabled = 'backup_enabled';
+  static const _kEnabled = BackupKeys.enabled;
   static const _kPaused = 'backup_user_paused';
   static const _kWifi = 'backup_wifi_only';
   static const _kCharging = 'backup_charging_only';

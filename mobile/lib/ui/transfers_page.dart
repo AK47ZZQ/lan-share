@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/local/gallery_saver.dart';
+import '../data/media_kinds.dart';
 import 'widgets/brand.dart';
 import '../transfer/local_files.dart';
 import '../transfer/transfer_engine.dart';
@@ -281,9 +282,9 @@ class _Tile extends ConsumerWidget {
     );
   }
 
-  static const _imgExts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
-      '.heic', '.heif'};
-  static const _vidExts = {'.mp4', '.mkv', '.mov', '.webm', '.avi', '.m4v'};
+  // 单一事实源 data/media_kinds.dart（07 审查 §4.1-2）
+  static const _imgExts = kImgExts;
+  static const _vidExts = kVidExts;
 
   bool get _isMedia {
     final ext = task.name.contains('.')

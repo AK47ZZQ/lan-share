@@ -5,6 +5,8 @@
 // 圆角/阴影/字号仍是全局 tokens，页面不再散用 Color(0xFF...)。
 import 'package:flutter/material.dart';
 
+import '../../data/media_kinds.dart';
+
 /// ── 主题色板（0.8.5 主题引擎）────────────────────────────
 /// 每套色板 = M3 种子色 + 品牌渐变（云朵块所在的品牌头）+ 深色底。
 /// 深色不再是 M3 中性灰：用带色板色相的深底（默认云朵紫蓝对应方向三
@@ -115,19 +117,14 @@ abstract final class Brand {
 }
 
 /// 文件类型 → 品牌色块（文件页统一图标语义：圆角方块 + 类型色 + 白字形）
+/// 媒体分组取单一事实源 data/media_kinds.dart（07 审查 §4.1-2：原 switch
+/// 手写 case 已漂移，.m4v/.3gp/.ogg 等落默认灰）；压缩包/文档是图标专属
+/// 分类，留在本地
 Color fileTypeColor(String ext) {
+  if (kVidExts.contains(ext)) return const Color(0xFF3B9EFF); // 视频：晴蓝
+  if (kAudExts.contains(ext)) return const Color(0xFFF2994A); // 音频：琥珀
+  if (kImgExts.contains(ext)) return const Color(0xFF5B6CFF); // 图片：品牌蓝
   switch (ext) {
-    case '.mp4':
-    case '.mkv':
-    case '.mov':
-    case '.webm':
-    case '.avi':
-      return const Color(0xFF3B9EFF); // 视频：晴蓝
-    case '.mp3':
-    case '.flac':
-    case '.wav':
-    case '.m4a':
-      return const Color(0xFFF2994A); // 音频：琥珀
     case '.zip':
     case '.7z':
     case '.rar':
@@ -140,15 +137,6 @@ Color fileTypeColor(String ext) {
     case '.xls':
     case '.xlsx':
       return const Color(0xFF34A853); // 表格：草绿
-    case '.jpg':
-    case '.jpeg':
-    case '.png':
-    case '.webp':
-    case '.gif':
-    case '.bmp':
-    case '.heic':
-    case '.heif':
-      return const Color(0xFF5B6CFF); // 图片：品牌蓝
     default:
       return const Color(0xFF8A93A6); // 其它：中性
   }

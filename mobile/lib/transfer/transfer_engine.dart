@@ -17,6 +17,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/protocol.dart';
 import '../data/local/notify.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
@@ -400,8 +401,9 @@ class TransferEngine extends ChangeNotifier {
           // total 计算抛 UnsupportedError 把任务判死
           // 文案友好：FormatException 会原样穿到 t.error 展示给用户。
           // 上限同理（红队 P3）：超大 chunk_size 会让客户端把整个文件读进
-          // 单请求内存 OOM
-          if (t.chunkSize <= 0 || t.chunkSize > 16 * 1024 * 1024) {
+          // 单请求内存 OOM——上限引用协议常量（07 审查 P0：曾写死 16MB，
+          // 服务端 >5GB 阶梯升 32/64MB 后 App 上传必败）
+          if (!isValidChunkSize(t.chunkSize)) {
             throw Exception('服务端返回异常分片大小，请稍后重试');
           }
           t.received
@@ -415,8 +417,8 @@ class TransferEngine extends ChangeNotifier {
           t.chunkSize = (r.data['chunk_size'] as num).toInt();
           // 文案友好：FormatException 会原样穿到 t.error 展示给用户。
           // 上限同理（红队 P3）：超大 chunk_size 会让客户端把整个文件读进
-          // 单请求内存 OOM
-          if (t.chunkSize <= 0 || t.chunkSize > 16 * 1024 * 1024) {
+          // 单请求内存 OOM——上限引用协议常量（07 审查 P0：曾写死 16MB）
+          if (!isValidChunkSize(t.chunkSize)) {
             throw Exception('服务端返回异常分片大小，请稍后重试');
           }
           t.received.addAll(((r.data['received'] as List?) ?? const [])

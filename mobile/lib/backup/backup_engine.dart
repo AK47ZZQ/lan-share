@@ -14,9 +14,11 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/protocol.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../data/local/secure_store.dart';
+import 'backup_keys.dart';
 import 'backup_config.dart';
 import 'backup_dest.dart';
 import 'backup_ledger.dart';
@@ -56,7 +58,7 @@ class BackupEngine {
   /// 轮被"仅充电"约束静默吞掉是头号投诉；流量保护保留（wifiLost 仍暂停）。
   static Future<String?> _pauseReason(String trigger) async {
     final sp = await SharedPreferences.getInstance();
-    if (!(sp.getBool('backup_enabled') ?? false)) return 'disabled';
+    if (!(sp.getBool(BackupKeys.enabled) ?? false)) return 'disabled';
     // 用户手动暂停（v0.17）：手动轮同样尊重——"暂停备份"是明确叫停，
     // 点了"立即备份"想跑，先回设置页解除暂停
     final cfg = await BackupConfig.load();
@@ -86,7 +88,7 @@ class BackupEngine {
     Future<String> finish([Map<String, dynamic>? override]) async {
       final m = override ?? res;
       try {
-        await sp.setString('backup_last_round', jsonEncode({
+        await sp.setString(BackupKeys.lastRound, jsonEncode({
           'status': m['status'],
           'reason': m['reason'],
           'uploaded': m['uploaded'] ?? 0,
@@ -120,7 +122,7 @@ class BackupEngine {
       if (_isPublicHost(host) && !cfg.allowPublicServer) {
         return await finish({'status': 'skip', 'reason': 'public_server'});
       }
-      final cooldownUntil = sp.getInt('backup_cooldown_until') ?? 0;
+      final cooldownUntil = sp.getInt(BackupKeys.cooldownUntil) ?? 0;
       // 手动触发豁免失败冷却：用户看到失败点了"立即备份"，应该立刻再试
       // 而不是被上一轮的 30 分钟冷却挡住（冷却本身照常刷新）
       if (trigger != 'manual' &&
@@ -140,9 +142,9 @@ class BackupEngine {
       }
       // 账本按账号隔离：同机换账号（或服务端改名）时旧账号的 done 记录
       // 会把新账号的照片永久跳过——检测到账号变化就清账本重对账
-      if ((sp.getString('backup_ledger_user') ?? '') != username) {
+      if ((sp.getString(BackupKeys.ledgerUser) ?? '') != username) {
         await BackupLedger.I.clearAll();
-        await sp.setString('backup_ledger_user', username);
+        await sp.setString(BackupKeys.ledgerUser, username);
         // 换账号（含服务端改名）：账本清空 + 新落位 <类型>/<新用户名>/…，
         // 重对账全量重备；sha 秒传零流量，旧用户名目录管理员手动清
       }
@@ -262,9 +264,9 @@ class BackupEngine {
           }
         }
         if (missing.isNotEmpty) {
-          await sp.setString('backup_missing_buckets', jsonEncode(missing));
+          await sp.setString(BackupKeys.missingBuckets, jsonEncode(missing));
         } else {
-          await sp.remove('backup_missing_buckets');
+          await sp.remove(BackupKeys.missingBuckets);
         }
       } catch (_) {/* 对账失败不阻塞本轮备份 */}
 
@@ -277,7 +279,7 @@ class BackupEngine {
           break;
         }
         attempted++;
-        await sp.setString('backup_progress_current', row.name);
+        await sp.setString(BackupKeys.progressCurrent, row.name);
         try {
           final ok = await _uploadOne(dio, ledger, row, username);
           if (!ok) {
@@ -292,12 +294,12 @@ class BackupEngine {
         }
         _reportProgress(attempted - failed, pending.length);
         // 进度落盘：首页备份卡 2s 轮询直接显示"备份中 X/Y"（通知栏之外的第二只眼）
-        await sp.setInt('backup_progress_done', attempted - failed);
-        await sp.setInt('backup_progress_total', pending.length);
+        await sp.setInt(BackupKeys.progressDone, attempted - failed);
+        await sp.setInt(BackupKeys.progressTotal, pending.length);
         // 防风暴雨：批量失败超阈值 → 冷却 30 分钟（设计 §4 限流）
         if (attempted >= 10 && failed / attempted > 0.3) {
           await sp.setInt(
-              'backup_cooldown_until',
+              BackupKeys.cooldownUntil,
               DateTime.now()
                   .add(const Duration(minutes: 30))
                   .millisecondsSinceEpoch);
@@ -310,31 +312,31 @@ class BackupEngine {
       res['failed'] = failed;
       // 首页备份卡的"上次完成"；有实际成果才刷新
       if ((attempted - failed) > 0) {
-        await sp.setInt('backup_last_done_at',
+        await sp.setInt(BackupKeys.lastDoneAt,
             DateTime.now().millisecondsSinceEpoch);
       }
       // 本轮结束清进度；失败数/待备数按账本现状回写，且感知排除相册：
       // 被排除项永远不会再传，留在"失败/待备"里红字永远消不掉（0.7.1）。
       // 分照片/视频回写供首页分类显示。
-      await sp.setInt('backup_progress_done', 0);
-      await sp.setInt('backup_progress_total', 0);
-      await sp.setString('backup_progress_current', '');
+      await sp.setInt(BackupKeys.progressDone, 0);
+      await sp.setInt(BackupKeys.progressTotal, 0);
+      await sp.setString(BackupKeys.progressCurrent, '');
       try {
         final st = await ledger.stats(excluded: cfg.excludedBuckets,
             included: cfg.selectedBuckets);
-        await sp.setInt('backup_failed_count', st.error);
-        await sp.setInt('backup_pending_photos', st.pendingPhotos);
-        await sp.setInt('backup_pending_videos', st.pendingVideos);
+        await sp.setInt(BackupKeys.failedCount, st.error);
+        await sp.setInt(BackupKeys.pendingPhotos, st.pendingPhotos);
+        await sp.setInt(BackupKeys.pendingVideos, st.pendingVideos);
       } catch (e) {
         debugPrint('[BackupEngine] pending stats write failed: $e');
       }
       // 回写剩余待备数：Worker 周期触发时为 0 就不拉引擎（省电省内存）；
       // -1 表示未知/配置刚变强制跑。Observer 触发不走此捷径。
       await sp.setInt(
-          'backup_pending_count', (pending.length - (attempted - failed))
+          BackupKeys.pendingCount, (pending.length - (attempted - failed))
               .clamp(0, 1 << 31));
       // 待备字节（首页空间预警用）：本轮成功部分实时扣减
-      await sp.setInt('backup_pending_bytes',
+      await sp.setInt(BackupKeys.pendingBytes,
           (pendingBytes - doneBytes).clamp(0, 1 << 62));
     } catch (e) {
       final s = e.toString();
@@ -347,9 +349,9 @@ class BackupEngine {
       // 注意这里绝不 close() 账本——sqflite 连接进程级共享，关掉会把主 isolate
       // 的统计卡/账本页一起打死（database_closed，0.7.1 实测复现后移除）。
       try {
-        await sp.setInt('backup_progress_done', 0);
-        await sp.setInt('backup_progress_total', 0);
-        await sp.setString('backup_progress_current', '');
+        await sp.setInt(BackupKeys.progressDone, 0);
+        await sp.setInt(BackupKeys.progressTotal, 0);
+        await sp.setString(BackupKeys.progressCurrent, '');
       } catch (e) {
         // 兜底清进度失败会让"备份中 X/Y"卡死在首页，至少留个日志
         debugPrint('[BackupEngine] progress reset failed: $e');
@@ -445,8 +447,10 @@ class BackupEngine {
             await ledger.setReceived(row.mediaId, received.length);
           }
           // 服务端异常响应可能给 0/负值/超大值（红队 P3：超大 chunk_size 会让
-          // 客户端把整个文件读进单请求内存 OOM），clamp 到协议合理区间
-          if (chunkSize <= 0 || chunkSize > 16 * 1024 * 1024) {
+          // 客户端把整个文件读进单请求内存 OOM），clamp 到协议合理区间——
+          // 上限引用协议常量（07 审查 P0：曾写死 16MB，服务端 >5GB 阶梯升
+          // 32/64MB 后备份 >5GB 文件必败）
+          if (!isValidChunkSize(chunkSize)) {
             throw const FormatException('bad_chunk_size');
           }
         } on DioException catch (e) {

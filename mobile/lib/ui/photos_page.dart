@@ -21,6 +21,7 @@ import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
 import '../data/api/purge.dart';
 import '../data/local/prefs.dart';
+import '../data/media_kinds.dart';
 import '../data/net.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
@@ -422,7 +423,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 手机相册多选上传（0.7.0 起落 照片|视频/<用户名>/手机上传/：选择器
   /// 不返回来源相册，给不了 <相册名> 那一层，与自动备份的相册子目录分开；
   /// 0.14 起支持视频，按扩展名分流到 视频/<用户名>/手机上传/）
-  static const _vidExts = {'mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi'};
+  // 单一事实源 data/media_kinds.dart（07 审查 §4.1-2；FilePicker 的
+  // extension 口径不带点，用无点变体）
+  static final _vidExts = kVidExtsNoDot;
 
   Future<void> _pickAndUpload() async {
     final res = await FilePicker.platform

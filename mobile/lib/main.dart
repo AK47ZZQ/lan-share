@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'backup/backup_keys.dart';
 import 'backup/backup_bridge.dart';
 import 'backup/backup_config.dart';
 import 'backup/backup_engine.dart';
@@ -75,12 +76,12 @@ Future<void> _rescheduleBackup() async {
 Future<void> _recoverWipePause() async {
   try {
     final sp = await SharedPreferences.getInstance();
-    if (sp.getString('wipe_backup_paused') != '1') return;
+    if (sp.getString(BackupKeys.wipePaused) != '1') return;
     final cfg = await BackupConfig.load();
     final fixed = cfg.copyWith(enabled: true);
     await fixed.save();
     await BackupBridge.applySchedule(fixed);
-    await sp.remove('wipe_backup_paused');
+    await sp.remove(BackupKeys.wipePaused);
   } catch (_) {}
 }
 

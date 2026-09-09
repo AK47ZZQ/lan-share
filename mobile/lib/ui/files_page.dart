@@ -19,6 +19,7 @@ import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
 import '../data/local/prefs.dart';
+import '../data/media_kinds.dart';
 import '../data/net.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
@@ -65,11 +66,10 @@ class Entry {
       ext: j['ext'] as String?,
       absPath: j['abs_path'] as String?);
 
-  // 与服务端 /thumb/ 的 IMG_EXTS | VID_EXTS 对齐（files.py:739），
-  // 集合外的类型服务端不出缩略图，客户端直接走类型图标不发请求
-  static const _imgExts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
-      '.heic', '.heif'};
-  static const _vidExts = {'.mp4', '.mkv', '.mov', '.webm', '.avi'};
+  // 集合单一事实源在 data/media_kinds.dart（07 审查 §4.1-2：原各页手写
+  // 且漂移——本页曾缺 .m4v/.3gp）；集合外服务端不出缩略图，直接走类型图标
+  static const _imgExts = kImgExts;
+  static const _vidExts = kVidExts;
 
   bool get isImage =>
       !isDir && _imgExts.contains((ext ?? '').toLowerCase());

@@ -1,5 +1,6 @@
 // 传输页"本地文件"视图的纯逻辑（v0.16.0）：Downloads 目录的可见文件过滤、
 // 孤儿分片判定、文件类型分档。纯函数便于单测；目录遍历留在 UI 层。
+import '../data/media_kinds.dart';
 import 'transfer_task.dart';
 
 /// 是否应从"本地文件"列表隐藏：.part 是未完成下载的分片锚（续传依赖），
@@ -20,10 +21,11 @@ bool isOrphanPart(String partPath, Iterable<TransferTask> tasks) =>
 String localFileKind(String name) {
   final dot = name.lastIndexOf('.');
   final ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : '';
-  const img = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic',
-      '.heif'};
-  const vid = {'.mp4', '.mkv', '.mov', '.webm', '.avi', '.m4v', '.3gp'};
-  const aud = {'.mp3', '.flac', '.m4a', '.aac', '.ogg', '.wav'};
+  // img/vid/aud 单一事实源在 data/media_kinds.dart；archive/doc 是
+  // "本地文件分档"专属分类，留在本地
+  const img = kImgExts;
+  const vid = kVidExts;
+  const aud = kAudExts;
   const arc = {'.zip', '.7z', '.rar', '.tar', '.gz', '.apk'};
   const doc = {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
       '.txt', '.md'};

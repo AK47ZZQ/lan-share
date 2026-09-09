@@ -9,12 +9,14 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../backup/backup_keys.dart';
 import '../backup/backup_bridge.dart';
 import '../backup/backup_round.dart';
 import '../data/activity.dart';
 import '../data/api/api_client.dart';
 import '../data/auto_switch.dart';
 import '../data/local/prefs.dart';
+import '../data/media_kinds.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
@@ -271,17 +273,17 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (!mounted) return;
     // 2s 周期定时器：值全部未变就跳过 setState（R1-P2）——HomePage 常驻
     // IndexedStack，无条件重建等于 App 全生命周期每 2s 重建整页
-    final backupOn = sp.getBool('backup_enabled') ?? false;
-    final pending = sp.getInt('backup_pending_count') ?? -1;
-    final pendingPhotos = sp.getInt('backup_pending_photos');
-    final pendingVideos = sp.getInt('backup_pending_videos');
-    final pendingBytes = sp.getInt('backup_pending_bytes') ?? 0;
-    final lastDoneAt = sp.getInt('backup_last_done_at');
-    final failed = sp.getInt('backup_failed_count') ?? 0;
-    final progressDone = sp.getInt('backup_progress_done') ?? 0;
-    final progressTotal = sp.getInt('backup_progress_total') ?? 0;
-    final lastRound = sp.getString('backup_last_round');
-    final workerState = sp.getString('backup_worker_state');
+    final backupOn = sp.getBool(BackupKeys.enabled) ?? false;
+    final pending = sp.getInt(BackupKeys.pendingCount) ?? -1;
+    final pendingPhotos = sp.getInt(BackupKeys.pendingPhotos);
+    final pendingVideos = sp.getInt(BackupKeys.pendingVideos);
+    final pendingBytes = sp.getInt(BackupKeys.pendingBytes) ?? 0;
+    final lastDoneAt = sp.getInt(BackupKeys.lastDoneAt);
+    final failed = sp.getInt(BackupKeys.failedCount) ?? 0;
+    final progressDone = sp.getInt(BackupKeys.progressDone) ?? 0;
+    final progressTotal = sp.getInt(BackupKeys.progressTotal) ?? 0;
+    final lastRound = sp.getString(BackupKeys.lastRound);
+    final workerState = sp.getString(BackupKeys.workerState);
     final unchanged = backupOn == _backupOn &&
         pending == _pending &&
         pendingPhotos == _pendingPhotos &&
@@ -985,12 +987,9 @@ class _RecentUpload {
   final String ext;
   _RecentUpload({required this.path, required this.name, required this.ext});
 
-  static const _videoExts = {
-    '.mp4', '.mov', '.m4v', '.3gp', '.webm', '.avi', '.mkv'
-  };
-  static const _imageExts = {
-    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.heic', '.heif', '.gif'
-  };
+  // 单一事实源 data/media_kinds.dart（07 审查 §4.1-2）
+  static const _videoExts = kVidExts;
+  static const _imageExts = kImgExts;
 
   bool get isVideo => _videoExts.contains(ext);
   bool get isImage => _imageExts.contains(ext);
