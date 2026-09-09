@@ -54,11 +54,23 @@ class UploadClient {
     return null;
   }
 
-  /// state：断点续传探测（已收分片并集进 [received]）。
-  Future<void> resume() async {
+  /// state：断点续传探测。
+  /// [merge] 两引擎语义本就不同（07 批次4 自查 R1-A，保留各自原行为）：
+  /// - true（transfer）：并集——队列 JSON 里的本地确认块是加速缓存，
+  ///   且 404 重开时已 clear，会话存活期内服务端不会丢已确认块；
+  /// - false（backup）：替换——账本只存 session_id，服务端 state 是
+  ///   唯一真值（对账 §4），不能被本地残留索引污染。
+  Future<void> resume({bool merge = true}) async {
     final r = await dio.get('/api/upload/state/$sid', cancelToken: cancelToken);
     chunkSize = _validatedChunkSize((r.data['chunk_size'] as num).toInt());
-    received.addAll(_receivedOf(r.data));
+    final server = _receivedOf(r.data);
+    if (merge) {
+      received.addAll(server);
+    } else {
+      received
+        ..clear()
+        ..addAll(server);
+    }
   }
 
   /// 会话 404（3 天 TTL 过期/被清理）：作废重开，断点归零。

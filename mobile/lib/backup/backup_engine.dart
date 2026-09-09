@@ -425,7 +425,7 @@ class BackupEngine {
             await ledger.setSession(
                 row.mediaId, client.sid!, client.chunkSize, client.received.toList());
           } else {
-            await client.resume();
+            await client.resume(merge: false); // 服务端 state 是唯一真值（对账 §4）
             await ledger.setReceived(row.mediaId, client.received.length);
           }
         } on FormatException catch (e) {
