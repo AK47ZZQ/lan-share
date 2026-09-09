@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import re
+from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -55,6 +56,23 @@ def _apk_path(data: dict):
     return apk
 
 
+_apk_sha_cache: list = ["", None, None]   # [sha256hex, mtime, size]
+
+
+def _apk_sha256(apk: Path) -> str:
+    """APK sha256 按 mtime+size 缓存（9.9 复审 P2）：App 后台高频检查更新，
+    不能每次都全量读 85MB 重算——只在发版替换文件后重算一次。"""
+    st = apk.stat()
+    if _apk_sha_cache[1:] == [st.st_mtime, st.st_size]:
+        return _apk_sha_cache[0]
+    h = hashlib.sha256()
+    with open(apk, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    _apk_sha_cache[:] = [h.hexdigest(), st.st_mtime, st.st_size]
+    return _apk_sha_cache[0]
+
+
 @app.get("/api/app/latest")
 def app_latest(_user=Depends(require_user)):
     data = _load_version()
@@ -64,12 +82,7 @@ def app_latest(_user=Depends(require_user)):
     # APK ~85MB，md5 级耗时只在检查更新时发生一次
     sha = str(data.get("sha256") or "")
     if not sha and apk.is_file():
-        import hashlib
-        h = hashlib.sha256()
-        with open(apk, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        sha = h.hexdigest()
+        sha = _apk_sha256(apk)
     return {
         "version": str(data["version"]),
         "build": data["build"],

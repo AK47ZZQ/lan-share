@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from contextvars import ContextVar
-from typing import Optional
+from typing import Optional, cast
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
@@ -149,7 +149,7 @@ def require_user(request: Request) -> sqlite3.Row:
         user = get_session_user(request) or get_bearer_user(request) or False
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return user
+    return cast(sqlite3.Row, user)
 
 
 def require_admin(request: Request) -> sqlite3.Row:

@@ -18,9 +18,10 @@ from fastapi.responses import FileResponse
 from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.db import _db
 from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
-                          login_locked_remaining, record_login_fail, verify_password)
+                          login_locked_remaining, record_login_fail)
 from app.filetools import _RESERVED_NAME, clean_filename, human_size
 from app.spaces import enforce_quota, resolve, sync_grants_on_move
+from app.api.auth import _verify_pw_with_dummy
 from app.api.files import _cross_space_guard, _is_own_private_root, _move_to_trash
 from app.main import app
 
@@ -67,7 +68,10 @@ async def _dav_auth(request: Request):
     # 未设置时回退登录密码。TOTP 对 Basic Auth 不可用（协议无第二步，见 SECURITY.md）
     stored = row["webdav_password_hash"] if row and row["webdav_password_hash"] else (
         row["password_hash"] if row else None)
-    ok = bool(row) and stored and await run_in_threadpool(verify_password, password, stored)
+    # 用户不存在/无密码时也跑一次哑 scrypt（复用主登录的等时校验）：消除
+    # "不存在用户 0ms / 存在用户 300ms" 的 Basic 认证时序用户名枚举（9.9 复审 P1-2）。
+    # 注意不能写 `row and ...`——row 为 None 短路后哑哈希就跑不到了
+    ok = await _verify_pw_with_dummy(password, stored or None)
     if not ok:
         # IP 级失败限速（R1-P2-1）：/dav 不在应用层限速桶内，公网匿名者可对
         # 每个账号发 5 次坏凭据滚动锁死全家 DAV+登录（15 分钟窗口补 5 发）。
@@ -163,21 +167,28 @@ async def dav_handler(request: Request, path: str = ""):
         if not exists:
             raise HTTPException(status_code=404)
         depth = request.headers.get("depth", "1")
-        entries = [_dav_prop_entry(f"/dav/{path}".rstrip("/") if path else "/dav/", target)]
-        if target.is_dir() and depth != "0":
-            for child in sorted(target.iterdir(), key=lambda e: e.name.lower()):
-                if child.name.startswith("."):
-                    continue
-                # iterdir 与 stat 之间条目可能被并发删除（R1-P2-2）：一次竞态
-                # OSError 不能让整个 PROPFIND 500
-                try:
-                    rel = f"/dav/{path}/{child.name}" if path else f"/dav/{child.name}"
-                    entries.append(_dav_prop_entry(rel, child))
-                except OSError:
-                    continue
-        body = ('<?xml version="1.0" encoding="utf-8"?>\n'
-                '<D:multistatus xmlns:D="DAV:">' + "".join(entries) + "</D:multistatus>")
-        return Response(content=body, status_code=207, media_type="application/xml; charset=utf-8")
+
+        # 大目录逐条 stat 是秒级同步 IO：与 MOVE/COPY 同理必须离开事件循环，
+        # 否则 DAV 客户端刷目录时全站请求一起冻结（9.9 复审 P1-1）
+        def _propfind_body() -> str:
+            entries = [_dav_prop_entry(
+                f"/dav/{path}".rstrip("/") if path else "/dav/", target)]
+            if target.is_dir() and depth != "0":
+                for child in sorted(target.iterdir(), key=lambda e: e.name.lower()):
+                    if child.name.startswith("."):
+                        continue
+                    # iterdir 与 stat 之间条目可能被并发删除（R1-P2-2）：一次竞态
+                    # OSError 不能让整个 PROPFIND 500
+                    try:
+                        rel = f"/dav/{path}/{child.name}" if path else f"/dav/{child.name}"
+                        entries.append(_dav_prop_entry(rel, child))
+                    except OSError:
+                        continue
+            return ('<?xml version="1.0" encoding="utf-8"?>\n'
+                    '<D:multistatus xmlns:D="DAV:">' + "".join(entries) + "</D:multistatus>")
+
+        return Response(content=await run_in_threadpool(_propfind_body),
+                        status_code=207, media_type="application/xml; charset=utf-8")
 
     if method == "PROPPATCH":
         # 客户端改属性（如文件时间）：假装接受

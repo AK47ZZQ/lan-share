@@ -7,8 +7,11 @@ echo   LAN Share - Starting services...
 echo ===================================
 
 REM Start FastAPI backend
+REM Pin hermes venv python: bare "python" resolves to the uv base env which has
+REM no fastapi and dies instantly (root cause of the mystery guardian failure).
+set PYTHON=C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
 echo [1/2] Starting FastAPI on :8766 ...
-start /B python server.py > logs\server.log 2>&1
+start /B "" "%PYTHON%" server.py > logs\server.log 2>&1
 
 REM Wait for FastAPI to be ready
 timeout /t 2 /nobreak >nul

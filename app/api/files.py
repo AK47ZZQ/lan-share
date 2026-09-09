@@ -699,7 +699,7 @@ async def preview_file(path: str, w: int | None = Query(default=None),
                 from PIL import Image, ImageOps
                 tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
                 try:
-                    img = Image.open(target)
+                    img: Image.Image = Image.open(target)
                     _reject_pixel_bomb(img)
                     img = ImageOps.exif_transpose(img)   # iPhone 照片靠 EXIF 标记旋转，缩放前矫正
                     img.thumbnail((w, w))
@@ -737,6 +737,10 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
     with _zips_lock:
         if _user["username"] in _zip_busy:
             raise HTTPException(status_code=429, detail="已有打包任务在进行，请稍候")
+        # 打包票据上限（9.9 复审 P2）：票据 1 小时才清一次，极端批量导出也不让
+        # _zips 无界增长；在开工前拒绝，不留孤儿 zip 文件
+        if len(_zips) >= 200:
+            raise HTTPException(status_code=429, detail="打包任务过多，请稍后再试")
         _zip_busy.add(_user["username"])
     try:
         targets = [resolve(_user, p, "read") for p in body.paths]

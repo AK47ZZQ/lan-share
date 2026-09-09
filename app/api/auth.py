@@ -259,12 +259,17 @@ async def me(request: Request):
                 row["avatar_path"] if row and row["avatar_path"] else "")
 
     nick, avatar = await run_in_threadpool(_prof)
+    # totp_rc 意外损坏（非合法 JSON）不能让整个 /api/auth/me 500（9.9 复审 P2）
+    try:
+        rc_left = len(json.loads(user["totp_rc"])) if user["totp_rc"] else 0
+    except (TypeError, ValueError):
+        rc_left = 0
     return {"username": user["username"], "role": user["role"],
             "quota_bytes": user["quota_bytes"],
             "nickname": nick,
             "avatar_path": avatar,
             "totp_enabled": bool(user["totp_enabled"]),
-            "totp_rc_left": len(json.loads(user["totp_rc"])) if user["totp_rc"] else 0}
+            "totp_rc_left": rc_left}
 
 
 class VerifyPwBody(BaseModel):
@@ -277,8 +282,15 @@ def _uid(user) -> int:
     return user["user_id"]
 
 
+# 列名白名单（9.9 复审 P2）：_user_field 签名开放，调用方误传用户输入即成
+# 注入口——只放行资料/口令三列，其余一律拒绝
+_USER_COLS = frozenset({"password_hash", "nickname", "avatar_path"})
+
+
 def _user_field(user, col: str):
     """会话行列不全（无 password_hash/nickname 等）：按 uid 回查 users 表。"""
+    if col not in _USER_COLS:
+        raise ValueError(f"column not allowed: {col}")
     row = _db().execute(f"SELECT {col} FROM users WHERE id=?",
                         (_uid(user),)).fetchone()
     return row[col] if row else None
@@ -359,7 +371,9 @@ async def upload_avatar(request: Request, file: UploadFile = File(...),
         raise HTTPException(status_code=413, detail="头像文件不能超过 8MB")
     try:
         from PIL import Image, ImageOps
-        img = await run_in_threadpool(Image.open, io.BytesIO(raw))
+        # lambda 包裹规避 Image.open 重载让 mypy 推不进线程池的 Callable 形参
+        img: Image.Image = await run_in_threadpool(
+            lambda: Image.open(io.BytesIO(raw)))
         if (img.width or 0) * (img.height or 0) > 60 * 1024 * 1024:
             raise HTTPException(status_code=415, detail="图片尺寸过大")
         img = await run_in_threadpool(ImageOps.exif_transpose, img)
