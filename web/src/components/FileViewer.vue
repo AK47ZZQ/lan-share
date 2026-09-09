@@ -4,22 +4,50 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, type Me } from '../api'
 import { confirmDlg, dlg, human, promptDlg, toast } from '../ui'
+import { AUD_EXTS, DOCX_EXTS, IMG_EXTS, TEXT_EXTS, VID_EXTS } from '../filekinds'
 import Modal from './Modal.vue'
 import ShareModal from './ShareModal.vue'
 import 'highlight.js/styles/github-dark.css'
 
-// 预览库按需加载（避免拖累首屏 bundle；首次打开文本/docx 预览时才拉 chunk）
-let _hljs: typeof import('highlight.js/lib/common')['default'] | null = null
+// 预览库按需加载（避免拖累首屏 bundle；首次打开文本/docx 预览时才拉 chunk）。
+// highlight.js 用 core+显式注册（9.9 复审 P3：common 全语言 ~200KB gzip，实际
+// 只预览十来种扩展名，不值得；未注册语言走 highlightAuto 纯文本兜底）
+let _hljs: typeof import('highlight.js/lib/core')['default'] | null = null
 let _marked: typeof import('marked')['marked'] | null = null
 let _purify: typeof import('dompurify')['default'] | null = null
 async function textLibs() {
   if (!_hljs || !_marked || !_purify) {
-    const [h, m, d] = await Promise.all([
-      import('highlight.js/lib/common'),
-      import('marked'),
-      import('dompurify'),
-    ])
-    _hljs = h.default; _marked = m.marked; _purify = d.default
+    const [core, py, js, ts, xml, css, json, yaml, ini, dos, bash, sql, md, m, d] =
+      await Promise.all([
+        import('highlight.js/lib/core'),
+        import('highlight.js/lib/languages/python'),
+        import('highlight.js/lib/languages/javascript'),
+        import('highlight.js/lib/languages/typescript'),
+        import('highlight.js/lib/languages/xml'),
+        import('highlight.js/lib/languages/css'),
+        import('highlight.js/lib/languages/json'),
+        import('highlight.js/lib/languages/yaml'),
+        import('highlight.js/lib/languages/ini'),
+        import('highlight.js/lib/languages/dos'),
+        import('highlight.js/lib/languages/bash'),
+        import('highlight.js/lib/languages/sql'),
+        import('highlight.js/lib/languages/markdown'),
+        import('marked'),
+        import('dompurify'),
+      ])
+    core.default.registerLanguage('python', py.default)
+    core.default.registerLanguage('javascript', js.default)
+    core.default.registerLanguage('typescript', ts.default)
+    core.default.registerLanguage('xml', xml.default)     // html/vue 用 xml 语法的注册别名
+    core.default.registerLanguage('css', css.default)
+    core.default.registerLanguage('json', json.default)
+    core.default.registerLanguage('yaml', yaml.default)
+    core.default.registerLanguage('ini', ini.default)     // toml 用 ini 的注册别名
+    core.default.registerLanguage('dos', dos.default)     // .bat
+    core.default.registerLanguage('bash', bash.default)   // .sh
+    core.default.registerLanguage('sql', sql.default)
+    core.default.registerLanguage('markdown', md.default)
+    _hljs = core.default; _marked = m.marked; _purify = d.default
   }
   return { hljs: _hljs!, marked: _marked!, purify: _purify! }
 }
@@ -53,11 +81,6 @@ const isMobile = ref(mqMobile.matches)
 const onMqChange = (e: MediaQueryListEvent) => { isMobile.value = e.matches }
 
 const item = computed(() => props.items[props.modelValue])
-const IMG = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif']
-const VID = ['.mp4', '.mkv', '.mov', '.webm', '.avi']
-const AUD = ['.mp3', '.flac', '.wav', '.m4a', '.ogg']
-const TEXT = ['.txt', '.md', '.log', '.json', '.csv', '.py', '.js', '.ts', '.vue', '.css',
-  '.html', '.xml', '.yml', '.yaml', '.ini', '.bat', '.sh', '.sql', '.toml']
 
 const extOf = (it: ViewerItem | undefined) => {
   if (!it) return ''
@@ -69,11 +92,12 @@ const extOf = (it: ViewerItem | undefined) => {
 type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'docx' | 'none'
 const kind = computed<Kind>((old): Kind => {
   const e = extOf(item.value)
-  if (IMG.includes(e)) return 'image'
-  if (VID.includes(e)) return 'video'
-  if (AUD.includes(e)) return 'audio'
+  if (IMG_EXTS.includes(e)) return 'image'
+  if (VID_EXTS.includes(e)) return 'video'
+  if (AUD_EXTS.includes(e)) return 'audio'
   if (e === '.pdf') return 'pdf'
-  if (TEXT.includes(e) || e === '.docx') return e === '.docx' ? 'docx' : 'text'
+  if (DOCX_EXTS.includes(e)) return 'docx'
+  if (TEXT_EXTS.includes(e)) return 'text'
   return 'none'
 })
 
@@ -316,7 +340,7 @@ function toggleAudio() {
 function onAudioEnded() {
   // 连播：向后找下一个音频
   for (let i = props.modelValue + 1; i < props.items.length; i++) {
-    if (AUD.includes(extOf(props.items[i]))) { go(i - props.modelValue); return }
+    if (AUD_EXTS.includes(extOf(props.items[i]))) { go(i - props.modelValue); return }
   }
   audioPlaying.value = false
 }
@@ -480,14 +504,14 @@ const filmstrip = computed(() => {
 })
 function thumbOf(it: ViewerItem): string | null {
   const e = extOf(it)
-  if (IMG.includes(e) || VID.includes(e)) return `/thumb/${enc(it.path)}`
+  if (IMG_EXTS.includes(e) || VID_EXTS.includes(e)) return `/thumb/${enc(it.path)}`
   return null
 }
 function iconOf(it: ViewerItem): string {
   const e = extOf(it)
-  if (AUD.includes(e)) return '🎵'
+  if (AUD_EXTS.includes(e)) return '🎵'
   if (e === '.pdf') return '📕'
-  if (TEXT.includes(e)) return '📄'
+  if (TEXT_EXTS.includes(e)) return '📄'
   return '📦'
 }
 </script>

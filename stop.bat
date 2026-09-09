@@ -1,15 +1,17 @@
 @echo off
-echo Stopping LAN Share services...
+REM Stop LAN Share. Preferred path: stop the NSSM services (net stop).
+REM Fallback: kill whatever still listens on the API/Caddy ports.
+REM (Old approach matched "server.py" in any python.exe command line - slow,
+REM  wmic-dependent and could kill an unrelated process; port-based is precise.)
 
-REM Kill FastAPI (python server.py)
-for /f "tokens=2" %%a in ('tasklist /fi "imagename eq python.exe" ^| findstr python') do (
-    wmic process where "ProcessId=%%a" get CommandLine 2>nul | findstr "server.py" >nul && (
-        echo Killing FastAPI (PID %%a)
-        taskkill /PID %%a /F >nul 2>&1
+net stop lan-share-api >nul 2>&1
+net stop lan-share-caddy >nul 2>&1
+
+for %%P in (8766 8765) do (
+    for /f %%K in ('powershell -NoProfile -Command "(Get-NetTCPConnection -LocalPort %%P -State Listen -ErrorAction SilentlyContinue).OwningProcess"') do (
+        echo Killing leftover PID %%K on port %%P
+        taskkill /PID %%K /F >nul 2>&1
     )
 )
-
-REM Kill Caddy
-taskkill /IM caddy.exe /F >nul 2>&1
 
 echo LAN Share stopped.

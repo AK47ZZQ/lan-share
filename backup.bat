@@ -24,10 +24,23 @@ if errorlevel 1 (
   exit /b 1
 )
 echo pg_dump ok: lanshare-%DSTAMP%.dump
+
+REM -- integrity: size sanity + sha256 sidecar (restore-drill.bat verifies it) --
+REM A truncated/zero-byte dump used to pass silently; now a dump under 10KB
+REM fails the backup, and every dump ships with a .sha256 for drill verification.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$f='%BACKUP_DEST%\db\lanshare-%DSTAMP%.dump'; $s=(Get-Item $f).Length; if($s -lt 10240){ Write-Host ('dump too small: ' + $s + ' bytes'); exit 1 }; (Get-FileHash -Algorithm SHA256 $f).Hash | Set-Content -Encoding ascii ($f -replace '\.dump$','.sha256')"
+if errorlevel 1 (
+  echo BACKUP FAILED: dump suspiciously small or unreadable
+  exit /b 1
+)
+echo sha256 sidecar written
+
 if exist "%BACKUP_DEST%\db\lanshare.dump" del "%BACKUP_DEST%\db\lanshare.dump"
 
 REM -- retention: delete dumps older than 2 days --
 forfiles -p "%BACKUP_DEST%\db" -m lanshare-*.dump -d -2 -c "cmd /c del @path" 2>nul
+forfiles -p "%BACKUP_DEST%\db" -m lanshare-*.sha256 -d -2 -c "cmd /c del @path" 2>nul
 
 REM -- file data: incremental (copy newer, never mirror-delete) --
 REM /MT:2（改进建议 9.6-P2-4）：默认 /MT:8 全速复制会把磁盘 IO 吃满，

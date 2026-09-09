@@ -1,5 +1,6 @@
 // 轻量 toast + 确认对话框（模块级响应式状态）
 import { reactive } from 'vue'
+import { AUD_EXTS, IMG_EXTS, VID_EXTS, extOfName } from './filekinds'
 
 export const toasts = reactive<{ id: number; text: string; kind: 'ok' | 'err' | 'info' }[]>([])
 let seq = 0
@@ -33,15 +34,20 @@ export function human(size: number | null | undefined): string {
   return `${s.toFixed(1)} PB`
 }
 
+// 媒体分类取自 filekinds 唯一事实源（9.9 复审 P3：两处手写列表已漂移）；
+// pdf/压缩包/文档是图标专属分类，预览路由不用，留在这里
+const NO_DOT = (a: string[]) => a.map(e => e.slice(1))
+const VID_ICON = NO_DOT(VID_EXTS), AUD_ICON = NO_DOT(AUD_EXTS), IMG_ICON = NO_DOT(IMG_EXTS)
+
 export function iconForName(name: string): string {
-  const ext = (name.match(/\.(\w+)$/)?.[1] ?? '').toLowerCase()
-  if (['mp4', 'mkv', 'mov', 'webm', 'avi'].includes(ext)) return '🎬'
-  if (['mp3', 'flac', 'wav', 'm4a'].includes(ext)) return '🎵'
+  const ext = extOfName(name).slice(1)
+  if (VID_ICON.includes(ext)) return '🎬'
+  if (AUD_ICON.includes(ext)) return '🎵'
   if (['zip', '7z', 'rar'].includes(ext)) return '🗜️'
   if (ext === 'pdf') return '📕'
   if (['doc', 'docx'].includes(ext)) return '📘'
   if (['xls', 'xlsx'].includes(ext)) return '📗'
-  if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic'].includes(ext)) return '🖼️'
+  if (IMG_ICON.includes(ext)) return '🖼️'
   return '📄'
 }
 
