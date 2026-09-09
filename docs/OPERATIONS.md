@@ -8,6 +8,10 @@
 | 服务名 | 内容 | 监听 |
 |---|---|---|
 | `lan-share-api` | `server.py`（uvicorn，FastAPI） | `127.0.0.1:8766`（仅本机，Caddy 反代） |
+
+> **端口/python 解释器改一处生效**：仓库根 `env.bat` 是部署单一事实源
+> （07 批次5），start.bat/stop.bat 已接线；改端口或 venv 路径只动它。
+> install-service.bat/backup.bat/Caddyfile 的同值归位待下次运维窗口。
 | `lan-share-caddy` | `caddy.exe`（仓库根 Caddyfile） | `:8765/:8767/:443`（TLS）+ `:80/:8080`（308 跳转） |
 | `lan-share-postgresql` | PostgreSQL 16 | `127.0.0.1:5433` |
 

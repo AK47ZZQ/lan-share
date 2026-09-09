@@ -104,27 +104,44 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 4. **调试账号**：接口调试用 `debug` 账号登录（凭据见 `docs/DEBUG-ACCOUNT.md`，不入库），
    审计日志可与管理员操作区分。
 
-## 代码结构（v3 拆包后）
+## 代码结构（v0.23 重构后：asgi 底层化 + api 按域 + services 层）
 
 ```
 app/
-├── main.py            应用组装：app+中间件 → 路由模块 → SPA 页面路由/深链回退 → 静态挂载
-├── config.py          全部常量与 env（SHARE_ROOT/DB_PATH/DATABASE_URL/TTL/限速等）
+├── asgi.py            app = FastAPI() + security_middleware（依赖图底层，不 import 任何 api；
+│                      07 批次2：11 对 main↔api 循环 import 由 APIRouter 化消除）
+├── main.py            组装根：include_router（16 个 api 模块）→ SPA 页面路由/深链回退 → 静态挂载
+├── config.py          全部常量与 env（SHARE_ROOT/DB_PATH/TTL/限速/MAX_CHUNK_SIZE 分片协议上限）
+├── contract.py        OpenAPI 契约归一化（dav operationId 确定化，导出脚本与快照测试共用）
 ├── db.py              双引擎（PG：psycopg autocommit；SQLite：每线程连接 + 写锁 +
 │                      init_db + _migrate_v3 幂等迁移）
-├── security.py        审计/scrypt/会话/防爆破/限速/get_session_user/get_bearer_user
-│                      /require_user/require_admin/preview_user
-├── filetools.py       safe_path/clean_filename/dir_tree/save_upload/ensure_heif_support
-├── spaces.py          v3 空间解析 resolve()/授权判定/配额/可见性过滤（安全核心）
-├── api/auth.py        认证 API（setup/login/logout/改密/改用户名/TOTP/设备 Token/配对码/账号管理）
-├── api/files.py       文件 API（列表/上传/移动/复制/回收站/预览/zip/缩略图/搜索/磁盘）
-├── api/share.py       分享 API（外链/票据/QR/取件记录/编辑；按 owner 隔离；定向分享触发通知）
-├── api/webdav.py      WebDAV（与网页同一 resolve 权限源；独立密码支持）
-├── api/system.py      定时清理/照片时间线/相册/通用 QR/healthz
-├── api/admin.py       成员/邀请/授权/动态流/公网地址/通知 bot
-├── api/notify.py      站内通知 + 事件推送 Webhook（push_webhook + 端点）
-├── api/appver.py      App 版本分发（读共享空间 App安装包/version.json；App 内检查更新）
-server.py             兼容 shim（NSSM 入口 server:app 不变；测试 import server）
+├── security.py        审计/scrypt/会话/防爆破/限速/preview_user + reset_auth_gates（测试）
+├── filetools.py       safe_path/clean_filename/dir_tree/save_upload + IMG_EXTS/VID_EXTS
+│                      （媒体扩展名单一事实源，三端对齐基准）
+├── spaces.py          resolve()/授权判定/配额/可见性 + 私人空间守卫（is_own_private_root 等，
+│                      07 批次3 上收为公共 API）（安全核心）
+├── store/settings.py  settings KV 读写唯一入口 + 全部 key 常量（07 批次1 事实源）
+├── services/          业务服务层（不持路由，07 批次3 成型）
+│   ├── archive.py     zip 打包票据表（issue/pop_ticket + sweep_expired）
+│   ├── cleanup.py     注册式定时清理（通用五件套 + 各域 register_sweep）
+│   ├── passwords.py   scrypt + 哑哈希等时校验（登录/DAV 同源）
+│   └── accounts.py    改名通用流程 rename_user_everywhere + clean_username 校验
+├── api/files.py       文件管理（列表/移动/复制/删除/改名/zip 端点/搜索/最近/磁盘）
+├── api/uploads.py     分块上传协议 + 直传 + blob 秒传指纹（07 批次3 拆出）
+├── api/trash.py       回收站（列表/恢复/删除/清空 + vpath 兼容）
+├── api/previews.py    /preview（?w= 中图档）+ /thumb（PIL/ffmpeg + 像素炸弹拦截）
+├── api/photos.py      照片时间线（扫描器/ffprobe 补扫/facets/meta + photos_scan_bump）
+├── api/albums.py      精选专辑（管理端 + 成员端合流；settings JSON 锁内原子读改写）
+├── api/qr.py          通用 QR SVG（品牌云朵）
+├── api/auth.py        认证 API（setup/login/TOTP/改密/改用户名/设备 Token/配对码/WebDAV 密码）
+├── api/share.py       分享 API（外链/票据/取件记录；按 owner 隔离；读侧 safe_path 过闸）
+├── api/webdav.py      WebDAV（Basic 哑哈希等时；与网页同一 resolve 权限源）
+├── api/admin.py       成员/邀请/授权/动态流/公网地址/导出（zip 票据走 archive 官方 API）
+├── api/notify.py      站内通知 + 事件推送 Webhook
+├── api/appver.py      App 版本分发（sha256 缓存）
+├── api/healthreport.py 健康日报（HTTP 探活 + Webhook）
+├── api/notes.py       笔记聚合列表
+server.py             纯入口（NSSM server:app；uvicorn __main__ 块不可删——漏了服务秒退）
 web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/views/ 九个页面；
                       构建产物 dist/ 由 main.py 直供（gitignore node_modules + dist）
 mobile/               Flutter App（mobile/lib/ 源码 + android/ ios/；build/ 与 .dart_tool/ 已 gitignore）

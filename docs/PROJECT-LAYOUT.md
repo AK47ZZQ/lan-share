@@ -34,3 +34,22 @@
 - `data/.avatars/<uid>.jpg`：用户头像（v0.17，点前缀目录，不进照片扫描/文件列表）
 - `tests/test_pg_sql_dialect.py`：PG 方言回归（v0.17；LIKE 字面 `%` 必须被
   `_pg_sql` 翻倍）
+
+## v0.22 / v0.23 新增的落点（架构重构两批，07 报告 §八/§九）
+
+- `app/asgi.py`：app 对象 + security_middleware（依赖图底层）；`app/main.py`
+  变纯组装根（include_router ×16）——11 对 main↔api 循环 import 消除
+- `app/store/settings.py`：settings KV 唯一读写入口 + key 常量
+- `app/services/`：archive（zip 票据）/ cleanup（注册式定时清理）/
+  passwords（scrypt+哑哈希）/ accounts（改名流程+用户名校验）
+- `app/api/` 按域拆分：uploads / trash / previews / photos / albums
+  （social.py 合流）/ qr；files.py 1030→460 行
+- `app/contract.py` + `contracts/openapi.json` + `tests/test_contract.py` +
+  `scripts/export-openapi.py`：API 契约快照（111 路径入库，变更即测试红灯）
+- `env.bat`：部署端口/python 路径单一事实源（start.bat/stop.bat 已接线；
+  install-service/backup.bat/Caddyfile 待运维窗口归位）
+- mobile：`data/api/protocol.dart`（分片上限常量）+ `data/api/upload_client.dart`
+  （上传协议单实现，两引擎共用）+ `data/media_kinds.dart`（扩展名事实源）+
+  `backup/backup_keys.dart`（备份 prefs 键常量）+ `test/upload_client_test.dart`
+- 媒体扩展名三端对齐基准：服务端 `app/filetools.py`（web filekinds.ts /
+  mobile media_kinds.dart 各持对齐副本）
