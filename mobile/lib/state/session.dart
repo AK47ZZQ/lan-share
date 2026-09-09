@@ -165,26 +165,30 @@ class SessionController extends StateNotifier<SessionState> {
 
   /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）
   Future<void> _exchangeToken(Dio dio, Response r) async {
-    final cookie = cookieHeaderFrom(r.headers['set-cookie']);
-    final deviceName = await Prefs.deviceName();
-    final tr = await dio.post('/api/auth/token',
-        options: Options(headers: {'Cookie': cookie, 'x-login-flow': '1'}),
-        data: {'name': deviceName});
-    await SecureStore.saveToken(tr.data['token'] as String);
+    try {
+      final cookie = cookieHeaderFrom(r.headers['set-cookie']);
+      final deviceName = await Prefs.deviceName();
+      final tr = await dio.post('/api/auth/token',
+          options: Options(headers: {'Cookie': cookie, 'x-login-flow': '1'}),
+          data: {'name': deviceName});
+      await SecureStore.saveToken(tr.data['token'] as String);
 
-    final me = await dio.get('/api/auth/me',
-        options: Options(headers: {'x-login-flow': '1'}));
-    final name = me.data['username'] as String?;
-    await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
-    // Token 已签发：立即清内存明文密码（R2-P3-7）。TOTP 二步路径（110 行）
-    // 未走此处之前还需要密码重试，语义不受影响
-    _password = '';
-    state = SessionState(
-        loggedIn: true,
-        username: name,
-        nickname: me.data['nickname'] as String?,
-        avatarPath: me.data['avatar_path'] as String?,
-        role: me.data['role'] as String?);
+      final me = await dio.get('/api/auth/me',
+          options: Options(headers: {'x-login-flow': '1'}));
+      final name = me.data['username'] as String?;
+      await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
+      state = SessionState(
+          loggedIn: true,
+          username: name,
+          nickname: me.data['nickname'] as String?,
+          avatarPath: me.data['avatar_path'] as String?,
+          role: me.data['role'] as String?);
+    } finally {
+      // Token 换取结束即清内存明文密码（R2-P3-7 + 9.9 复审 P1-4）：成功自不必
+      // 说，失败路径也不残留。TOTP 二步重试语义只存在于进入本函数之前，
+      // 此后密码再无用途
+      _password = '';
+    }
   }
 
   /// 资料更新（v0.17）：改昵称后原地刷新状态，免重新拉 /me

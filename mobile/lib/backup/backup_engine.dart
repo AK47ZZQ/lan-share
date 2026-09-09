@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -94,7 +95,10 @@ class BackupEngine {
           'trigger': trigger,
           'ts': DateTime.now().millisecondsSinceEpoch,
         }));
-      } catch (_) {}
+      } catch (e) {
+        // prefs 写失败（磁盘满/权限）会让首页备份卡永久停在旧数据，得有痕
+        debugPrint('[BackupEngine] last_round write failed: $e');
+      }
       return jsonEncode(m);
     }
 
@@ -321,7 +325,9 @@ class BackupEngine {
         await sp.setInt('backup_failed_count', st.error);
         await sp.setInt('backup_pending_photos', st.pendingPhotos);
         await sp.setInt('backup_pending_videos', st.pendingVideos);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[BackupEngine] pending stats write failed: $e');
+      }
       // 回写剩余待备数：Worker 周期触发时为 0 就不拉引擎（省电省内存）；
       // -1 表示未知/配置刚变强制跑。Observer 触发不走此捷径。
       await sp.setInt(
@@ -344,7 +350,10 @@ class BackupEngine {
         await sp.setInt('backup_progress_done', 0);
         await sp.setInt('backup_progress_total', 0);
         await sp.setString('backup_progress_current', '');
-      } catch (_) {}
+      } catch (e) {
+        // 兜底清进度失败会让"备份中 X/Y"卡死在首页，至少留个日志
+        debugPrint('[BackupEngine] progress reset failed: $e');
+      }
     }
     return finish();
   }

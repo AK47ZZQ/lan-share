@@ -4,6 +4,7 @@
 // 设备 Token（服务端 90 天滑动过期，可随时吊销）。
 // 双写双读：写入两路都写；读取 Keystore 优先、异常或为空时读副本。
 // （互斥方案的教训：Keystore 写成功即清副本，冷启动读失败时无路可退→掉登录）
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -16,7 +17,11 @@ class SecureStore {
   static Future<void> saveToken(String token) async {
     try {
       await _storage.write(key: _kToken, value: token);
-    } catch (_) {}
+    } catch (e) {
+      // 静默降级到 SP 副本是对的，但必须有痕：部分国产 ROM Keystore 间歇性
+      // 失败时，用户"反复掉登录"却无日志可查（9.9 复审 P2）
+      debugPrint('[SecureStore] keystore write token failed: $e');
+    }
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kTokenFallback, token);
   }
@@ -25,7 +30,9 @@ class SecureStore {
     try {
       final v = await _storage.read(key: _kToken);
       if (v != null && v.isNotEmpty) return v;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[SecureStore] keystore read token failed: $e');
+    }
     final sp = await SharedPreferences.getInstance();
     return sp.getString(_kTokenFallback);
   }
@@ -36,7 +43,9 @@ class SecureStore {
     try {
       final v = await _storage.read(key: key);
       if (v != null && v.isNotEmpty) return v;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[SecureStore] keystore read $key failed: $e');
+    }
     try {
       final sp = await SharedPreferences.getInstance();
       return sp.getString('fb_$key');
@@ -48,7 +57,9 @@ class SecureStore {
   static Future<void> setString(String key, String value) async {
     try {
       await _storage.write(key: key, value: value);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[SecureStore] keystore write $key failed: $e');
+    }
     try {
       final sp = await SharedPreferences.getInstance();
       await sp.setString('fb_$key', value);

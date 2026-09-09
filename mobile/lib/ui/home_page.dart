@@ -3,6 +3,7 @@
 // 只读概览加少量动作（立即备份/跳转）；细节操作仍归各职能页。
 import 'dart:async';
 
+import 'package:dio/dio.dart' show DioException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -58,7 +59,28 @@ class _HomePageState extends ConsumerState<HomePage> {
   List<_RecentUpload>? _recent;
   List<ActivityItem>? _activity;
   int _notifUnread = 0; // 站内通知未读数（0.8.0，30s 一刷）
+  bool _netDown = false; // 轮询连续失败后的断网横幅（9.9 复审 P2）
+  int _netFails = 0;
   Timer? _tick, _diskTick;
+
+  /// 三路轮询任一成功即恢复：断网横幅只在持续不可达时出现/驻留
+  void _netMarkOk() {
+    if (_netFails == 0 && !_netDown) return;
+    _netFails = 0;
+    if (!mounted) return;
+    setState(() => _netDown = false);
+  }
+
+  /// 只有"连不上"（无响应：超时/拒连/DNS）才计入；4xx/5xx 说明服务器可达，
+  /// 权限/资源问题各有自己的展示，不该伪装成断网。一轮 30s 周期三路全失败
+  /// 即满 3 次 → 出横幅
+  void _netMarkFail(Object e) {
+    if (!(e is DioException && e.response == null)) return;
+    _netFails++;
+    if (_netFails >= 3 && !_netDown && mounted) {
+      setState(() => _netDown = true);
+    }
+  }
 
   // ── 首页卡片布局自定义（v0.18）────────────────────────────
   // 长按卡片拖动排序；「管理卡片」面板控制显隐；顺序/显隐存 prefs
@@ -298,7 +320,10 @@ class _HomePageState extends ConsumerState<HomePage> {
         _diskFree = (r.data['free_bytes'] as num?)?.toInt() ?? 0;
         _shareSize = r.data['share_size'] as String? ?? '';
       });
-    } catch (_) {}
+      _netMarkOk();
+    } catch (e) {
+      _netMarkFail(e);
+    }
   }
 
   /// 最近上传横滑条：全库最近修改的文件（跨上传入口，30s 一刷）。
@@ -317,7 +342,10 @@ class _HomePageState extends ConsumerState<HomePage> {
           .toList();
       if (!mounted) return;
       setState(() => _recent = items);
-    } catch (_) {}
+      _netMarkOk();
+    } catch (e) {
+      _netMarkFail(e);
+    }
   }
 
   /// 家里动态（0.6.2）：/api/activity 与 Web 同源，隐私过滤/聚合在服务端
@@ -332,15 +360,22 @@ class _HomePageState extends ConsumerState<HomePage> {
         final items = ActivityItem.listFrom(r.data);
         if (!mounted) return;
         setState(() => _activity = items);
-      } catch (_) {}
+      } catch (e) {
+        _netMarkFail(e);
+      }
       // 通知未读数顺带刷新（0.8.0）：铃铛徽标用（复用同一 dio，0.8.1 审查修复）
       try {
         final r2 = await dio.get('/api/notifications');
         if (!mounted) return;
         setState(() =>
             _notifUnread = (r2.data['unread'] as num?)?.toInt() ?? 0);
-      } catch (_) {}
-    } catch (_) {}
+      } catch (e) {
+        _netMarkFail(e);
+      }
+      _netMarkOk();
+    } catch (e) {
+      _netMarkFail(e);
+    }
   }
 
   @override
@@ -391,6 +426,24 @@ class _HomePageState extends ConsumerState<HomePage> {
                 avatar: _headAvatar(session),
                 gradient: PaletteScope.of(context).gradient,
               )),
+          // 断网横幅（9.9 复审 P2）：三路轮询连续失败时提示，恢复后自动消失
+          if (_netDown)
+            SliverToBoxAdapter(
+                child: Container(
+                    margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                        color: cs.error.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Row(children: [
+                      Icon(Icons.wifi_off, size: 16, color: cs.error),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: Text('连不上服务器，正在自动重试…',
+                              style:
+                                  TextStyle(fontSize: 12, color: cs.error))),
+                    ]))),
           SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
               sliver: SliverReorderableList(
@@ -1002,8 +1055,10 @@ class _WelcomeHeaderDelegate extends SliverPersistentHeaderDelegate {
 
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
-    // t=0 完全展开（问候可见）；t=1 完全收起（标题可见）
-    final t = (shrinkOffset / (maxExtent - minExtent)).clamp(0.0, 1.0);
+    // t=0 完全展开（问候可见）；t=1 完全收起（标题可见）。
+    // NaN.clamp 不 clamp：分母为 0 的极端布局回落 t=0（9.9 复审 P1-5）
+    final span = maxExtent - minExtent;
+    final t = span > 0 ? (shrinkOffset / span).clamp(0.0, 1.0) : 0.0;
     return Stack(children: [
       // 渐变铺满当前实际高度（overscroll 拉伸时 extent 变大也照样填满）
       Positioned.fill(
