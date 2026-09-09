@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -47,9 +48,11 @@ class Entry {
   final String sizeHuman;
   final String modified;
   final String? ext;
+  // 服务器真实存储路径（改进建议 9.6-P1-3），"复制路径"用；旧服务端无此字段
+  final String? absPath;
   Entry({required this.name, required this.path, required this.isDir,
       required this.isPrivateRoot, required this.size,
-      required this.sizeHuman, required this.modified, this.ext});
+      required this.sizeHuman, required this.modified, this.ext, this.absPath});
 
   factory Entry.fromJson(Map<String, dynamic> j) => Entry(
       name: j['name'] as String,
@@ -59,7 +62,8 @@ class Entry {
       size: (j['size'] as num?)?.toInt() ?? 0,
       sizeHuman: j['size_human'] as String? ?? '',
       modified: j['modified'] as String? ?? '',
-      ext: j['ext'] as String?);
+      ext: j['ext'] as String?,
+      absPath: j['abs_path'] as String?);
 
   // 与服务端 /thumb/ 的 IMG_EXTS | VID_EXTS 对齐（files.py:739），
   // 集合外的类型服务端不出缩略图，客户端直接走类型图标不发请求
@@ -553,6 +557,21 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     engine.enqueueDownload(
                         remotePath: e.path, name: e.name, size: e.size);
                     widget.onGoTransfers?.call();
+                  }),
+              // 复制服务器真实路径（改进建议 9.6-P1-3）：旧服务端无 abs_path 时回退逻辑路径
+              ListTile(
+                  leading: const Icon(Icons.copy_outlined),
+                  title: const Text('复制路径'),
+                  subtitle: Text(e.absPath ?? '/${e.path}',
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await Clipboard.setData(
+                        ClipboardData(text: e.absPath ?? '/${e.path}'));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('已复制路径'),
+                        duration: Duration(seconds: 2)));
                   }),
               if (canShare)
                 ListTile(

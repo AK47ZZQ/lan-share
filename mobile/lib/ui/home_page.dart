@@ -22,11 +22,13 @@ import 'backup_settings_page.dart';
 import 'invite_redeem_page.dart';
 import 'notifications_page.dart';
 import 'recent_page.dart';
+import 'shares_page.dart';
 import 'storage_detail_page.dart';
 import 'notes_page.dart';
 import 'trash_page.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
+import 'theme/app_theme.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   final VoidCallback onGoPhotos, onGoFiles, onGoTransfers, onGoMe;
@@ -367,68 +369,159 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (w != null) layout.add(_CardSpec(id, w));
     }
 
+    // 沉浸渐变头（9.6-P2-2 方案 A）：SliverAppBar 展开=品牌渐变头
+    // （问候+头像+微数据，从状态栏铺满），滚动收窄为纯色工具条
+    final topInset = MediaQuery.of(context).padding.top;
+    final session = ref.watch(sessionProvider);
     return RefreshIndicator(
         onRefresh: _refreshAll,
-        child: ReorderableListView(
-            // 品牌头固定在列表头不参与排序（v0.18 卡片自定义）。v0.20：
-            // ReorderableListView 带 header 时列表顶部 padding 会被挪去包
-            // header（SDK reorderable_list.dart：listPadding.top 置 0），
-            // 第一张卡片直接贴住渐变头——header 外再包一层底部间距补回
-            header: Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: BrandHeader(
-                  topInset: MediaQuery.of(context).padding.top,
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    const BrandCloud(size: 44),
-                    const SizedBox(height: 12),
-                    Text(_greeting(username),
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 19,
-                            fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 2),
-                    ValueListenableBuilder<String>(
-                        valueListenable: AutoSwitch.I.lastEvent,
-                        builder: (_, ev, _) {
-                          final auto = ev.isNotEmpty ? ' · 自动切换已生效' : '';
-                          return Text(
-                              '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
-                              style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.92),
-                                  fontSize: 12));
-                        }),
-                  ]),
-                ),
-            ),
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-            buildDefaultDragHandles: false, // 长按卡片启动拖动（延迟监听器）
-            onReorderStart: (_) => _dragHintOnce(),
-            // v3.41+：onReorderItem 的 newIndex 已自适应移除项，无需 -1 修正
-            onReorderItem: (oldI, newI) => _onReorder(oldI, newI, layout.length),
-            proxyDecorator: (child, i, anim) => AnimatedBuilder(
-                animation: anim,
-                builder: (_, _) => Material(
-                    elevation: 6,
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                    child: child)),
-            children: [
-              for (var i = 0; i < layout.length; i++)
-                ReorderableDelayedDragStartListener(
+        child: CustomScrollView(slivers: [
+          SliverAppBar(
+              pinned: true,
+              expandedHeight: topInset + 196,
+              // 收起后的工具条底色取渐变首色（纯色近似，白字同源）
+              backgroundColor: PaletteScope.of(context).gradient.first,
+              foregroundColor: Colors.white,
+              centerTitle: false,
+              title: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Brand.cloud, size: 18, color: Colors.white),
+                const SizedBox(width: 6),
+                const Text('LAN Share',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+              ]),
+              flexibleSpace: FlexibleSpaceBar(
+                  background: BrandHeader(
+                      bottomRadius: 0,
+                      topInset: topInset,
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(children: [
+                              Expanded(
+                                  child: Text(_greeting(username),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w700))),
+                              _headAvatar(session),
+                            ]),
+                            const SizedBox(height: 4),
+                            ValueListenableBuilder<String>(
+                                valueListenable: AutoSwitch.I.lastEvent,
+                                builder: (_, ev, _) {
+                                  final auto =
+                                      ev.isNotEmpty ? ' · 自动切换已生效' : '';
+                                  return Text(
+                                      '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
+                                      style: TextStyle(
+                                          color:
+                                              Colors.white.withValues(alpha: 0.92),
+                                          fontSize: 12));
+                                }),
+                            const SizedBox(height: 14),
+                            Row(children: [
+                              _headStat('服务端已用', humanSize(_diskUsed)),
+                              const SizedBox(width: 8),
+                              _headStat(
+                                  '待备份',
+                                  _pending < 0
+                                      ? '统计中'
+                                      : _pending == 0
+                                          ? '全部就绪'
+                                          : '$_pending 项'),
+                              const SizedBox(width: 8),
+                              _headStat('剩余空间', humanSize(_diskFree)),
+                            ]),
+                          ])))),
+          SliverPadding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+              sliver: SliverReorderableList(
+              onReorderStart: (_) => _dragHintOnce(),
+              // v3.41+：onReorderItem 的 newIndex 已自适应移除项，无需 -1 修正
+              onReorderItem: (oldI, newI) => _onReorder(oldI, newI, layout.length),
+              proxyDecorator: (child, i, anim) => AnimatedBuilder(
+                  animation: anim,
+                  builder: (_, _) => Material(
+                      elevation: 6,
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                      child: child)),
+              itemCount: layout.length + 1,
+              itemBuilder: (ctx, i) {
+                // 管理入口（常驻、不可拖动）：隐藏的卡片从这里加回
+                if (i == layout.length) {
+                  return KeyedSubtree(
+                      key: const ValueKey('__manage__'),
+                      child: Center(
+                          child: TextButton.icon(
+                              style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact),
+                              onPressed: _manageCards,
+                              icon: const Icon(Icons.tune, size: 18),
+                              label: const Text('管理卡片'))));
+                }
+                return ReorderableDelayedDragStartListener(
                     key: ValueKey(layout[i].id),
                     index: i,
-                    child: layout[i].widget),
-              // 管理入口（常驻、不可拖动）：隐藏的卡片从这里加回
-              Center(
-                  key: const ValueKey('__manage__'),
-                  child: TextButton.icon(
-                      style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact),
-                      onPressed: _manageCards,
-                      icon: const Icon(Icons.tune, size: 18),
-                      label: const Text('管理卡片'))),
-            ]));
+                    child: layout[i].widget);
+              }))]));
+  }
+
+  /// 渐变头右上角头像：有头像走 AuthImage（服务端 /api/auth/avatar），无头像
+  /// 取显示名首字；点按进"我的"tab（9.6-P2-2 快捷入口）
+  Widget _headAvatar(SessionState session) {
+    final name = session.username ?? '';
+    final hasAvatar = (session.avatarPath ?? '').isNotEmpty && _base.isNotEmpty;
+    return GestureDetector(
+        onTap: widget.onGoMe,
+        child: CircleAvatar(
+            radius: 20,
+            backgroundColor: Colors.white24,
+            backgroundImage: null,
+            child: hasAvatar
+                ? ClipOval(
+                    child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: AuthImage(
+                            url: '$_base/api/auth/avatar/'
+                                '${Uri.encodeComponent(name)}')))
+                : Text(
+                    name.isNotEmpty ? name.characters.first.toUpperCase() : '?',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700))));
+  }
+
+  /// 渐变头微数据胶囊（白 14% 底，深浅主题都在渐变上可读）
+  Widget _headStat(String label, String value) {
+    return Expanded(
+        child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(10)),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 2),
+                  Text(label,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          fontSize: 11)),
+                ])));
   }
 
   /// 卡片 id → 内容。数据未就绪（最近上传/动态为空）返回 null 跳过整卡。
@@ -583,9 +676,17 @@ class _HomePageState extends ConsumerState<HomePage> {
                     ])),
             ]));
       case 'backup':
+        // 整卡可点（改进建议 9.6-P0-9）：点卡片主体进备份管理页；
+        // 卡内"立即备份/备份设置"等按钮仍各自响应
         return _card(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            child: InkWell(
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const BackupSettingsPage())),
+                borderRadius: BorderRadius.circular(12),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                   _cardTitle('自动备份',
                       icon: Icons.backup_outlined,
                       trailing: _badge(_backupOn ? '已开启' : '已关闭',
@@ -659,7 +760,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                     const BackupSettingsPage())),
                         child: const Text('备份设置')),
                   ]),
-                ]));
+                ])));
       case 'transfers':
         return _card(
             child: InkWell(
@@ -745,7 +846,10 @@ class _HomePageState extends ConsumerState<HomePage> {
                     Navigator.push(context,
                         MaterialPageRoute(builder: (_) => const TrashPage()));
                   }),
-                  _quick(Icons.link_outlined, '我的分享', widget.onGoMe),
+                  _quick(Icons.link_outlined, '我的分享', () {
+                    Navigator.push(context,
+                        MaterialPageRoute(builder: (_) => const SharesPage()));
+                  }),
                 ]));
       case 'invite':
         // v0.15.2：邀请码注册入口——新成员凭码自助建号，管理端建码

@@ -5,6 +5,7 @@ import { previewAs } from './previewAs'
 export interface Entry {
   name: string; path: string; is_dir: boolean; is_private_root?: boolean
   size: number | null; size_human: string; modified: string; ext: string | null
+  abs_path?: string  // 服务器真实存储路径（"复制路径"用，9.6-P1-3）
 }
 export interface Me { username: string; role: 'admin' | 'member' | 'guest'; quota_bytes: number | null; totp_enabled?: boolean; totp_rc_left?: number; nickname?: string; avatar_path?: string }
 export interface TrashItem { id: number; name: string; orig_path: string; size_human: string; deleted_at: string; days_left: number }
@@ -23,11 +24,15 @@ export interface DiskInfo { total: string; used: string; free: string; total_hum
 export interface Member { id: number; username: string; role: string }
 export interface DeviceInfo { id: number; name: string; created_at: number; last_seen: number; current: boolean }
 export interface NotificationItem { id: number; type: string; title: string; body: string | null; link: string | null; created_at: number; read: boolean }
+export interface BroadcastItem {
+  id: string; title: string; body: string | null; target_count: number
+  status: 'draft' | 'scheduled' | 'sent'; scheduled_at: number | null
+  sent_at: number | null; withdrawn_at: number | null; created_at: number
+  created_by: string; unread: number; read: number
+}
 export interface PhotoItem { path: string; name: string; taken: string; month: string; uploader: string; thumb: string }
 export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
 export interface Album { id: string; title: string; month?: string; created_by?: string; count?: number; cover?: string }
-export interface PhotoComment { id: number; user: string; body: string; created_at: number; mine: boolean }
-export interface PhotoReactions { emojis: string[]; reactions: { emoji: string; count: number; names: string[] }[]; mine: string[] }
 
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
@@ -70,12 +75,7 @@ export const api = {
   // 相册共创：成员可建精选专辑（admin/创建者可删）
   addAlbum: (title: string, month: string) => jpost('/api/albums', { title, month }).then(r => handle<{ ok: boolean; albums: Album[] }>(r)),
   deleteAlbum: (id: string) => fetch(`/api/albums/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
-  // 照片互动：评论 + 表情回应
-  photoComments: (path: string) => fetch(`/api/photo/comments?path=${encodeURIComponent(path)}`).then(r => handle<{ comments: PhotoComment[] }>(r)),
-  addPhotoComment: (path: string, body: string) => jpost('/api/photo/comments', { path, body }).then(r => handle<{ ok: boolean; id: number }>(r)),
-  deletePhotoComment: (id: number) => fetch(`/api/photo/comments/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
-  photoReactions: (path: string) => fetch(`/api/photo/reactions?path=${encodeURIComponent(path)}`).then(r => handle<PhotoReactions>(r)),
-  togglePhotoReaction: (path: string, emoji: string) => jpost('/api/photo/reactions', { path, emoji }).then(r => handle<{ ok: boolean; on: boolean }>(r)),
+  // 照片评论/表情回应已下线（改进建议 9.6-P2-13）
   // 数据导出（管理）：成员数据足迹 zip
   exportMember: (username: string) => jpost('/api/admin/export', { username }).then(r => handle<{ ok: boolean; url: string; name: string; files: number; bytes: number }>(r)),
   logout: () => fetch('/api/logout', { method: 'POST' }).then(() => undefined),
@@ -110,7 +110,25 @@ export const api = {
   // v0.20 手动广播：站内通知逐人 + 已配置 webhook 同步推
   adminNotify: (title: string, body: string, userIds?: number[]) =>
     jpost('/api/admin/notify', { title, body, ...(userIds?.length ? { user_ids: userIds } : {}) })
-      .then(r => handle<{ ok: boolean; sent: number; webhook: boolean }>(r)),
+      .then(r => handle<{ ok: boolean; sent: number; webhook: boolean; broadcast_id: string }>(r)),
+
+  // 通知管理（9.6-P2-14）：发送记录/撤回/提醒未读/草稿定时
+  sentBroadcasts: () => fetch('/api/admin/notifications/sent').then(r => handle<{ items: BroadcastItem[] }>(r)),
+  withdrawBroadcast: (id: string) =>
+    jpost(`/api/admin/notifications/broadcast/${encodeURIComponent(id)}/withdraw`, {}).then(r => handle<{ ok: boolean; removed: number }>(r)),
+  remindBroadcast: (id: string) =>
+    jpost(`/api/admin/notifications/broadcast/${encodeURIComponent(id)}/remind`, {}).then(r => handle<{ ok: boolean; unread: number }>(r)),
+  saveDraft: (title: string, body: string, userIds: number[] | null, scheduledAt: number | null) =>
+    jpost('/api/admin/notifications/draft', { title, body, user_ids: userIds, scheduled_at: scheduledAt })
+      .then(r => handle<{ ok: boolean; id: string }>(r)),
+  sendDraft: (id: string) =>
+    jpost(`/api/admin/notifications/draft/${encodeURIComponent(id)}/send`, {}).then(r => handle<{ ok: boolean; sent: number }>(r)),
+  deleteDraft: (id: string) =>
+    fetch(`/api/admin/notifications/draft/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  // 全员端：单条已读/删除
+  notificationRead: (id: number) => jpost(`/api/notifications/${id}/read`, {}).then(r => handle<{ ok: boolean }>(r)),
+  notificationDelete: (id: number) =>
+    fetch(`/api/notifications/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
 
   // 每日健康日报（磁盘/备份/证书/隧道 → Webhook）
   getHealthReport: () => fetch('/api/admin/healthreport').then(r => handle<{ enabled: boolean; time: string; backup_dest: string; webhook_set: boolean }>(r)),

@@ -16,7 +16,9 @@ if not exist "%BACKUP_DEST%\db" mkdir "%BACKUP_DEST%\db"
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set DSTAMP=%%i
 
 REM -- meta DB: PostgreSQL custom-format dump, date-stamped, keep last 2 days --
-"%PGDUMP%" -h 127.0.0.1 -p 5433 -U lanshare -d lanshare -Fc -f "%BACKUP_DEST%\db\lanshare-%DSTAMP%.dump"
+REM lock-wait-timeout: dump 拿不到表的 ACCESS SHARE 时 5s 内放弃而不是挂死
+REM （改进建议 9.6-P2-4；该锁不阻塞业务读写，正常情况瞬时获得）
+"%PGDUMP%" -h 127.0.0.1 -p 5433 -U lanshare -d lanshare -Fc --lock-wait-timeout=5000 -f "%BACKUP_DEST%\db\lanshare-%DSTAMP%.dump"
 if errorlevel 1 (
   echo BACKUP FAILED: pg_dump error
   exit /b 1
@@ -28,7 +30,9 @@ REM -- retention: delete dumps older than 2 days --
 forfiles -p "%BACKUP_DEST%\db" -m lanshare-*.dump -d -2 -c "cmd /c del @path" 2>nul
 
 REM -- file data: incremental (copy newer, never mirror-delete) --
-robocopy "C:\lan-share\data" "%BACKUP_DEST%\files" /E /XO /R:2 /W:5 ^
+REM /MT:2（改进建议 9.6-P2-4）：默认 /MT:8 全速复制会把磁盘 IO 吃满，
+REM 备份窗口内 Web/App 的列表与缩略图请求明显变慢；压到 2 线程换平顺
+robocopy "C:\lan-share\data" "%BACKUP_DEST%\files" /E /XO /R:2 /W:5 /MT:2 ^
   /XD ".chunks" ".zips" "tmp" /XF ".meta.db" ".meta.db-wal" ".meta.db-shm" /NFL /NDL /NP
 if %ERRORLEVEL% GEQ 8 (
   echo BACKUP FAILED robocopy exit %ERRORLEVEL%

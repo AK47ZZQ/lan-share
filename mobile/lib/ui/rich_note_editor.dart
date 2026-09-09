@@ -7,6 +7,7 @@
 // · RichNoteEditorPage：编辑 + 保存（multipart 直传，同纯文本笔记通道）
 // · 图片插入：相册选取 → base64 data URI 内嵌进 HTML（自包含单文件，
 //   移动/改名不断链）；表情：常用 emoji 网格一键插入（系统键盘也可）
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -89,15 +90,37 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
   bool _dirty = false;
   String? _error;
   String _initialHtml = '';
+  Timer? _autoTimer; // 自动保存定时器（改进建议 9.6-P0-12）
 
   @override
   void initState() {
     super.initState();
     _loadContent();
+    // 自动保存：每 30s 静默覆盖上传一次脏内容；失败内容仍在编辑器，可重试
+    _autoTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted && _dirty && !_saving && !_loading && _error == null) {
+        _save(silent: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    super.dispose();
   }
 
   String get _remotePath =>
       '${widget.dir}/${widget.name}'.replaceAll('//', '/');
+
+  /// AppBar 标题：笔记在子文件夹（分类）里时显示"分类名 / 文件名"，
+  /// 直接在笔记根目录则只显示文件名（与纯文本编辑器同款）
+  String get _title {
+    final seg =
+        widget.dir.split('/').where((s) => s.trim().isNotEmpty).toList();
+    if (seg.isEmpty) return widget.name;
+    return '${seg.last} / ${widget.name}';
+  }
 
   Future<void> _loadContent() async {
     if (widget.isNew) {
@@ -129,13 +152,18 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
 
   String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
-  Future<bool> _save() async {
+  /// silent=true 为自动保存：成功不弹 SnackBar（避免打扰），失败仍提示
+  Future<bool> _save({bool silent = false}) async {
     if (_saving) return false;
     setState(() => _saving = true);
     try {
       final html = await _ctrl.getText(); // 包内返回非空 Future<String>
       final dio = await ApiClient.I.dio();
-      await dio.post('/api/upload?path=${Uri.encodeComponent(widget.dir)}',
+      // on_dup=overwrite（改进建议 9.6-P0-12）：就地编辑直接覆盖源文件，
+      // 不走"旧文件进回收站"，杜绝回收站堆积同一笔记的多个副本
+      await dio.post(
+          '/api/upload?path=${Uri.encodeComponent(widget.dir)}'
+          '&on_dup=overwrite',
           data: FormData.fromMap({
             'file': MultipartFile.fromString(
                 html.isEmpty ? '<p></p>' : html,
@@ -144,9 +172,11 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
           }));
       if (!mounted) return true;
       setState(() => _dirty = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已保存到 $_remotePath'),
-              duration: const Duration(seconds: 2)));
+      if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('已保存到 $_remotePath'),
+                duration: const Duration(seconds: 2)));
+      }
       return true;
     } on DioException catch (e) {
       if (!mounted) return false;
@@ -234,7 +264,7 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(widget.name,
+          title: Text(_title,
               style: const TextStyle(fontSize: 14,
                   overflow: TextOverflow.ellipsis)),
           actions: [

@@ -45,8 +45,8 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| GET | `/api/files/{path}` | 🔑 | 目录列表 `{path, items:[{name,path,is_dir,size,size_human,modified,ext}]}`；隐藏（点前缀）目录不返回 |
-| POST | `/api/upload/{path}` | 🔑 | multipart 单请求上传（≤2GB）；返回 `{sha256, deduped, ...}` |
+| GET | `/api/files/{path}` | 🔑 | 目录列表 `{path, items:[{name,path,is_dir,size,size_human,modified,ext,abs_path}]}`；`abs_path`=服务器真实存储路径（正斜杠，"复制路径"用，v3.31）；隐藏（点前缀）目录不返回 |
+| POST | `/api/upload/{path}` | 🔑 | multipart 单请求上传（≤2GB）；`?on_dup=` 控制同名覆盖行为（v3.31：`trash`=旧版本进回收站【默认】，`overwrite`=直接覆盖不留版本——笔记编辑器就地保存专用）；返回 `{sha256, deduped, ...}` |
 | POST | `/api/upload/init` | 🔑 | `{dest_dir, filename, size, sha256?}` → 命中指纹 `{instant:true,...}` 秒传硬链接；否则 `{session, chunk_size, received:[]}`。分片大小自适应（≤2GB→5MB / ≤5GB→16MB / ≤10GB→32MB / 更大→64MB）；总大小硬上限 64GB |
 | GET | `/api/upload/state/{sid}` | 🔑 | `{received:[块序号]}`（断点续传，chunk_size 与 init 一致） |
 | POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速）；原子落盘，字节数不符整块即拒（中断不留半截分片） |
@@ -60,7 +60,17 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | GET | `/api/search?q=` | 🔑 | 文件名搜索，最多 50 条 |
 | GET | `/api/recent?limit=` | 🔑 | 最近修改（≤100） |
 | GET | `/api/disk` · `/api/disk/detail` | 🔑 | C 盘用量 + 网盘统计（`share_size` 按文件索引去重，硬链接只计一次；detail 附各一级目录逻辑大小 `categories`） |
-| GET | `/api/photos?limit=&offset=&month=&uploader=&refresh=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,month,uploader,thumb}]}`（EXIF 日期倒序；jpg/jpeg/png/webp/bmp/heic/heif）；`month=YYYY-MM`/`uploader` 过滤；`refresh=1` 放宽扫描节流（App 备份完成后拉最新，地板 5s 防滥用） |
+| GET | `/api/photos?limit=&offset=&month=&uploader=&refresh=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,month,uploader,thumb,abs_path}]}`（EXIF 日期倒序；jpg/jpeg/png/webp/bmp/heic/heif）；`month=YYYY-MM`/`uploader` 过滤；`refresh=1` 放宽扫描节流（App 备份完成后拉最新，地板 5s 防滥用）；`abs_path` 为服务器真实存储路径（v3.31） |
+
+## 笔记（v3.31）
+
+笔记 = 网盘里的普通文件（.md/.markdown/.txt/.html/.htm），分类 = 笔记目录下的
+子文件夹（可嵌套）。本端点只做"带摘要的一次性聚合列表"；新建/重命名/移动/
+删除分类与笔记复用上方 files 通道（mkdir/rename/move/delete），不另立分类存储。
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/notes/list?path=&q=&sort=` | 🔑 | `{total, items:[{name, path, category, ext, size_human, modified, mtime, ctime, summary}]}`；`category`=相对笔记目录的子路径（`""`=未分类）；`summary`=正文前 200 字纯文本（html 先去标签，只读文件头 8KB）；`q` 命中文件名或内容前 8KB（大小写不敏感）；`sort=modified`\|`created`\|`name`；单目录树聚合上限 2000 篇（防误选网盘根目录全盘扫描） |
 
 ## 回收站
 
@@ -182,17 +192,43 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 
 - `POST /api/share` 记录 `owner_id`；新增可选表单字段 `target`（成员用户名）=
   **定向分享**：仅该成员与 admin 登录后可取（免提取码），对无关者 404；
-  创建时自动给收件人发站内通知
+  创建时自动给收件人发站内通知（走统一出口，尊重接收方通知偏好）
 - `GET /api/members` 🔑 在用成员名单（定向分享收件人下拉用，不含自己）
-- `GET /api/notifications` 🔑 `{unread, items[50]}` 本人站内通知；
-  `POST /api/notifications/read` 🔑 全部标记已读；`GET /api/shares` 按创建者隔离
-  （admin 全见 + `owner` 字段），响应为 **以 token 为键的字典**；带密码分享
+- `GET /api/shares` 按创建者隔离（admin 全见 + `owner` 字段），响应为 **以 token 为键的字典**；带密码分享
   含 `password` 明文（创建时保存，旧存量分享无此字段）
 - `DELETE /api/shares/{token}` 与 `GET /api/shares/{token}/history` 仅创建者/admin
 - 下载计数**按票据去重**：下载管理器的并发 Range 分段同一 `tkt` 只计 1 次
 - `GET /api/share/{token}/qr` 🔑 需登录（按请求 Host 生成对应域的二维码）
 
+### 通知与推送（v3.31 通知管理）
+
+站内通知统一经 `insert_notification()` 落库——先查接收方**通知偏好**（按类型组
+share/admin/system 三组开关，存 settings `notify_prefs_user_<uid>`），关闭的
+类型不落库；站外 webhook 推送不受偏好影响。
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/notifications` | 🔑 | `{unread, items[50]:[{id,type,title,body,link,created_at,read}]}`（id 倒序） |
+| POST | `/api/notifications/read` | 🔑 | 全部标记已读 |
+| POST | `/api/notifications/{id}/read` | 🔑 | 单条标记已读（v3.31）；返回 `{changed}` |
+| DELETE | `/api/notifications/{id}` | 🔑 | 删除本人单条通知（v3.31） |
+| GET | `/api/notifications/prefs` | 🔑 | 本人通知偏好 `{share, admin, system}`（缺省全 true） |
+| PUT | `/api/notifications/prefs` | 🔑 | `{share?, admin?, system?}` 部分更新偏好（v3.31） |
+| POST | `/api/admin/notify` | ⚙️ | 手动广播 `{title, body?, user_ids?}`（空=全体在职）；落 `admin_broadcasts` 记录（broadcast_id 贯穿站内行，支持撤回/统计）；逐人写入尊重偏好；`user_ids` 显式定向但全不匹配 → 404；返回 `{sent, webhook, broadcast_id}` |
+| GET | `/api/admin/notifications/sent` | ⚙️ | 发送记录+草稿箱 `{items:[{id, title, body, target_count, status: sent\|draft\|scheduled, scheduled_at, sent_at, withdrawn_at, created_at, created_by, unread, read}]}`（新在前，≤100 条；unread/read 为该广播站内行的统计） |
+| POST | `/api/admin/notifications/broadcast/{bid}/withdraw` | ⚙️ | 撤回：删该广播全部**未读**站内行（已读的保留为历史），标记 withdrawn_at；`{removed}` |
+| POST | `/api/admin/notifications/broadcast/{bid}/remind` | ⚙️ | 提醒未读：对仍处未读的成员再推一次站外 webhook（站内不重复落）；`{unread}` |
+| POST | `/api/admin/notifications/draft` | ⚙️ | 保存草稿 `{title, body?, user_ids?, scheduled_at?}`（unix 秒；`scheduled_at` 非空即定时广播，到期由服务端周期任务自动发送）；`{id}` |
+| POST | `/api/admin/notifications/draft/{bid}/send` | ⚙️ | 立即发送草稿/定时项（已发送 409） |
+| DELETE | `/api/admin/notifications/draft/{bid}` | ⚙️ | 删除草稿/定时项（已发送的不可删） |
+
+> 广播写库于 `admin_broadcasts` 表（双引擎迁移 v3.31）；`notifications.broadcast_id`
+> 列为存量库自动补列。定时广播由 startup 周期任务（60s）扫描到期 `scheduled` 记录发送。
+
 ### 相册（v3.5）
+
+> 照片评论/表情回应（photo_comments / photo_reactions）已于 v3.31 下线：端点删除，
+> 存量表与数据保留不再读写。
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|

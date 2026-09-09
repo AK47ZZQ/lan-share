@@ -22,7 +22,7 @@ from app.security import (audit, client_ip, get_bearer_user, get_session_user,
 from app.filetools import human_size
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
-from app.api.notify import push_webhook
+from app.api.notify import insert_notification, push_webhook
 from app.main import app
 
 @app.post("/api/share")
@@ -73,13 +73,12 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
              time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
              _user["user_id"] if "user_id" in _user.keys() else None,
              None, target_id))
-        if target_id:
-            _db().execute(
-                "INSERT INTO notifications(user_id, type, title, body, link, created_at) "
-                "VALUES(?,?,?,?,?,?)",
-                (target_id, "share", f"{_user['username']} 给你分享了文件",
-                 target_path.name, f"/s/{token}", time.time()))
         _db().commit()
+    # 站内通知统一出口（9.6-P2-14）：偏好关闭的接收方不再落库
+    if target_id:
+        insert_notification(target_id, "share",
+                            f"{_user['username']} 给你分享了文件",
+                            target_path.name, f"/s/{token}")
     audit("share_create", str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"),
           f"{expires_hours}h", client_ip(request))
     if target_id:

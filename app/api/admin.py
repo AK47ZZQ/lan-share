@@ -465,42 +465,9 @@ async def admin_test_webhook(request: Request, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
-class NotifyBody(BaseModel):
-    title: str
-    body: str = ""
-    user_ids: list[int] | None = None   # None/空 = 全体在职用户
-
-
-@app.post("/api/admin/notify")
-def admin_broadcast_notify(body: NotifyBody, request: Request,
-                           _admin=Depends(require_admin)):
-    """手动广播（v0.20，App/Web 管理面板对话框直发）：站内通知人手一条 +
-    已配置的站外 webhook 一起推。标题必填截 80，正文截 500。"""
-    title = body.title.strip()[:80]
-    text = body.body.strip()[:500]
-    if not title:
-        raise HTTPException(status_code=400, detail="标题不能为空")
-    if body.user_ids:
-        targets = _db().execute(
-            "SELECT id, username, is_active FROM users WHERE is_active=1").fetchall()
-        want = set(body.user_ids)
-        targets = [t for t in targets if t["id"] in want]
-        if not targets:
-            raise HTTPException(status_code=404, detail="目标用户不存在或已停用")
-    else:
-        targets = _db().execute(
-            "SELECT id, username, is_active FROM users WHERE is_active=1").fetchall()
-    now = time.time()
-    with _db_lock:
-        _db().executemany(
-            "INSERT INTO notifications(user_id, type, title, body, created_at) "
-            "VALUES(?,?,?,?,?)",
-            [(t["id"], "admin", title, text, now) for t in targets])
-        _db().commit()
-    push_webhook(title, text)
-    audit("notify_broadcast", f"{len(targets)}人: {title[:40]}",
-          ip=client_ip(request))
-    return {"ok": True, "sent": len(targets), "webhook": bool(get_webhook_url())}
+# 手动广播 POST /api/admin/notify 已迁往 notify.py（改进建议 9.6-P2-14）：
+# 广播落 admin_broadcasts 记录，支持发送记录/撤回/提醒未读/草稿定时；
+# 站内写入统一走 notify.insert_notification（尊重接收方通知偏好）。
 
 
 # ─── 目录授权 ─────────────────────────────────────────────
@@ -604,7 +571,6 @@ def activity(limit: int = 50, user=Depends(require_user)):
             "invite_redeemed", "trash", "restore", "move", "rename"}
     items: list[dict] = []
     max_items = max(1, min(limit, 100))
-    username = user["username"]
     for r in rows:
         if r["action"] not in show or len(items) >= max_items:
             continue
@@ -663,7 +629,7 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
     file_count = 0
     file_bytes = 0
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
-        for label, root in roots:
+        for _label, root in roots:
             if not root.exists():
                 continue
             for f in root.rglob("*"):

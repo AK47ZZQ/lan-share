@@ -1,4 +1,4 @@
-# 项目目录布局与关键路径（v0.17 整理）
+# 项目目录布局与关键路径（v0.21 更新）
 
 > 结论先行：**唯一真源是本仓库**。生产路径、构建镜像全部是指向/镜像本仓库的辅助目录，改代码只改这里。
 
@@ -24,7 +24,13 @@
 3. 分发三件套：APK + version.json + versions.json（发版纪律见项目记忆 05-验收红线）
 4. 生产 API 重启：`powershell Restart-Service lan-share-api`（Git Bash 下 `sc` 会静默失败）
 
-## 本次（v0.17）新增的落点
+## v0.21 新增的落点
 
-- `data/.avatars/<uid>.jpg`：用户头像（点前缀目录，不进照片扫描/文件列表）
-- `tests/test_pg_sql_dialect.py`：PG 方言回归（LIKE 字面 `%` 必须被 `_pg_sql` 翻倍）
+- `app/api/notes.py`：笔记聚合列表端点（/api/notes/list，摘要+分类归属；
+  分类 CRUD 复用 files 通道，不另立存储）
+- 数据库：`notifications.broadcast_id` 列（双引擎迁移）+ `admin_broadcasts`
+  表（广播记录/草稿/定时）；`photo_comments` / `photo_reactions` 不再建表
+  （功能下线，存量库旧表保留不删）
+- `data/.avatars/<uid>.jpg`：用户头像（v0.17，点前缀目录，不进照片扫描/文件列表）
+- `tests/test_pg_sql_dialect.py`：PG 方言回归（v0.17；LIKE 字面 `%` 必须被
+  `_pg_sql` 翻倍）

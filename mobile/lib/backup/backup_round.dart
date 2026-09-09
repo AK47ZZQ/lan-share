@@ -47,6 +47,7 @@ const _skipReasonText = {
   'no_username': '未获取到用户名',
   'bad_username': '用户名异常',
   'scan_or_ledger_unavailable': '媒体库/账本暂不可用',
+  'insufficient_space': '服务端空间不足，已跳过（清理空间后自动续备）',
   'busy': '上一轮仍在进行',
 };
 

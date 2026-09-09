@@ -3,8 +3,26 @@
 // 编辑过 → 重新备份。状态机：pending → uploading → done | error；
 // error 且 attempts≤5 下轮自动重试，attempts>5 = 暂停（账本页"重试失败项"
 // 手动复活），否则暂停态会被 reconcile 反复重入，attempts 永远压不住。
+// v0.21（9.6-P1-10）：新增 server_missing——轮前对账发现服务端相册目录被
+// 手动删除时，done 行转入此态（不再自动重传），由备份详情页提示用户选择
+// "重新备份"或"从备份移除"。
 // 单向备份语义：相册里删掉的照片账本原样保留（网盘不随相册删除）。
 import 'package:sqflite/sqflite.dart';
+
+/// 相册迁移（场景3 改名识别）：reconcile 发现同 id 行 bucket 变更时记录
+class BucketMove {
+  final String kind; // image | video
+  final String from; // 旧相册名
+  final String to; // 新相册名
+  BucketMove({required this.kind, required this.from, required this.to});
+}
+
+/// reconcile 结果：待备份清单 + 本轮观察到的相册迁移（改名识别输入）
+class ReconcileResult {
+  final List<LedgerRow> pending;
+  final List<BucketMove> bucketMoves;
+  ReconcileResult({required this.pending, required this.bucketMoves});
+}
 
 class LedgerRow {
   final String mediaId; // "img_123" / "vid_456"
@@ -200,15 +218,17 @@ class BackupLedger {
 
   /// 媒体库扫描结果与账本对账：新文件/变更文件/未完成项 → 待备份清单
   /// （按拍摄时间升序，网盘里相册顺序自然）。纯 done 且未变更的跳过。
-  Future<List<LedgerRow>> reconcile(List<LedgerRow> scanned) async {
+  /// v0.21：server_missing 行不自动复活（用户在详情页明确选择后才行）；
+  /// bucket 变更同时记入 bucketMoves（改名识别，9.6-P1-10 场景3）。
+  Future<ReconcileResult> reconcile(List<LedgerRow> scanned) async {
     final db = await open();
     final known = <String, LedgerRow>{};
     // 两段查询控内存：done 行只取对账所需 4 列（大头），全行仅装未完成积压
     // （正常是小集合），10 万张相册不至于全量 12 列进 Dart 堆
     for (final r in await db.query('ledger',
-        columns: ['media_id', 'mtime', 'size', 'sha256', 'bucket'],
-        where: 'status = ?',
-        whereArgs: ['done'])) {
+        columns: ['media_id', 'mtime', 'size', 'sha256', 'bucket', 'status'],
+        where: 'status IN (?, ?)',
+        whereArgs: ['done', 'server_missing'])) {
       known[r['media_id'] as String] = LedgerRow(
           mediaId: r['media_id'] as String,
           kind: '',
@@ -216,15 +236,16 @@ class BackupLedger {
           size: (r['size'] as num).toInt(),
           mtime: (r['mtime'] as num).toInt(),
           bucket: r['bucket'] as String? ?? '',
-          status: 'done',
+          status: r['status'] as String? ?? 'done',
           sha256: r['sha256'] as String?);
     }
-    for (final r in await db
-        .query('ledger', where: 'status != ?', whereArgs: ['done'])) {
+    for (final r in await db.query('ledger',
+        where: 'status NOT IN (?, ?)', whereArgs: ['done', 'server_missing'])) {
       final row = LedgerRow.fromMap(r);
       known[row.mediaId] = row;
     }
     final pending = <LedgerRow>[];
+    final moves = <BucketMove>[];
     final batch = db.batch();
     for (final s in scanned) {
       final row = known[s.mediaId];
@@ -239,6 +260,10 @@ class BackupLedger {
         // 文件被编辑（mtime/size）或被移动到别的相册（bucket，0.7.0 起
         // 落位跟随相册）→ 重置后重传；服务端旧副本保留（单向备份语义），
         // sha256 沿用 → 秒传免流量，只在目标目录建引用
+        if (row.bucket != s.bucket) {
+          moves.add(BucketMove(
+              kind: s.kind, from: row.bucket, to: s.bucket));
+        }
         final reset = LedgerRow(
             mediaId: s.mediaId,
             kind: s.kind,
@@ -250,6 +275,9 @@ class BackupLedger {
         batch.update('ledger', reset.toMap(),
             where: 'media_id = ?', whereArgs: [s.mediaId]);
         pending.add(reset);
+      } else if (row.status == 'server_missing') {
+        // 服务端相册已删 + 本地内容未变：保持 missing 态等用户决定，
+        // 不自动重传（否则用户在服务端删相册会被备份悄悄重建）
       } else if (row.status != 'done' && row.attempts <= 5) {
         pending.add(row); // pending/uploading/error 且未暂停 → 自动重试
       }
@@ -257,7 +285,7 @@ class BackupLedger {
     }
     await batch.commit(noResult: true);
     pending.sort((a, b) => a.mtime.compareTo(b.mtime));
-    return pending;
+    return ReconcileResult(pending: pending, bucketMoves: moves);
   }
 
   Future<void> setStatus(String id, String status) async {
@@ -432,5 +460,88 @@ class BackupLedger {
         orderBy: 'rowid DESC',
         limit: limit);
     return rows.map(LedgerRow.fromMap).toList();
+  }
+
+  // ── 相册级管理（9.6-P1-10 智能识别）───────────────────────
+
+  /// done 行的 (kind → 相册名集合)：服务端目录对账用
+  Future<Map<String, Set<String>>> doneBucketsByKind() async {
+    final db = await open();
+    final rows = await db.rawQuery(
+        "SELECT kind, bucket, COUNT(*) AS c FROM ledger "
+        "WHERE status = 'done' AND bucket != '' GROUP BY kind, bucket");
+    final out = <String, Set<String>>{};
+    for (final r in rows) {
+      out
+          .putIfAbsent(r['kind'] as String, () => {})
+          .add(r['bucket'] as String);
+    }
+    return out;
+  }
+
+  /// 场景1：服务端相册被删——kind+bucket 的全部 done 行转入 server_missing
+  Future<int> markBucketServerMissing(String kind, String bucket) async {
+    final db = await open();
+    return db.update('ledger', {'status': 'server_missing'},
+        where: "status = 'done' AND kind = ? AND bucket = ?",
+        whereArgs: [kind, bucket]);
+  }
+
+  /// 详情页"重新备份"：missing 行回 pending（sha256 在 → 秒传只建引用）
+  Future<int> reBackupBucket(String kind, String bucket) async {
+    final db = await open();
+    return db.update('ledger', {'status': 'pending', 'attempts': 0},
+        where: "status = 'server_missing' AND kind = ? AND bucket = ?",
+        whereArgs: [kind, bucket]);
+  }
+
+  /// 详情页"从备份移除"：missing 行整批删除（服务端无副本可留）
+  Future<int> dropBucket(String kind, String bucket) async {
+    final db = await open();
+    return db.delete('ledger',
+        where: "status = 'server_missing' AND kind = ? AND bucket = ?",
+        whereArgs: [kind, bucket]);
+  }
+
+  /// 场景3：相册改名——迁移行的 bucket 改新名、remote_path 前缀替换、
+  /// 状态恢复 done（sha256/旧副本都在，服务端目录已改名，不重传）
+  Future<int> applyBucketRename(String kind, String from, String to,
+      String oldPrefix, String newPrefix) async {
+    final db = await open();
+    final rows = await db.query('ledger',
+        columns: ['media_id', 'remote_path'],
+        where: 'kind = ? AND bucket = ?',
+        whereArgs: [kind, from]);
+    final batch = db.batch();
+    for (final r in rows) {
+      final rp = r['remote_path'] as String?;
+      final newRp =
+          (rp != null && rp.startsWith(oldPrefix)) ? newPrefix + rp.substring(oldPrefix.length) : rp;
+      final upd = <String, Object?>{'bucket': to, 'status': 'done'};
+      if (newRp != null) upd['remote_path'] = newRp;
+      batch.update('ledger', upd,
+          where: 'media_id = ?', whereArgs: [r['media_id']]);
+    }
+    await batch.commit(noResult: true);
+    return rows.length;
+  }
+
+  /// 服务端副本删除后的账本清理：kind+bucket 全行删除（不管状态）
+  Future<int> dropBucketAll(String kind, String bucket) async {
+    final db = await open();
+    return db.delete('ledger',
+        where: 'kind = ? AND bucket = ?', whereArgs: [kind, bucket]);
+  }
+
+  /// server_missing 的相册清单（详情页提示条）：[{kind, bucket, count}]
+  Future<List<Map<String, Object>>> serverMissingBuckets() async {
+    final db = await open();
+    final rows = await db.rawQuery(
+        "SELECT kind, bucket, COUNT(*) AS c FROM ledger "
+        "WHERE status = 'server_missing' GROUP BY kind, bucket");
+    return [
+      for (final r in rows)
+        {'kind': r['kind'] as String, 'bucket': r['bucket'] as String, 'count': (r['c'] as num).toInt()}
+    ];
   }
 }

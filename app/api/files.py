@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.config import (MAX_CHUNKED_SIZE, MAX_UPLOAD_SIZE, TRASH_DAYS, ZIP_TTL, SHARE_ROOT, chunk_size_for)
+from app.config import (MAX_CHUNKED_SIZE, TRASH_DAYS, ZIP_TTL, SHARE_ROOT, chunk_size_for)
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, preview_user, require_user, require_admin
 from app.filetools import (_file_dict, clean_filename, dir_tree, ensure_heif_support,
@@ -355,13 +355,16 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
 @app.post("/api/upload/{path:path}")
 @app.post("/api/upload")
 async def upload_file(request: Request, path: str = "", file: UploadFile = File(...),
+                      on_dup: str = Query(default="trash"),
                       _user=Depends(require_user)):
+    if on_dup not in ("trash", "overwrite"):
+        raise HTTPException(status_code=400, detail="on_dup 仅支持 trash/overwrite")
     clean_name = clean_filename(file.filename)
     dest = resolve(_user, path, "write") / clean_name
     # 真实配额校验移入 save_upload 落位前（R1-P1-2）：starlette multipart 的
     # file.size 恒为 0，预检 `file.size or MAX_UPLOAD_SIZE` 会把所有直传按 2GB
     # 计价，配额 <2GB 的成员任何直传必 409
-    result = await save_upload(file, dest, quota_user=_user)
+    result = await save_upload(file, dest, quota_user=_user, on_dup=on_dup)
     deduped = register_blob(dest, result["sha256"], result["size"])
     audit("upload", result["path"], result["size_human"], client_ip(request))
     from app.api.system import photos_scan_bump

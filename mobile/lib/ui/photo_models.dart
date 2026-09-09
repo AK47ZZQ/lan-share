@@ -16,6 +16,8 @@ class PhotoItem {
   /// 预览 URL 随之变化，绕开客户端 180 天磁盘缓存陈旧。照片墙不传
   /// （无 mtime 字段，维持既有取舍）。
   final String? cacheKey;
+  /// 服务器真实存储路径（改进建议 9.6-P1-3），"复制路径"用；旧服务端无此字段
+  final String? absPath;
   /// 显示口径：昵称优先（"共享空间"这类非用户名保持原样）
   String get uploaderDisplay =>
       uploaderNick.trim().isNotEmpty ? uploaderNick.trim() : uploader;
@@ -23,7 +25,7 @@ class PhotoItem {
       required this.month, required this.uploader,
       this.uploaderNick = '',
       this.mediaType = 'photo', this.duration, this.width, this.height,
-      this.cacheKey});
+      this.cacheKey, this.absPath});
 
   bool get isVideo => mediaType == 'video';
 
@@ -46,7 +48,8 @@ class PhotoItem {
       mediaType: j['media_type'] as String? ?? 'photo',
       duration: (j['duration'] as num?)?.toDouble(),
       width: (j['width'] as num?)?.toInt(),
-      height: (j['height'] as num?)?.toInt());
+      height: (j['height'] as num?)?.toInt(),
+      absPath: j['abs_path'] as String?);
 
   /// 视频角标时长文案（124 → "2:04"）
   String get durationLabel {

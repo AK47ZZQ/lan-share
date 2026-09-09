@@ -56,6 +56,8 @@ function menuAct(action: string) {
   if (action === 'open') open(e)
   else if (action === 'download') download(e)
   else if (action === 'share') sharePaths.value = [e.path]
+  // 复制服务器真实存储路径（9.6-P1-3）；旧服务端无 abs_path 时回退逻辑路径
+  else if (action === 'copypath') void copyText(e.abs_path ?? `/${e.path}`)
   else if (action === 'rename') { renameTarget.value = e; renameName.value = e.name }
   else if (action === 'move') { selectMode.value = true; selected.value = new Set([e.path]); showMove.value = true }
   else if (action === 'delete') { selectMode.value = true; selected.value = new Set([e.path]); void doDelete() }
@@ -542,6 +544,7 @@ onUnmounted(() => {
       <button class="mi" @click="menuAct('open')">📂 {{ menu.e.is_dir ? '打开' : '预览' }}</button>
       <button v-if="!menu.e.is_dir" class="mi" @click="menuAct('download')">⬇ 下载</button>
       <button class="mi" @click="menuAct('share')">🔗 分享</button>
+      <button class="mi" @click="menuAct('copypath')">📋 复制路径</button>
       <button class="mi" @click="menuAct('rename')">✏️ 重命名</button>
       <button class="mi" @click="menuAct('move')">📂 移动到…</button>
       <div class="divider" />

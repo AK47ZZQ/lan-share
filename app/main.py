@@ -131,6 +131,7 @@ async def security_middleware(request: Request, call_next):
 from app.api import admin, appver, auth, files, share, webdav, system, notify  # noqa: E402,F401
 from app.api import healthreport  # noqa: E402,F401
 from app.api import social  # noqa: E402,F401
+from app.api import notes  # noqa: E402,F401
 
 # CSP：脚本全部外部化（script-src 'self'）；样式保留内联（style-src 'unsafe-inline'，
 # 仅 CSS 注入风险，收益/成本比合理）。前端已无任何内联事件处理器。

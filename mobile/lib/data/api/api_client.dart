@@ -55,6 +55,25 @@ class ApiClient {
         handler.next(options);
       },
       onError: (e, handler) async {
+        // GET 幂等自动重试（改进建议 9.6-P2-4）：备份窗口（pg_dump+文件
+        // 复制）内 DB/IO 短暂压力会偶发超时/5xx；对幂等 GET 静默重试一次，
+        // 把"加载失败"降成"慢一点"。只救无响应或 5xx，4xx/证书问题不重试
+        final ro = e.requestOptions;
+        final noResp = e.response == null;
+        final server5xx = (e.response?.statusCode ?? 0) >= 500;
+        if (ro.method == 'GET' &&
+            ro.extra['__retried'] != true &&
+            e.error is! HandshakeException &&
+            (noResp || server5xx)) {
+          ro.extra['__retried'] = true;
+          await Future.delayed(const Duration(milliseconds: 800));
+          try {
+            final res = await fresh.fetch<dynamic>(ro);
+            return handler.resolve(res);
+          } on DioException catch (re) {
+            return handler.next(re);
+          }
+        }
         // 自签证书被拒：把待确认指纹打包成 TrustRequiredError 给 UI
         if (e.error is HandshakeException) {
           final uri = e.requestOptions.uri;

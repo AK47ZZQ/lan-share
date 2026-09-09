@@ -5,14 +5,20 @@
 // · 幻灯片：3 秒/张自动播放，结束停在最后一张
 // · 信息/分享/删除操作内联（此前要退回列表才能操作）
 import 'dart:async';
+import 'dart:io';
 
+import 'package:dio/dio.dart' show Options, ResponseType;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/media_proxy.dart';
 import '../data/api/purge.dart';
+import '../data/local/gallery_saver.dart';
 import '../data/net.dart';
 import '../state/session.dart' show sessionProvider;
 import '../transfer/transfer_engine.dart';
@@ -52,9 +58,25 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
   // 防止横向漂移误翻页并清零缩放；放大后也可正常横滑翻页（先收一手物理，
   // 简化实现：交互期间冻结翻页）
   bool _interacting = false;
+  // 放大后的"平移模式"（改进建议 9.6-P1-8）：双击放大后单指拖动平移图片
+  // 而不是翻页——跟踪当前缩放，>1x 时冻结 PageView，InteractiveViewer 接管
+  // 平移；双击回 1x 自动恢复翻页
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _transform.addListener(_onTransformChanged);
+  }
+
+  void _onTransformChanged() {
+    final zoomed = _transform.value.getMaxScaleOnAxis() > 1.005;
+    if (zoomed != _zoomed && mounted) setState(() => _zoomed = zoomed);
+  }
 
   @override
   void dispose() {
+    _transform.removeListener(_onTransformChanged);
     _slide?.cancel();
     _zoomCtrl?.dispose();
     _transform.dispose();
@@ -223,6 +245,82 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                 ]));
   }
 
+  /// 长按操作菜单（改进建议 9.6-P1-8）：保存到相册/分享/复制路径/查看详情
+  Future<void> _showActionSheet() async {
+    final it = widget.items[_index];
+    final canShare = ref.read(sessionProvider).role != 'guest';
+    await showModalBottomSheet(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('保存到相册'),
+                  subtitle: const Text('下载原图存入系统相册 LAN Share 目录'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _saveToGallery();
+                  }),
+              if (canShare)
+                ListTile(
+                    leading: const Icon(Icons.share_outlined),
+                    title: const Text('分享'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _shareCurrent();
+                    }),
+              ListTile(
+                  leading: const Icon(Icons.copy_outlined),
+                  title: const Text('复制路径'),
+                  subtitle: Text(it.absPath ?? '/${it.path}',
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await Clipboard.setData(
+                        ClipboardData(text: it.absPath ?? '/${it.path}'));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('已复制路径'),
+                        duration: Duration(seconds: 2)));
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: const Text('查看详情'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _showInfo();
+                  }),
+            ])));
+  }
+
+  /// 保存到相册：直接拉原图字节 → 临时文件 → MediaStore 通道入库
+  Future<void> _saveToGallery() async {
+    final it = widget.items[_index];
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('正在下载原图…'), duration: Duration(seconds: 2)));
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get<List<int>>('/preview/${encPath(it.path)}',
+          options: Options(responseType: ResponseType.bytes));
+      final tmp = File(
+          '${(await getTemporaryDirectory()).path}'
+          '/lanshare-viewer-${DateTime.now().millisecondsSinceEpoch}'
+          '${it.name.contains('.') ? it.name.substring(it.name.lastIndexOf('.')) : ''}');
+      await tmp.writeAsBytes(r.data ?? const [], flush: true);
+      final err = await GallerySaver.save(tmp.path, isVideo: it.isVideo);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(err ?? '已保存到系统相册'),
+          duration: const Duration(seconds: 2)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('保存失败，请稍后重试'),
+          duration: Duration(seconds: 2)));
+    }
+  }
+
   /// 预览 URL 单一事实源：显示与"重试放行负缓存"共用，改档位/路径
   /// 格式只动这里（review 0.12.0 P2——两份手写字符串迟早漂移）。
   /// 公网弱网加固：1280 原图档在蜂窝下太慢，退 960 档（手机屏仍清晰）。
@@ -322,7 +420,8 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
             child: PageView.builder(
               itemCount: widget.items.length,
               controller: _pageController,
-              physics: _interacting
+              // 放大（平移模式）或捏合交互期间冻结翻页（9.6-P1-8）
+              physics: (_interacting || _zoomed)
                   ? const NeverScrollableScrollPhysics()
                   : const PageScrollPhysics(),
               onPageChanged: (i) {
@@ -339,6 +438,9 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                         onDoubleTapDown: (d) => _onDoubleTapImage(
                             d.localPosition),
                         onDoubleTap: () {},
+                        // 长按操作菜单（改进建议 9.6-P1-8）：保存到相册/
+                        // 分享/复制路径/查看详情
+                        onLongPress: _showActionSheet,
                         child: InteractiveViewer(
                         transformationController: _transform,
                         maxScale: 5,

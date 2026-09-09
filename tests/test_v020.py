@@ -11,7 +11,7 @@ import secrets
 import pytest
 
 import server
-from test_multiuser import make_user  # noqa: F401  (跨文件复用建号工厂 fixture)
+from test_multiuser import make_user  # 跨文件复用建号工厂 fixture
 
 
 # ── /api/admin/notify 广播 ───────────────────────────────────

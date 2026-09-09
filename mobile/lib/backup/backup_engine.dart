@@ -33,6 +33,10 @@ class _TrustAbort implements Exception {
 bool _isTrustError(DioException e) =>
     e.error is TrustRequiredError || e.error is HandshakeException;
 
+/// 路径逐段 URL 编码（/api/files/{path} 的中文/空格段）
+String _encSegs(String p) =>
+    p.split('/').map(Uri.encodeComponent).join('/');
+
 class _DigestSink implements Sink<Digest> {
   Digest? value;
   @override
@@ -140,6 +144,7 @@ class BackupEngine {
       }
       List<LedgerRow> scanned;
       List<LedgerRow> pending;
+      List<BucketMove> bucketMoves = const [];
       try {
         var media = await MediaSource.query(includeVideos: cfg.includeVideos);
         // 相册白名单（0.14，同日改为"一个不勾 = 全部不备份"）：只备勾选的
@@ -165,7 +170,9 @@ class BackupEngine {
                 mtime: m.mtime,
                 bucket: m.bucket))
             .toList();
-        pending = await BackupLedger.I.reconcile(scanned);
+        final rec = await BackupLedger.I.reconcile(scanned);
+        pending = rec.pending;
+        bucketMoves = rec.bucketMoves;
       } catch (_) {
         // 媒体库/账本暂不可用（DB 锁、磁盘满、权限被回收）：本轮跳过，
         // 等下个周期再试——不算引擎错误，避免 Worker 无限 retry
@@ -176,6 +183,87 @@ class BackupEngine {
 
       final dio = await ApiClient.I.dio();
       final ledger = BackupLedger.I;
+
+      // ── 轮前对账（9.6-P1-10 智能识别，全部采纳）──────────────
+      // 场景5：空间预检——待备总量超过服务端剩余空间时整轮跳过（比传到
+      // 一半失败友好），round JSON reason=insufficient_space，设置页可见
+      try {
+        final disk = await dio.get('/api/disk');
+        final free = (disk.data['free_bytes'] as num?)?.toInt() ?? 0;
+        if (free > 0 && pendingBytes > free) {
+          return await finish({
+            'status': 'skip',
+            'reason': 'insufficient_space',
+            'pending': pending.length,
+          });
+        }
+      } catch (_) {/* 空间接口不可用不阻塞备份，上传失败仍有逐张处理 */}
+
+      // 场景3：相册改名识别——同 (类型, 旧→新) 方向迁移 ≥5 张，且本地扫描
+      // 中旧相册已整体消失（不是拆分/挪几张），判定为改名：服务端 rename
+      // 目录 + 账本改指向恢复 done，不重传；rename 失败照旧重传兜底
+      if (bucketMoves.isNotEmpty) {
+        final scannedBuckets = scanned.map((s) => s.bucket).toSet();
+        final byDir = <String, int>{}; // 'kind|from|to' -> 张数
+        for (final m in bucketMoves) {
+          byDir['${m.kind}|${m.from}|${m.to}'] =
+              (byDir['${m.kind}|${m.from}|${m.to}'] ?? 0) + 1;
+        }
+        for (final e in byDir.entries) {
+          if (e.value < 5) continue;
+          final parts = e.key.split('|');
+          final kind = parts[0], from = parts[1], to = parts[2];
+          if (scannedBuckets.contains(from) || from.isEmpty) continue;
+          try {
+            final fromDir = backupDestDir(
+                username: username, kind: kind, bucket: from);
+            final newName = safeBucketName(to);
+            await dio.post('/api/rename',
+                data: {'path': fromDir, 'new_name': newName});
+            final newDir = backupDestDir(username: username, kind: kind, bucket: to);
+            await ledger.applyBucketRename(kind, from, to, '$fromDir/', '$newDir/');
+            pending = pending
+                .where((r) => !(r.kind == kind && r.bucket == to))
+                .toList();
+            res['pending'] = pending.length;
+          } catch (_) {/* rename 失败：行保持 pending 走正常重传 */}
+        }
+      }
+
+      // 场景1：服务端相册被删对账——账本 done 相册（safe 名）与远端目录集
+      // 对比；缺失的 done 行转入 server_missing（不再自动重传），详情页
+      // 提示用户"重新备份/从备份移除"
+      try {
+        final missing = <Map<String, String>>[];
+        final doneBuckets = await ledger.doneBucketsByKind();
+        for (final kindEntry in doneBuckets.entries) {
+          final top = kindEntry.key == 'video' ? '视频' : '照片';
+          List items = const [];
+          try {
+            final r = await dio.get(
+                '/api/files/${_encSegs('$top/$username')}');
+            items = (r.data['items'] as List? ?? const [])
+                .where((e) => (e as Map)['is_dir'] == true)
+                .toList();
+          } catch (_) {
+            items = const []; // 目录拉不到（无权限/暂未创建）→ 本轮不判定
+          }
+          final serverDirs = items
+              .map((e) => (e as Map)['name'] as String? ?? '')
+              .toSet();
+          for (final b in kindEntry.value) {
+            if (serverDirs.contains(safeBucketName(b))) continue;
+            await ledger.markBucketServerMissing(kindEntry.key, b);
+            missing.add({'kind': kindEntry.key, 'bucket': b});
+          }
+        }
+        if (missing.isNotEmpty) {
+          await sp.setString('backup_missing_buckets', jsonEncode(missing));
+        } else {
+          await sp.remove('backup_missing_buckets');
+        }
+      } catch (_) {/* 对账失败不阻塞本轮备份 */}
+
       var attempted = 0, failed = 0, doneBytes = 0;
       for (final row in pending) {
         final pause = await _pauseReason(trigger);

@@ -2,7 +2,7 @@
 
 > **App 子模块技术文档**：工程结构 / 传输协议 / 备份与分享机制 / 构建签名。
 > 功能总览、里程碑状态与版本历史见根目录 `README.md` 与 `CHANGELOG.md`
-> （当前 **v0.20.0+60**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
+> （当前 **v0.21.0+61**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
 
 家庭网盘 LAN Share 的原生移动客户端。需求见 `docs/DESIGN-v3/APP-REQUIREMENTS.md`，
 技术方案见 `docs/DESIGN-v3/APP-DESIGN.md`。
@@ -14,9 +14,12 @@ lib/
 ├── main.dart               入口（main）+ 后台 isolate 入口（backupMain）
 │                           + 登录态↔传输引擎/备份调度联动
 ├── backup/                 ★ M-A3 自动备份（纯 Dart 引擎，后台 isolate 跑）
-│   ├── backup_engine.dart  账本 diff → sha256 → init 秒传 → 分片 → finish
-│   ├── backup_ledger.dart  sqflite 单表账本（(id,mtime,size) 变更判定）
+│   ├── backup_engine.dart  账本 diff → 轮前对账(空间/改名/相册被删, v0.21) →
+│   │                       sha256 → init 秒传 → 分片 → finish
+│   ├── backup_ledger.dart  sqflite 单表账本（(id,mtime,size) 变更判定；
+│   │                       v0.21 状态机加 server_missing + 相册级管理）
 │   ├── backup_config.dart  开关/约束配置（enabled 键被 Kotlin 直读）
+│   ├── backup_round.dart   轮次结果 JSON → 中文状态文案（首页/详情页共用）
 │   ├── backup_bridge.dart  主 isolate → 原生调度桥（挂/撤周期任务/权限/立即备份）
 │   └── media_source.dart   MediaStore 查询/临时文件通道封装
 ├── data/
@@ -31,10 +34,16 @@ lib/
 ├── transfer/               ★ M-A2 传输核心（纯 Dart，可单测，双端共享）
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
-└── ui/                     首页(卡片式综合面板/最近上传) / 照片(拍摄·入库双序时间线) /
-                            文件(双布局+新建 md·txt / 上传二维码) / 传输中心(汇总条) /
-                            笔记(md·txt·html 富文本) / 分享管理 / 我的(备份设置/授权卡/
-                            验证器/更新) / 登录页 v2(预检/生物识别/配对码) / 管理面板
+└── ui/                     首页(沉浸渐变欢迎头+卡片综合面板/最近上传) /
+                            照片(拍摄·入库双序时间线+查看器平移手势/长按菜单) /
+                            文件(双布局+新建 md·txt / 复制路径 / 上传二维码) /
+                            传输中心(汇总条) /
+                            笔记(分类体系：侧栏嵌套树/卡片列表带摘要/置顶收藏/
+                            拖拽与批量移动/排序切换；md·txt·html 三编辑器带
+                            30s+失焦自动保存，on_dup=overwrite 覆盖保存) /
+                            通知中心(分类过滤/单条已读·滑动删除/偏好开关) /
+                            分享管理 / 我的(备份设置/授权卡/验证器/更新) /
+                            登录页 v2(预检/生物识别/配对码) / 管理面板
 
 android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄桥
 ├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）
@@ -80,6 +89,20 @@ android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄
   重构）固定 `照片|视频/<用户名>/<相册名>/` 三级目录（账本带相册维度，
   改名用户自动落新目录）；手动上传落 `照片/<用户名>/手机上传/`；视频默认
   不备份（开关可开）；排除相册按相册维度勾选
+- **智能对账（v0.21，轮前三步）**：每轮上传前先对账再干活——
+  ① **空间预检**：`GET /api/disk` 剩余 < 本轮待备总量 → 整轮 skip
+  （`insufficient_space`，状态文案可见，清理后自动续备）；
+  ② **改名识别**：reconcile 上报的 bucket 迁移中，同方向 ≥5 张且旧相册已
+  从本地扫描整体消失 → 判定改名：`POST /api/rename` 改服务端目录 +
+  `applyBucketRename` 批量改账本指向（恢复 done），**不重传**（rename
+  失败自动回落为正常重传兜底）；
+  ③ **相册被删识别**：账本 done 相册（safe 名）与服务端目录集对比，缺失
+  的 done 行转 `server_missing` 态**不再自动重传**——备份详情页出现提示卡，
+  逐相册选择「重新备份」（回 pending，sha 秒传重建引用）或「从备份移除」
+  （删账本行）
+- **服务端副本管理（v0.21）**：备份设置页「管理服务端相册」——列出
+  `照片|视频/<用户名>/` 全部相册，逐个删除服务端副本（进服务端回收站
+  30 天可恢复）并同步清理账本该相册全部记录
 - **验收**（模拟器 API 35 E2E）：60 张全自动备份 sha 一致；账本去重重跑
   mtime 零变化；250MB 杀进程续传**零重传**（服务端分片文件 mtime 前后一致
   的物理证据）；重启手机周期任务自动恢复

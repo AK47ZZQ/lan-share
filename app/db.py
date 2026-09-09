@@ -206,7 +206,20 @@ _PG_SCHEMA = """
         body TEXT,
         link TEXT,
         created_at DOUBLE PRECISION NOT NULL,
-        read_at DOUBLE PRECISION
+        read_at DOUBLE PRECISION,
+        broadcast_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS admin_broadcasts(
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        targets TEXT NOT NULL DEFAULT '[]',
+        created_by TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'sent',
+        scheduled_at DOUBLE PRECISION,
+        sent_at DOUBLE PRECISION,
+        withdrawn_at DOUBLE PRECISION,
+        created_at DOUBLE PRECISION NOT NULL
     );
     CREATE TABLE IF NOT EXISTS device_tokens(
         id BIGSERIAL PRIMARY KEY,
@@ -219,26 +232,14 @@ _PG_SCHEMA = """
     );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
-    CREATE TABLE IF NOT EXISTS photo_comments(
-        id BIGSERIAL PRIMARY KEY,
-        photo_path TEXT NOT NULL,
-        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        body TEXT NOT NULL,
-        created_at DOUBLE PRECISION NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_pc_photo ON photo_comments(photo_path, id);
-    CREATE TABLE IF NOT EXISTS photo_reactions(
-        id BIGSERIAL PRIMARY KEY,
-        photo_path TEXT NOT NULL,
-        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        emoji TEXT NOT NULL,
-        created_at DOUBLE PRECISION NOT NULL,
-        UNIQUE(photo_path, user_id, emoji)
-    );
-    CREATE INDEX IF NOT EXISTS idx_pr_photo ON photo_reactions(photo_path);
 """
 
-_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "photo_comments", "photo_reactions", "device_tokens")
+# 照片评论/表情回应（photo_comments / photo_reactions）已按改进建议
+# 9.6-P2-13 下线：不再建表（存量部署中的旧表与数据保留不动，只是没有
+# 代码再读写）。若从 SQLite 迁移到 PG，这两张表也不会再出现在目标库。
+# 注意：不再使用，勿把两表加回 _PG_SEQUENCES。
+
+_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "device_tokens")
 
 
 def pg_setval_sequences(conn: _PgConn):
@@ -326,6 +327,8 @@ def init_db():
         # v0.20：入库时间（二维码/手机上传按拍摄时间落历史月份，"没更新"
         # 的感知问题）——扫描首次见到该文件时打点，按入库排序用
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS added_at DOUBLE PRECISION")
+        # v0.21：通知管理——广播组 id（撤回/发送记录按组操作）
+        _db().execute("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS broadcast_id TEXT")
         # 提取码明文停存（R1-P2-5 + R2-P2）：PG 分支同样清洗存量值（幂等）
         _db().execute("UPDATE shares SET password_plain=NULL WHERE password_plain IS NOT NULL")
         _backfill_audit_usernames()
@@ -457,6 +460,10 @@ def _migrate_v3():
             conn.execute("ALTER TABLE photos ADD COLUMN height INTEGER")
         if "added_at" not in pcols:
             conn.execute("ALTER TABLE photos ADD COLUMN added_at REAL")
+        # v0.21：通知广播组 id（改进建议 9.6-P2-14，撤回/发送记录按组操作）
+        ncols = {r["name"] for r in conn.execute("PRAGMA table_info(notifications)").fetchall()}
+        if ncols and "broadcast_id" not in ncols:
+            conn.execute("ALTER TABLE notifications ADD COLUMN broadcast_id TEXT")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS grants(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -490,7 +497,20 @@ def _migrate_v3():
                 body TEXT,
                 link TEXT,
                 created_at REAL NOT NULL,
-                read_at REAL
+                read_at REAL,
+                broadcast_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS admin_broadcasts(
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                body TEXT,
+                targets TEXT NOT NULL DEFAULT '[]',
+                created_by TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sent',
+                scheduled_at REAL,
+                sent_at REAL,
+                withdrawn_at REAL,
+                created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS device_tokens(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -503,23 +523,8 @@ def _migrate_v3():
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
             CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
-            CREATE TABLE IF NOT EXISTS photo_comments(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                photo_path TEXT NOT NULL,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                body TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_pc_photo ON photo_comments(photo_path, id);
-            CREATE TABLE IF NOT EXISTS photo_reactions(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                photo_path TEXT NOT NULL,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                emoji TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                UNIQUE(photo_path, user_id, emoji)
-            );
-            CREATE INDEX IF NOT EXISTS idx_pr_photo ON photo_reactions(photo_path);
+            -- 照片评论/表情回应两表（photo_comments/photo_reactions）已按
+            -- 改进建议 9.6-P2-13 下线，不再建表；存量库中的旧表保留不删
         """)
         # 仅当库内已无 admin 时才晋升（R1-P2-1）：此前每次启动无条件把最小 id
         # 用户提为 admin，管理员被降级/删号后重启会"复活"成 admin

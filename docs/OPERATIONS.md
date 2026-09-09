@@ -70,6 +70,11 @@ curl -k https://192.168.1.100:8765/healthz
 
 ## 4. 文件备份（backup.bat）
 
+> v3.31 调整（改进建议 9.6-P2-4）：`robocopy` 加 `/MT:2`（默认 8 线程会把
+> 磁盘 IO 吃满，备份窗口内 Web/App 列表与缩略图明显变慢）；`pg_dump` 加
+> `--lock-wait-timeout=5000`（拿不到锁 5 秒放弃而非挂死；ACCESS SHARE 不阻塞
+> 业务写，正常瞬时获得）。
+
 - 计划任务：`schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 03:30
   /TR "C:\lan-share\backup.bat"`（已注册）。
 - 行为：PG custom-format dump（按日期，保留最近 2 天）+ 数据目录拷贝到

@@ -94,6 +94,9 @@ def dir_tree(path: Path) -> dict:
             "size_human": human_size(stat.st_size) if is_file else "-",
             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             "ext": entry.suffix.lower() if is_file else None,
+            # 服务器真实存储路径（改进建议 9.6-P1-3）：供"复制路径"用，
+            # 统一正斜杠；能列出该条目即有读权限，与前端按钮可见性一致
+            "abs_path": str(entry).replace("\\", "/"),
         })
     rel_path = str(path.relative_to(SHARE_ROOT)).replace("\\", "/")
     return {"path": rel_path if rel_path != "." else "", "items": items}
@@ -118,10 +121,15 @@ def move_to_trash(target: Path, orig_path: str):
         _db().commit()
 
 
-async def save_upload(file: UploadFile, dest: Path, quota_user=None) -> dict:
+async def save_upload(file: UploadFile, dest: Path, quota_user=None,
+                      on_dup: str = "trash") -> dict:
     """单请求直传。先写 .uploading 临时文件、完成后 os.replace 原子落位；
     临时名带唯一后缀，两个并发同名单请求（如分片超时重试与原请求并发）
     不会同时打开同一个 tmp 交错写坏；旧版本在替换前进回收站。
+
+    on_dup 控制同名覆盖行为（改进建议 9.6-P0-12）：默认 "trash" 旧版本进
+    回收站（通用上传防丢）；"overwrite" 直接覆盖不留版本——供笔记编辑器
+    这类"就地编辑"场景使用，避免每次保存都往回收站塞一个副本。
 
     quota_user 传入时在落位前按真实占用校验配额（R1-P1-2）：starlette 对
     multipart 文件部分的 UploadFile.size 恒为 0，端点预检无法可信计价；此刻
@@ -161,7 +169,8 @@ async def save_upload(file: UploadFile, dest: Path, quota_user=None) -> dict:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
-    if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
+    if dest.exists() and on_dup != "overwrite":
+        # 覆盖上传：旧版本进回收站，不直接丢失（on_dup=overwrite 除外）
         move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
     os.replace(tmp, dest)
     return {

@@ -93,6 +93,13 @@ function go(n: NotificationItem) {
   if (n.link) router.push(n.link)
 }
 
+// 单条操作（9.6-P2-14）：删除通知（面板内即时移除）；未读删除同步减徽标
+async function remove(n: NotificationItem) {
+  items.value = items.value.filter(x => x.id !== n.id)
+  if (!n.read) unread.value = Math.max(0, unread.value - 1)
+  try { await api.notificationDelete(n.id) } catch { /* 面板已移除，失败无碍 */ }
+}
+
 // 动态条目点击 → 独立动态页定位高亮（直达跳转在 /activity 页的"去查看"）
 function goActivityItem(n: ActivityItem) {
   open.value = false
@@ -131,14 +138,17 @@ function close() { open.value = false }
         <div v-if="loading" class="notif-empty">加载中…</div>
         <div v-else-if="!items.length" class="notif-empty">暂无通知<br /><small>成员分享给你的文件会出现在这里</small></div>
         <div v-else class="notif-list">
-          <button v-for="n in items" :key="n.id" class="notif-item" :class="{ unread: !n.read }" @click="go(n)">
-            <span class="notif-icon">{{ n.type === 'share' ? '🔗' : '🔔' }}</span>
-            <span class="notif-main">
-              <span class="notif-title">{{ n.title }}</span>
-              <span v-if="n.body" class="notif-body">{{ n.body }}</span>
-              <span class="notif-time">{{ fmtTs(n.created_at) }}</span>
-            </span>
-          </button>
+          <div v-for="n in items" :key="n.id" class="notif-row">
+            <button class="notif-item" :class="{ unread: !n.read }" @click="go(n)">
+              <span class="notif-icon">{{ n.type === 'share' ? '🔗' : '🔔' }}</span>
+              <span class="notif-main">
+                <span class="notif-title">{{ n.title }}</span>
+                <span v-if="n.body" class="notif-body">{{ n.body }}</span>
+                <span class="notif-time">{{ fmtTs(n.created_at) }}</span>
+              </span>
+            </button>
+            <button class="notif-del" title="删除" @click="remove(n)">✕</button>
+          </div>
         </div>
       </template>
 
@@ -211,6 +221,14 @@ function close() { open.value = false }
   display: flex; gap: 10px; width: 100%; text-align: left; padding: 9px 10px;
   border: 0; border-radius: 9px; background: transparent; cursor: pointer; color: var(--text);
 }
+.notif-row { display: flex; align-items: stretch; border-radius: 9px; }
+.notif-row .notif-item { flex: 1; min-width: 0; }
+.notif-del {
+  flex: none; border: 0; background: transparent; color: var(--text-3); cursor: pointer;
+  padding: 0 8px; font-size: 12px; border-radius: 6px; opacity: 0; transition: opacity .12s;
+}
+.notif-row:hover .notif-del { opacity: 1; }
+.notif-del:hover { color: var(--danger, #e5484d); background: var(--hover); }
 .notif-item:hover { background: var(--hover); }
 .notif-item.unread .notif-title { font-weight: 600; }
 .notif-item.act.clickable .notif-title { color: var(--text); }

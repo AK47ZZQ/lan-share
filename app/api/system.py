@@ -508,6 +508,8 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
             "width": r["width"],
             "height": r["height"],
             "thumb": f"/thumb/{r['path']}",
+            # 服务器真实存储路径（改进建议 9.6-P1-3），"复制路径"用
+            "abs_path": str(SHARE_ROOT / r["path"]).replace("\\", "/"),
         } for r in rows],
     }
 
