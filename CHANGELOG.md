@@ -2,6 +2,37 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — v0.23.0+67：架构审查重构第二批（消循环 + 拆上帝模块 + 协议单实现）
+
+依据《07-内聚耦合与可维护性审查》§5.2~5.5 执行：
+
+- **批次2 服务端消循环**：app 对象与 security_middleware 迁居 `app/asgi.py`
+  （依赖图底层），11 个 api 模块全部改 APIRouter，main.py 组装根统一
+  include_router——**11 对 main↔api 循环 import 消除**；server.py 瘦身为纯
+  入口（uvicorn main 块保留）；**测试解钉**：conftest 与 17 个测试文件弃
+  server shim 改走 app.* 官方路径，security/share/auth/photos 新增官方
+  reset 接口替代直掏私有字典
+- **批次3 拆上帝模块**：files.py(1030行) 按域拆为 uploads（分块协议）/trash/
+  previews + services/archive（zip 票据表收口，admin 导出不再偷 _zips）；
+  system.py(750行) 拆为 photos（时间线+扫描器）/albums（**与 social.py 合流
+  ，四处理清成单模块**）/qr；webdav/auth 的私人空间守卫上收 spaces.py 公共
+  API；新增 services/cleanup.py **注册式**清理（uploads/archive/share 各自
+  register_sweep，system 不再掏别家私有状态）；services/passwords.py 收口
+  scrypt+哑哈希等时校验（webdav 改引，消函数体反向 import）；
+  services/accounts.py **改名流程双实现合流**（P1 级重复 + normcase 漂移
+  收口），clean_username 用户名校验同源
+- **批次4 App 协议单实现**：新增 `data/api/upload_client.dart`——
+  init/秒传/state/分片补齐/finish 与全部响应防御校验（会话 id 白名单、
+  分片协议上限 clamp）只剩一份，transfer/backup 两引擎换装（07 §4.1-1 的
+  "同坑"逐字节拷贝消灭；重试/暂停/账本语义仍归各引擎）
+- **批次5 契约与部署**：新增 `scripts/export-openapi.py` +
+  `contracts/openapi.json`（111 路径提交入库）+ `test_contract.py` 快照
+  比对——服务端契约变更从此 git diff 可见、测试红灯兜底；`env.bat` 部署
+  单一事实源（端口/python 路径），start.bat/stop.bat 接线
+- 门禁：pytest **179**（178+1 契约）/ ruff+mypy 33 文件 / dart analyze 0 /
+  flutter test 144。服务端 v3.33 / App v0.23.0+67
+
+
 ## 2026-09-10 — v0.22.0+66：架构审查重构第一批（P0 分片契约 + 事实源五件套）
 
 依据《07-内聚耦合与可维护性审查》与《06-全量测试与审查报告》合并排期执行：

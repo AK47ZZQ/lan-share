@@ -14,7 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
-import '../data/api/protocol.dart';
+import '../data/api/upload_client.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../data/local/secure_store.dart';
@@ -400,10 +400,9 @@ class BackupEngine {
         await ledger.setSha(row.mediaId, sha);
       }
 
-      var sid = row.sessionId;
-      var chunkSize = 0;
+      // 协议单实现（07 审查批次 4：init/state 校验/分片补齐/finish 不再本文件手写）
+      final client = UploadClient(dio: dio)..sid = row.sessionId;
       var reopens = 0; // 会话重开计数：防 init 正常但 chunk/finish 恒 404 的死循环
-      final received = <int>{};
       var backoff = 0;
       while (true) {
         if (reopens > 5) {
@@ -412,51 +411,30 @@ class BackupEngine {
         }
         // 1) 会话：新开 init（含秒传）；有 sid 则 state 探测续传（对账 §4）
         try {
-          if (sid == null) {
-            final r = await dio.post('/api/upload/init', data: {
-              'dest_dir': destDir,
-              'filename': row.name,
-              'size': size,
-              'sha256': ?sha,
-            });
-            if (r.data['instant'] == true) {
-              // path 缺失兜底（与 finish 分支同坑，R2-P3）：别把秒传成功误标失败
-              await ledger.markDone(
-                  row.mediaId, (r.data['path'] as String?) ?? row.name);
+          if (client.sid == null) {
+            final instantPath = await client.init(
+                destDir: destDir,
+                filename: row.name,
+                size: size,
+                sha256: sha);
+            if (instantPath != null) {
+              // path 缺失兜底已在 client 内处理（R2-P3）：别把秒传成功误标失败
+              await ledger.markDone(row.mediaId, instantPath);
               return true;
             }
-            sid = r.data['session'] as String;
-            // 会话 id 白名单（服务端 token_urlsafe 字母表）：响应字段不可信，
-            // 防御性校验避免畸形 id 进 URL 模板造成无意义请求/歧义路径
-            if (!RegExp(r'^[A-Za-z0-9_\-]{8,64}$').hasMatch(sid)) {
-              throw const FormatException('bad_session');
-            }
-            chunkSize = (r.data['chunk_size'] as num).toInt();
-            received
-              ..clear()
-              ..addAll(((r.data['received'] as List?) ?? const [])
-                  .map((e) => (e as num).toInt()));
-            await ledger.setSession(row.mediaId, sid, chunkSize, received.toList());
+            await ledger.setSession(
+                row.mediaId, client.sid!, client.chunkSize, client.received.toList());
           } else {
-            final r = await dio.get('/api/upload/state/$sid');
-            chunkSize = (r.data['chunk_size'] as num).toInt();
-            received
-              ..clear()
-              ..addAll(((r.data['received'] as List?) ?? const [])
-                  .map((e) => (e as num).toInt()));
-            await ledger.setReceived(row.mediaId, received.length);
+            await client.resume();
+            await ledger.setReceived(row.mediaId, client.received.length);
           }
-          // 服务端异常响应可能给 0/负值/超大值（红队 P3：超大 chunk_size 会让
-          // 客户端把整个文件读进单请求内存 OOM），clamp 到协议合理区间——
-          // 上限引用协议常量（07 审查 P0：曾写死 16MB，服务端 >5GB 阶梯升
-          // 32/64MB 后备份 >5GB 文件必败）
-          if (!isValidChunkSize(chunkSize)) {
-            throw const FormatException('bad_chunk_size');
-          }
+        } on FormatException catch (e) {
+          // 协议响应校验失败（bad_session/bad_chunk_size）
+          await ledger.fail(row.mediaId, '服务端返回异常（${e.message}）');
+          return false;
         } on DioException catch (e) {
-          if (e.response?.statusCode == 404 && sid != null) {
-            sid = null; // 会话过期（3 天 TTL）→ 重开，断点归零
-            received.clear();
+          if (e.response?.statusCode == 404 && client.sid != null) {
+            client.reopen(); // 会话过期（3 天 TTL）→ 重开，断点归零
             reopens++;
             continue;
           }
@@ -466,32 +444,20 @@ class BackupEngine {
         }
 
         // 2) 补缺失分片
-        final total = (size + chunkSize - 1) ~/ chunkSize;
-        final missing = [
-          for (var i = 0; i < total; i++)
-            if (!received.contains(i)) i,
-        ];
-        for (final i in missing) {
-          final len =
-              (size - i * chunkSize) < chunkSize ? (size - i * chunkSize) : chunkSize;
-          final bytes = await _readChunk(f, i * chunkSize, len);
+        for (final i in client.missingChunks(size)) {
+          final bytes = await UploadClient.readChunk(
+              f, i * client.chunkSize, client.chunkLength(size, i));
           try {
-            await dio.post('/api/upload/chunk/$sid?index=$i',
-                data: bytes,
-                options: Options(
-                    contentType: 'application/octet-stream',
-                    sendTimeout: const Duration(minutes: 10)));
-            received.add(i);
+            await client.postChunk(i, bytes);
             backoff = 0;
             // 账本 received 仅 UI 展示（断点真值在服务端 state），按 1/10 节流
             // 落盘，避免长视频几百片 × 逐片 UPDATE 的写放大
-            if (received.length % 10 == 0) {
-              await ledger.setReceived(row.mediaId, received.length);
+            if (client.received.length % 10 == 0) {
+              await ledger.setReceived(row.mediaId, client.received.length);
             }
           } on DioException catch (e) {
             if (e.response?.statusCode == 404) {
-              sid = null;
-              received.clear();
+              client.reopen();
               reopens++;
               break;
             }
@@ -500,23 +466,20 @@ class BackupEngine {
             break;
           }
         }
-        if (sid == null) continue;
+        if (client.sid == null) continue;
         // 上面分片循环 break 表示有失败要重走会话/分片补齐
-        if (received.length < total) continue;
+        if (client.missingChunks(size).isNotEmpty) continue;
 
         // 3) finish（服务端拼装 + sha 必校验）
         try {
-          final r = await dio.post('/api/upload/finish/$sid',
-              options: Options(receiveTimeout: const Duration(minutes: 15)));
           // path 异常兜底：finish 200 即已拼装成功，别因响应字段意外
           // 抛 TypeError 把"服务端已有文件"误标失败（sha 在账本，下轮秒传可纠）
-          await ledger.markDone(
-              row.mediaId, (r.data['path'] as String?) ?? row.name);
+          final remotePath = await client.finish(fallbackName: row.name);
+          await ledger.markDone(row.mediaId, remotePath);
           return true;
         } on DioException catch (e) {
           if (e.response?.statusCode == 404) {
-            sid = null;
-            received.clear();
+            client.reopen();
             reopens++;
             continue;
           }
@@ -569,15 +532,6 @@ class BackupEngine {
     return true;
   }
 
-  static Future<List<int>> _readChunk(File f, int offset, int len) async {
-    final raf = await f.open();
-    try {
-      await raf.setPosition(offset);
-      return await raf.read(len);
-    } finally {
-      await raf.close();
-    }
-  }
 
   /// §6：公网地址默认不自动备份，省流量。判定逻辑收口到 data/net.dart
   ///（2026-09-03：公网徽标/上传提醒共用同一事实源）
