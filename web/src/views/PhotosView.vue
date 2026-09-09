@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { api, type PhotoItem, type PhotoFacets, type Album, type Me } from '../api'
 import { confirmDlg, promptDlg, toast } from '../ui'
+import { extOfName } from '../filekinds'
 import Modal from '../components/Modal.vue'
 import ShareModal from '../components/ShareModal.vue'
 import FileViewer, { type ViewerItem } from '../components/FileViewer.vue'
@@ -20,7 +21,7 @@ const LIMIT = 120
 // 预览器数据：已加载照片扁平化 + 预览内分享
 const navItems = computed<ViewerItem[]>(() =>
   groups.value.flatMap(g => g.photos.map(p => ({
-    path: p.path, name: p.name, ext: p.path.match(/(\.[^.]+)$/)?.[1] ?? null,
+    path: p.path, name: p.name, ext: extOfName(p.path) || null,
     taken: p.taken, uploader: p.uploader, modified: p.taken,
   }))))
 const sharePaths = ref<string[] | null>(null)

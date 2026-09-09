@@ -4,7 +4,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, type Me } from '../api'
 import { confirmDlg, dlg, human, promptDlg, toast } from '../ui'
-import { AUD_EXTS, DOCX_EXTS, IMG_EXTS, TEXT_EXTS, VID_EXTS } from '../filekinds'
+import { AUD_EXTS, DOCX_EXTS, extOfName, IMG_EXTS, TEXT_EXTS, THUMB_EXTS, VID_EXTS } from '../filekinds'
 import Modal from './Modal.vue'
 import ShareModal from './ShareModal.vue'
 import 'highlight.js/styles/github-dark.css'
@@ -84,9 +84,7 @@ const item = computed(() => props.items[props.modelValue])
 
 const extOf = (it: ViewerItem | undefined) => {
   if (!it) return ''
-  if (it.ext) return it.ext.toLowerCase()
-  const m = it.name.match(/(\.[^.]+)$/)
-  return m ? m[1].toLowerCase() : ''
+  return it.ext ? it.ext.toLowerCase() : extOfName(it.name)
 }
 
 type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'docx' | 'none'
@@ -503,9 +501,9 @@ const filmstrip = computed(() => {
   return props.items.slice(lo, hi).map((it, i) => ({ it, index: lo + i }))
 })
 function thumbOf(it: ViewerItem): string | null {
-  const e = extOf(it)
-  if (IMG_EXTS.includes(e) || VID_EXTS.includes(e)) return `/thumb/${enc(it.path)}`
-  return null
+  // THUMB_EXTS 自带 .svg 排除（服务端 /thumb 不收 svg，请求必 404）
+  if (!THUMB_EXTS.includes(extOf(it))) return null
+  return `/thumb/${enc(it.path)}`
 }
 function iconOf(it: ViewerItem): string {
   const e = extOf(it)

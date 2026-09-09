@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, type Entry, type Me } from '../api'
-import { confirmDlg, promptDlg, toast } from '../ui'
+import { confirmDlg, iconForName, promptDlg, toast } from '../ui'
+import { THUMB_EXTS } from '../filekinds'
 import { uploadFiles, uploadingNow } from '../uploader'
 import Modal from '../components/Modal.vue'
 import DirPicker from '../components/DirPicker.vue'
@@ -99,8 +100,9 @@ function parentDir(p: string): string {
 
 function thumbOf(e: Entry): string | null {
   if (e.is_dir) return null
-  const ext = (e.ext || '').toLowerCase()
-  if (!['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic', '.heif', '.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return null
+  // 扩展名判定走 filekinds 唯一事实源（07 审查 §4.3-1：手写列表已漂移——
+  // 曾漏 .svg 且不随服务端缩略图能力更新）；THUMB_EXTS 自带 svg 排除逻辑
+  if (!THUMB_EXTS.includes((e.ext || '').toLowerCase())) return null
   // encodeURI 不编码 # ? % 等字符——含这些字符的文件名会截断/破坏 URL，逐段 encodeURIComponent
   return `/thumb/${e.path.split('/').map(encodeURIComponent).join('/')}`
 }
@@ -117,15 +119,8 @@ function thumbError(ev: Event) {
 }
 function fileIcon(e: Entry): string {
   if (e.is_dir) return '📁'
-  const ext = (e.ext || '').toLowerCase()
-  if (['.mp4', '.mkv', '.mov', '.webm', '.avi'].includes(ext)) return '🎬'
-  if (['.mp3', '.flac', '.wav', '.m4a'].includes(ext)) return '🎵'
-  if (['.zip', '.7z', '.rar'].includes(ext)) return '🗜️'
-  if (['.pdf'].includes(ext)) return '📕'
-  if (['.doc', '.docx'].includes(ext)) return '📘'
-  if (['.xls', '.xlsx'].includes(ext)) return '📗'
-  if (['.txt', '.md'].includes(ext)) return '📄'
-  return '📄'
+  // ui.iconForName 已按 filekinds 分类（含 .ogg 等曾被手写表漏掉的扩展名）
+  return iconForName(e.name)
 }
 
 // 请求序号守卫（R1-P2-3）：慢链路下快速连点目录/搜索，旧响应后到会覆盖新结果

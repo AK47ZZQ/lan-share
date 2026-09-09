@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth, avatarBust } from './auth'
@@ -44,6 +44,8 @@ function exitPreview() {
 }
 
 onMounted(() => { boot(); document.addEventListener('click', closeMenu) })
+// 根组件实际永不卸载，但清理纪律与全站其余组件保持一致（06 审查 P2-2）
+onUnmounted(() => document.removeEventListener('click', closeMenu))
 
 watchEffect(() => {
   // 首帧路由可能尚未解析（route.name === undefined），此时禁止重定向，
@@ -51,6 +53,10 @@ watchEffect(() => {
   if (!authReady.value || route.name === undefined) return
   if (!me.value && !publicRoute.value) void router.replace('/login')
   if (me.value && route.name === 'login') void router.replace('/')
+  // 管理路由角色守卫（06 审查 P2-1 / 07 审查 §3.3）：meta.admin 此前是死配置，
+  // 非 admin 直达 /admin 会短暂渲染 AdminView（成员列表布局等结构信息）才被
+  // 页内 onMounted 拦截；API 虽全部服务端判权，渲染面也不该给
+  if (me.value && route.meta.admin && me.value.role !== 'admin') void router.replace('/')
 })
 </script>
 
