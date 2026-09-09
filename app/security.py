@@ -14,6 +14,8 @@ from fastapi import HTTPException, Request
 from app.config import (AUDIT_KEEP, COOKIE_NAME, DEVICE_TOKEN_TTL, LOGIN_LOCK_SECONDS,
                         LOGIN_MAX_FAILS, SESSION_RENEW_AFTER, SESSION_TTL)
 from app.db import _db, _db_lock
+from app.store import settings
+from app.store.settings import get_setting
 
 # 当前请求的登录用户名：中间件注入，audit() 自动带上（公开入口为空串）
 _audit_user: ContextVar[str] = ContextVar("audit_user", default="")
@@ -210,12 +212,12 @@ def _netlocs_cached():
         return _netloc_cache[0], _netloc_cache[1]
     primary, allset = "", set()
     try:
-        for key in ("public_base_url", "public_base_url_alt"):
-            row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-            netloc = (urlsplit(row["value"]).netloc or "").lower() if row and row["value"] else ""
+        for key in (settings.PUBLIC_BASE_URL, settings.PUBLIC_BASE_URL_ALT):
+            val = get_setting(key)
+            netloc = (urlsplit(val).netloc or "").lower() if val else ""
             if netloc:
                 allset.add(netloc)
-                if key == "public_base_url":
+                if key == settings.PUBLIC_BASE_URL:
                     primary = netloc
     except Exception:
         pass

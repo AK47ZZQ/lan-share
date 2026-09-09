@@ -39,11 +39,18 @@ MAX_WEBDAV_SIZE = 20 * 1024 * 1024 * 1024   # WebDAV PUT 上限 20GB（流式写
 MAX_CHUNKED_SIZE = 64 * 1024 * 1024 * 1024  # 分片上传总大小硬上限 64GB
 _GB = 1024 * 1024 * 1024
 
+# 分片协议上限——单一事实源（07 审查 P0）：服务端 chunk_size_for 的输出、
+# init/state 响应里的 max_chunk_size、移动端两引擎的防御 clamp、Caddyfile 的
+# "单块 ≤64MB" 注释，全部以它为准。改阶梯只许改 chunk_size_for，新值不得超过
+# 本常量；客户端收紧/放宽 clamp 只许引用本值（经响应下发），不许写死数字。
+MAX_CHUNK_SIZE = 64 * 1024 * 1024
+
 
 def chunk_size_for(total_size: int) -> int:
     """按文件大小自适应分片——纯函数，init/state/chunk/finish 四处一致（断点续传依赖）。
 
     10GB@5MB=2048 个请求；自适应后 32MB=320 个，减少 HTTP 往返开销。
+    输出契约：0 < 返回值 ≤ MAX_CHUNK_SIZE（test_chunk_contract 钉死）。
     """
     if total_size <= 2 * _GB:
         return CHUNK_SIZE            # 5MB
@@ -51,4 +58,4 @@ def chunk_size_for(total_size: int) -> int:
         return 16 * 1024 * 1024      # 16MB
     if total_size <= 10 * _GB:
         return 32 * 1024 * 1024      # 32MB
-    return 64 * 1024 * 1024          # 64MB
+    return MAX_CHUNK_SIZE            # 64MB

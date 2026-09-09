@@ -19,11 +19,13 @@ from pydantic import BaseModel
 
 from app.db import _db, _db_lock
 from app.security import audit, require_admin, require_user
+from app.store.settings import (NOTIFY_PREFS_PREFIX, NOTIFY_WEBHOOK_URL,
+                                get_setting, set_setting)
 from app.main import app
 
 
 def _pref_key(uid: int) -> str:
-    return f"notify_prefs_user_{uid}"
+    return f"{NOTIFY_PREFS_PREFIX}{uid}"
 
 
 def _groups_of(t: str) -> str:
@@ -34,12 +36,11 @@ def _groups_of(t: str) -> str:
 
 
 def get_prefs(uid: int) -> dict:
-    row = _db().execute("SELECT value FROM settings WHERE key=?",
-                        (_pref_key(uid),)).fetchone()
-    if not row or not row["value"]:
+    raw = get_setting(_pref_key(uid))
+    if not raw:
         return {"share": True, "admin": True, "system": True}
     try:
-        prefs = json.loads(row["value"])
+        prefs = json.loads(raw)
     except (ValueError, TypeError):
         return {"share": True, "admin": True, "system": True}
     return {**{"share": True, "admin": True, "system": True}, **prefs}
@@ -125,12 +126,7 @@ def write_prefs(body: PrefsBody, user=Depends(require_user)):
         v = getattr(body, k)
         if v is not None:
             prefs[k] = bool(v)
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO settings(key, value) VALUES(?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (_pref_key(user["user_id"]), json.dumps(prefs)))
-        _db().commit()
+    set_setting(_pref_key(user["user_id"]), json.dumps(prefs))
     return {"ok": True, **prefs}
 
 
@@ -360,12 +356,8 @@ async def _fire_due_once():
 # ntfy（https://ntfy.sh/主题）、Bark（https://api.day.app/key）、Server酱、
 # Telegram（bot API sendMessage 的 GET 形式）等常见推送渠道。
 
-_WEBHOOK_KEY = "notify_webhook_url"
-
-
 def get_webhook_url() -> str:
-    row = _db().execute("SELECT value FROM settings WHERE key=?", (_WEBHOOK_KEY,)).fetchone()
-    return (row["value"] or "").strip() if row else ""
+    return get_setting(NOTIFY_WEBHOOK_URL).strip()
 
 
 def webhook_send(url: str, title: str, body: str = "") -> None:

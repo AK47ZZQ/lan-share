@@ -17,10 +17,10 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.config import PROJECT_ROOT, SHARE_ROOT
-from app.db import _db
 from app.filetools import human_size
 from app.main import app
 from app.security import audit, client_ip, require_user
+from app.store.settings import PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT, get_setting
 
 DIST_DIR = "App安装包"
 APK_MIME = "application/vnd.android.package-archive"
@@ -165,16 +165,11 @@ def _cert_fingerprint() -> str:
     return fp
 
 
-def _setting(key: str) -> str:
-    row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else ""
-
-
 @app.get("/api/app/entries")
 def app_entries():
     """主/备公网入口 + 证书指纹。地址为 null 表示未配置对应隧道；
     App 端只展示非空项，主备切换、指纹预校验都以此为准。"""
-    pub = _setting("public_base_url")
-    alt = _setting("public_base_url_alt")
+    pub = get_setting(PUBLIC_BASE_URL)
+    alt = get_setting(PUBLIC_BASE_URL_ALT)
     return {"public": pub or None, "public_alt": alt or None,
             "cert_sha256": _cert_fingerprint()}

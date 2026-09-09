@@ -19,6 +19,9 @@ from app.security import (audit, client_ip, hash_password, require_admin, requir
 from app.spaces import (RESERVED_USERNAMES, _normcase_eq, invalidate_grants_cache,
                         visible)
 from app.api.notify import get_webhook_url, push_webhook, webhook_send
+from app.store.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
+                                PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT,
+                                get_setting, set_setting)
 from app.main import app
 
 
@@ -386,22 +389,17 @@ def invite_redeem(body: RedeemBody, request: Request):
 # ─── 公网访问地址（分享链接双地址用）───────────────────────
 
 
-def _get_setting(key: str) -> str:
-    row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    return row["value"] if row else ""
-
-
 @app.get("/api/admin/public-url")
 def get_public_url(_admin=Depends(require_admin)):
-    return {"public_base_url": _get_setting("public_base_url"),
-            "public_base_url_alt": _get_setting("public_base_url_alt")}
+    return {"public_base_url": get_setting(PUBLIC_BASE_URL),
+            "public_base_url_alt": get_setting(PUBLIC_BASE_URL_ALT)}
 
 
 @app.get("/api/public-url")
 def get_public_url_user(_user=Depends(require_user)):
     """公网访问地址：全员可读（分享/直传多地址复制用，非敏感）。"""
-    return {"public_base_url": _get_setting("public_base_url"),
-            "public_base_url_alt": _get_setting("public_base_url_alt")}
+    return {"public_base_url": get_setting(PUBLIC_BASE_URL),
+            "public_base_url_alt": get_setting(PUBLIC_BASE_URL_ALT)}
 
 
 @app.post("/api/admin/public-url")
@@ -413,11 +411,8 @@ def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
             raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
     if url and url_alt and urlsplit(url).netloc.lower() == urlsplit(url_alt).netloc.lower():
         raise HTTPException(status_code=400, detail="备用地址不能与主地址相同")
-    with _db_lock:
-        for key, val in (("public_base_url", url), ("public_base_url_alt", url_alt)):
-            _db().execute("INSERT INTO settings(key, value) VALUES(?, ?) "
-                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, val))
-        _db().commit()
+    set_setting(PUBLIC_BASE_URL, url)
+    set_setting(PUBLIC_BASE_URL_ALT, url_alt)
     reset_netloc_cache()   # 入口判定即时生效
     audit("public_url_set", f"{url} | alt={url_alt}", ip=client_ip(request))
     return {"ok": True, "public_base_url": url, "public_base_url_alt": url_alt}
@@ -440,10 +435,7 @@ def admin_set_webhook(body: dict, request: Request, _admin=Depends(require_admin
         if "{title}" not in url and "{body}" not in url:
             raise HTTPException(status_code=400,
                                 detail="URL 需包含 {title} 或 {body} 占位符（URL 编码后替换）")
-    with _db_lock:
-        _db().execute("INSERT INTO settings(key, value) VALUES('notify_webhook_url', ?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (url,))
-        _db().commit()
+    set_setting(NOTIFY_WEBHOOK_URL, url)
     audit("webhook_set" if url else "webhook_cleared", url[:120], ip=client_ip(request))
     return {"ok": True, "url": url}
 
@@ -551,10 +543,7 @@ def activity_clear(_admin=Depends(require_admin)):
     """清空动态（软清空：记水位，审计历史仍完整保留）。"""
     import time as _t
     now = str(_t.time())
-    with _db_lock:
-        _db().execute("INSERT INTO settings(key, value) VALUES('activity_cleared_at', ?) "
-                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (now,))
-        _db().commit()
+    set_setting(ACTIVITY_CLEARED_AT, now)
     return {"ok": True}
 
 
@@ -562,8 +551,7 @@ def activity_clear(_admin=Depends(require_admin)):
 def activity(limit: int = 50, user=Depends(require_user)):
     """动态流：审计日志过滤为家庭可见事件。private 路径仅本人可见（E7/E8 折衷）。
     同人同类动作在 10 分钟窗口内聚合为一条（count 表示合并条数）。"""
-    cleared = _db().execute("SELECT value FROM settings WHERE key='activity_cleared_at'").fetchone()
-    cutoff = float(cleared["value"]) if cleared else 0
+    cutoff = float(get_setting(ACTIVITY_CLEARED_AT) or 0)
     rows = _db().execute(
         "SELECT ts, username, action, target, detail FROM audit_log "
         "WHERE ts > ? ORDER BY id DESC LIMIT 500", (cutoff,)).fetchall()

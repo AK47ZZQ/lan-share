@@ -22,6 +22,8 @@ from fastapi.concurrency import run_in_threadpool
 from app.config import PROJECT_ROOT, SHARE_ROOT
 from app.db import _db
 from app.security import audit, client_ip, require_admin
+from app.store.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
+                                NOTIFY_WEBHOOK_URL, get_setting, set_setting)
 from app.main import app
 
 # 备份产物目录：backup.bat（Task Scheduler 03:30 独立跑）的落点，服务端只读状态
@@ -30,21 +32,14 @@ BACKUP_DEST = Path(os.environ.get("BACKUP_DEST", "C:/lan-share-backup"))
 # 免费隧道突然挂掉是"全家公网失联"的前兆，日报兜底探活（host:port，env 可换）
 PUBLIC_PROBE = "your-frp-domain.com:xxxxx"
 
-_HR_ENABLED = "health_report_enabled"
-_HR_TIME = "health_report_time"
 _DEFAULT_TIME = "09:00"
 _last_sent_date = None   # 内存态：进程级按日去重（重启后补发当天的，无重复风险）
 _daily_task = None       # 日报任务引用：未保存引用的 create_task 可能被 GC 回收（R2-P3-8）
 
 
-def _setting(key: str, default: str = "") -> str:
-    row = _db().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    return (row["value"] if row and row["value"] else default)
-
-
 def get_report_config() -> dict:
-    return {"enabled": _setting(_HR_ENABLED, "1") == "1",
-            "time": _setting(_HR_TIME, _DEFAULT_TIME),
+    return {"enabled": get_setting(HEALTH_REPORT_ENABLED, "1") == "1",
+            "time": get_setting(HEALTH_REPORT_TIME, _DEFAULT_TIME),
             "backup_dest": str(BACKUP_DEST),
             "public_probe": PUBLIC_PROBE}
 
@@ -168,7 +163,7 @@ def format_report(d: dict) -> tuple[str, bool]:
 @app.get("/api/admin/healthreport")
 def admin_get_healthreport(_admin=Depends(require_admin)):
     cfg = get_report_config()
-    cfg["webhook_set"] = bool(_setting("notify_webhook_url"))
+    cfg["webhook_set"] = bool(get_setting(NOTIFY_WEBHOOK_URL))
     return cfg
 
 
@@ -176,19 +171,12 @@ def admin_get_healthreport(_admin=Depends(require_admin)):
 def admin_set_healthreport(body: dict, request: Request, _admin=Depends(require_admin)):
     enabled = "1" if body.get("enabled") else "0"
     hhmm = _parse_hhmm(str(body.get("time") or _DEFAULT_TIME))
-    _upsert_setting(_HR_ENABLED, enabled)
-    _upsert_setting(_HR_TIME, hhmm)
+    set_setting(HEALTH_REPORT_ENABLED, enabled)
+    set_setting(HEALTH_REPORT_TIME, hhmm)
     audit("healthreport_set", f"enabled={enabled} time={hhmm}", ip=client_ip(request))
     return {"ok": True, "enabled": enabled == "1", "time": hhmm}
 
 
-def _upsert_setting(key: str, value: str) -> None:
-    from app.db import _db_lock
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO settings(key, value) VALUES(?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
-        _db().commit()
 
 
 @app.post("/api/admin/healthreport/test")

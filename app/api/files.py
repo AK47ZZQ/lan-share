@@ -21,11 +21,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.config import (MAX_CHUNKED_SIZE, TRASH_DAYS, ZIP_TTL, SHARE_ROOT, chunk_size_for)
+from app.config import (MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE, TRASH_DAYS, ZIP_TTL, SHARE_ROOT, chunk_size_for)
 from app.db import _db, _db_lock
 from app.security import audit, client_ip, preview_user, require_user, require_admin
 from app.filetools import (_file_dict, clean_filename, dir_tree, ensure_heif_support,
-                           human_size, move_to_trash, save_upload)
+                           human_size, IMG_EXTS, move_to_trash, save_upload, VID_EXTS)
 from app.spaces import enforce_quota, resolve, sample_readable, sync_grants_on_move, visible
 from app.main import app
 
@@ -212,7 +212,8 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             (sid, body.dest_dir, dest.name, body.size, body.sha256, time.time(),
              _user["user_id"]))
         _db().commit()
-    return {"instant": False, "session": sid, "chunk_size": chunk_size_for(body.size), "received": []}
+    return {"instant": False, "session": sid, "chunk_size": chunk_size_for(body.size),
+            "max_chunk_size": MAX_CHUNK_SIZE, "received": []}
 
 
 @app.get("/api/upload/state/{sid}")
@@ -224,7 +225,8 @@ async def upload_state(sid: str, _user=Depends(require_user)):
     _session_owner_guard(row, _user)
     d = _chunk_dir(sid)
     received = sorted(int(p.stem.split("-")[1]) for p in d.glob("part-*")) if d.exists() else []
-    return {"session": sid, "chunk_size": chunk_size_for(row["total_size"]), "received": received}
+    return {"session": sid, "chunk_size": chunk_size_for(row["total_size"]),
+            "max_chunk_size": MAX_CHUNK_SIZE, "received": received}
 
 
 @app.post("/api/upload/chunk/{sid}")
@@ -846,9 +848,7 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
 
 
 # ─── 缩略图 ───────────────────────────────────────────────
-
-IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"}
-VID_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
+# IMG_EXTS/VID_EXTS 单一事实源在 filetools（07 审查 §5.1-3），与照片时间线共用
 
 
 @app.get("/thumb/{path:path}")

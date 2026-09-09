@@ -19,7 +19,8 @@ from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_T
 from app.db import _db, _db_lock
 from app.security import (audit, client_ip, get_bearer_user, get_session_user,
                           preview_user, require_user)
-from app.filetools import human_size
+from app.filetools import human_size, safe_path
+from app.store.settings import PUBLIC_BASE_URL, get_setting
 from app.spaces import resolve
 from app.api.auth import SharePrepareBody
 from app.api.notify import insert_notification, push_webhook
@@ -230,7 +231,11 @@ async def share_download(request: Request, token: str, tkt: str):
     # 次数上限已在 prepare 发票时原子把关（R1-P2-4）：此处不再复查——
     # prepare 计数后 downloads 已达上限，复查会把自己的合法票据 410 掉
     s = _get_active_share(token)
-    file_path = SHARE_ROOT / s["path"]
+    # 读侧过闸（06 审查 P1-2 防御纵深）：写侧创建分享时虽经 relative_to
+    # 保证是 SHARE_ROOT 内相对路径，但读侧不设防——万一未来任何路径把含
+    # "../" 或点前缀的值写进 shares 表（或库被其他漏洞篡改），此处即成任意
+    # 文件读取。safe_path 对穿越/隐藏段直接 403
+    file_path = safe_path(s["path"])
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File deleted")
     return FileResponse(file_path, media_type="application/octet-stream",
@@ -245,9 +250,9 @@ def share_qr(token: str, request: Request, _user=Depends(require_user)):
         raise HTTPException(status_code=404, detail="Share not found")
     # host 优先取管理员配置的公网地址（R1-P3-5）：LAN 可注入 X-Forwarded-Proto
     # /Host 影响二维码指向；配置缺失时才回退请求头
-    row = _db().execute("SELECT value FROM settings WHERE key='public_base_url'").fetchone()
-    if row and row["value"]:
-        url = f"{row['value'].rstrip('/')}/s/{token}"
+    pub = get_setting(PUBLIC_BASE_URL)
+    if pub:
+        url = f"{pub.rstrip('/')}/s/{token}"
     else:
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
         host = request.headers.get("host") or request.url.netloc

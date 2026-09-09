@@ -25,7 +25,8 @@ from app.security import audit, preview_user, require_user, require_admin
 from app.spaces import resolve, visible
 from app.api.files import _chunk_dir, _zips, _zips_lock
 from app.api.share import _tickets, _tickets_lock
-from app.filetools import ensure_heif_support
+from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support
+from app.store.settings import FEATURED_ALBUMS
 from app.main import app
 
 ensure_heif_support()   # HEIC/HEIF 解码注册（照片时间线 EXIF/元数据需要）
@@ -174,18 +175,17 @@ def _cleanup_db():
             del _tickets[k]
 
 # ─── 照片时间线 ───────────────────────────────────────────
-
-PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"}
+# IMG_EXTS/VID_EXTS 单一事实源在 filetools（07 审查 §5.1-3），与预览/缩略图共用
+# （旧 PHOTO_EXTS 曾缺 .gif、旧 VIDEO_EXTS 独有 .m4v/.3gp，两边已漂移）。
 # 视频纳入照片时间线（App v0.6.0）：备份本就支持视频，此前时间线只扫图片，
 # 手机备份的视频在照片墙完全不可见。类型由扩展名推导（media_type），不建列。
-VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".webm", ".avi", ".mkv"}
 _last_photo_scan = 0.0
 _last_force_scan = 0.0
 _photo_scan_lock = threading.Lock()
 
 
 def _media_type(rel: str) -> str:
-    return "video" if Path(rel).suffix.lower() in VIDEO_EXTS else "photo"
+    return "video" if Path(rel).suffix.lower() in VID_EXTS else "photo"
 
 
 _FFPROBE_FALLBACKS = ("C:/env/ffmpeg/bin/ffprobe.exe",)   # NSSM 服务 PATH 常不带 ffmpeg
@@ -240,7 +240,7 @@ def _probe_video_durations(cap: int = 20):
         return
     todo, others = [], []
     for r in rows:
-        if Path(r["path"]).suffix.lower() in VIDEO_EXTS:
+        if Path(r["path"]).suffix.lower() in VID_EXTS:
             todo.append(r["path"])
         elif r["duration"] is None:
             others.append(r["path"])   # codec/尺寸 IS NULL 的图片行不占视频补扫配额
@@ -351,7 +351,7 @@ def _scan_photos(force: bool = False):
             rel_parts = f.relative_to(SHARE_ROOT).parts
             if any(p.startswith(".") for p in rel_parts):
                 continue
-            if not f.is_file() or f.suffix.lower() not in PHOTO_EXTS | VIDEO_EXTS:
+            if not f.is_file() or f.suffix.lower() not in IMG_EXTS | VID_EXTS:
                 continue
             stat = f.stat()
             rel = str(f.relative_to(SHARE_ROOT)).replace("\\", "/")
@@ -364,7 +364,7 @@ def _scan_photos(force: bool = False):
             # added_at：首次入库打点（ON CONFLICT 更新分支不碰它——拍照时间
             # 排序不变，只有新文件才拿到现在时刻）
             updates.append((rel, _photo_taken_at(f), stat.st_mtime_ns, stat.st_size,
-                            None if f.suffix.lower() in VIDEO_EXTS else 0,
+                            None if f.suffix.lower() in VID_EXTS else 0,
                             time.time()))
         with _db_lock:
             if updates:
@@ -541,11 +541,8 @@ def photo_facets(request: Request, _user=Depends(require_user)):
 
 # ─── 精选专辑（月份集合，管理员维护，全员可见）──────────────
 
-_ALBUMS_KEY = "featured_albums"
-
-
 def _load_albums() -> list[dict]:
-    row = _db().execute("SELECT value FROM settings WHERE key=?", (_ALBUMS_KEY,)).fetchone()
+    row = _db().execute("SELECT value FROM settings WHERE key=?", (FEATURED_ALBUMS,)).fetchone()
     if not row or not row["value"]:
         return []
     import json
@@ -561,7 +558,7 @@ def _save_albums(albums: list[dict]):
     with _db_lock:
         _db().execute(
             "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (_ALBUMS_KEY, json.dumps(albums, ensure_ascii=False)))
+            (FEATURED_ALBUMS, json.dumps(albums, ensure_ascii=False)))
         _db().commit()
 
 
@@ -592,7 +589,7 @@ def _mutate_albums(mutator) -> bool:
     import json
     with _db_lock:
         row = _db().execute(
-            "SELECT value FROM settings WHERE key=?", (_ALBUMS_KEY,)).fetchone()
+            "SELECT value FROM settings WHERE key=?", (FEATURED_ALBUMS,)).fetchone()
         try:
             albums = json.loads(row["value"]) if row and row["value"] else []
             if not isinstance(albums, list):
@@ -604,7 +601,7 @@ def _mutate_albums(mutator) -> bool:
         _db().execute(
             "INSERT INTO settings(key, value) VALUES(?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (_ALBUMS_KEY, json.dumps(albums, ensure_ascii=False)))
+            (FEATURED_ALBUMS, json.dumps(albums, ensure_ascii=False)))
         _db().commit()
         return True
 
@@ -645,22 +642,42 @@ def create_album(body: AlbumBody, _admin=Depends(require_admin)):
         raise HTTPException(status_code=400, detail="专辑标题需为 1~40 字符")
     if not re.fullmatch(r"\d{4}-\d{2}", body.month):
         raise HTTPException(status_code=400, detail="month 需为 YYYY-MM 格式")
-    albums = _load_albums()
-    if any(a.get("month") == body.month for a in albums):
-        raise HTTPException(status_code=409, detail="该月份已是精选专辑")
-    albums.insert(0, {"id": f"al-{time.time_ns()}", "title": title, "month": body.month})
-    _save_albums(albums[:50])
+    err: list[tuple[int, str]] = []
+
+    def _do(albums: list[dict]) -> bool:
+        # 重复/上限检查必须锁内做（06 审查 P1-1）：裸 _load+_save 两步之间
+        # 不持锁，双管理员并发创建互相覆盖丢更新；上限显式拒绝而非静默截断
+        # （与 social.py 成员侧同款语义）
+        if any(a.get("month") == body.month for a in albums):
+            err.append((409, "该月份已是精选专辑"))
+            return False
+        if len(albums) >= 50:
+            err.append((400, "专辑数量已达上限（50），请先清理不用的"))
+            return False
+        albums.insert(0, {"id": f"al-{time.time_ns()}", "title": title, "month": body.month})
+        return True
+
+    if not _mutate_albums(_do):
+        code, detail = err[0] if err else (500, "创建失败")
+        raise HTTPException(status_code=code, detail=detail)
     audit("album_create", f"{title} ({body.month})")
-    return {"ok": True, "albums": albums}
+    return {"ok": True}
 
 
 @app.delete("/api/admin/albums/{album_id}")
 def delete_album(album_id: str, _admin=Depends(require_admin)):
-    albums = _load_albums()
-    remaining = [a for a in albums if a.get("id") != album_id]
-    if len(remaining) == len(albums):
-        raise HTTPException(status_code=404, detail="专辑不存在")
-    _save_albums(remaining)
+    err: list[tuple[int, str]] = []
+
+    def _do(albums: list[dict]) -> bool:
+        if not any(a.get("id") == album_id for a in albums):
+            err.append((404, "专辑不存在"))
+            return False
+        albums[:] = [a for a in albums if a.get("id") != album_id]
+        return True
+
+    if not _mutate_albums(_do):
+        code, detail = err[0] if err else (500, "删除失败")
+        raise HTTPException(status_code=code, detail=detail)
     audit("album_delete", album_id)
     return {"ok": True}
 

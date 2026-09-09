@@ -168,3 +168,43 @@ def test_upload_sanitizes_windows_illegal_chars(auth):
     assert r.status_code == 200, r.text
     assert r.json()["name"] == 'bad_name_with_chars_x_.txt'
     auth.delete("/api/files/" + r.json()["path"])
+
+
+# ── 分片契约（07 架构审查 P0 回归钉）─────────────────────
+# 历史 bug：服务端把 >5GB 文件的分片阶梯升到 32/64MB，移动端两引擎的防御
+# clamp 写死 16MB 未同步 → App 上传 >5GB 必败。本组测试把"协议上限"钉为
+# 单一事实源：MAX_CHUNK_SIZE；init/state 响应必须下发 max_chunk_size 供
+# 客户端 clamp，任何一侧擅自越界即红灯。
+
+def test_chunk_size_output_within_protocol_cap():
+    from app.config import MAX_CHUNK_SIZE, chunk_size_for
+    sizes = [0, 1, CHUNK_SIZE, 2 * GB, 2 * GB + 1, 5 * GB, 5 * GB + 1,
+             10 * GB, 10 * GB + 1, MAX_CHUNKED_SIZE, MAX_CHUNKED_SIZE + 1]
+    for size in sizes:
+        cs = chunk_size_for(size)
+        assert 0 < cs <= MAX_CHUNK_SIZE, f"size={size} -> {cs}"
+
+
+def test_max_chunk_size_is_the_64mb_protocol_value():
+    # 客户端（mobile/lib/data/api/protocol.dart kMaxChunkSize）与 Caddyfile
+    # 注释都按 64MB 对齐；此常量一旦改动必须三端同步
+    from app.config import MAX_CHUNK_SIZE
+    assert MAX_CHUNK_SIZE == 64 * 1024 * 1024
+
+
+def test_upload_init_and_state_declare_max_chunk_size(auth):
+    import hashlib
+    import time as _time
+    r = auth.post("/api/upload/init", json={
+        "dest_dir": "", "filename": f"contract-{_time.time()}.bin",
+        "size": 6 * GB, "sha256": hashlib.sha256(b"contract").hexdigest()})
+    d = r.json()
+    assert d.get("instant") is not True
+    sid = d["session"]
+    # 会话不显式清理（与既有测试一致）：conftest 每轮跑在临时 SHARE_ROOT，
+    # 会话行随临时库丢弃，TTL 3 天兜底
+    assert d["max_chunk_size"] == 64 * 1024 * 1024
+    assert d["chunk_size"] == 32 * 1024 * 1024  # >5GB → 32MB 阶梯（曾致 App 必败的那一档）
+    st = auth.get(f"/api/upload/state/{sid}")
+    assert st.status_code == 200, st.text
+    assert st.json()["max_chunk_size"] == 64 * 1024 * 1024

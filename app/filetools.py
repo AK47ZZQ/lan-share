@@ -40,6 +40,17 @@ def human_size(size_bytes: int | float) -> str:
     return f"{size_bytes:.1f} PB"
 
 
+# ─── 媒体扩展名（单一事实源，07 审查 §5.1-3）──────────────
+# 图片预览/缩略图（api/files.py）与照片时间线扫描（api/system.py）共用同一份。
+# 漂移教训：本共同体曾有 .gif（能预览）而照片扫描没有（不进时间线），
+# 照片扫描有 .m4v/.3gp 而缩略图没有（时间线有但无缩略图）。
+# .svg 有意不收：浏览器直接导航 svg 会执行内嵌脚本，预览端点按内联图片
+# 服会有 XSS 面，svg 保持走下载。Web（web/src/filekinds.ts）与 App
+# （mobile/lib/data/media_kinds.dart）各自持有一份对齐副本，改动需三端同步。
+IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"}
+VID_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".webm", ".avi", ".mkv"}
+
+
 def safe_path(rel: str) -> Path:
     """防目录穿越 + 禁止访问点前缀隐藏路径（.trash/.meta.db 等）。"""
     parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
