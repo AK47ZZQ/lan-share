@@ -378,64 +378,70 @@ class _HomePageState extends ConsumerState<HomePage> {
         child: CustomScrollView(slivers: [
           SliverAppBar(
               pinned: true,
-              expandedHeight: topInset + 196,
+              // 内容高度：状态栏+20 顶距+问候行40+4+副行18+10+胶囊51+18 底距
+              // （v0.21.1 收紧：此前 196 导致内容下方一大段空渐变）
+              expandedHeight: topInset + 170,
               // 收起后的工具条底色取渐变首色（纯色近似，白字同源）
               backgroundColor: PaletteScope.of(context).gradient.first,
               foregroundColor: Colors.white,
               centerTitle: false,
-              title: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Brand.cloud, size: 18, color: Colors.white),
-                const SizedBox(width: 6),
-                const Text('LAN Share',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700)),
-              ]),
+              // title 留空：标题画进下方 flexibleSpace 的收起态层——
+              // SliverAppBar.title 展开时也渲染，会与问候语重叠（v0.21.1 遮挡根因）
+              title: const SizedBox.shrink(),
               flexibleSpace: FlexibleSpaceBar(
-                  background: BrandHeader(
-                      bottomRadius: 0,
-                      topInset: topInset,
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(children: [
-                              Expanded(
-                                  child: Text(_greeting(username),
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 20,
-                                          fontWeight: FontWeight.w700))),
-                              _headAvatar(session),
-                            ]),
-                            const SizedBox(height: 4),
-                            ValueListenableBuilder<String>(
-                                valueListenable: AutoSwitch.I.lastEvent,
-                                builder: (_, ev, _) {
-                                  final auto =
-                                      ev.isNotEmpty ? ' · 自动切换已生效' : '';
-                                  return Text(
-                                      '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
-                                      style: TextStyle(
-                                          color:
-                                              Colors.white.withValues(alpha: 0.92),
-                                          fontSize: 12));
-                                }),
-                            const SizedBox(height: 14),
-                            Row(children: [
-                              _headStat('服务端已用', humanSize(_diskUsed)),
-                              const SizedBox(width: 8),
-                              _headStat(
-                                  '待备份',
-                                  _pending < 0
-                                      ? '统计中'
-                                      : _pending == 0
-                                          ? '全部就绪'
-                                          : '$_pending 项'),
-                              const SizedBox(width: 8),
-                              _headStat('剩余空间', humanSize(_diskFree)),
-                            ]),
-                          ])))),
+                  background: Stack(children: [
+                    BrandHeader(
+                        bottomRadius: 0,
+                        topInset: topInset,
+                        bottomPadding: 18,
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(children: [
+                                Expanded(
+                                    child: Text(_greeting(username),
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.w700))),
+                                _headAvatar(session),
+                              ]),
+                              const SizedBox(height: 4),
+                              ValueListenableBuilder<String>(
+                                  valueListenable: AutoSwitch.I.lastEvent,
+                                  builder: (_, ev, _) {
+                                    final auto =
+                                        ev.isNotEmpty ? ' · 自动切换已生效' : '';
+                                    return Text(
+                                        '${_serverPublic == null ? "" : "${_serverPublic!}入口 · "}家庭网盘概览 · 下拉刷新$auto',
+                                        style: TextStyle(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.92),
+                                            fontSize: 12));
+                                  }),
+                              const SizedBox(height: 10),
+                              Row(children: [
+                                _headStat('服务端已用', humanSize(_diskUsed)),
+                                const SizedBox(width: 8),
+                                _headStat(
+                                    '待备份',
+                                    _pending < 0
+                                        ? '统计中'
+                                        : _pending == 0
+                                            ? '全部就绪'
+                                            : '$_pending 项'),
+                                const SizedBox(width: 8),
+                                _headStat('剩余空间', humanSize(_diskFree)),
+                              ]),
+                            ])),
+                    // 收起态工具条（LAN Share + 云朵）：随折叠淡入，
+                    // 展开时完全透明不与问候语叠加
+                    Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _collapsedToolbar(topInset: topInset)),
+                  ]))),
           SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
               sliver: SliverReorderableList(
@@ -468,6 +474,37 @@ class _HomePageState extends ConsumerState<HomePage> {
                     index: i,
                     child: layout[i].widget);
               }))]));
+  }
+
+  /// 收起态工具条：LAN Share + 云朵，透明度 = 折叠进度。
+  /// FlexibleSpaceBarSettings.currentExtent 由 SliverAppBar 驱动，
+  /// 完全展开时 0（不遮挡问候语），完全收起时 1（替代 title）。
+  Widget _collapsedToolbar({required double topInset}) {
+    return SizedBox(
+        height: kToolbarHeight + topInset,
+        child: LayoutBuilder(builder: (context, _) {
+          final s = context
+              .dependOnInheritedWidgetOfExactType<FlexibleSpaceBarSettings>();
+          final t = s == null
+              ? 0.0
+              : (1 -
+                      ((s.currentExtent - s.minExtent) /
+                          (s.maxExtent - s.minExtent)))
+                  .clamp(0.0, 1.0);
+          return Opacity(
+              opacity: t,
+              child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, topInset + 10, 16, 0),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Brand.cloud, size: 18, color: Colors.white),
+                    const SizedBox(width: 6),
+                    const Text('LAN Share',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700)),
+                  ])));
+        }));
   }
 
   /// 渐变头右上角头像：有头像走 AuthImage（服务端 /api/auth/avatar），无头像
