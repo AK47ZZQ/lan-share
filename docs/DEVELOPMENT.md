@@ -120,7 +120,11 @@ app/
 │                      （媒体扩展名单一事实源，三端对齐基准）
 ├── spaces.py          resolve()/授权判定/配额/可见性 + 私人空间守卫（is_own_private_root 等，
 │                      07 批次3 上收为公共 API）（安全核心）
-├── store/settings.py  settings KV 读写唯一入口 + 全部 key 常量（07 批次1 事实源）
+├── settings.py        settings KV 读写唯一入口 + 全部 key 常量（07 批次1 事实源；
+│                      v3.36 自 store/ 上移至配置层，消 security→store 分层倒置）
+├── store/users.py     **users 表唯一 SQL 出口**（v3.36 A1 仓储：业务模块不认识
+│                      表结构，加一列只改 db.py DDL + 本文件；读返回原始行，
+│                      写统一 _write——事务内推迟 commit、事务外立即提交）
 ├── services/          业务服务层（不持路由，07 批次3 成型）
 │   ├── archive.py     zip 打包票据表（issue/pop_ticket + sweep_expired）
 │   ├── cleanup.py     注册式定时清理（通用五件套 + 各域 register_sweep）

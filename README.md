@@ -1,4 +1,4 @@
-# LAN Share — 家庭团队网盘（服务端 v3.35 · App v0.24.0+69）
+# LAN Share — 家庭团队网盘（服务端 v3.36 · App v0.24.0+69）
 
 家用小团队（2–20 人）的多用户网盘。局域网与公网（樱花FRP）功能完全对等，
 支持多角色成员、私人/共享双空间、目录授权、断点续传、秒传去重、回收站、
@@ -155,7 +155,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 史脱节）。APK 经自家分享链接在 `App安装包/lanshare.apk` 分发（30 天有效，同文件
 覆盖 + 新建分享）；新版本通过 App 内「关于与检查更新」升级，无需手动换包。
 R8 已关（WorkManager/Room 在裁剪下启动即崩，见 `docs/DEVELOPMENT.md`）。
-**当前测试基线：pytest 210 项 / Dart 179 项 / 契约 117 路径 / analyze 0 / ruff·mypy 全绿。**
+**当前测试基线：pytest 231 项（SQLite）+ PostgreSQL 双引擎 229 项 / web 单测 6 项 / Dart 179 项 / 契约 117 路径 / analyze 0 / ruff·mypy 全绿。**
 完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
 
 **WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
@@ -204,8 +204,9 @@ Pillow + pillow-heif、qrcode、pyotp、ffmpeg（可选）。
 ```
 lan-share/
 ├── server.py               兼容 shim（NSSM 入口 server:app 不变）
-├── app/                    后端包：config/db/security/filetools/spaces/main
+├── app/                    后端包：config/settings/db/security/filetools/spaces/main
 │                           api/{auth,files,share,webdav,system,admin,notify,social,notes}/
+│                           store/{users}（表仓储：users 表唯一 SQL 出口）
 ├── web/                    Vue3 前端工程（构建产物 web/dist 由 FastAPI 挂载，
 │                           node_modules + dist 已 gitignore）
 ├── mobile/                 Flutter 原生 App（v0.21.0+61；技术文档见 mobile/README.md）
@@ -218,10 +219,12 @@ lan-share/
 ├── CHANGELOG.md            版本历史
 ├── backup.bat              每日 23:30 自动跑（pg_dump -Fc + 文件增量）
 ├── check.bat               本地质量门禁（pytest 基线）
-├── tests/                  210 项测试（基线 + 多用户 + v3.5 + 大文件 + 公网防护
+├── tests/                  231 项测试（基线 + 多用户 + v3.5 + 大文件 + 公网防护
 │                           + 四小项 + 设备 Token + 兼容性回归 + 配对码 + 两步验证恢复码
-│                           + App 批次 + 安全修复回归 + v0.17/v0.20 批次；
-│                           照片互动测试已随功能下线移除）
+│                           + App 批次 + 安全修复回归 + v0.17/v0.20 批次 + PG 方言/
+│                           schema 漂移守卫 + AST 回潮守卫；照片互动测试已随功能下线移除。
+│                           设 LANSHARE_TEST_PG_URL 即同一套用例改跑 PostgreSQL——
+│                           在目标库的临时 schema 建表，不碰生产 public 表）
 └── logs/                   服务日志（NSSM 轮转）
 ```
 
@@ -261,10 +264,18 @@ M-K2 编辑器双链四件套 / M-K3 agent 层与约定文档 / M-K4 web `/kb`�
 挂账 v2：`[[#锚点]]` 小节锚、代码块内 `[[ ]]` 跳过解析、rename 断链 fixup、
 web 端笔记视图。
 
+**服务端 v3.36 ✅**（独立复审修复批：`app/roles.py` 与整批历史改动入库 + 回滚点；
+**双引擎测试**（同一套用例跑 SQLite 与 PostgreSQL，PG 侧此前零覆盖）；新增 CI
+（ruff/mypy/pytest×2 引擎/web 测试）；Webhook 重定向逐跳复校验；WebDAV 真锁
+（RFC 4918，原 LOCK 为假锁）；`db.transaction()` 真事务（redeem/改密/删号等）；
+PG 连接有界化；**users 表单一主人**（`app/store/users.py`，11 模块 80 条 SQL 迁出）；
+settings 降 L0；27 处 async 内裸 `_db()` 清零；3 条 AST 回潮守卫；Web 端补测。
+已重启上线并核验。门禁 SQLite 231 / PG 229+2skipped / ruff·mypy 全绿 / web 6 项。
+详见 `项目记忆/11-独立工程复审-2026-09-10.md` §九执行记录）。
+
 **服务端 v3.35 ✅**（安全加固与"约定收口"第一批：Webhook SSRF 防护 / 管理端不再
 拉取密码哈希 / APK SHA 缓存加锁 + `filetools.to_rel()` 收编 38 处路径转换 /
-`app/roles.py` 角色常量化 / 私有符号公共化；App 端无变更。门禁 pytest 210 ·
-ruff · mypy 全绿。计划与后续批次见 `项目记忆/10-改进计划-v3.35.md`）。
+`app/roles.py` 角色常量化 / 私有符号公共化。计划见 `项目记忆/10-改进计划-v3.35.md`）。
 
 v2 个人网盘（P0–P3）✅ → v3 家庭团队版：M0 拆包 ✅ · M1 数据层 ✅（v3.5 起
 **PostgreSQL 16 生产库**，SQLite 仅测试）· M2 Vue 全站 ✅ · M3 多用户核心 ✅

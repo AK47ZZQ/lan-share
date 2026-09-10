@@ -1,7 +1,8 @@
 # LAN Share 项目全貌认知梳理
 
 > 生成时间：2026-09-10 · 依据仓库实测代码（app/ 8170 行 Python、web/ Vue3 工程、mobile/ Flutter 工程 80 个 dart 文件）
-> 当前版本：服务端 v3.35 / App v0.24.0+69
+> 当前版本：服务端 v3.36 / App v0.24.0+69（v3.36 起新增 `app/store/users.py`
+> 仓储层、`app/settings.py`、双引擎测试与 CI；测试基线见下方更新）
 
 ---
 
@@ -32,7 +33,7 @@
 | 其他后端 | qrcode / pyotp / aiofiles / PyYAML / ffmpeg(可选) | 二维码、TOTP、异步写盘、知识库 frontmatter、视频缩略图 |
 | Web 前端 | **Vue 3.5 + Vite 6 + TypeScript 5.7 + vue-router 4** | SFC `<script setup>`；marked / highlight.js / DOMPurify / docx-preview |
 | 移动端 | **Flutter 3.47 + Dart 3.13** | Dio + flutter_riverpod + sqflite + flutter_secure_storage + flutter_cache_manager |
-| 质量门禁 | **ruff + mypy + pytest + pip-audit**（check.bat） | 测试基线 pytest 210 / Dart 179 |
+| 质量门禁 | **ruff + mypy + pytest + pip-audit**（check.bat）+ CI（.github/workflows） | 测试基线 pytest 231（SQLite）/ 229（PostgreSQL 双引擎）/ web 6 / Dart 179 |
 
 依赖全部**手写钉版**在 `requirements.txt`（与生产 venv 实测一致），不直接 `pip freeze`。
 
@@ -65,7 +66,7 @@ lan-share/
 ├── data/                  运行时数据根（private/shared/incoming/.trash/.chunks/.thumbs）
 ├── docs/                  API / SECURITY / DEVELOPMENT / STATUS-v3 / DESIGN-v3 / KB-CONVENTIONS …
 ├── 项目记忆/              01 架构现状 · 02 里程碑 · 03 踩坑 · 04 发版SOP · 05 红线 · 06/07 审查
-├── tests/                 26 个测试文件（pytest 基线 210 项）
+├── tests/                 28 个测试文件（pytest 基线 231 项；含 PG 方言/schema 漂移守卫）
 ├── scripts/               build-apk.bat（镜像到 ASCII 路径）· migrate_sqlite_to_pg.py
 ├── check.bat              质量门禁（pytest baseline）
 ├── backup.bat             每日 23:30 pg_dump -Fc + 文件增量
@@ -288,7 +289,7 @@ WebDAV 有**独立密码**（与登录密码隔离，可单独轮换），解密
 
 ## 11. 测试与质量门禁
 
-- **pytest 210 项**（26 个测试文件），其中 `test_baseline.py` 是行为回归网，`test_multiuser.py` 覆盖角色/空间/授权边界，`test_review_fixes.py` 是安全回归网（改 `spaces.py`/Caddyfile/回收站/设备 Token/TOTP 必跑）。
+- **pytest 231 项**（28 个测试文件；另设 `LANSHARE_TEST_PG_URL` 可整体切 PostgreSQL），其中 `test_baseline.py` 是行为回归网，`test_multiuser.py` 覆盖角色/空间/授权边界，`test_review_fixes.py` 是安全回归网（改 `spaces.py`/Caddyfile/回收站/设备 Token/TOTP 必跑）。
 - `tests/conftest.py` 在导入前把 `SHARE_ROOT` 指向临时目录，**全套测试不碰真实数据**。
 - **Dart 179 项** + `dart analyze` 0 问题。
 - ruff 全绿（显式豁免 BLE001/B008/B904 等刻意风格）；mypy 有 3 项历史遗留。

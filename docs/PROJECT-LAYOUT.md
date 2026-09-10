@@ -40,6 +40,8 @@
 - `app/asgi.py`：app 对象 + security_middleware（依赖图底层）；`app/main.py`
   变纯组装根（include_router ×16）——11 对 main↔api 循环 import 消除
 - `app/store/settings.py`：settings KV 唯一读写入口 + key 常量
+  （v3.36 起上移为 `app/settings.py`，消 security→store 分层倒置；
+  `app/store/` 留给表仓储——`app/store/users.py` 是 users 表唯一 SQL 出口）
 - `app/services/`：archive（zip 票据）/ cleanup（注册式定时清理）/
   passwords（scrypt+哑哈希）/ accounts（改名流程+用户名校验）
 - `app/api/` 按域拆分：uploads / trash / previews / photos / albums
