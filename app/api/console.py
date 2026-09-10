@@ -13,11 +13,12 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
 from app.api.appver import DIST_DIR
 from app.db import _db, _db_lock
-from app.security import audit, client_ip, require_admin
+from app.security import COOKIE_NAME, _sha, audit, client_ip, require_admin
 from app.store import users as users_store
 
 router = APIRouter()
@@ -201,3 +202,48 @@ def admin_revoke_device(device_id: int, request: Request,
         raise HTTPException(status_code=404, detail="设备不存在或已过期")
     audit("admin.device.revoke", target=str(device_id), ip=client_ip(request))
     return {"ok": True}
+
+
+# ── 会话治理增强（v3.40）：按账号一键下线 / 全站会话清空 ─———
+
+
+class KickBody(BaseModel):
+    scope: str = "all"  # all | web | app
+
+
+@router.post("/api/admin/users/{uid}/kick")
+def admin_kick_user(uid: int, request: Request, body: KickBody | None = None,
+                    _admin=Depends(require_admin)):
+    """按账号一键下线：scope=all 全部 / web 仅 Web 会话 / app 仅 App 设备。
+    对当前登录账号拒绝 all/web（防止站长把自己踢下线）；app 范围允许（可踢自己的旧手机）。"""
+    scope = (body.scope if body and body.scope in ("all", "web", "app") else "all")
+    # 会话 principal 行的键是 user_id（sessions.user_id），Bearer 行也一致
+    if uid == _admin["user_id"] and scope in ("all", "web"):
+        raise HTTPException(status_code=400, detail="不能对当前登录账号吊销 Web 会话（会把自己踢下线）")
+    username = users_store.get_username(uid)
+    if username is None:
+        raise HTTPException(status_code=404, detail="成员不存在")
+    with _db_lock:
+        cs = (_db().execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
+              if scope in ("all", "web") else None)
+        cd = (_db().execute("DELETE FROM device_tokens WHERE user_id = ?", (uid,))
+              if scope in ("all", "app") else None)
+        _db().commit()
+    counts = {"sessions": cs.rowcount if cs is not None else 0,
+              "devices": cd.rowcount if cd is not None else 0}
+    audit("admin.kick", target=username,
+          detail=f"scope={scope} web={counts['sessions']} app={counts['devices']}",
+          ip=client_ip(request))
+    return {"ok": True, **counts}
+
+
+@router.delete("/api/admin/sessions")
+def admin_sessions_purge(request: Request, _admin=Depends(require_admin)):
+    """全站会话清空（应急"全部下线"）：保留当前请求自己的会话。"""
+    keep = _sha(request.cookies.get(COOKIE_NAME) or "")
+    with _db_lock:
+        cur = _db().execute("DELETE FROM sessions WHERE token_hash != ?", (keep,))
+        _db().commit()
+    audit("admin.sessions.purge", detail=f"revoked={cur.rowcount}",
+          ip=client_ip(request))
+    return {"ok": True, "revoked": cur.rowcount}

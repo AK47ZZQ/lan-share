@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // 治理工具（v3.39 新增）：大文件 TOP / 疑似重复（同尺寸聚类）/ 会话与设备吊销。
 // 数据源：/api/admin/large-files · /api/admin/duplicates · /api/admin/sessions|devices。
-import { onMounted, ref } from 'vue'
-import { api, type AdminDevice, type AdminSession, type DupGroup, type LargeFileItem } from '../api'
+import { computed, onMounted, ref } from 'vue'
+import { api, type AdminDevice, type AdminSession, type AdminUser, type DupGroup, type LargeFileItem } from '../api'
 import { confirmDlg, fmtTs, human, toast } from '../ui'
 
 const err = ref('')
@@ -34,16 +34,55 @@ async function loadDupes() {
   } catch (e) { toast((e as Error).message, 'err') } finally { dupeBusy.value = false }
 }
 
-// 会话与设备
+// 会话与设备（v3.40 增强：按账号筛选 / 按账号汇总与一键下线 / 全站清空）
 const sessions = ref<AdminSession[]>([])
 const devices = ref<AdminDevice[]>([])
 const accessBusy = ref(false)
+const accessFilter = ref('')
+const usersMap = ref<Record<string, number>>({})
+const filteredSessions = computed(() => {
+  const q = accessFilter.value.trim().toLowerCase()
+  return q ? sessions.value.filter(x => x.username.toLowerCase().includes(q)) : sessions.value
+})
+const filteredDevices = computed(() => {
+  const q = accessFilter.value.trim().toLowerCase()
+  return q ? devices.value.filter(x => x.username.toLowerCase().includes(q)) : devices.value
+})
+const accountSummary = computed(() => {
+  const m = new Map<string, { sessions: number; devices: number }>()
+  for (const x of sessions.value)
+    m.set(x.username, { sessions: (m.get(x.username)?.sessions || 0) + 1, devices: m.get(x.username)?.devices || 0 })
+  for (const x of devices.value)
+    m.set(x.username, { sessions: m.get(x.username)?.sessions || 0, devices: (m.get(x.username)?.devices || 0) + 1 })
+  return [...m.entries()].sort((a, b) => (b[1].sessions + b[1].devices) - (a[1].sessions + a[1].devices))
+})
 async function loadAccess() {
   accessBusy.value = true
   try {
-    const [s, d] = await Promise.all([api.adminSessions(), api.adminDevices()])
-    sessions.value = s.items; devices.value = d.items
+    const [sx, dx, ux] = await Promise.all([api.adminSessions(), api.adminDevices(), api.adminUsers()])
+    sessions.value = sx.items; devices.value = dx.items
+    usersMap.value = Object.fromEntries(ux.map(x => [x.username, x.id]))
   } catch (e) { toast((e as Error).message, 'err') } finally { accessBusy.value = false }
+}
+async function kickAccount(username: string, scope: 'all' | 'web' | 'app') {
+  const uid = usersMap.value[username]
+  if (!uid) { toast('找不到该账号', 'err'); return }
+  const label = scope === 'all' ? '「' + username + '」的全部 Web 会话与 App 设备'
+    : scope === 'web' ? '「' + username + '」的全部 Web 会话'
+    : '「' + username + '」的全部 App 设备'
+  if (!(await confirmDlg('一键下线' + label + '？对方需重新登录/配对。', { danger: true, okText: '一键下线' }))) return
+  try {
+    const r = await api.kickUser(uid, scope)
+    toast('已下线：Web 会话 ' + r.sessions + ' 个、App 设备 ' + r.devices + ' 台', 'ok')
+    await loadAccess()
+  } catch (e) { toast((e as Error).message, 'err') }
+}
+async function purgeAllSessions() {
+  if (!(await confirmDlg('清空全站所有 Web 会话（保留你当前这个）？所有成员将被登出。', { danger: true, okText: '全部下线' }))) return
+  try {
+    const r = await api.purgeSessions()
+    toast('已吊销 ' + r.revoked + ' 个会话', 'ok'); await loadAccess()
+  } catch (e) { toast((e as Error).message, 'err') }
 }
 async function killSession(s: AdminSession) {
   if (!(await confirmDlg(`吊销「${s.username}」的这个 Web 会话？对方下一步操作即被登出。`, { danger: true, okText: '吊销' }))) return
@@ -119,14 +158,31 @@ function switchTab(t: 'large' | 'dupes' | 'access') {
 
     <!-- 会话与设备 -->
     <div v-if="tab === 'access'" style="display:grid;gap:12px">
-      <div class="card" style="padding:10px;display:grid;gap:2px">
-        <div style="display:flex;gap:8px;align-items:center;padding:4px 6px">
-          <div style="font-size:13.5px;font-weight:600">💻 Web 会话（活跃 {{ sessions.length }}）</div>
-          <div style="flex:1" />
+      <div class="card" style="padding:10px 12px;display:grid;gap:8px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div style="font-size:13.5px;font-weight:600">👤 按账号下线</div>
+          <input v-model="accessFilter" placeholder="按账号筛选…" style="flex:1;min-width:160px;font-size:13.5px;max-width:220px" />
+          <button class="btn danger sm" style="margin-left:auto" @click="purgeAllSessions">⚠ 全部下线（保留我）</button>
           <button class="btn ghost sm" :disabled="accessBusy" @click="loadAccess">刷新</button>
         </div>
-        <div v-if="!sessions.length" class="empty">没有活跃会话</div>
-        <div v-for="s in sessions" :key="s.token_hash" class="frow" style="cursor:default">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <span v-for="[name, c] in accountSummary" :key="name"
+                style="display:inline-flex;gap:6px;align-items:center;padding:4px 6px 4px 10px;border:1px solid var(--line);border-radius:999px;font-size:12.5px">
+            <b>{{ name }}</b>
+            <span style="color:var(--text-3)">会话 {{ c.sessions }} · 设备 {{ c.devices }}</span>
+            <button class="btn ghost sm" style="padding:2px 8px" title="该账号全部下线" @click="kickAccount(name, 'all')">一键下线</button>
+          </span>
+          <span v-if="!accountSummary.length" style="font-size:12.5px;color:var(--text-3)">没有活跃账号</span>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px;display:grid;gap:2px">
+        <div style="display:flex;gap:8px;align-items:center;padding:4px 6px">
+          <div style="font-size:13.5px;font-weight:600">💻 Web 会话（活跃 {{ filteredSessions.length }}<span v-if="accessFilter"> / {{ sessions.length }}</span>）</div>
+          <div style="flex:1" />
+        </div>
+        <div v-if="!filteredSessions.length" class="empty">没有匹配的会话</div>
+        <div v-for="s in filteredSessions" :key="s.token_hash" class="frow" style="cursor:default">
           <span class="icon">💻</span>
           <span class="name">
             <div style="font-size:13.5px">{{ s.username }} <span style="color:var(--text-3);font-size:12px">{{ s.ip }}{{ s.ua ? ' · ' + s.ua.slice(0, 60) : '' }}</span></div>
@@ -140,11 +196,11 @@ function switchTab(t: 'large' | 'dupes' | 'access') {
 
       <div class="card" style="padding:10px;display:grid;gap:2px">
         <div style="display:flex;gap:8px;align-items:center;padding:4px 6px">
-          <div style="font-size:13.5px;font-weight:600">📱 App 设备（活跃 {{ devices.length }}）</div>
+          <div style="font-size:13.5px;font-weight:600">📱 App 设备（活跃 {{ filteredDevices.length }}<span v-if="accessFilter"> / {{ devices.length }}</span>）</div>
           <div style="flex:1" />
         </div>
-        <div v-if="!devices.length" class="empty">没有活跃设备</div>
-        <div v-for="d in devices" :key="d.id" class="frow" style="cursor:default">
+        <div v-if="!filteredDevices.length" class="empty">没有匹配的设备</div>
+        <div v-for="d in filteredDevices" :key="d.id" class="frow" style="cursor:default">
           <span class="icon">📱</span>
           <span class="name">
             <div style="font-size:13.5px">{{ d.name }} <span style="color:var(--text-3);font-size:12px">· {{ d.username }}</span></div>

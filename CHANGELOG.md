@@ -2,6 +2,41 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — 服务端 v3.40：通知管理（公告+站内通知）+ 会话治理增强
+
+主人两条需求头脑风暴落地（概念划分：**公告**=主页长期布告，**通知**=个人收件箱
+推送；会话治理补"按账号"维度）。**App 无变更（仍 v0.27.0+72）**。
+**门禁：pytest 216（SQLite）+ 214/2 skipped（PG 双引擎）· ruff · mypy ·
+vue-tsc · web 6。已重启上线核验。**
+
+**通知管理**
+- 新增**公告栏**（announcements 表，双引擎建表）：站长发布/删除，全家主页可见
+  ——总览 Dashboard 公告卡 + 文件页顶部可关闭横幅（按公告 id 记住"不再显示"）。
+  GET /api/announcements（登录即可读）+ POST/DELETE admin。
+- **站内通知管理**（/notify-ops 新卡）：全站近 100 条、按成员筛选、单条删除
+  （GET /api/admin/notifications?username= + DELETE /{id}）；成员被删后残留通知
+  回退显示 #uid。
+- **广播彻底删除**：DELETE /api/admin/notifications/broadcast/{bid}——记录与
+  已送达站内通知（含已读）一并清除（撤回只删未读，这个删干净）；通知运营页
+  sent 行新增"彻底删除"钮。
+- 顺手修**存量双引擎 bug**：发送记录统计的 `SUM(read_at IS NULL)` 在 PG 报
+  function sum(boolean) 不存在——线上"查看发送记录"本来就会 500；改 CASE WHEN
+  双引擎兼容（PG 全量测试抓出）。
+
+**会话治理增强（/governance 会话与设备）**
+- **按账号一键下线**：POST /api/admin/users/{uid}/kick（scope=all|web|app）；
+  对当前登录账号拒绝 all/web（防自踢，实测 400）。账号汇总 chips（每账号会话/
+  设备数 + 一键下线钮）。
+- **全部下线（保留我）**：DELETE /api/admin/sessions（排除当前请求自身会话），
+  应急"全站强制登出"。
+- 按账号筛选框（会话/设备列表即时过滤）；AdminView 成员行新增"🚪 踢下线"
+  紧急操作（自己那行不显示）。
+
+**测试**：test_v39_console.py 13→21 条（公告生命周期/全站通知/广播彻底删除/
+kick 含自踢防护/全局清空保留自己）；契约 119→126 路径。
+**核验**：公告增删+未认证 401、全站通知带成员名、自踢 400、新包
+index-Cr2Rg7NA.js 生效。核验时误踢 uid=1（站长）Web 会话一次——重新登录即可。
+
 ## 2026-09-10 — 服务端 v3.39：产品定位更新——Web 后台化（App 主攻内容入口）
 
 主人拍板五项决策（详见 `data/笔记/产品定位更新-*.md` §v2）：member 保留 web 内容

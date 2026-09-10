@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { api, type Entry, type Me } from '../api'
+import { api, type Announcement, type Entry, type Me } from '../api'
 import { confirmDlg, iconForName, promptDlg, toast } from '../ui'
 import { THUMB_EXTS } from '../filekinds'
 import { uploadFiles, uploadingNow } from '../uploader'
@@ -18,6 +18,15 @@ const route = useRoute()
 
 const grid = ref(localStorage.getItem('lsView') !== 'list')
 watch(grid, g => localStorage.setItem('lsView', g ? 'grid' : 'list'))
+
+// 公告横幅（v3.40）：主页顶部展示站长公告；按公告 id 记住"不再显示"
+const allAnns = ref<Announcement[]>([])
+const dismissedAnns = ref<number[]>(JSON.parse(localStorage.getItem('lsAnnsDismissed') || '[]'))
+const visibleAnns = computed(() => allAnns.value.filter(a => !dismissedAnns.value.includes(a.id)).slice(0, 3))
+function dismissAnn(id: number) {
+  dismissedAnns.value = [...dismissedAnns.value, id]
+  localStorage.setItem('lsAnnsDismissed', JSON.stringify(dismissedAnns.value))
+}
 function hashName(s: string): number {
   let h = 0
   for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0
@@ -357,6 +366,8 @@ function humanBytes(n: number): string {
 }
 
 onMounted(() => {
+  // 公告横幅数据（失败静默：公告属锦上添花，不挡文件浏览）
+  api.announcements().then(r => { allAnns.value = r.items }).catch(() => {})
   load(String(route.query.dir || ''))
   loadPublic()
   window.addEventListener('paste', onPaste)
@@ -376,6 +387,13 @@ onUnmounted(() => {
 
 <template>
   <main class="page">
+    <div v-if="visibleAnns.length" class="ann-banner">
+      <div v-for="a in visibleAnns" :key="a.id" class="ann-line">
+        <span>📢</span><b>{{ a.title }}</b>
+        <span v-if="a.body" class="ann-body">{{ a.body }}</span>
+        <button class="ann-x" title="不再显示" @click="dismissAnn(a.id)">✕</button>
+      </div>
+    </div>
     <div class="page-head">
       <div class="title-row"><h1>文件</h1></div>
       <button v-if="path && view === 'browse'" class="btn ghost sm" title="返回上一级" @click="load(parentDir(path))">← 返回</button>
@@ -553,3 +571,15 @@ onUnmounted(() => {
                 @share="onViewerShare" @refresh="load(path)" />
   </main>
 </template>
+
+<style scoped>
+.ann-banner { display: grid; gap: 6px; margin-bottom: 12px; }
+.ann-line {
+  display: flex; gap: 8px; align-items: baseline;
+  background: var(--glass); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 12px; font-size: 13.5px;
+}
+.ann-body { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ann-x { margin-left: auto; border: 0; background: transparent; cursor: pointer; color: var(--text-3); }
+.ann-x:hover { color: var(--danger); }
+</style>

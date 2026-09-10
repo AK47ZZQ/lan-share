@@ -141,6 +141,14 @@ async function changeRole(u: AdminUser, ev: Event) {
   try { await api.adminPatchUser(u.id, { role }); toast('角色已更新', 'ok'); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
 
+// 一键下线（v3.40 紧急操作）：Web 会话 + App 设备一起清，对方需重新登录/配对
+async function kickMember(u: AdminUser) {
+  if (!(await confirmDlg(`一键下线「${u.username}」的全部 Web 会话与 App 设备？对方需重新登录/配对。`, { danger: true, okText: '踢下线' }))) return
+  try {
+    const r = await api.kickUser(u.id, 'all')
+    toast(`已下线：Web 会话 ${r.sessions} 个、App 设备 ${r.devices} 台`, 'ok')
+  } catch (e) { toast((e as Error).message, 'err') }
+}
 async function delUser(u: AdminUser) {
   if (!(await confirmDlg(`删除成员「${u.username}」？其私人目录将移入 .orphaned/ 保留。`, { danger: true, okText: '删除' }))) return
   try { await api.adminDeleteUser(u.id); await loadAll(); toast('已删除', 'ok') } catch (e) { toast((e as Error).message, 'err') }
@@ -196,6 +204,7 @@ onMounted(async () => {
           <button class="btn ghost sm" title="修改用户名/重置密码/两步验证/WebDAV 密码" @click="credModal = u">✏️ 账号</button>
           <button class="btn ghost sm" title="设置私人空间配额" @click="openQuota(u)">📏 配额</button>
           <button class="btn ghost sm" title="导出该成员数据（私人空间+直传子树 zip）" @click="exportUser(u)">📦 导出</button>
+          <button v-if="u.username !== me?.username" class="btn ghost sm" title="一键下线该成员的全部 Web 会话与 App 设备（紧急操作）" @click="kickMember(u)">🚪 踢下线</button>
           <button class="btn ghost sm" @click="toggleActive(u)">{{ u.is_active ? '停用' : '启用' }}</button>
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
         </span>

@@ -1,11 +1,48 @@
 <script setup lang="ts">
 // 通知运营（v3.39 从 AdminView 拆出）：手动广播 + 发送记录/撤回/提醒未读/草稿定时。
 import { onMounted, ref } from 'vue'
-import { api, type AdminUser, type BroadcastItem } from '../api'
-import { confirmDlg, toast } from '../ui'
+import { api, type AdminNotificationItem, type AdminUser, type Announcement, type BroadcastItem } from '../api'
+import { confirmDlg, fmtTs, toast } from '../ui'
 
 const err = ref('')
 const users = ref<AdminUser[]>([])
+
+// ── 公告管理（v3.40）：主页公告栏的增删 ──
+const anns = ref<Announcement[]>([])
+const annTitle = ref('')
+const annBody = ref('')
+const annBusy = ref(false)
+async function loadAnns() {
+  try { anns.value = (await api.announcements()).items } catch (e) { toast((e as Error).message, 'err') }
+}
+async function createAnn() {
+  if (!annTitle.value.trim()) return
+  annBusy.value = true
+  try {
+    await api.createAnnouncement(annTitle.value.trim(), annBody.value.trim())
+    toast('公告已发布，全家主页可见', 'ok')
+    annTitle.value = ''; annBody.value = ''
+    await loadAnns()
+  } catch (e) { toast((e as Error).message, 'err') } finally { annBusy.value = false }
+}
+async function delAnn(a: Announcement) {
+  if (!(await confirmDlg(`删除公告「${a.title}」？主页将不再显示。`, { danger: true, okText: '删除' }))) return
+  try { await api.deleteAnnouncement(a.id); toast('已删除', 'ok'); await loadAnns() } catch (e) { toast((e as Error).message, 'err') }
+}
+
+// ── 站内通知管理（v3.40）：全站视角 + 单条删除 ──
+const notis = ref<AdminNotificationItem[]>([])
+const notiFilter = ref('')
+const notiBusy = ref(false)
+async function loadNotis() {
+  notiBusy.value = true
+  try { notis.value = (await api.adminNotifications(notiFilter.value, 100)).items }
+  catch (e) { toast((e as Error).message, 'err') } finally { notiBusy.value = false }
+}
+async function delNoti(n: AdminNotificationItem) {
+  if (!(await confirmDlg(`删除「${n.username}」的通知「${n.title}」？`, { danger: true, okText: '删除' }))) return
+  try { await api.deleteAdminNotification(n.id); toast('已删除', 'ok'); await loadNotis() } catch (e) { toast((e as Error).message, 'err') }
+}
 
 // 手动广播（v0.20）：标题/正文 + 可选成员，站内通知 + webhook 一起推
 const notifyOpen = ref(false)
@@ -44,6 +81,17 @@ async function loadBroadcasts() {
   bcOpen.value = true; bcBusy.value = true
   try {
     broadcasts.value = (await api.sentBroadcasts()).items
+  } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
+}
+async function purge(b: BroadcastItem) {
+  if (!(await confirmDlg(
+    `彻底删除「${b.title}」？将同时清掉已送达的全部站内通知（含已读），不可恢复。`,
+    { danger: true, okText: '彻底删除' }))) return
+  bcBusy.value = true
+  try {
+    const r = await api.purgeBroadcast(b.id)
+    toast(`已删除广播及 ${r.notifications_removed} 条站内通知`, 'ok')
+    await loadBroadcasts()
   } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
 }
 async function withdraw(b: BroadcastItem) {
@@ -99,6 +147,7 @@ function fmtTime(sec: number | null) {
 
 onMounted(async () => {
   try { users.value = await api.adminUsers() } catch (e) { err.value = (e as Error).message }
+  void loadAnns()
 })
 </script>
 
@@ -110,8 +159,62 @@ onMounted(async () => {
     </div>
     <p v-if="err" class="err">{{ err }}</p>
 
-    <!-- 手动广播 -->
+    <!-- 公告管理 -->
     <div class="card" style="padding:14px 16px;display:grid;gap:8px">
+      <div style="font-size:13.5px;font-weight:600">📢 公告管理</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input v-model="annTitle" maxlength="80" placeholder="公告标题（必填）" style="flex:2;min-width:180px;font-size:14px" />
+        <input v-model="annBody" maxlength="500" placeholder="正文（可留空）" style="flex:3;min-width:200px;font-size:14px" />
+        <button class="btn sm" :disabled="annBusy || !annTitle.trim()" @click="createAnn">
+          {{ annBusy ? '发布中…' : '发布公告' }}</button>
+      </div>
+      <div v-if="!anns.length" class="empty">还没有公告——发布后显示在全家主页顶部</div>
+      <div v-for="a in anns" :key="a.id" class="frow" style="cursor:default">
+        <span class="icon">📢</span>
+        <span class="name">
+          <div style="font-size:13.5px"><b>{{ a.title }}</b>
+            <span v-if="a.body" style="color:var(--text-3);font-size:12px"> · {{ a.body }}</span></div>
+          <small>{{ a.created_by }} · {{ fmtTs(a.created_at) }}</small>
+        </span>
+        <span class="ops" style="opacity:1">
+          <button class="iconbtn danger" title="删除公告" @click="delAnn(a)">✕</button>
+        </span>
+      </div>
+    </div>
+
+    <!-- 站内通知管理 -->
+    <div class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:10px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div style="font-size:13.5px;font-weight:600">📥 站内通知</div>
+        <span style="font-size:12px;color:var(--text-3)">全站近 100 条 · 可按成员筛选 · 单条删除</span>
+        <div style="flex:1" />
+        <select v-model="notiFilter" style="font-size:13px" @change="loadNotis">
+          <option value="">全部成员</option>
+          <option v-for="u in users" :key="u.id" :value="u.username">{{ u.nickname || u.username }}</option>
+        </select>
+        <button class="btn ghost sm" :disabled="notiBusy" @click="loadNotis">刷新</button>
+      </div>
+      <template v-if="notis.length || notiBusy">
+        <div v-if="!notis.length" class="empty">{{ notiBusy ? '加载中…' : '暂无通知' }}</div>
+        <div v-for="n in notis" :key="n.id" class="frow" style="cursor:default;align-items:flex-start">
+          <span class="icon">{{ n.read_at ? '📭' : '📬' }}</span>
+          <span class="name" style="flex:1">
+            <div style="font-size:13.5px"><b>{{ n.title }}</b>
+              <span class="badge" style="margin-left:4px">{{ n.type }}</span>
+              <span v-if="!n.read_at" class="badge warn">未读</span></div>
+            <div v-if="n.body" style="font-size:12px;color:var(--text-3);white-space:pre-wrap">{{ n.body }}</div>
+            <small>{{ n.username }} · {{ fmtTs(n.created_at) }}</small>
+          </span>
+          <span class="ops" style="opacity:1">
+            <button class="iconbtn danger" title="删除该通知" @click="delNoti(n)">✕</button>
+          </span>
+        </div>
+      </template>
+      <div v-else class="empty">点「刷新」加载全站通知</div>
+    </div>
+
+    <!-- 手动广播 -->
+    <div class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
       <div style="font-size:13.5px;font-weight:600">📣 发送通知</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn sm" @click="notifyOpen = !notifyOpen">{{ notifyOpen ? '收起' : '撰写广播' }}</button>
@@ -188,6 +291,7 @@ onMounted(async () => {
             <template v-if="b.status === 'sent'">
               <button v-if="!b.withdrawn_at" class="btn ghost sm" :disabled="bcBusy" @click="withdraw(b)">撤回未读</button>
               <button class="btn ghost sm" :disabled="bcBusy" @click="remind(b)">提醒未读</button>
+              <button class="btn ghost sm" :disabled="bcBusy" @click="purge(b)">彻底删除</button>
             </template>
             <template v-else>
               <button class="btn sm" :disabled="bcBusy" @click="sendDraft(b)">立即发送</button>

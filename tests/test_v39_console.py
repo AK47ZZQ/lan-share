@@ -158,3 +158,138 @@ def test_member_forbidden_on_governance(client):
     for path in ("/api/admin/large-files", "/api/admin/duplicates",
                  "/api/admin/audit", "/api/admin/sessions", "/api/admin/devices"):
         assert m.get(path).status_code == 403, path
+
+
+# ── v3.40 · 公告栏 ───────────────────────────────────────────
+
+def test_announcements_lifecycle(auth, client):
+    title = f"维护公告-{_rand()}"
+    r = auth.post("/api/admin/announcements",
+                  json={"title": title, "body": "今晚 20:00 维护"})
+    assert r.status_code == 200, r.text
+
+    items = auth.get("/api/announcements").json()["items"]
+    assert any(i["title"] == title for i in items)
+
+    # 成员可见，但不可增删
+    m = _member(client)
+    assert any(i["title"] == title
+               for i in m.get("/api/announcements").json()["items"])
+    assert m.post("/api/admin/announcements",
+                  json={"title": "x"}).status_code == 403
+
+    aid = next(i["id"] for i in items if i["title"] == title)
+    assert auth.delete(f"/api/admin/announcements/{aid}").status_code == 200
+    assert auth.delete(f"/api/admin/announcements/{aid}").status_code == 404
+    assert not any(i["title"] == title
+                   for i in auth.get("/api/announcements").json()["items"])
+
+    r = auth.post("/api/admin/announcements", json={"title": "   "})
+    assert r.status_code == 422  # 空标题拒绝
+
+
+# ── v3.40 · 站内通知管理 ─────────────────────────────────────
+
+def test_admin_notifications_list_and_delete(auth, client):
+    m = _member(client)
+    # 定向广播给成员 → 成员收件箱出现
+    r = auth.post("/api/admin/notify",
+                  json={"title": f"定向通知-{_rand()}", "body": "hi"})
+    assert r.status_code == 200, r.text
+
+    items = auth.get("/api/admin/notifications", params={"limit": 200}).json()["items"]
+    assert items, "全站通知列表不应为空"
+    assert all("username" in i for i in items)
+
+    # 按成员筛选
+    names = {i["username"] for i in items}
+    target_name = sorted(names)[0]
+    filtered = auth.get("/api/admin/notifications",
+                        params={"username": target_name}).json()["items"]
+    assert all(i["username"] == target_name for i in filtered)
+
+    nid = items[0]["id"]
+    assert auth.delete(f"/api/admin/notifications/{nid}").status_code == 200
+    assert auth.delete(f"/api/admin/notifications/{nid}").status_code == 404
+    assert m.get("/api/admin/notifications").status_code == 403
+
+
+def test_broadcast_purge_removes_record_and_notifications(auth, client):
+    m = _member(client)
+    title = f"待彻底删除-{_rand()}"
+    assert auth.post("/api/admin/notify",
+                     json={"title": title}).status_code == 200
+
+    inbox_before = len(m.get("/api/notifications").json()["items"])
+    assert inbox_before >= 1
+
+    sent = auth.get("/api/admin/notifications/sent").json()["items"]
+    bid = next(b["id"] for b in sent if b["title"] == title)
+
+    r = auth.delete(f"/api/admin/notifications/broadcast/{bid}")
+    assert r.status_code == 200, r.text
+    assert r.json()["notifications_removed"] >= 1
+    assert auth.delete(
+        f"/api/admin/notifications/broadcast/{bid}").status_code == 404
+
+    titles = [n["title"] for n in m.get("/api/notifications").json()["items"]]
+    assert title not in titles, "彻底删除后收件箱不应残留"
+
+
+# ── v3.40 · 会话治理增强 ─────────────────────────────────────
+
+def test_kick_by_account(auth, client):
+    # 自建已知用户名的成员：uid 必须"指名道姓"，否则会踢错人（文件内多测试
+    # 各自建过成员，admin 列表第一个未必是本测试的 m）
+    admin0 = _bare(client)
+    assert admin0.post("/api/login", json={
+        "username": ADMIN_USER, "password": ADMIN_PASS}).status_code == 200
+    inv = admin0.post("/api/admin/invites",
+                      json={"role": "member", "hours": 24},
+                      cookies=dict(admin0.cookies)).json()
+    mname = "kickm" + _rand()
+    assert client.post("/api/invites/redeem", json={
+        "code": inv["code"], "username": mname,
+        "password": MEMBER_PASS}).status_code == 200
+    m = _bare(client)
+    assert m.post("/api/login", json={
+        "username": mname, "password": MEMBER_PASS}).status_code == 200
+    assert m.post("/api/auth/token",
+                  json={"name": f"kick-{_rand()}"}).status_code == 200
+
+    users = auth.get("/api/admin/users").json()
+    uid = next(u["id"] for u in users if u["username"] == mname)
+
+    r = auth.post(f"/api/admin/users/{uid}/kick", json={"scope": "all"})
+    assert r.status_code == 200, r.text
+    assert r.json()["sessions"] >= 1
+
+    # 成员的 Web 会话已死
+    assert m.get("/api/auth/me").status_code == 401
+
+    # 自踢防护：admin 对自己 kick web/all 必须 400
+    me_row = auth.get("/api/auth/me").json()
+    admin_uid = next(u["id"] for u in users if u["username"] == me_row["username"])
+    assert auth.post(f"/api/admin/users/{admin_uid}/kick",
+                     json={"scope": "web"}).status_code == 400
+
+
+def test_global_sessions_purge_keeps_self(client):
+    a1 = _bare(client)
+    assert a1.post("/api/login", json={
+        "username": ADMIN_USER, "password": ADMIN_PASS}).status_code == 200
+    a2 = _bare(client)
+    assert a2.post("/api/login", json={
+        "username": ADMIN_USER, "password": ADMIN_PASS}).status_code == 200
+
+    operator = _bare(client)
+    operator.post("/api/login", json={
+        "username": ADMIN_USER, "password": ADMIN_PASS})
+    r = operator.delete("/api/admin/sessions")
+    assert r.status_code == 200, r.text
+    assert r.json()["revoked"] >= 1
+
+    # 其他会话全部下线，操作者自身保留
+    assert a1.get("/api/auth/me").status_code == 401
+    assert a2.get("/api/auth/me").status_code == 401
+    assert operator.get("/api/auth/me").status_code == 200

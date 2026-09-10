@@ -310,6 +310,13 @@ _PG_SCHEMA = """
         last_seen DOUBLE PRECISION,
         expires_at DOUBLE PRECISION NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS announcements(
+        id BIGSERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        body TEXT,
+        created_by TEXT NOT NULL DEFAULT '',
+        created_at DOUBLE PRECISION NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
 """
@@ -319,7 +326,8 @@ _PG_SCHEMA = """
 # 代码再读写）。若从 SQLite 迁移到 PG，这两张表也不会再出现在目标库。
 # 注意：不再使用，勿把两表加回 _PG_SEQUENCES。
 
-_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "device_tokens")
+_PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "device_tokens",
+                 "announcements")
 
 
 def pg_setval_sequences(conn: _PgConn):
@@ -673,6 +681,13 @@ def _migrate_v3():
                 created_at REAL NOT NULL,
                 last_seen REAL,
                 expires_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS announcements(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                body TEXT,
+                created_by TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
             CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);

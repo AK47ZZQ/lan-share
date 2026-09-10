@@ -16,11 +16,11 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.db import _db, _db_lock
-from app.security import audit, require_admin, require_user
+from app.security import audit, client_ip, require_admin, require_user
 from app.store import users as users_store
 from app.settings import (NOTIFY_PREFS_PREFIX, NOTIFY_WEBHOOK_URL,
                                 get_setting, set_setting)
@@ -211,7 +211,8 @@ def admin_list_broadcasts(_admin=Depends(require_admin)):
         if tids:
             marks = ",".join("?" * len(tids))
             row = _db().execute(
-                f"SELECT SUM(read_at IS NULL) AS unread, SUM(read_at IS NOT NULL) AS read "
+                f"SELECT SUM(CASE WHEN read_at IS NULL THEN 1 ELSE 0 END) AS unread, "
+                f"SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read "
                 f"FROM notifications WHERE broadcast_id=? AND user_id IN ({marks})",
                 [r["id"], *tids]).fetchone()
             stat = {"unread": row["unread"] or 0, "read": row["read"] or 0}
@@ -461,3 +462,106 @@ def push_webhook(title: str, body: str = "") -> None:
             audit("webhook_fail", title[:60], str(e)[:120])
 
     _webhook_pool.submit(_run)
+
+
+# ── 公告栏（v3.40）：面向全家的持续布告，区别于一次性推送 ———
+# 公告 = 主页公告栏条目（登录可见，站长增删）；通知 = 个人收件箱推送。
+# 广播（admin_broadcasts）仍承担"推送一次性通知"，公告承担"长期挂着的告知"。
+
+
+@router.get("/api/announcements")
+def announcements_list(_user: dict = Depends(require_user)):
+    rows = _db().execute(
+        "SELECT id, title, body, created_by, created_at FROM announcements "
+        "ORDER BY id DESC LIMIT 10").fetchall()
+    return {"items": [dict(r) for r in rows]}
+
+
+class AnnouncementBody(BaseModel):
+    title: str
+    body: str = ""
+
+
+@router.post("/api/admin/announcements")
+def announcement_create(body: AnnouncementBody, request: Request,
+                        _admin=Depends(require_admin)):
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="标题不能为空")
+    with _db_lock:
+        _db().execute(
+            "INSERT INTO announcements(title, body, created_by, created_at) "
+            "VALUES(?,?,?,?)",
+            (title[:80], body.body.strip()[:500],
+             _admin["username"], time.time()))
+        _db().commit()
+    audit("announcement.create", target=title[:40], ip=client_ip(request))
+    return {"ok": True}
+
+
+@router.delete("/api/admin/announcements/{aid}")
+def announcement_delete(aid: int, request: Request,
+                        _admin=Depends(require_admin)):
+    with _db_lock:
+        cur = _db().execute("DELETE FROM announcements WHERE id = ?", (aid,))
+        _db().commit()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    audit("announcement.delete", target=str(aid), ip=client_ip(request))
+    return {"ok": True}
+
+
+# ── 站内通知管理（v3.40）：admin 全站视角 + 单条删除 ————————
+
+
+@router.get("/api/admin/notifications")
+def admin_notifications_list(request: Request, _admin=Depends(require_admin),
+                             username: str = "", limit: int = 100):
+    """全站通知近况（新→旧），可按成员筛选；用户名映射走 users store。"""
+    limit = max(1, min(limit, 200))
+    uid = users_store.id_by_username(username) if username.strip() else None
+    if username.strip() and uid is None:
+        return {"items": []}
+    rows = (_db().execute(
+        "SELECT id, user_id, type, title, body, link, created_at, read_at, "
+        "broadcast_id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        (uid, limit)).fetchall() if uid is not None else _db().execute(
+        "SELECT id, user_id, type, title, body, link, created_at, read_at, "
+        "broadcast_id FROM notifications ORDER BY id DESC LIMIT ?",
+        (limit,)).fetchall())
+    items = []
+    for r in rows:
+        d = dict(r)
+        uid = d.pop("user_id")
+        # 成员被删后其通知可能仍残留（无外键级联的存量库）：回退显示 #uid
+        d["username"] = users_store.get_username(uid) or f"#{uid}"
+        items.append(d)
+    return {"items": items}
+
+
+@router.delete("/api/admin/notifications/{nid}")
+def admin_notification_delete(nid: int, request: Request,
+                              _admin=Depends(require_admin)):
+    with _db_lock:
+        cur = _db().execute("DELETE FROM notifications WHERE id = ?", (nid,))
+        _db().commit()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="通知不存在")
+    audit("admin.notification.delete", target=str(nid), ip=client_ip(request))
+    return {"ok": True}
+
+
+@router.delete("/api/admin/notifications/broadcast/{bid}")
+def admin_broadcast_purge(bid: str, request: Request,
+                          _admin=Depends(require_admin)):
+    """彻底删除广播：记录 + 已送达的站内通知一并清除（撤回只删未读，这个删干净）。"""
+    with _db_lock:
+        cur = _db().execute("DELETE FROM admin_broadcasts WHERE id = ?", (bid,))
+        n = _db().execute(
+            "DELETE FROM notifications WHERE broadcast_id = ?", (bid,))
+        _db().commit()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="广播不存在")
+    audit("admin.broadcast.purge", target=bid[:12] + "…",
+          detail=f"notifications={n.rowcount}", ip=client_ip(request))
+    return {"ok": True, "notifications_removed": n.rowcount}

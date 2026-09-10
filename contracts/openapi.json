@@ -86,6 +86,24 @@
     "title": "AlbumItemsBody",
     "type": "object"
    },
+   "AnnouncementBody": {
+    "properties": {
+     "body": {
+      "default": "",
+      "title": "Body",
+      "type": "string"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "title": "AnnouncementBody",
+    "type": "object"
+   },
    "AuthBody": {
     "properties": {
      "password": {
@@ -332,6 +350,17 @@
      }
     },
     "title": "InviteBody",
+    "type": "object"
+   },
+   "KickBody": {
+    "properties": {
+     "scope": {
+      "default": "all",
+      "title": "Scope",
+      "type": "string"
+     }
+    },
+    "title": "KickBody",
     "type": "object"
    },
    "MoveBody": {
@@ -957,6 +986,79 @@
     "summary": "Admin Delete Album"
    }
   },
+  "/api/admin/announcements": {
+   "post": {
+    "operationId": "announcement_create_api_admin_announcements_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AnnouncementBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Announcement Create"
+   }
+  },
+  "/api/admin/announcements/{aid}": {
+   "delete": {
+    "operationId": "announcement_delete_api_admin_announcements__aid__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "aid",
+      "required": true,
+      "schema": {
+       "title": "Aid",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Announcement Delete"
+   }
+  },
   "/api/admin/audit": {
    "get": {
     "description": "审计日志近况（audit_log 自带 AUDIT_KEEP 水位）。",
@@ -1454,6 +1556,93 @@
     "summary": "Admin Large Files"
    }
   },
+  "/api/admin/notifications": {
+   "get": {
+    "description": "全站通知近况（新→旧），可按成员筛选；用户名映射走 users store。",
+    "operationId": "admin_notifications_list_api_admin_notifications_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "username",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Username",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Notifications List"
+   }
+  },
+  "/api/admin/notifications/broadcast/{bid}": {
+   "delete": {
+    "description": "彻底删除广播：记录 + 已送达的站内通知一并清除（撤回只删未读，这个删干净）。",
+    "operationId": "admin_broadcast_purge_api_admin_notifications_broadcast__bid__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "bid",
+      "required": true,
+      "schema": {
+       "title": "Bid",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Broadcast Purge"
+   }
+  },
   "/api/admin/notifications/broadcast/{bid}/remind": {
    "post": {
     "description": "提醒未读：对仍处未读的成员再推一次站外 webhook（站内不重复落）。",
@@ -1657,6 +1846,43 @@
     "summary": "Admin List Broadcasts"
    }
   },
+  "/api/admin/notifications/{nid}": {
+   "delete": {
+    "operationId": "admin_notification_delete_api_admin_notifications__nid__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "nid",
+      "required": true,
+      "schema": {
+       "title": "Nid",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Notification Delete"
+   }
+  },
   "/api/admin/notify": {
    "post": {
     "operationId": "admin_broadcast_notify_api_admin_notify_post",
@@ -1763,6 +1989,21 @@
    }
   },
   "/api/admin/sessions": {
+   "delete": {
+    "description": "全站会话清空（应急\"全部下线\"）：保留当前请求自己的会话。",
+    "operationId": "admin_sessions_purge_api_admin_sessions_delete",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Admin Sessions Purge"
+   },
    "get": {
     "description": "活跃 Web 会话（token_hash 仅作吊销句柄，不回传原文令牌——库里本就只有哈希）。",
     "operationId": "admin_sessions_api_admin_sessions_get",
@@ -1913,6 +2154,61 @@
      }
     },
     "summary": "Admin Patch User"
+   }
+  },
+  "/api/admin/users/{uid}/kick": {
+   "post": {
+    "description": "按账号一键下线：scope=all 全部 / web 仅 Web 会话 / app 仅 App 设备。\n对当前登录账号拒绝 all/web（防止站长把自己踢下线）；app 范围允许（可踢自己的旧手机）。",
+    "operationId": "admin_kick_user_api_admin_users__uid__kick_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "uid",
+      "required": true,
+      "schema": {
+       "title": "Uid",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/KickBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Kick User"
    }
   },
   "/api/admin/users/{uid}/password": {
@@ -2333,6 +2629,22 @@
      }
     },
     "summary": "Update Album Items"
+   }
+  },
+  "/api/announcements": {
+   "get": {
+    "operationId": "announcements_list_api_announcements_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Announcements List"
    }
   },
   "/api/app/download": {

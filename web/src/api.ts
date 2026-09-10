@@ -52,6 +52,8 @@ export interface DupGroup { size: number; paths: string[]; wasted: number }
 export interface AuditItem { ts: number; ip: string; action: string; target: string; detail: string; username: string }
 export interface AdminSession { token_hash: string; username: string; created_at: number; expires_at: number; ip: string; ua: string }
 export interface AdminDevice { id: number; username: string; name: string; created_at: number; last_seen: number | null; expires_at: number }
+export interface Announcement { id: number; title: string; body: string | null; created_by: string; created_at: number }
+export interface AdminNotificationItem { id: number; username: string; type: string; title: string; body: string | null; link: string | null; created_at: number; read_at: number | null; broadcast_id: string | null }
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
     // 会话过期：整页跳登录（带 next 回跳）。公开页（/s/ 分享、/up 直传、/login）
@@ -137,6 +139,20 @@ export const api = {
   revokeAdminSession: (tokenHash: string) => fetch(`/api/admin/sessions/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   adminDevices: () => fetch('/api/admin/devices').then(r => handle<{ items: AdminDevice[] }>(r)),
   revokeAdminDevice: (id: number) => fetch(`/api/admin/devices/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+
+  // 公告栏 + 站内通知管理 + 会话治理（v3.40）
+  announcements: () => fetch('/api/announcements').then(r => handle<{ items: Announcement[] }>(r)),
+  createAnnouncement: (title: string, body: string) => jpost('/api/admin/announcements', { title, body }).then(r => handle<{ ok: boolean }>(r)),
+  deleteAnnouncement: (id: number) => fetch(`/api/admin/announcements/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  adminNotifications: (username = '', limit = 100) => {
+    const q = new URLSearchParams({ limit: String(limit) })
+    if (username) q.set('username', username)
+    return fetch(`/api/admin/notifications?${q}`).then(r => handle<{ items: AdminNotificationItem[] }>(r))
+  },
+  deleteAdminNotification: (id: number) => fetch(`/api/admin/notifications/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  purgeBroadcast: (id: string) => fetch(`/api/admin/notifications/broadcast/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean; notifications_removed: number }>(r)),
+  kickUser: (uid: number, scope: 'all' | 'web' | 'app') => jpost(`/api/admin/users/${uid}/kick`, { scope }).then(r => handle<{ ok: boolean; sessions: number; devices: number }>(r)),
+  purgeSessions: () => fetch('/api/admin/sessions', { method: 'DELETE' }).then(r => handle<{ ok: boolean; revoked: number }>(r)),
   // v0.20 手动广播：站内通知逐人 + 已配置 webhook 同步推
   adminNotify: (title: string, body: string, userIds?: number[]) =>
     jpost('/api/admin/notify', { title, body, ...(userIds?.length ? { user_ids: userIds } : {}) })

@@ -2,11 +2,12 @@
 // 控制台总览（v3.39 定位更新）：一屏看全站——存储/成员/照片/分享/回收站/
 // 秒传库/会话设备/App 版本 + 最近动态。全部只读聚合（/api/admin/overview）。
 import { computed, onMounted, ref } from 'vue'
-import { api, type ConsoleOverview, type ActivityItem } from '../api'
+import { api, type Announcement, type ConsoleOverview, type ActivityItem } from '../api'
 import { ACTION_NAMES, fmtTs, human } from '../ui'
 
 const ov = ref<ConsoleOverview | null>(null)
 const acts = ref<ActivityItem[]>([])
+const anns = ref<Announcement[]>([])
 const err = ref('')
 
 const diskBarStyle = computed(() => {
@@ -17,9 +18,11 @@ const diskBarStyle = computed(() => {
 
 onMounted(async () => {
   try {
-    const [o, acts_] = await Promise.all([api.adminOverview(), api.activity(40)])
+    const [o, acts_, anns_] = await Promise.all([
+      api.adminOverview(), api.activity(40), api.announcements()])
     ov.value = o
     acts.value = acts_.slice(0, 8)
+    anns.value = anns_.items
   } catch (e) { err.value = (e as Error).message }
 })
 </script>
@@ -32,6 +35,17 @@ onMounted(async () => {
         站长工作台 · 数据截至 {{ ov ? fmtTs(ov.server_time) : '加载中…' }}</span>
     </div>
     <p v-if="err" class="err">{{ err }}</p>
+
+    <!-- 公告栏：站长的"长期布告"，区别于一次性推送 -->
+    <div v-if="anns.length" class="card ann-card">
+      <div class="ann-head">📢 公告
+        <router-link to="/notify-ops" class="stat-link">管理 →</router-link></div>
+      <div v-for="a in anns" :key="a.id" class="ann-row">
+        <b>{{ a.title }}</b>
+        <span v-if="a.body" class="ann-body">{{ a.body }}</span>
+        <span class="ann-time">{{ a.created_by }} · {{ fmtTs(a.created_at) }}</span>
+      </div>
+    </div>
 
     <template v-if="ov">
       <div class="stat-grid">
@@ -113,6 +127,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.ann-card { padding: 11px 14px; margin-bottom: 12px; display: grid; gap: 5px; }
+.ann-head { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.ann-row { display: flex; gap: 8px; align-items: baseline; font-size: 13.5px; flex-wrap: wrap; }
+.ann-body { color: var(--text-2); }
+.ann-time { font-size: 11.5px; color: var(--text-3); margin-left: auto; }
 .stat-grid {
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
