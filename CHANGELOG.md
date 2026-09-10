@@ -2,6 +2,49 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — 服务端 v3.35：安全加固与"约定收口"第一批
+
+依据《项目记忆/09-项目建议报告》与《10-改进计划-v3.35》执行，**行为等价 + 纯增强**，
+不含功能变更、不改 API 形状（契约仍 117 路径）。
+
+**安全小项（B）**
+- **Webhook SSRF 防护**（`notify.assert_public_webhook_url`）：scheme 白名单 +
+  字面 IP 私网/回环/链路本地/保留段判定 + 域名解析结果须全为公网；**保存时**
+  与**发送前**双处校验。实测拒绝 `ftp://`、`127.0.0.1`、`192.168.*`、`[::1]`、
+  `169.254.*`，公网域名放行。残留（有意接受并已文档化）：不防 DNS rebinding 与
+  urllib 默认 302 跟随——webhook 仅 admin 可配置，作纵深防线足够。
+- **管理端用户列表不再拉取密码哈希**：SQL 由 `SELECT webdav_password_hash` 改为
+  `(webdav_password_hash IS NOT NULL) AS webdav_set`，字段名与类型不变。
+- **APK SHA 缓存加锁**：`appver._apk_sha_cache` 增 `threading.Lock`，消除 App
+  后台高频检查更新的并发读写竞争。
+
+**约定收口（A/C）——"存在 N 份的约定"收成"唯一事实源"**
+- **路径转换单一事实源**：新增 `filetools.to_rel()`，收编 9 个模块里手写的
+  `str(x.relative_to(SHARE_ROOT)).replace("\\","/")` **38 处 → 1 处**；顺带修掉
+  webdav 两处漏 `replace` 的审计记录（Windows 下带反斜杠）。
+- **角色常量单一事实源**：新增 `app/roles.py`（`ADMIN/MEMBER/GUEST/ALL_ROLES`），
+  服务端 9 文件 **39 处**角色字面量收编。**刻意不动**通知分组与保留用户名集合
+  （同名不同义，roles.py 内已显式警告勿复用）。
+- **私有符号公共化**：`filetools._file_dict → file_dict`、
+  `_RESERVED_NAME → RESERVED_NAME`，消除跨模块 import 下划线私有符号的 3 个点。
+
+**文档**
+- README 修正过期测试基线（pytest 169→210、Dart 144→179，补契约 117 路径）。
+- 《09-项目建议报告》勘误：`check.bat` 实测已含 pytest/ruff/mypy/pip-audit 四段，
+  原"门禁缺段"结论作废并移入"已完成勿重复"清单。
+
+**运维与备份（欠账清理）**
+- **备份恢复演练 Tier-1 实测通过**：最新 dump `lanshare-20260910.dump` 的 sha256
+  与 sidecar 一致、`pg_restore -l` 可读、**16 张表**齐全。
+- **文件数据侧新增 manifest 校验**（`backup.bat` 产出 `files-manifest.txt`：
+  文件数 + 总字节；`scripts/restore-drill.bat` 比对，不一致即 `DRILL FAILED`）。
+  补上"robocopy 增量且不删、跑残了看不出来"的盲区；首条基线
+  **7454 文件 / 20,147,257,165 字节**。演练文档见 `docs/OPERATIONS.md §4`。
+- **待办逐条复核**：关闭 3 项过期/已完成条目（ZZQZZQ 授权——实为 admin 无需授权；
+  成员视角预览——早已实现；check.bat 四段门禁——早已齐备），未关闭项逐条注明原因。
+
+**门禁**：pytest 210 / ruff / mypy 全绿。
+
 ## 2026-09-10 — v0.24.0+69：知识库与图谱（双链/图谱/agent 三层，全端上线）
 
 知识库 = 笔记的第三种视图（方案 A 加层，零新存储）：`data/笔记/知识库与图谱功能设计方案（待确认）.md` v2 定稿 → M-K0~K4 一版全交付。

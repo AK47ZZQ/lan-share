@@ -72,19 +72,59 @@ curl -k https://192.168.1.100:8765/healthz
 - 迁移规范：所有 DDL 走三引擎迁移层（PG/SQLite/MySQL 兼容），新加列必须
   三份方言都写。
 
-## 4. 文件备份（backup.bat）
+## 4. 文件备份与恢复演练（backup.bat + restore-drill.bat）
 
 > v3.31 调整（改进建议 9.6-P2-4）：`robocopy` 加 `/MT:2`（默认 8 线程会把
 > 磁盘 IO 吃满，备份窗口内 Web/App 列表与缩略图明显变慢）；`pg_dump` 加
 > `--lock-wait-timeout=5000`（拿不到锁 5 秒放弃而非挂死；ACCESS SHARE 不阻塞
 > 业务写，正常瞬时获得）。
+>
+> **v3.35 新增**：文件数据侧 **manifest 校验**（补上"robocopy 增量且不删，
+> 跑残了看不出来"的盲区）。
 
-- 计划任务：`schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 03:30
+- 计划任务（备份）：`schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 23:30
   /TR "C:\lan-share\backup.bat"`（已注册）。
+  > 时间口径核对（2026-09-10）：README/HANDOVER 写 23:30，而 `backup.bat` 注释与本
+  > 手册原写 03:30——**已按实测统一为 23:30**（备份产物 mtime 为 23:30 / 00:33，
+  > 与 23:30 吻合）。如需确认，`schtasks /Query /TN "lan-share-backup" /V /FO LIST`，
+  > 四处（README / HANDOVER / 本手册 / backup.bat 注释）一并改。
 - 行为：PG custom-format dump（按日期，保留最近 2 天）+ 数据目录拷贝到
   `BACKUP_DEST`（默认 `C:\lan-share-backup`，可用环境变量覆盖）。
-- **每月做一次恢复演练**：备份目录 → 空 data 目录 → 起服务 → healthz +
-  抽查文件可下载。备份没恢复过等于没备份。
+- **产物清单**：`db\lanshare-YYYYMMDD.dump`（+ `.sha256` sidecar）、`files\`
+  （数据目录增量副本）、`files-manifest.txt`（文件数 + 总字节，v3.35 新增）。
+
+### 4.1 恢复演练（restore-drill.bat）
+
+**Tier 1 — 只读，安全，可定期自动跑**（`scripts\restore-drill.bat`）：
+1. 取 `%BACKUP_DEST%\db` 里最新的 dump；
+2. 校验 sha256 与 `.sha256` sidecar 是否一致（**sidecar 是大写、`sha256sum`
+   是小写，比对须忽略大小写**）；
+3. `pg_restore -l` 读一遍归档（截断/损坏的 dump 会在这里失败）；
+4. **比对 `files-manifest.txt` 与实际文件数/总字节**（v3.35 新增）。
+
+建议每周日 04:00 跑（**需主人执行**——本机 `schtasks` 受安全策略限制，
+AI 无法代跑）：
+```bat
+schtasks /Create /TN "lan-share-restore-drill" /SC WEEKLY /D SUN /ST 04:00 ^
+  /TR "C:\lan-share\scripts\restore-drill.bat"
+```
+
+**Tier 2 — 全量恢复，手工，需一次性开权限**：
+`lanshare` 角色默认无 `CREATEDB`，所以要先（二选一）：
+```sql
+ALTER ROLE lanshare CREATEDB;            -- 一次性
+```
+然后按 `restore-drill.bat` 末尾的步骤：加一条 pgpass → `createdb lanshare_drill`
+→ `pg_restore -d lanshare_drill <dump>` → 抽查 `users`/`photos`/`shares` 行数 →
+演练完 `DROP DATABASE lanshare_drill`。
+
+> **每月至少做一次 Tier 2。备份没恢复过等于没备份。**
+> 2026-09-10 复核：Tier 1 已实测通过（最新 dump sha256 一致、归档可读、
+> **16 张表**齐全、manifest 基线 7454 文件 / 20,147,257,165 字节）。
+> 另注：dump 中仍含已下线的 `photo_comments` / `photo_reactions` 两表
+> （v0.21 下线但存量表未 DROP），可在下次大版本迁移时清理。
+
+- 异地/第二块盘备份：**仍挂账**（第二块盘到位后连同 Tier 2 一起落地）。
 
 ## 5. 证书与信任（TLS）
 
