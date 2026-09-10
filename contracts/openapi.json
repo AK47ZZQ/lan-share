@@ -173,6 +173,48 @@
     "title": "Body_create_share_api_share_post",
     "type": "object"
    },
+   "Body_feedback_create_api_feedback_post": {
+    "properties": {
+     "app_ver": {
+      "default": "",
+      "title": "App Ver",
+      "type": "string"
+     },
+     "body": {
+      "default": "",
+      "title": "Body",
+      "type": "string"
+     },
+     "device": {
+      "default": "",
+      "title": "Device",
+      "type": "string"
+     },
+     "files": {
+      "default": [],
+      "items": {
+       "contentMediaType": "application/octet-stream",
+       "type": "string"
+      },
+      "title": "Files",
+      "type": "array"
+     },
+     "title": {
+      "title": "Title",
+      "type": "string"
+     },
+     "type": {
+      "default": "idea",
+      "title": "Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "title": "Body_feedback_create_api_feedback_post",
+    "type": "object"
+   },
    "Body_upload_avatar_api_auth_avatar_post": {
     "properties": {
      "file": {
@@ -1241,6 +1283,23 @@
      }
     },
     "summary": "Admin Export"
+   }
+  },
+  "/api/admin/feedback": {
+   "get": {
+    "description": "admin 全量视角（含用户名），Web 管理台后续可挂。",
+    "operationId": "feedback_admin_list_api_admin_feedback_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Feedback Admin List"
    }
   },
   "/api/admin/grants": {
@@ -3303,6 +3362,140 @@
      }
     },
     "summary": "Disk Detail"
+   }
+  },
+  "/api/feedback": {
+   "get": {
+    "description": "自己的反馈列表；admin 全量（带用户名，前端按需展示）。",
+    "operationId": "feedback_list_api_feedback_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Feedback List"
+   },
+   "post": {
+    "operationId": "feedback_create_api_feedback_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_feedback_create_api_feedback_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Feedback Create"
+   }
+  },
+  "/api/feedback/{fid}": {
+   "get": {
+    "operationId": "feedback_detail_api_feedback__fid__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "fid",
+      "required": true,
+      "schema": {
+       "title": "Fid",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Feedback Detail"
+   }
+  },
+  "/api/feedback/{fid}/img/{name}": {
+   "get": {
+    "operationId": "feedback_image_api_feedback__fid__img__name__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "fid",
+      "required": true,
+      "schema": {
+       "title": "Fid",
+       "type": "string"
+      }
+     },
+     {
+      "in": "path",
+      "name": "name",
+      "required": true,
+      "schema": {
+       "title": "Name",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Feedback Image"
    }
   },
   "/api/files": {

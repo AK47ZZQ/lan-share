@@ -11,6 +11,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'about_page.dart';
+import 'feedback_page.dart';
 import 'notes_page.dart';
 import 'transfers_page.dart';
 import 'admin_page.dart';
@@ -950,6 +951,19 @@ class _MePageState extends ConsumerState<MePage> {
                                 builder: (_) => const TrashPage()))),
                       ]))),
         ),
+        // ── 反馈通道（v0.28）：想法/Bug 直达开发端，状态可追 ────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: Card(
+              margin: EdgeInsets.zero,
+              child: ListTile(
+                  leading: Icon(Icons.forum_outlined, color: cs.primary),
+                  title: const Text('反馈通道'),
+                  subtitle: const Text('有想法或发现 Bug？一键发给开发端'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => const FeedbackPage())),
+                  ))),
         // ── 外观与通知 ────────────────────────────────────────
         _group(context, '外观与通知', [
           ListTile(

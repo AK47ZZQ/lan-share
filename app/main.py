@@ -23,10 +23,11 @@ from app.api import notes
 from app.api import uploads, trash, previews          # files 按域拆出（07 批次 3A）
 from app.api import photos, albums, qr                # system 按域拆出（07 批次 3B）
 from app.api import console                           # 管理台（v3.39 Web 控制台）
+from app.api import feedback                          # 反馈通道（v0.28）
 
 for _mod in (admin, appver, auth, files, uploads, trash, previews, share,
              webdav, system, notify, healthreport, photos, albums, qr, notes,
-             console):
+             console, feedback):
     app.include_router(_mod.router)
 
 # CSP：脚本全部外部化（script-src 'self'）；样式保留内联（style-src 'unsafe-inline'，
