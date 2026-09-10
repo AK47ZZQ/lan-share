@@ -13,8 +13,9 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.config import SHARE_ROOT, TRASH_DAYS
 from app.db import _db, _db_lock
+from app.roles import ADMIN
 from app.security import audit, client_ip, require_admin, require_user
-from app.filetools import human_size
+from app.filetools import human_size, to_rel
 from app.spaces import resolve, visible
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
@@ -40,7 +41,7 @@ def _trash_rel_parts(orig_path: str) -> list[str] | None:
 @router.get("/api/trash")
 async def list_trash(_user=Depends(require_user)):
     rows = _db().execute("SELECT * FROM trash ORDER BY deleted_at DESC").fetchall()
-    is_admin = _user["role"] == "admin"
+    is_admin = _user["role"] == ADMIN
     items = []
     for r in rows:
         parts = _trash_rel_parts(r["orig_path"])
@@ -70,7 +71,7 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     # trash id 把他人 private/incoming 的回收站条目"恢复"进自己空间
     parts = _trash_rel_parts(row["orig_path"])
     if parts is None:
-        if _user["role"] != "admin":
+        if _user["role"] != ADMIN:
             raise HTTPException(status_code=403, detail="Forbidden")
     elif not visible(_user, parts):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -89,8 +90,8 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     with _db_lock:
         _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
         _db().commit()
-    audit("restore", str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"), ip=client_ip(request))
-    return {"ok": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")}
+    audit("restore", to_rel(dest), ip=client_ip(request))
+    return {"ok": True, "path": to_rel(dest)}
 
 
 @router.delete("/api/trash/{trash_id}")
@@ -100,7 +101,7 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
         raise HTTPException(status_code=404, detail="Not found")
     parts = _trash_rel_parts(row["orig_path"])
     if parts is None:
-        if _user["role"] != "admin":
+        if _user["role"] != ADMIN:
             raise HTTPException(status_code=403, detail="Forbidden")
     elif not visible(_user, parts):
         raise HTTPException(status_code=403, detail="Forbidden")

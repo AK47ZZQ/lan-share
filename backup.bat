@@ -1,6 +1,10 @@
 @echo off
 REM LAN Share backup (v3.5): PostgreSQL dump + data dir -> backup dest. Daily via Task Scheduler:
-REM   schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 03:30 /TR "C:\lan-share\backup.bat"
+REM   schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 23:30 /TR "C:\lan-share\backup.bat"
+REM   NOTE (2026-09-10): this comment and docs/OPERATIONS.md previously said 03:30 while
+REM   README/HANDOVER said 23:30. Observed dump mtimes (23:30, 00:33) match 23:30, so the
+REM   docs are now aligned to 23:30. Confirm the registered task time with
+REM   `schtasks /Query /TN "lan-share-backup" /V /FO LIST` and fix all four places together.
 REM DB dumps are date-stamped and only the last 2 days are kept (older deleted here).
 REM Requires PGPASSFILE (C:\pginstall\pgpass.conf) - password never lives in this file.
 setlocal
@@ -51,5 +55,20 @@ if %ERRORLEVEL% GEQ 8 (
   echo BACKUP FAILED robocopy exit %ERRORLEVEL%
   exit /b 1
 )
+
+REM -- file-data manifest: fingerprint (count + total bytes) of the files copy.
+REM    robocopy is incremental and never mirror-deletes, so a partial run is
+REM    otherwise invisible; restore-drill.bat compares against this manifest.
+REM    Read-only enumeration; ~20GB/7.5k files costs a few seconds.
+REM    NOTE: WriteAllLines with an explicit List is used because passing an
+REM    array / -join expression to Set-Content collapsed it onto ONE line
+REM    (verified 2026-09-10) - the manifest must be 3 separate lines.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$r='%BACKUP_DEST%\files'; $f=@(Get-ChildItem -LiteralPath $r -Recurse -File -Force -ErrorAction SilentlyContinue); $s=($f | Measure-Object -Property Length -Sum).Sum; if($null -eq $s){$s=0}; $a=New-Object 'System.Collections.Generic.List[string]'; $a.Add('generated=' + (Get-Date -Format s)); $a.Add('files=' + $f.Count); $a.Add('bytes=' + [int64]$s); [IO.File]::WriteAllLines('%BACKUP_DEST%\files-manifest.txt', $a)"
+if errorlevel 1 (
+  echo BACKUP FAILED: file manifest generation failed
+  exit /b 1
+)
+echo file manifest written
 echo BACKUP OK
 endlocal

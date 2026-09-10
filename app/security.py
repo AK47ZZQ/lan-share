@@ -14,6 +14,7 @@ from fastapi import HTTPException, Request
 from app.config import (AUDIT_KEEP, COOKIE_NAME, DEVICE_TOKEN_TTL, LOGIN_LOCK_SECONDS,
                         LOGIN_MAX_FAILS, SESSION_RENEW_AFTER, SESSION_TTL)
 from app.db import _db, _db_lock
+from app.roles import ADMIN
 from app.store import settings
 from app.store.settings import get_setting
 
@@ -157,7 +158,7 @@ def require_user(request: Request) -> sqlite3.Row:
 def require_admin(request: Request) -> sqlite3.Row:
     """v3：管理端点依赖（成员/邀请/授权管理、审计、删号）。"""
     user = require_user(request)
-    if user["role"] != "admin":
+    if user["role"] != ADMIN:
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 
@@ -170,7 +171,7 @@ def preview_user(request: Request, user: sqlite3.Row) -> "sqlite3.Row | dict":
     返回 dict 并补 user_id=id（users 表主键是 id，会话行叫 user_id）；dict 与
     Row 的键访问/`.keys()` 语义一致，resolve/visible 的取值写法两者兼容。"""
     as_name = (request.headers.get("x-as-user") or "").strip()
-    if not as_name or user["role"] != "admin":
+    if not as_name or user["role"] != ADMIN:
         return user
     row = _db().execute(
         "SELECT * FROM users WHERE username=? AND is_active=1", (as_name,)).fetchone()

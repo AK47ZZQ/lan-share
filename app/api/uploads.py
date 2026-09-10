@@ -19,8 +19,9 @@ from app.config import (MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE, SHARE_ROOT, UPLOAD_SES
                         chunk_size_for)
 from app.services import cleanup
 from app.db import _db, _db_lock
+from app.roles import ADMIN
 from app.security import audit, client_ip, require_user
-from app.filetools import clean_filename, human_size, move_to_trash, save_upload
+from app.filetools import clean_filename, human_size, move_to_trash, save_upload, to_rel
 from app.spaces import enforce_quota, resolve, sample_readable
 from app.api.photos import photos_scan_bump
 
@@ -30,7 +31,7 @@ router = APIRouter()
 
 def _session_owner_guard(row, user):
     """分块上传会话只能由创建者（或 admin）续传/收尾。"""
-    if row["user_id"] and row["user_id"] != user["user_id"] and user["role"] != "admin":
+    if row["user_id"] and row["user_id"] != user["user_id"] and user["role"] != ADMIN:
         raise HTTPException(status_code=403, detail="Forbidden")
 def register_blob(path: Path, sha: str, size: int) -> bool:
     """登记内容指纹；发现同内容旧文件则用 NTFS 硬链接去重（返回是否发生了去重）。
@@ -135,18 +136,18 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                             # 会导致下面 os.link 找不到源（WinError 2）——已是同
                             # 内容，直接判定秒传完成，不动旧文件
                             if os.path.samestat(os.stat(dest), os.stat(sample)):
-                                audit("upload_instant", str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                                audit("upload_instant", to_rel(dest),
                                       human_size(body.size), client_ip(request))
-                                return {"instant": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                                return {"instant": True, "path": to_rel(dest),
                                         "size": body.size, "size_human": human_size(body.size)}
                         except OSError:
                             pass
-                        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+                        move_to_trash(dest, to_rel(dest))
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     os.link(sample, dest)
-                    audit("upload_instant", str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                    audit("upload_instant", to_rel(dest),
                           human_size(body.size), client_ip(request))
-                    return {"instant": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+                    return {"instant": True, "path": to_rel(dest),
                             "size": body.size, "size_human": human_size(body.size)}
                 except OSError as e:
                     import logging
@@ -286,14 +287,14 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=409, detail="同名目录已存在")
     if dest.exists():  # 覆盖上传：旧版本进回收站，不直接丢失
-        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+        move_to_trash(dest, to_rel(dest))
     os.replace(tmp, dest)
     deduped = register_blob(dest, real_sha, size)
     shutil.rmtree(d, ignore_errors=True)
     with _db_lock:
         _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
         _db().commit()
-    rel = str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")
+    rel = to_rel(dest)
     audit("upload", rel, human_size(size), client_ip(request))
     # v0.20：新文件落盘后清零照片扫描节流——下一次照片页请求必扫，
     # 二维码/网页/App 上传的图片不再等 60s 普通节流

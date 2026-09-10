@@ -19,7 +19,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.config import SHARE_ROOT
-from app.filetools import NOTE_EXTS, human_size
+from app.filetools import NOTE_EXTS, human_size, to_rel
 from app.security import require_user
 from app.spaces import resolve, visible
 
@@ -87,7 +87,7 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
             continue
         items.append({
             "name": p.name,
-            "path": str(p.relative_to(SHARE_ROOT)).replace("\\", "/"),
+            "path": to_rel(p),
             "category": category,
             "ext": p.suffix.lower(),
             "size_human": human_size(stat.st_size),

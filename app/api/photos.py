@@ -17,8 +17,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.config import SHARE_ROOT
 from app.db import _db, _db_lock
+from app.roles import ADMIN, MEMBER
 from app.security import preview_user, require_user
-from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support
+from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support, to_rel
 from app.spaces import resolve, visible
 from app.api.albums import load_albums as _load_albums
 
@@ -215,7 +216,7 @@ def _scan_photos(force: bool = False):
             if not f.is_file() or f.suffix.lower() not in IMG_EXTS | VID_EXTS:
                 continue
             stat = f.stat()
-            rel = str(f.relative_to(SHARE_ROOT)).replace("\\", "/")
+            rel = to_rel(f)
             seen.add(rel)
             row = known.get(rel)
             if row and row[0] == stat.st_mtime_ns and row[1] == stat.st_size:
@@ -295,17 +296,17 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     # 可见性下推 SQL（R1-P2-10）：member/admin 的 visible() 语义可用路径前缀
     # 完整表达——shared 全可见、private/incoming 仅本人子树；点前缀隐藏段
     # 一并排除（与 visible() 对齐）。guest 仍走 Python 过滤（grants 已有缓存）
-    role = user["role"] if "role" in user.keys() else "member"
+    role = user["role"] if "role" in user.keys() else MEMBER
     pushdown = False
     # 非 ASCII 用户名不做下推（R3-P3-4）：SQLite LIKE 只折叠 ASCII 大小写，
     # 与 _normcase 的全 Unicode 折叠在改名（Windows 保留旧大小写）场景下
     # 会分叉——本人照片 fail-closed 消失；退回 Python 过滤
-    if role in ("admin", "member") and user["username"].isascii():
+    if role in (ADMIN, MEMBER) and user["username"].isascii():
         pushdown = True
         esc = (user["username"].replace("\\", "\\\\")
                .replace("%", r"\%").replace("_", r"\_"))
         own_priv = f"private/{esc}/%"
-        if role == "admin":
+        if role == ADMIN:
             cond = ("(path NOT LIKE 'private/%' OR path LIKE ? ESCAPE '\\')"
                     " AND path NOT LIKE '.%' AND path NOT LIKE '%/.%'")
             args: list = [own_priv]

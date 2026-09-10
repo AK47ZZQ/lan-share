@@ -18,7 +18,7 @@ from app.security import audit
 def clean_username(name: str) -> str:
     """新用户名合法性校验（原 admin._clean_username，auth 侧内联校验与之对齐）：
     空白/控制符/长度、保留名、路径分隔符与冒号、Windows 设备保留名。"""
-    from app.filetools import _RESERVED_NAME
+    from app.filetools import RESERVED_NAME
 
     from app.spaces import RESERVED_USERNAMES
     n = (name or "").strip()
@@ -28,7 +28,7 @@ def clean_username(name: str) -> str:
         raise HTTPException(status_code=400, detail="该用户名是保留名")
     if re.search(r"[/\\:]", n):
         raise HTTPException(status_code=400, detail="用户名不能含路径分隔符或冒号")
-    if _RESERVED_NAME.match(n):
+    if RESERVED_NAME.match(n):
         raise HTTPException(status_code=400, detail="该用户名是 Windows 设备保留名")
     return n
 

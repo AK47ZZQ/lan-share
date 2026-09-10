@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.db import _db, _db_lock
+from app.roles import ADMIN, GUEST
 from app.security import audit, client_ip, preview_user, require_admin, require_user
 from app.spaces import visible
 from app.store.settings import FEATURED_ALBUMS
@@ -206,7 +207,7 @@ class AlbumBody(BaseModel):
 
 @router.post("/api/albums")
 def create_album(body: AlbumBody, request: Request, _user=Depends(require_user)):
-    if _user["role"] == "guest":
+    if _user["role"] == GUEST:
         raise HTTPException(status_code=403, detail="访客不能创建专辑")
     title = body.title.strip()
     if not title or len(title) > 40:
@@ -269,7 +270,7 @@ class AlbumItemsBody(BaseModel):
 @router.put("/api/albums/{album_id}/items")
 def update_album_items(album_id: str, body: AlbumItemsBody, request: Request,
                        _user=Depends(require_user)):
-    if _user["role"] == "guest":
+    if _user["role"] == GUEST:
         raise HTTPException(status_code=403, detail="访客不能编辑专辑")
     # 长度预检（R1-P3-3）：与 create_album 同款上限，避免可见性校验循环跑完才限长
     if len(body.add) + len(body.remove) > 2 * ALBUM_ITEMS_MAX:
@@ -291,7 +292,7 @@ def update_album_items(album_id: str, body: AlbumItemsBody, request: Request,
         if not hit:
             err.append((404, "专辑不存在"))
             return False
-        if _user["role"] != "admin" and hit.get("created_by") != _user["username"]:
+        if _user["role"] != ADMIN and hit.get("created_by") != _user["username"]:
             err.append((403, "只能编辑自己创建的专辑"))
             return False
         items = [i for i in (hit.get("items") or [])]
@@ -326,7 +327,7 @@ def delete_album(album_id: str, request: Request, _user=Depends(require_user)):
         if not hit:
             err.append((404, "专辑不存在"))
             return False
-        if _user["role"] != "admin" and hit.get("created_by") != _user["username"]:
+        if _user["role"] != ADMIN and hit.get("created_by") != _user["username"]:
             err.append((403, "只能删除自己创建的专辑"))
             return False
         albums[:] = [a for a in albums if a.get("id") != album_id]

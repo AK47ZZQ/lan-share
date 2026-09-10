@@ -44,6 +44,17 @@ def human_size(size_bytes: int | float) -> str:
     return f"{size_bytes:.1f} PB"
 
 
+def to_rel(path: "Path | str") -> str:
+    """物理路径 → 相对 SHARE_ROOT 的正斜杠相对路径。
+
+    全项目**唯一**的这层转换点（07/08 审查）：此前
+    `str(x.relative_to(SHARE_ROOT)).replace("\\\\", "/")` 在 40 处手写复制，
+    且有两处漏了 replace（audit 记录在 Windows 下带反斜杠）。集中后语义
+    与原先完全一致（不在 SHARE_ROOT 下仍抛 ValueError，不静默兜底）。
+    """
+    return str(Path(path).relative_to(SHARE_ROOT)).replace("\\", "/")
+
+
 # ─── 媒体扩展名（单一事实源，07 审查 §5.1-3）──────────────
 # 图片预览/缩略图（api/files.py）与照片时间线扫描（api/system.py）共用同一份。
 # 漂移教训：本共同体曾有 .gif（能预览）而照片扫描没有（不进时间线），
@@ -77,12 +88,12 @@ def clean_filename(name: str | None) -> str:
         n = 'unnamed'
     if n.startswith('.'):
         n = '_' + n
-    if _RESERVED_NAME.match(n):
+    if RESERVED_NAME.match(n):
         n = '_' + n
     return n[:200] or 'unnamed'
 
 
-_RESERVED_NAME = re.compile(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', re.I)
+RESERVED_NAME = re.compile(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', re.I)
 
 
 def dir_tree(path: Path) -> dict:
@@ -100,7 +111,7 @@ def dir_tree(path: Path) -> dict:
             is_file = entry.is_file()
         except OSError:
             continue
-        rel = str(entry.relative_to(SHARE_ROOT)).replace("\\", "/")
+        rel = to_rel(entry)
         items.append({
             "name": entry.name,
             "path": rel,
@@ -113,7 +124,7 @@ def dir_tree(path: Path) -> dict:
             # 统一正斜杠；能列出该条目即有读权限，与前端按钮可见性一致
             "abs_path": str(entry).replace("\\", "/"),
         })
-    rel_path = str(path.relative_to(SHARE_ROOT)).replace("\\", "/")
+    rel_path = to_rel(path)
     return {"path": rel_path if rel_path != "." else "", "items": items}
 
 
@@ -186,22 +197,22 @@ async def save_upload(file: UploadFile, dest: Path, quota_user=None,
             raise
     if dest.exists() and on_dup != "overwrite":
         # 覆盖上传：旧版本进回收站，不直接丢失（on_dup=overwrite 除外）
-        move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+        move_to_trash(dest, to_rel(dest))
     os.replace(tmp, dest)
     return {
         "name": dest.name,
-        "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"),
+        "path": to_rel(dest),
         "size": size,
         "size_human": human_size(size),
         "sha256": sha256.hexdigest(),
     }
 
 
-def _file_dict(f: Path) -> dict:
+def file_dict(f: Path) -> dict:
     stat = f.stat()
     return {
         "name": f.name,
-        "path": str(f.relative_to(SHARE_ROOT)).replace("\\", "/"),
+        "path": to_rel(f),
         "size": stat.st_size,
         "size_human": human_size(stat.st_size),
         "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),

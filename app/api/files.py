@@ -19,8 +19,10 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.config import SHARE_ROOT
+from app.roles import ADMIN
 from app.security import audit, client_ip, preview_user, require_user
-from app.filetools import _file_dict, clean_filename, dir_tree, human_size, move_to_trash
+from app.filetools import (clean_filename, dir_tree, file_dict, human_size,
+                           move_to_trash, to_rel)
 from app.spaces import (cross_space_guard, enforce_quota, is_own_private_root,
                         resolve, sync_grants_on_move, visible)
 from app.services import archive
@@ -71,7 +73,7 @@ async def create_directory(request: Request, path: str, _user=Depends(require_us
     cleaned = [clean_filename(p) for p in parts]
     target = resolve(_user, "/".join(cleaned), "write")
     target.mkdir(parents=True, exist_ok=True)
-    rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
+    rel = to_rel(target)
     audit("mkdir", rel, ip=client_ip(request))
     return {"ok": True, "path": rel}
 
@@ -115,7 +117,7 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             #（review 2026-09-03 P1：移动目录后 grants.path 全部失联）
             was_dir = target.is_dir()
             try:
-                old_rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
+                old_rel = to_rel(target)
             except ValueError:
                 old_rel = ""
             placed = None
@@ -131,7 +133,7 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
                     continue
             if placed is None:
                 raise HTTPException(status_code=409, detail="无法生成不重名的目标名")
-            final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
+            final_rel = to_rel(placed)
             if was_dir:
                 sync_grants_on_move(old_rel, final_rel)
             results.append({"src": src, "ok": True, "dest": final_rel})
@@ -199,9 +201,9 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
                 shutil.copytree(target, placed)
             else:
                 shutil.copy2(target, placed)
-            final_rel = str(placed.relative_to(SHARE_ROOT)).replace("\\", "/")
+            final_rel = to_rel(placed)
             results.append({"src": src, "ok": True, "dest": final_rel})
-            audit("copy", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
+            audit("copy", to_rel(target),
                   f"→ {final_rel}", client_ip(request))
         except HTTPException as e:
             results.append({"src": src, "ok": False, "error": e.detail})
@@ -220,10 +222,10 @@ async def delete_file(request: Request, path: str, _user=Depends(require_user)):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Not found")
     # 回收站登记物理相对路径（此前存请求原样 vpath，visible() 无法判定归属）
-    move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
+    move_to_trash(target, to_rel(target))
     # 审计同样记物理相对路径（R1-P3-1）：vpath 形态（private:x.jpg）进动态流
     # 后 visible() 无法归一，会泄漏到全员可见
-    audit("trash", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"), ip=client_ip(request))
+    audit("trash", to_rel(target), ip=client_ip(request))
     return {"ok": True}
 
 
@@ -332,7 +334,7 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
     if dest.exists():
         raise HTTPException(status_code=400, detail="目标名称已存在")
     try:
-        old_rel = str(target.relative_to(SHARE_ROOT)).replace("\\", "/")
+        old_rel = to_rel(target)
     except ValueError:
         old_rel = ""
     try:
@@ -342,9 +344,9 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
     except OSError:
         raise HTTPException(status_code=500, detail="重命名失败（目标被占用或系统错误）")
     if old_rel:
-        sync_grants_on_move(old_rel, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+        sync_grants_on_move(old_rel, to_rel(dest))
     audit("rename", old_rel or body.path, body.new_name, client_ip(request))
-    return {"ok": True, "path": str(dest.relative_to(SHARE_ROOT)).replace("\\", "/")}
+    return {"ok": True, "path": to_rel(dest)}
 
 
 @router.get("/api/search")
@@ -355,7 +357,7 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
         if not visible(_user, rel_parts):
             continue
         if f.is_file() and q.lower() in f.name.lower():
-            results.append(_file_dict(f))
+            results.append(file_dict(f))
             if len(results) >= 50:
                 break
     return results
@@ -369,7 +371,7 @@ def recent_files(limit: int = Query(default=20, ge=0, le=100), _user=Depends(req
         if not visible(_user, rel_parts):
             continue
         if f.is_file():
-            files.append(_file_dict(f))
+            files.append(file_dict(f))
     files.sort(key=lambda x: x["modified"], reverse=True)
     return files[:limit]
 
@@ -439,7 +441,7 @@ def disk_detail(user=Depends(require_user)):
         "share_size": share_physical, "share_size_human": human_size(share_physical),
         "categories": None, "private_used": None, "quota_bytes": None,
     }
-    if user["role"] == "admin":
+    if user["role"] == ADMIN:
         resp["categories"] = {name: {"size": size, "size_human": human_size(size)}
                               for name, size in cat_sizes.items()}
     else:

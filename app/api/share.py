@@ -15,11 +15,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, SHARE_ROOT, TICKET_TTL
+from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, TICKET_TTL
 from app.db import _db, _db_lock
+from app.roles import ADMIN
 from app.security import (audit, client_ip, get_bearer_user, get_session_user,
                           preview_user, require_user)
-from app.filetools import human_size, safe_path
+from app.filetools import human_size, safe_path, to_rel
 from app.store.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
 from app.services import cleanup
@@ -74,7 +75,7 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         _db().execute(
             "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain, target_user_id) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-             (token, str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"), target_path.name,
+             (token, to_rel(target_path), target_path.name,
              target_path.stat().st_size if target_path.is_file() else None,
              time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
              _user["user_id"] if "user_id" in _user.keys() else None,
@@ -85,10 +86,10 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         insert_notification(target_id, "share",
                             f"{_user['username']} 给你分享了文件",
                             target_path.name, f"/s/{token}")
-    audit("share_create", str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"),
+    audit("share_create", to_rel(target_path),
           f"{expires_hours}h", client_ip(request))
     if target_id:
-        audit("share_target", str(target_path.relative_to(SHARE_ROOT)).replace("\\", "/"),
+        audit("share_target", to_rel(target_path),
               f"→ {target_username}", client_ip(request))
         push_webhook("📬 收到定向分享",
                      f"{_user['username']} 分享给 {target_username}：{target_path.name}")
@@ -105,7 +106,7 @@ def _target_guard(s: sqlite3.Row, request: Request) -> bool:
     if s["target_user_id"] is None:
         return False
     u = get_session_user(request) or get_bearer_user(request)
-    if u and (u["user_id"] == s["target_user_id"] or u["role"] == "admin"):
+    if u and (u["user_id"] == s["target_user_id"] or u["role"] == ADMIN):
         return True
     # 404 而非 403：不向无关者泄露分享的存在；detail 供落地页给出登录引导
     raise HTTPException(status_code=404, detail="定向分享：请登录对应成员账号")
@@ -290,7 +291,7 @@ def list_shares(request: Request, _user=Depends(require_user)):
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
         _db().commit()
     viewer = preview_user(request, _user)   # admin 成员视角预览
-    is_admin = viewer["role"] == "admin"
+    is_admin = viewer["role"] == ADMIN
     rows = _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall()
     uid_map = {r["id"]: r["username"]
                for r in _db().execute("SELECT id, username FROM users").fetchall()}
@@ -329,7 +330,7 @@ def share_history(token: str, _user=Depends(require_user)):
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
     # 无主（v2 遗留）分享归 admin 管；owner_id None 不再等同"人人可管"
-    if _user["role"] != "admin" and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
+    if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     rows = _db().execute(
         "SELECT ts, ip, action FROM audit_log "
@@ -344,7 +345,7 @@ def revoke_share(request: Request, token: str, _user=Depends(require_user)):
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != "admin" and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
+    if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     with _db_lock:
         cur = _db().execute("DELETE FROM shares WHERE token=?", (token,))
@@ -367,7 +368,7 @@ def edit_share(request: Request, token: str, body: ShareEditBody,
     s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != "admin" and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
+    if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
     if body.expires_hours is None and body.max_downloads is None:
         raise HTTPException(status_code=400, detail="没有要修改的字段")

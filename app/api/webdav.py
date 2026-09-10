@@ -2,8 +2,10 @@
 import base64
 import mimetypes
 import os
+import re
 import secrets
 import shutil
+import threading
 import time
 from datetime import datetime
 from email.utils import formatdate
@@ -19,7 +21,7 @@ from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.db import _db
 from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail)
-from app.filetools import _RESERVED_NAME, clean_filename, human_size
+from app.filetools import RESERVED_NAME, clean_filename, human_size, to_rel
 from app.spaces import enforce_quota, resolve, sync_grants_on_move
 from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy
 from app.filetools import move_to_trash
@@ -136,6 +138,58 @@ def _dav_tree_size(p: Path) -> int:
 _READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNLOCK"}
 
 
+# ─── WebDAV 写锁（11 号复审 P2-5）─────────────────────────────
+# 原实现是**假锁**：LOCK 返回一个 token，却不记录任何状态——并发 PUT 可互踩
+# （Windows 挂载盘并发写有数据损坏面）。这里实现 RFC 4918 语义的**进程内写锁**：
+#   · 只有客户端**显式 LOCK** 后才生效 → 不用锁的客户端零影响（无行为回归）；
+#   · 持锁期间他人写同一资源（或 depth:infinity 锁下的子孙）→ 423 Locked；
+#   · UNLOCK 或到期自动释放。
+# 锁表只在进程内（单进程部署，见 README）；token 不落库、不跨进程。
+# OPTIONS 因此可以**诚实**地声明 DAV: 1, 2（此前声明 2 却没有锁）。
+_LOCK_TTL = 3600
+_locks: dict[str, dict] = {}      # normcase(物理路径) -> {token, owner, expires}
+_locks_mu = threading.RLock()
+
+
+def reset_dav_locks() -> None:
+    """清空锁表（测试专用，与项目其它 reset_* 接口同款风格）。"""
+    with _locks_mu:
+        _locks.clear()
+
+
+def _sweep_locks_locked() -> None:
+    now = time.time()
+    for k in [k for k, v in _locks.items() if v["expires"] < now]:
+        _locks.pop(k, None)
+
+
+def _presented_tokens(request: Request) -> str:
+    """请求里出示的锁凭据：`If:` 头（RFC 要求）或 `Lock-Token:`（UNLOCK 用）。"""
+    return f"{request.headers.get('if', '')} {request.headers.get('lock-token', '')}"
+
+
+def _conflicting_lock(user, target: Path):
+    """返回阻塞本次写操作的他人锁记录（含 depth:infinity 的祖先锁），无则 None。"""
+    with _locks_mu:
+        _sweep_locks_locked()
+        me = user["username"]
+        p = Path(target)
+        while True:
+            rec = _locks.get(os.path.normcase(str(p)))
+            if rec and rec["owner"] != me:
+                return rec
+            if p == SHARE_ROOT or p.parent == p:
+                return None
+            p = p.parent
+
+
+def _require_lock(request: Request, user, target: Path) -> None:
+    """写操作前置守卫：他人持锁且未出示对应 token → 423（RFC 4918 §9.10.4）。"""
+    rec = _conflicting_lock(user, target)
+    if rec and rec["token"] not in _presented_tokens(request):
+        raise HTTPException(status_code=423, detail="Locked")
+
+
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
 router = APIRouter()
 
@@ -206,6 +260,7 @@ async def dav_handler(request: Request, path: str = ""):
     if method == "PUT":
         if target.is_dir():
             raise HTTPException(status_code=409, detail="Is collection")
+        _require_lock(request, user, target)   # 他人持锁 → 423（P2-5）
         parent = target.parent
         if not parent.exists():
             raise HTTPException(status_code=409, detail="Parent collection missing")
@@ -226,7 +281,7 @@ async def dav_handler(request: Request, path: str = ""):
         if exists:
             # 覆盖的旧版本进回收站，而不是直接丢失（.trash 在 private 树外，
             # 不计入配额扫描；先移走旧文件，下一步的配额扫描即为最终占用）
-            move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
+            move_to_trash(target, to_rel(target))
         # 配额计价：此刻 private 树里已有 tmp（=即将落位的最终内容），旧版已
         # 移出——扫描值即落位后的占用，incoming 传 0 才是精确校验。传 size 会
         # 把 tmp 双计、误报配额不足。失败必须清掉 tmp 再抛，别留半截残留。
@@ -245,16 +300,17 @@ async def dav_handler(request: Request, path: str = ""):
         except OSError:
             tmp.unlink(missing_ok=True)
             raise
-        audit("dav_put", str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
+        audit("dav_put", to_rel(target),
               human_size(size), client_ip(request))
         return Response(status_code=201 if created else 204)
 
     if method == "MKCOL":
         if exists:
             raise HTTPException(status_code=405, detail="Already exists")
+        _require_lock(request, user, target)   # 他人持锁 → 423（P2-5）
         if not target.parent.exists():
             raise HTTPException(status_code=409, detail="Parent collection missing")
-        if _RESERVED_NAME.match(target.name):
+        if RESERVED_NAME.match(target.name):
             raise HTTPException(status_code=400, detail="Reserved name")
         target.mkdir(parents=False)
         audit("dav_mkdir", path, ip=client_ip(request))
@@ -263,19 +319,22 @@ async def dav_handler(request: Request, path: str = ""):
     if method == "DELETE":
         if not exists:
             raise HTTPException(status_code=404)
+        _require_lock(request, user, target)   # 他人持锁 → 423（P2-5）
         if target == SHARE_ROOT:
             raise HTTPException(status_code=403)
         if is_own_private_root(user, target):
             raise HTTPException(status_code=403, detail="私人空间根目录不可删除")
         # 与界面删除一致：进回收站（登记物理相对路径）
-        move_to_trash(target, str(target.relative_to(SHARE_ROOT)).replace("\\", "/"))
+        move_to_trash(target, to_rel(target))
         audit("dav_delete", path, ip=client_ip(request))
         return Response(status_code=204)
 
     if method in ("MOVE", "COPY"):
         if not exists:
             raise HTTPException(status_code=404)
+        _require_lock(request, user, target)   # 源被他人持锁 → 423（P2-5）
         dest = _dav_destination(request, user)
+        _require_lock(request, user, dest)     # 目标被他人持锁 → 423
         if dest == target:
             raise HTTPException(status_code=403, detail="Same resource")
         # 与界面 /api/move 同款成环守卫：把目录搬进自己的子目录
@@ -297,36 +356,60 @@ async def dav_handler(request: Request, path: str = ""):
                 if not overwrite:
                     raise HTTPException(status_code=412, detail="Destination exists")
                 # 被覆盖的旧目标进回收站，与界面行为一致
-                move_to_trash(dest, str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
+                move_to_trash(dest, to_rel(dest))
             if method == "MOVE":
                 shutil.move(str(target), str(dest))
                 # 与界面 /api/move 同步授权路径（红队 P2-4）：挂载盘改名已授权
                 # 共享目录后 grants.path 悬空，guest 静默 403
-                sync_grants_on_move(str(target.relative_to(SHARE_ROOT)).replace("\\", "/"),
-                                    str(dest.relative_to(SHARE_ROOT)).replace("\\", "/"))
-                audit("dav_move", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
+                sync_grants_on_move(to_rel(target),
+                                    to_rel(dest))
+                audit("dav_move", path, to_rel(dest), client_ip(request))
             else:
                 if target.is_dir():
                     shutil.copytree(target, dest)
                 else:
                     shutil.copy2(target, dest)
-                audit("dav_copy", path, str(dest.relative_to(SHARE_ROOT)), client_ip(request))
+                audit("dav_copy", path, to_rel(dest), client_ip(request))
             return 201 if not dest.exists() or method == "COPY" else 204
 
         return Response(status_code=await run_in_threadpool(_do_transfer))
 
     if method == "LOCK":
-        token = f"opaquelocktoken:{secrets.token_hex(8)}"
+        # 真锁（11 号复审 P2-5）：登记 token 与到期时间。此前的实现返回 token
+        # 却不记状态，并发 PUT 可互踩——被锁的表象下毫无保护。
+        m = re.search(r"Second-(\d+)", request.headers.get("timeout", ""))
+        timeout_s = max(1, min(int(m.group(1)), _LOCK_TTL)) if m else _LOCK_TTL
+        key = os.path.normcase(str(target))
+        with _locks_mu:
+            _sweep_locks_locked()
+            cur = _locks.get(key)
+            if (cur and cur["owner"] != user["username"]
+                    and cur["token"] not in _presented_tokens(request)):
+                raise HTTPException(status_code=423, detail="Locked")
+            # 续期/重复 LOCK：沿用原 token（RFC 4918 §9.10.2 刷新语义）
+            token = cur["token"] if cur else f"opaquelocktoken:{secrets.token_hex(16)}"
+            _locks[key] = {"token": token, "owner": user["username"],
+                           "expires": time.time() + timeout_s}
         body = ('<?xml version="1.0" encoding="utf-8"?>'
                 '<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>'
                 '<D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>'
-                '<D:depth>0</D:depth><D:timeout>Second-3600</D:timeout>'
+                '<D:depth>0</D:depth>'
+                f'<D:timeout>Second-{timeout_s}</D:timeout>'
                 f'<D:locktoken><D:href>{token}</D:href></D:locktoken>'
                 '</D:activelock></D:lockdiscovery></D:prop>')
         return Response(content=body, status_code=200, media_type="application/xml; charset=utf-8",
                         headers={"Lock-Token": f"<{token}>"})
 
     if method == "UNLOCK":
+        token = (request.headers.get("lock-token") or "").strip().strip("<>")
+        key = os.path.normcase(str(target))
+        with _locks_mu:
+            cur = _locks.get(key)
+            if not cur or cur["token"] != token:
+                raise HTTPException(status_code=409, detail="Lock token mismatch")
+            if cur["owner"] != user["username"]:
+                raise HTTPException(status_code=403, detail="Not lock owner")
+            _locks.pop(key, None)
         return Response(status_code=204)
 
     raise HTTPException(status_code=405, detail="Method not supported")

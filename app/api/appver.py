@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import re
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -56,20 +57,23 @@ def _apk_path(data: dict):
 
 
 _apk_sha_cache: list = ["", None, None]   # [sha256hex, mtime, size]
+_apk_sha_lock = threading.Lock()          # 06-P2：并发读写无锁（App 后台高频检查更新）
 
 
 def _apk_sha256(apk: Path) -> str:
     """APK sha256 按 mtime+size 缓存（9.9 复审 P2）：App 后台高频检查更新，
-    不能每次都全量读 85MB 重算——只在发版替换文件后重算一次。"""
+    不能每次都全量读 85MB 重算——只在发版替换文件后重算一次。
+    加锁保护缓存读写（06-P2）：结果幂等，锁主要防并发下的重复全量计算。"""
     st = apk.stat()
-    if _apk_sha_cache[1:] == [st.st_mtime, st.st_size]:
+    with _apk_sha_lock:
+        if _apk_sha_cache[1:] == [st.st_mtime, st.st_size]:
+            return _apk_sha_cache[0]
+        h = hashlib.sha256()
+        with open(apk, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        _apk_sha_cache[:] = [h.hexdigest(), st.st_mtime, st.st_size]
         return _apk_sha_cache[0]
-    h = hashlib.sha256()
-    with open(apk, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    _apk_sha_cache[:] = [h.hexdigest(), st.st_mtime, st.st_size]
-    return _apk_sha_cache[0]
 
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）

@@ -12,12 +12,14 @@ from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
 from app.db import _db, _db_lock, is_unique_violation
-from app.filetools import human_size
+from app.filetools import human_size, to_rel
+from app.roles import ADMIN, ALL_ROLES, GUEST, MEMBER
 from app.security import (audit, client_ip, hash_password, require_admin, require_user,
                           reset_netloc_cache)
 from app.spaces import (_normcase_eq, invalidate_grants_cache,
                         visible)
-from app.api.notify import get_webhook_url, push_webhook, webhook_send
+from app.api.notify import (assert_public_webhook_url, get_webhook_url, push_webhook,
+                            webhook_send)
 from app.store.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
                                 PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT,
                                 get_setting, set_setting)
@@ -38,8 +40,11 @@ router = APIRouter()
 
 @router.get("/api/admin/users")
 def admin_list_users(_admin=Depends(require_admin)):
+    # 06-P2：不把 webdav_password_hash（scrypt 哈希）拉进应用层，SQL 层直接转布尔。
+    # 原实现 SELECT 完整哈希仅为 bool() 判断，等于把口令材料多暴露一层。
     rows = _db().execute(
-        "SELECT id, username, role, is_active, quota_bytes, created_at, webdav_password_hash, "
+        "SELECT id, username, role, is_active, quota_bytes, created_at, "
+        "(webdav_password_hash IS NOT NULL) AS webdav_set, "
         "totp_enabled, nickname, avatar_path FROM users ORDER BY id").fetchall()
     return [{
         "id": r["id"], "username": r["username"],
@@ -49,7 +54,7 @@ def admin_list_users(_admin=Depends(require_admin)):
         "is_active": bool(r["is_active"]), "quota_bytes": r["quota_bytes"],
         "quota_human": human_size(r["quota_bytes"]) if r["quota_bytes"] else "-",
         "created_at": time.strftime("%Y-%m-%d", time.localtime(r["created_at"])),
-        "webdav_set": bool(r["webdav_password_hash"]),
+        "webdav_set": bool(r["webdav_set"]),
         "totp_enabled": bool(r["totp_enabled"]),
     } for r in rows]
 
@@ -76,17 +81,17 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
         raise HTTPException(status_code=404, detail="用户不存在")
     # 最后管理员守卫与负配额校验都提到写事务之前（R1-P0-1 / R2-P1 同类）：
     # 锁内"先 UPDATE 后 raise"会把连接留在持有 RESERVED 锁的未决事务里
-    if (body.role is not None and body.role != "admin") or body.is_active is False:
+    if (body.role is not None and body.role != ADMIN) or body.is_active is False:
         _last_admin_guard(_db(), uid)
     if body.quota_bytes is not None and body.quota_bytes < 0:
         raise HTTPException(status_code=400, detail="配额不能为负数")
     with _db_lock:
         if body.role is not None:
-            if body.role not in ("admin", "member", "guest"):
+            if body.role not in ALL_ROLES:
                 raise HTTPException(status_code=400, detail="非法角色")
             # 锁内复查守卫（R2-P2）：两个并发 PATCH 降级最后两名 admin 可同时
             # 通过锁外检查，双双提交后 0 admin
-            if body.role != "admin":
+            if body.role != ADMIN:
                 _last_admin_guard(_db(), uid)
             _db().execute("UPDATE users SET role=? WHERE id=?", (body.role, uid))
         if body.is_active is not None:
@@ -122,7 +127,7 @@ def admin_set_username(uid: int, body: AdminCredBody, request: Request,
     new_name = _clean_username(body.value)
     if new_name == row["username"]:
         raise HTTPException(status_code=400, detail="新用户名与当前相同")
-    rename_user_everywhere(uid, row["username"], new_name, "admin",
+    rename_user_everywhere(uid, row["username"], new_name, ADMIN,
                            client_ip(request))
     audit("admin_rename_user", f"{row['username']} → {new_name}", ip=client_ip(request))
     return {"ok": True, "username": new_name}
@@ -207,7 +212,7 @@ def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin))
     row = _db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="用户不存在")
-    if row["role"] == "admin":
+    if row["role"] == ADMIN:
         _last_admin_guard(_db(), uid)
     with _db_lock:
         # sessions 显式清理（红队 P3-1）：SQLite 该表未声明 CASCADE，残留行
@@ -237,13 +242,13 @@ def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin))
 
 
 class InviteBody(BaseModel):
-    role: str = "member"
+    role: str = MEMBER
     hours: int = 72
 
 
 @router.post("/api/admin/invites")
 def admin_create_invite(body: InviteBody, request: Request, _admin=Depends(require_admin)):
-    if body.role not in ("member", "guest"):
+    if body.role not in (MEMBER, GUEST):
         raise HTTPException(status_code=400, detail="邀请角色只能是 member/guest")
     if not 1 <= body.hours <= 24 * 30:
         raise HTTPException(status_code=400, detail="有效期 1 小时 ~ 30 天")
@@ -394,6 +399,11 @@ def admin_set_webhook(body: dict, request: Request, _admin=Depends(require_admin
         if "{title}" not in url and "{body}" not in url:
             raise HTTPException(status_code=400,
                                 detail="URL 需包含 {title} 或 {body} 占位符（URL 编码后替换）")
+        # SSRF 防护（06-P2）：保存时即拒内网/保留地址，早失败早反馈
+        try:
+            assert_public_webhook_url(url.replace("{title}", "t").replace("{body}", "b"))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     set_setting(NOTIFY_WEBHOOK_URL, url)
     audit("webhook_set" if url else "webhook_cleared", url[:120], ip=client_ip(request))
     return {"ok": True, "url": url}
@@ -583,7 +593,7 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
                 if not f.is_file():
                     continue
                 # arcname 保留 private/incoming 前缀（相对 SHARE_ROOT），恢复时按空间原样落位
-                z.write(f, str(f.relative_to(SHARE_ROOT)).replace("\\", "/"))
+                z.write(f, to_rel(f))
                 file_count += 1
                 file_bytes += f.stat().st_size
         shares = _db().execute(

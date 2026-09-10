@@ -58,6 +58,23 @@ if errorlevel 1 (
 powershell -NoProfile -Command "Write-Host ('table-data sections: ' + (Select-String -Path '%TOC%' -Pattern 'TABLE DATA').Count)"
 del "%TOC%" >nul 2>&1
 
+REM -- file-data manifest check (count + bytes vs backup.bat) --
+REM    Catches a partial/failed robocopy run that the DB-dump checks cannot see.
+REM    Parsed with regex on the raw content so it works whether the manifest
+REM    uses CRLF or LF line endings.
+if not exist "%BACKUP_DEST%\files-manifest.txt" (
+    echo file manifest missing - backup predates hardening, skip
+    goto drill_ok
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$c=Get-Content '%BACKUP_DEST%\files-manifest.txt' -Raw -ErrorAction Stop; $ef=[int64]([regex]::Match($c,'files=(\d+)').Groups[1].Value); $eb=[int64]([regex]::Match($c,'bytes=(\d+)').Groups[1].Value); $f=@(Get-ChildItem -LiteralPath '%BACKUP_DEST%\files' -Recurse -File -Force -ErrorAction SilentlyContinue); $s=($f | Measure-Object -Property Length -Sum).Sum; if($null -eq $s){$s=0}; Write-Host ('manifest    : files ' + $ef + ' -> ' + $f.Count + ' ; bytes ' + $eb + ' -> ' + [int64]$s); if($ef -ne $f.Count -or $eb -ne [int64]$s){ exit 1 }"
+if errorlevel 1 (
+    echo DRILL FAILED: file-data manifest mismatch - backup incomplete
+    exit /b 1
+)
+echo file manifest ok
+
+:drill_ok
 echo DRILL OK ^(tier 1^): %NEWEST% is readable and hash-verified.
 echo.
 echo -- Tier 2 manual drill (full restore, run by hand when needed) --

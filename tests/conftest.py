@@ -6,6 +6,15 @@
 - TestClient 不进 with 块 → lifespan 不触发 → 定时清理线程不会启动（测试确定性）。
 - 限速/防爆破/票据是进程内存态，跨测试会串味：每个测试前经各模块的
   官方 reset 函数清空（07 审查批次 2 测试解钉：不再直掏私有字典）。
+
+**双引擎**（11 号复审批次 1，P1-1）：默认跑 SQLite。设 `LANSHARE_TEST_PG_URL`
+（形如 `postgresql://lanshare@127.0.0.1:5433/lanshare`）即让**同一套测试**改跑
+PostgreSQL——在**该库内的临时 schema** 里建表（`search_path` 隔离），
+保证既不碰生产 `public` 表、也不需要 CREATEDB 权限。用完 DROP SCHEMA。
+
+    LANSHARE_TEST_PG_URL=postgresql://... python -m pytest tests/ -q
+
+这条路径是生产真正跑的引擎（`_PgConn`/`_pg_sql`/`_PG_SCHEMA`），此前零覆盖。
 """
 
 import os
@@ -18,10 +27,29 @@ import pytest
 _ROOT = tempfile.mkdtemp(prefix="lan-share-test-")
 os.environ["SHARE_ROOT"] = _ROOT
 
+# ── 可选：切到 PostgreSQL（临时 schema 隔离，见模块 docstring）──
+_PG_URL = os.environ.get("LANSHARE_TEST_PG_URL", "").strip()
+_PG_SCHEMA = ""
+
+if _PG_URL:
+    import uuid
+
+    import psycopg
+
+    _PG_SCHEMA = "ls_test_" + uuid.uuid4().hex[:12]
+    _boot = psycopg.connect(_PG_URL, autocommit=True)
+    _boot.execute(f'DROP SCHEMA IF EXISTS "{_PG_SCHEMA}" CASCADE')
+    _boot.execute(f'CREATE SCHEMA "{_PG_SCHEMA}"')
+    _boot.close()
+    _sep = "&" if "?" in _PG_URL else "?"
+    # search_path 只含临时 schema：public 里的生产表对该连接不可见
+    os.environ["DATABASE_URL"] = f"{_PG_URL}{_sep}options=-csearch_path%3D{_PG_SCHEMA}"
+
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.api import auth as _auth, photos as _photos, share as _share  # noqa: E402
+from app.api import webdav as _webdav  # noqa: E402
 from app.security import reset_auth_gates  # noqa: E402
 from app.services import kb as _kb  # noqa: E402
 
@@ -49,11 +77,13 @@ def _reset_in_memory_state():
     _auth.reset_pair_codes()
     _photos.reset_scan_throttle()
     _kb.reset_kb_state()
+    _webdav.reset_dav_locks()
     yield
     reset_auth_gates()
     _share.reset_share_state()
     _auth.reset_pair_codes()
     _kb.reset_kb_state()
+    _webdav.reset_dav_locks()
 
 
 @pytest.fixture()
@@ -79,3 +109,11 @@ def workdir():
 
 def pytest_sessionfinish(session, exitstatus):
     shutil.rmtree(_ROOT, ignore_errors=True)
+    if _PG_URL and _PG_SCHEMA:
+        try:
+            import psycopg
+            c = psycopg.connect(_PG_URL, autocommit=True)
+            c.execute(f'DROP SCHEMA IF EXISTS "{_PG_SCHEMA}" CASCADE')
+            c.close()
+        except Exception as e:   # 清理失败不掩盖测试结果，但要看得见
+            print(f"\n[conftest] 临时 schema 清理失败 {_PG_SCHEMA}: {e}")

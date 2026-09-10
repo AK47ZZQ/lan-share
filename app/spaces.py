@@ -27,6 +27,7 @@ from fastapi import HTTPException
 
 from app.config import SHARE_ROOT
 from app.db import _db, _db_lock
+from app.roles import ADMIN, GUEST, MEMBER
 from app.filetools import safe_path
 
 # 邀请建号拒绝的用户名（避免与空间保留段/系统目录冲突）
@@ -123,7 +124,7 @@ def sample_readable(user, sample) -> bool:
     admin 全见、member 仅本人子树、guest 凭 grant；其余 shared 语义。
     """
     username = user["username"]
-    role = user["role"] if "role" in user.keys() else "member"
+    role = user["role"] if "role" in user.keys() else MEMBER
     from pathlib import Path as _Path
     try:
         rel = _Path(sample).resolve().relative_to(_Path(SHARE_ROOT).resolve())
@@ -135,12 +136,12 @@ def sample_readable(user, sample) -> bool:
     if _normcase_eq(parts[0], "private"):
         return len(parts) >= 2 and _normcase_eq(parts[1], username)
     if _normcase_eq(parts[0], "incoming"):
-        if role == "admin":
+        if role == ADMIN:
             return True
-        if role == "member":
+        if role == MEMBER:
             return len(parts) >= 2 and _normcase_eq(parts[1], username)
         return _grant_hit(user["user_id"], "shared/" + "/".join(parts), "read")
-    if role == "guest":
+    if role == GUEST:
         return _grant_hit(user["user_id"], "shared/" + "/".join(parts), "read")
     return True  # member/admin：shared 默认可读
 
@@ -151,7 +152,7 @@ def resolve(user, path: str, need: str = "read") -> Path:
     user: sqlite3.Row（users 行，含 role；调用方来自 require_user/require_admin）。
     """
     username = user["username"]
-    role = user["role"] if "role" in user.keys() else "member"
+    role = user["role"] if "role" in user.keys() else MEMBER
     raw = (path or "").replace("\\", "/")
 
     m = re.match(r"^(shared|private):(.*)$", raw)
@@ -172,7 +173,7 @@ def resolve(user, path: str, need: str = "read") -> Path:
     # App 分发目录写保护（红队 P2-2）：version.json/APK 落在 shared 普通目录，
     # 持写 grant 的成员可植入带"自洽 sha256"的恶意 APK 推给全体客户端升级
     # = RCE。写操作 admin-only（读保持原权限，全员检查更新需要）。
-    if parts and _normcase_eq(parts[0], "App安装包") and need == "write" and role != "admin":
+    if parts and _normcase_eq(parts[0], "App安装包") and need == "write" and role != ADMIN:
         raise HTTPException(status_code=403, detail="安装包目录仅管理员可写")
     if parts and _normcase_eq(parts[0], "private"):
         # 旧 UI 入口：shared:private/... 永远映射到请求者本人 private（防跨用户）。
@@ -185,7 +186,7 @@ def resolve(user, path: str, need: str = "read") -> Path:
         sub = parts[1:]
         if need == "write":
             # 直传落各自子目录（权限内建，不查 grant）
-            if role == "admin" and sub:
+            if role == ADMIN and sub:
                 # admin 对既有路径的精确写操作（删除/移动/覆盖他人文件）
                 return safe_path("/".join(parts))
             if sub and _normcase_eq(sub[0], username):
@@ -193,9 +194,9 @@ def resolve(user, path: str, need: str = "read") -> Path:
                 return safe_path("/".join(parts))
             return safe_path("/".join(["incoming", username] + sub))
         # 读：admin 全见；member 仅本人子树；guest 凭 grant
-        if role == "admin":
+        if role == ADMIN:
             return safe_path("/".join(parts))
-        if role == "member":
+        if role == MEMBER:
             if not sub or not _normcase_eq(sub[0], username):
                 # 列 incoming 根 → 只能给本人子树视图
                 return safe_path("/".join(["incoming", username]))
@@ -208,10 +209,10 @@ def resolve(user, path: str, need: str = "read") -> Path:
 
     vkey = "shared/" + "/".join(parts)
     if need == "write":
-        if role != "admin" and not _grant_hit(user["user_id"], vkey, "write"):
+        if role != ADMIN and not _grant_hit(user["user_id"], vkey, "write"):
             raise HTTPException(status_code=403, detail="Forbidden")
     else:  # read
-        if role == "guest" and not _grant_hit(user["user_id"], vkey, "read"):
+        if role == GUEST and not _grant_hit(user["user_id"], vkey, "read"):
             raise HTTPException(status_code=403, detail="Forbidden")
         # member/admin：shared 默认可读
     return safe_path("/".join(parts)) if parts else SHARE_ROOT
@@ -282,15 +283,15 @@ def visible(user, rel_parts) -> bool:
         return False
     if not parts:
         return False   # 空段无归属语义，宁可不可见（防 IndexError）
-    role = user["role"] if "role" in user.keys() else "member"
+    role = user["role"] if "role" in user.keys() else MEMBER
     username = user["username"]
     if _normcase_eq(parts[0], "private"):
         return len(parts) > 1 and _normcase_eq(parts[1], username)
     if _normcase_eq(parts[0], "incoming"):
-        if role == "admin":
+        if role == ADMIN:
             return True
         return len(parts) > 1 and _normcase_eq(parts[1], username)
-    if role == "guest":
+    if role == GUEST:
         vkey = "shared/" + "/".join(parts)
         return _grant_hit(user["user_id"], vkey, "read")
     return True
@@ -322,7 +323,7 @@ def under_private(path: Path, username: str) -> bool:
 def cross_space_guard(user, src: Path, dest: Path):
     """E9：成员不得把文件移入/移出私人空间与共享空间之间（admin 不限）。
     私人空间内部的移动不受限。"""
-    if user["role"] == "admin":
+    if user["role"] == ADMIN:
         return
     src_priv = under_private(src, user["username"])
     dest_priv = under_private(dest, user["username"])
