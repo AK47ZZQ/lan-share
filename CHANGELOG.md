@@ -2,6 +2,49 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — 服务端 v3.39：产品定位更新——Web 后台化（App 主攻内容入口）
+
+主人拍板五项决策（详见 `data/笔记/产品定位更新-*.md` §v2）：member 保留 web 内容
+浏览；消费体验全部保留（P4 清理作废）；Dashboard 信息拉满；完整管理归 web、App
+只做紧急/简单操作。**App 无变更（仍 v0.27.0+72）**。
+**门禁：pytest 211（SQLite）+ 209/2 skipped（PG 双引擎）· ruff · mypy · vue-tsc ·
+web 6。已重启上线核验。**
+
+**定位声明**：App = 家的内容入口（照片备份/文件/笔记/分享）；Web = 站长管理工作台
+（总览/内容/分享治理/通知运营/成员与权限/系统设置/运行状态）；/s/、/up、/login
+访客门面不动。
+
+**Web 后台化（P1–P3 全量落地）**
+- 后台壳：左侧导航（宽屏常驻、<900px 抽屉）+ 顶栏 + 汉堡钮；路由 '/' 变总览、
+  文件迁 /files；meta.admin 守卫统一把成员重定向 /files（不再回流 '/'）。
+- 总览 DashboardView（新）：存储水位/成员/照片库/分享/回收站/秒传指纹库/会话设备/
+  App 最新版 8 卡 + 最近动态 8 条。
+- AdminView 拆分：/admin 只留成员·邀请·授权（改名"成员与权限"）；通知运营
+  /notify-ops（手动广播+发送记录/草稿定时/撤回提醒）；系统设置 /settings（公网
+  地址+Webhook+健康日报）——解决 AdminView users tab 长期堆卡问题。
+- 治理工具 /governance（新）：大文件 TOP50 / 疑似重复（同尺寸聚类，标注"疑似"）/
+  Web 会话与 App 设备列表+吊销。
+- 运行状态 /status（新）：healthz 探针展示 + 版本对账 + 审计日志近 80 条。
+- PWA/照片/音视频/笔记等消费功能**全部保留**（主人决策）。
+
+**服务端（app/api/console.py，8 端点全部 require_admin）**
+- GET /api/admin/overview（聚合快照）、/large-files、/duplicates、/audit、
+  /sessions、/devices；DELETE /sessions/{hash}、/devices/{id}（吊销，审计留痕）。
+- 契约快照 111→119 路径；tests/test_v39_console.py 8 条（admin/member 边界、
+  聚类、吊销后立即失效）。
+
+**执行中收口两坑**
+- users 表 AST 守卫生效：JOIN users 违规 → 用户名映射走 users_store、概览统计走
+  list_for_admin。
+- **双引擎盲区再现**：SQLite 行可 `row[0]`、PG RealDictRow 只认列名——单测绿、
+  生产 500（KeyError: 0）。改"单值 AS v 按名取 + 列表 dict(row)"，并以
+  LANSHARE_TEST_PG_URL 跑 PG 全量（209 passed/2 skipped）验证。**新纪律：碰 DB
+  的新端点，门禁加跑 PG 引擎。**
+
+**上线核验**：healthz 双口 ok；overview 返回真实数据（4 成员/467 照片/磁盘 84.4%/
+App 0.27.0）；large-files 480 文件；audit/sessions 正常；未认证 401；web 新包
+index-DimMkrsK.js 生效。
+
 ## 2026-09-10 — App v0.27.0+72：需求文件《改.txt》头脑风暴落地批
 
 依据 `data/笔记/改.txt`（09-06 需求）。头脑风暴先行：与主人确认两处开放决策

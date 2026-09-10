@@ -1,17 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, type AdminUser, type BroadcastItem, type Grant } from '../api'
+import { api, type AdminUser, type Grant } from '../api'
 import { me } from '../auth'
 import { setPreviewAs } from '../previewAs'
 import Modal from '../components/Modal.vue'
 import AdminUserModal from '../components/AdminUserModal.vue'
-import { confirmDlg, fmtTs, toast } from '../ui'
+import { confirmDlg, toast } from '../ui'
 
 const router = useRouter()
 function viewAs(username: string) {
   setPreviewAs(username)
-  router.push('/')   // router 只有 /（R1-P3-12）：'/files' 靠 catch-all 兜底才碰巧能用
+  router.push('/files')  // 内容区（v3.39：/ 已改为管理台总览）
   toast(`已切换到「${username}」视角浏览（只读预览）`, 'ok')
 }
 
@@ -157,154 +157,19 @@ async function delGrant(g: { id: number }) {
   if (!(await confirmDlg('撤销这条目录授权？成员将立即失去对应访问权', { danger: true, okText: '撤销' }))) return
   try { await api.adminDeleteGrant(g.id); await loadAll() } catch (e) { toast((e as Error).message, 'err') }
 }
-const pubUrl = ref('')
-const pubAlt = ref('')
-async function savePubUrl() {
-  try { await api.setPublicUrl(pubUrl.value.trim(), pubAlt.value.trim()); toast('公网地址已保存', 'ok') } catch (e) { toast((e as Error).message, 'err') }
-}
-
-// 事件推送（通知 bot）
-const hookUrl = ref('')
-const hookBusy = ref(false)
-async function saveHook() {
-  hookBusy.value = true
-  try { await api.setWebhook(hookUrl.value.trim()); toast('推送地址已保存', 'ok') }
-  catch (e) { toast((e as Error).message, 'err') } finally { hookBusy.value = false }
-}
-async function testHook() {
-  try { await api.testWebhook(); toast('测试消息已发送，去手机上看看', 'ok') }
-  catch (e) { toast((e as Error).message, 'err') }
-}
-// 手动广播（v0.20）：标题/正文 + 可选成员，站内通知 + webhook 一起推
-const notifyOpen = ref(false)
-const notifyTitle = ref('')
-const notifyBody = ref('')
-const notifyTargets = ref<number[]>([])
-const notifyBusy = ref(false)
-const notifyOk = ref(false)
-async function sendNotify() {
-  if (!notifyTitle.value.trim()) return
-  notifyBusy.value = true; notifyOk.value = false
-  try {
-    const r = await api.adminNotify(notifyTitle.value.trim(), notifyBody.value.trim(),
-      notifyTargets.value.length ? [...notifyTargets.value] : undefined)
-    toast(`已推送给 ${r.sent} 人${r.webhook ? '，站外 webhook 同步发送' : ''}`, 'ok')
-    notifyOk.value = true
-    setTimeout(() => { notifyOk.value = false; notifyOpen.value = false }, 1200)
-    notifyTitle.value = ''; notifyBody.value = ''; notifyTargets.value = []
-  } catch (e) { toast((e as Error).message, 'err') } finally { notifyBusy.value = false }
-}
-function toggleNotify(id: number) {
-  notifyTargets.value = notifyTargets.value.includes(id)
-    ? notifyTargets.value.filter(x => x !== id)
-    : [...notifyTargets.value, id]
-}
-
-// 通知管理（9.6-P2-14）：发送记录/撤回/提醒未读/草稿定时
-const broadcasts = ref<BroadcastItem[]>([])
-const bcOpen = ref(false)
-const bcBusy = ref(false)
-const draftTitle = ref('')
-const draftBody = ref('')
-const draftTarget = ref<'all' | 'pick'>('all')
-const draftTime = ref('')  // HH:mm，非空 = 定时
-async function loadBroadcasts() {
-  bcOpen.value = true; bcBusy.value = true
-  try {
-    broadcasts.value = (await api.sentBroadcasts()).items
-  } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
-}
-async function withdraw(b: BroadcastItem) {
-  if (!(await confirmDlg(`撤回「${b.title}」的所有未读通知？已读的保留为历史。`, { title: '撤回' }))) return
-  bcBusy.value = true
-  try {
-    const r = await api.withdrawBroadcast(b.id)
-    toast(`已撤回 ${r.removed} 条未读`, 'ok'); await loadBroadcasts()
-  } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
-}
-async function remind(b: BroadcastItem) {
-  bcBusy.value = true
-  try {
-    const r = await api.remindBroadcast(b.id)
-    toast(r.unread > 0 ? `已向 ${r.unread} 位未读成员推送站外提醒` : '没有未读成员', r.unread > 0 ? 'ok' : 'info')
-  } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
-}
-async function saveDraft(scheduled: boolean) {
-  bcBusy.value = true
-  try {
-    let at: number | null = null
-    if (scheduled && draftTime.value) {
-      const [h, m] = draftTime.value.split(':').map(Number)
-      const d = new Date(); d.setHours(h, m, 0, 0)
-      if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1) // 已过时刻→明天
-      at = d.getTime() / 1000
-    }
-    const ids = draftTarget.value === 'pick' && notifyTargets.value.length ? [...notifyTargets.value] : null
-    await api.saveDraft(draftTitle.value.trim(), draftBody.value.trim(), ids, at)
-    toast(at ? '定时已安排' : '草稿已保存', 'ok')
-    draftTitle.value = ''; draftBody.value = ''; draftTime.value = ''
-    await loadBroadcasts()
-  } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
-}
-async function sendDraft(b: BroadcastItem) {
-  bcBusy.value = true
-  try {
-    const r = await api.sendDraft(b.id)
-    toast(`已发送给 ${r.sent} 人`, 'ok'); await loadBroadcasts()
-  } catch (e) { toast((e as Error).message, 'err') } finally { bcBusy.value = false }
-}
-async function deleteDraft(b: BroadcastItem) {
-  if (!(await confirmDlg(`删除草稿「${b.title}」？`, { danger: true, title: '删除草稿' }))) return
-  try {
-    await api.deleteDraft(b.id); await loadBroadcasts()
-  } catch (e) { toast((e as Error).message, 'err') }
-}
-function fmtTime(sec: number | null) {
-  if (!sec) return '-'
-  const d = new Date(sec * 1000)
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-// 每日健康日报
-const hrEnabled = ref(true)
-const hrTime = ref('09:00')
-const hrBusy = ref(false)
-const hrLastReport = ref('')
-async function saveHr() {
-  hrBusy.value = true
-  try {
-    const r = await api.setHealthReport(hrEnabled.value, hrTime.value.trim())
-    hrTime.value = r.time
-    toast(`健康日报已${r.enabled ? `开启（每天 ${r.time}）` : '关闭'}`, 'ok')
-  } catch (e) { toast((e as Error).message, 'err') } finally { hrBusy.value = false }
-}
-async function testHr() {
-  hrBusy.value = true
-  try {
-    const r = await api.testHealthReport()
-    hrLastReport.value = r.report
-    toast(r.sent === null ? 'Webhook 未配置——报告内容见下方预览'
-          : r.sent ? '日报已发送，去手机上看看' : 'Webhook 发送失败（见服务器审计日志）',
-          r.sent === false ? 'err' : 'ok')
-  } catch (e) { toast((e as Error).message, 'err') } finally { hrBusy.value = false }
-}
-
 onMounted(async () => {
   if (me.value && me.value.role !== 'admin') {
     err.value = '需要管理员权限'
     return
   }
   void loadAll()
-  try { const r = await api.getPublicUrl(); pubUrl.value = r.public_base_url; pubAlt.value = r.public_base_url_alt || '' } catch { /* */ }
-  try { hookUrl.value = (await api.getWebhook()).url } catch { /* */ }
-  try { const r = await api.getHealthReport(); hrEnabled.value = r.enabled; hrTime.value = r.time } catch { /* */ }
 })
 </script>
 
 <template>
   <main class="page">
     <div class="page-head">
-      <h1>管理</h1>
+      <h1>成员与权限</h1>
       <nav class="tabs" style="flex:1">
         <a href="#" :class="{ 'router-link-active': tab === 'users' }" @click.prevent="tab = 'users'">成员</a>
         <a href="#" :class="{ 'router-link-active': tab === 'invites' }" @click.prevent="tab = 'invites'">邀请</a>
@@ -335,125 +200,6 @@ onMounted(async () => {
           <button class="iconbtn danger" title="删除成员" @click="delUser(u)">✕</button>
         </span>
       </div>
-    </div>
-
-    <!-- 公网地址设置（成员页底部） -->
-    <div v-if="tab === 'users'" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
-      <div style="font-size:13.5px;font-weight:600">🌐 公网访问地址（主/备隧道）</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input v-model="pubUrl" placeholder="主隧道，如 https://your-frp-domain.com:xxxxx" style="flex:1;min-width:220px;font-size:14px" />
-        <input v-model="pubAlt" placeholder="备用隧道（可空），如 https://your-frp-domain.com:xxxxx" style="flex:1;min-width:220px;font-size:14px" />
-        <button class="btn sm" @click="savePubUrl">保存</button>
-      </div>
-      <p style="font-size:12px;color:var(--text-3);margin:0">保存后，分享卡片提供局域网/公网复制按钮，App 登录页展示主/备隧道快捷入口；备用入口的防爆破分账与 healthz 收敛同步生效。</p>
-    </div>
-
-    <!-- 事件推送（通知 bot） -->
-    <div v-if="tab === 'users'" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
-      <div style="font-size:13.5px;font-weight:600">📮 事件推送（通知 bot）</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input v-model="hookUrl" placeholder="GET 模板 URL，需含 {title}/{body} 占位符" style="flex:1;min-width:260px;font-size:14px" />
-        <button class="btn sm" :disabled="hookBusy" @click="saveHook">保存</button>
-        <button class="btn ghost sm" :disabled="hookBusy || !hookUrl" @click="testHook">发送测试</button>
-        <button class="btn sm" @click="notifyOpen = true">📣 发送通知</button>
-      </div>
-      <div v-if="notifyOpen" style="display:grid;gap:8px;background:var(--bg-2,#f6f6f8);border:1px solid var(--line);border-radius:10px;padding:10px">
-        <input v-model="notifyTitle" maxlength="80" placeholder="标题（必填，如：明晚 20:00 全家网盘维护）" style="font-size:14px" />
-        <textarea v-model="notifyBody" maxlength="500" rows="2" placeholder="正文（可留空）" style="font-size:14px;resize:vertical"></textarea>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-          <label style="display:flex;align-items:center;gap:4px;font-size:13px">
-            <input type="checkbox" :checked="notifyTargets.length === 0" @change="notifyTargets = []" style="width:auto" /> 全体
-          </label>
-          <template v-for="u in users.filter(x => x.role !== 'admin' && x.is_active !== false)" :key="u.id">
-            <label style="display:flex;align-items:center;gap:4px;font-size:13px">
-              <input type="checkbox" :checked="notifyTargets.includes(u.id)"
-                @change="toggleNotify(u.id)" style="width:auto" /> {{ u.nickname || u.username }}
-            </label>
-          </template>
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
-          <span v-if="notifyOk" class="notify-ok">✓ 已发送</span>
-          <button class="btn ghost sm" @click="notifyOpen = false">取消</button>
-          <button class="btn sm notify-send" :disabled="notifyBusy || !notifyTitle.trim()" @click="sendNotify">
-            {{ notifyBusy ? '推送中…' : '推送' }}</button>
-        </div>
-      </div>
-      <p style="font-size:12px;color:var(--text-3);margin:0">
-        定向分享、新成员加入时推送到站外（GET 模板，占位符经 URL 编码后替换）。示例：<span v-pre>ntfy <code>https://ntfy.sh/你的主题/{title}</code> · Bark <code>https://api.day.app/你的key/{title}/{body}</code> · Server酱 <code>https://sctapi.ftqq.com/你的key.send?title={title}&desp={body}</code></span>
-      </p>
-    </div>
-
-    <!-- 通知管理（9.6-P2-14）：发送记录/撤回/提醒未读/草稿定时 -->
-    <div v-if="tab === 'users'" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:10px">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <div style="font-size:13.5px;font-weight:600">🗂️ 通知管理</div>
-        <span style="font-size:12px;color:var(--text-3)">发送记录 · 撤回 · 草稿/定时</span>
-        <div style="flex:1" />
-        <button class="btn ghost sm" :disabled="bcBusy" @click="loadBroadcasts">{{ bcOpen ? '刷新' : '查看发送记录' }}</button>
-      </div>
-      <template v-if="bcOpen">
-        <!-- 新建草稿 -->
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:var(--bg-2,#f6f6f8);border:1px solid var(--line);border-radius:10px;padding:10px">
-          <input v-model="draftTitle" maxlength="80" placeholder="新草稿标题（必填）" style="flex:2;min-width:180px;font-size:14px" />
-          <input v-model="draftBody" maxlength="500" placeholder="正文（可留空）" style="flex:3;min-width:200px;font-size:14px" />
-          <select v-model="draftTarget" style="font-size:13px">
-            <option value="all">全体</option>
-            <option value="pick">指定成员…（推送面板勾选）</option>
-          </select>
-          <label style="display:flex;align-items:center;gap:4px;font-size:12.5px">
-            定时 <input v-model="draftTime" type="time" style="width:96px;font-size:13px" />
-          </label>
-          <button class="btn sm" :disabled="bcBusy || !draftTitle.trim()" @click="saveDraft(true)">
-            {{ draftTime ? '定时保存' : '存为草稿' }}</button>
-        </div>
-        <div v-if="!broadcasts.length" class="empty">还没有发送记录或草稿</div>
-        <div v-for="b in broadcasts" :key="b.id" class="frow" style="cursor:default;align-items:flex-start">
-          <span class="icon">{{ b.status === 'sent' ? '📣' : (b.status === 'scheduled' ? '⏰' : '📝') }}</span>
-          <div class="name" style="flex:1">
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-              <b style="font-size:13.5px">{{ b.title }}</b>
-              <span v-if="b.withdrawn_at" class="badge" style="background:var(--glass);color:var(--text-3)">已撤回</span>
-              <span v-else-if="b.status === 'draft'" class="badge" style="background:var(--glass);color:var(--text-3)">草稿</span>
-              <span v-else-if="b.status === 'scheduled'" class="badge" style="background:var(--glass);color:#b8860b">
-                定时 {{ fmtTime(b.scheduled_at) }}</span>
-              <span v-else-if="b.unread >= 0" class="badge" style="background:var(--glass);color:var(--text-3)">
-                未读 {{ b.unread }} / 已读 {{ b.read }}</span>
-            </div>
-            <div style="font-size:12px;color:var(--text-3);white-space:pre-wrap">{{ b.body || '（无正文）' }}</div>
-            <div style="font-size:11px;color:var(--text-3)">
-              {{ b.status === 'sent' ? `发送给 ${b.target_count} 人 · ${fmtTime(b.sent_at)}` : `目标 ${b.target_count} 人` }} · {{ b.created_by }}
-            </div>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <template v-if="b.status === 'sent'">
-              <button v-if="!b.withdrawn_at" class="btn ghost sm" :disabled="bcBusy" @click="withdraw(b)">撤回未读</button>
-              <button class="btn ghost sm" :disabled="bcBusy" @click="remind(b)">提醒未读</button>
-            </template>
-            <template v-else>
-              <button class="btn sm" :disabled="bcBusy" @click="sendDraft(b)">立即发送</button>
-              <button class="btn ghost sm" :disabled="bcBusy" @click="deleteDraft(b)">删除</button>
-            </template>
-          </div>
-        </div>
-      </template>
-    </div>
-
-    <!-- 每日健康日报 -->
-    <div v-if="tab === 'users'" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
-      <div style="font-size:13.5px;font-weight:600">🩺 每日健康日报</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13.5px">
-          <input v-model="hrEnabled" type="checkbox" style="width:auto" /> 每天推送
-        </label>
-        <input v-model="hrTime" placeholder="09:00" style="width:110px;font-size:14px" />
-        <button class="btn sm" :disabled="hrBusy" @click="saveHr">保存</button>
-        <button class="btn ghost sm" :disabled="hrBusy" @click="testHr">立即采集一次</button>
-      </div>
-      <p style="font-size:12px;color:var(--text-3);margin:0">
-        汇总数据盘水位、昨晚备份产物新鲜度、证书剩余天数、公网隧道探活与成员/照片统计，推到上面的 Webhook。
-        磁盘 ≥85%、备份超 26h 未更新、证书剩余 &lt;14 天、隧道探活失败会标 ⚠️。
-      </p>
-      <pre v-if="hrLastReport" style="font-size:12px;background:var(--glass);border:1px solid var(--line);border-radius:8px;padding:10px;margin:0;white-space:pre-wrap">{{ hrLastReport }}</pre>
     </div>
 
     <!-- 邀请 -->
@@ -562,16 +308,4 @@ onMounted(async () => {
   </main>
 </template>
 
-<style scoped>
-/* 推送按钮禁用态：不用全局 opacity 淡化（浅色主题下渐变变白不可辨），
-   改为保持品牌渐变、仅降饱和，配合"推送中…"文案保持可辨识 */
-.notify-send:disabled {
-  opacity: 1;
-  filter: saturate(.45) brightness(.94);
-}
-.notify-ok {
-  font-size: 13px;
-  color: #2e9e5b;
-  font-weight: 600;
-}
-</style>
+

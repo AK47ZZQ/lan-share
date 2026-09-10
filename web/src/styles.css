@@ -479,3 +479,48 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
   .share-card .iconbtn.danger { display: none; }
   .btn-revoke { display: inline-flex; align-items: center; }
 }
+
+/* ── 控制台壳（v3.39 定位更新：Web = 站长工作台）────────────── */
+.console { display: flex; min-height: 100vh; }
+.console > .side {
+  width: 208px; flex-shrink: 0; position: sticky; top: 0; height: 100vh;
+  overflow-y: auto; padding: 14px 10px;
+  background: var(--glass-strong); border-right: 1px solid var(--line);
+}
+.side-nav { display: grid; gap: 2px; }
+.side-group {
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  color: var(--text-3); padding: 14px 10px 5px; text-transform: uppercase;
+}
+.side-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px; border-radius: 9px; font-size: 13.5px;
+  color: var(--text-2); text-decoration: none;
+}
+.side-item span { width: 20px; text-align: center; }
+.side-item:hover { background: var(--hover); color: var(--text); }
+.side-item.router-link-active {
+  background: var(--hover); color: var(--accent); font-weight: 600;
+}
+.side-scrim { display: none; }
+.main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.console-body { flex: 1; }
+.side-toggle {
+  display: none; border: 1px solid var(--line); background: var(--glass-strong);
+  border-radius: 9px; font-size: 16px; padding: 5px 10px; cursor: pointer;
+  color: var(--text-2);
+}
+@media (max-width: 900px) {
+  .console > .side {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 300;
+    transform: translateX(-100%); transition: transform .2s ease;
+    width: 240px;
+  }
+  .console > .side.open { transform: translateX(0); box-shadow: var(--shadow); }
+  .side-scrim {
+    display: block; position: fixed; inset: 0; z-index: 290;
+    background: rgba(0, 0, 0, .35);
+  }
+  .side-toggle { display: inline-block; }
+  .console-body .page { padding-top: 16px; }
+}

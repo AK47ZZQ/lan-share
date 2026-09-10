@@ -33,6 +33,25 @@ export interface BroadcastItem {
 export interface PhotoItem { path: string; name: string; taken: string; month: string; uploader: string; thumb: string }
 export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
 export interface Album { id: string; title: string; month?: string; created_by?: string; count?: number; cover?: string }
+
+// 管理台（v3.39）：总览聚合 / 内容治理 / 会话与设备
+export interface ConsoleOverview {
+  users: { total: number; active: number; admins: number; guests: number }
+  photos: { count: number; size: number }
+  shares: { total: number; active: number; downloads: number }
+  trash: { count: number; size: number }
+  blobs: { count: number; size: number }
+  sessions: { active: number }
+  devices: { active: number }
+  disk: { used_pct: number; free_gb: number; total_gb: number; free_bytes: number; total_bytes: number; used_bytes: number }
+  app_latest: { version: string; build: number } | null
+  server_time: number
+}
+export interface LargeFileItem { path: string; size: number; mtime: number }
+export interface DupGroup { size: number; paths: string[]; wasted: number }
+export interface AuditItem { ts: number; ip: string; action: string; target: string; detail: string; username: string }
+export interface AdminSession { token_hash: string; username: string; created_at: number; expires_at: number; ip: string; ua: string }
+export interface AdminDevice { id: number; username: string; name: string; created_at: number; last_seen: number | null; expires_at: number }
 async function handle<T>(r: Response): Promise<T> {
   if (r.status === 401) {
     // 会话过期：整页跳登录（带 next 回跳）。公开页（/s/ 分享、/up 直传、/login）
@@ -108,6 +127,16 @@ export const api = {
   getWebhook: () => fetch('/api/admin/webhook').then(r => handle<{ url: string }>(r)),
   setWebhook: (url: string) => jpost('/api/admin/webhook', { url }).then(r => handle<{ ok: boolean; url: string }>(r)),
   testWebhook: () => jpost('/api/admin/webhook/test', {}).then(r => handle<{ ok: boolean }>(r)),
+
+  // 管理台（v3.39）：总览 / 治理 / 会话与设备
+  adminOverview: () => fetch('/api/admin/overview').then(r => handle<ConsoleOverview>(r)),
+  largeFiles: (limit = 50) => fetch(`/api/admin/large-files?limit=${limit}`).then(r => handle<{ items: LargeFileItem[]; total_files: number; total_size: number }>(r)),
+  duplicates: (minSize: number, limit = 50) => fetch(`/api/admin/duplicates?min_size=${minSize}&limit=${limit}`).then(r => handle<{ groups: DupGroup[]; group_count: number }>(r)),
+  auditLog: (limit = 100) => fetch(`/api/admin/audit?limit=${limit}`).then(r => handle<{ items: AuditItem[] }>(r)),
+  adminSessions: () => fetch('/api/admin/sessions').then(r => handle<{ items: AdminSession[] }>(r)),
+  revokeAdminSession: (tokenHash: string) => fetch(`/api/admin/sessions/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
+  adminDevices: () => fetch('/api/admin/devices').then(r => handle<{ items: AdminDevice[] }>(r)),
+  revokeAdminDevice: (id: number) => fetch(`/api/admin/devices/${id}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   // v0.20 手动广播：站内通知逐人 + 已配置 webhook 同步推
   adminNotify: (title: string, body: string, userIds?: number[]) =>
     jpost('/api/admin/notify', { title, body, ...(userIds?.length ? { user_ids: userIds } : {}) })

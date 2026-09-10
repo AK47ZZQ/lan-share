@@ -26,6 +26,9 @@ async function boot() {
 const menuOpen = ref(false)
 const showDisk = ref(false)
 const showAccount = ref(false)
+// 控制台侧栏（v3.39）：宽屏常驻，窄屏抽屉（<900px）
+const sideOpen = ref(false)
+const isAdmin = computed(() => me.value?.role === 'admin')
 const theme = ref<Theme>(currentTheme())
 function setTheme(th: Theme) { theme.value = th; applyTheme(th) }
 function closeMenu() { menuOpen.value = false }
@@ -54,9 +57,12 @@ watchEffect(() => {
   if (!me.value && !publicRoute.value) void router.replace('/login')
   if (me.value && route.name === 'login') void router.replace('/')
   // 管理路由角色守卫（06 审查 P2-1 / 07 审查 §3.3）：meta.admin 此前是死配置，
-  // 非 admin 直达 /admin 会短暂渲染 AdminView（成员列表布局等结构信息）才被
-  // 页内 onMounted 拦截；API 虽全部服务端判权，渲染面也不该给
-  if (me.value && route.meta.admin && me.value.role !== 'admin') void router.replace('/')
+  // 非 admin 直达管理页会短暂渲染视图（结构信息外泄）才被页内拦截；
+  // API 虽全部服务端判权，渲染面也不该给。定位更新（2026-09-10）后 '/'
+  // 即管理台总览（meta.admin），成员统一落 /files 内容区。
+  if (me.value && route.meta.admin && me.value.role !== 'admin') void router.replace('/files')
+  // 路由切换收起移动端抽屉侧栏
+  if (sideOpen.value) sideOpen.value = false
 })
 </script>
 
@@ -94,15 +100,43 @@ watchEffect(() => {
     <router-view v-if="publicRoute" />
 
     <template v-else-if="me">
-      <!-- 成员视角预览横幅（admin 专用） -->
-      <div v-if="previewAs" style="position:sticky;top:0;z-index:70;display:flex;gap:10px;align-items:center;justify-content:center;padding:7px 12px;font-size:13px;background:var(--accent,#4f7cff);color:#fff">
-        <span>👁 正在以 <b>{{ previewAs }}</b> 的视角浏览（只读预览，操作仍按你的管理员权限执行）</span>
-        <button class="btn sm" style="background:#fff;color:#1f2430;border:none;font-weight:600" @click="exitPreview">退出视角</button>
-      </div>
-      <header class="topbar">
-        <router-link to="/" class="brand" title="回到主页">
-          <img class="logo" src="/static/favicon.svg" alt="LAN Share" /><span class="brand-name">LAN Share</span>
-        </router-link>
+      <!-- 控制台壳（v3.39 定位更新）：左侧导航 + 顶栏；窄屏侧栏为抽屉 -->
+      <div class="console">
+        <aside class="side" :class="{ open: sideOpen }">
+          <nav class="side-nav">
+            <template v-if="isAdmin">
+              <div class="side-group">总览</div>
+              <router-link class="side-item" to="/" @click="sideOpen = false"><span>📊</span> 总览</router-link>
+            </template>
+            <div class="side-group">内容</div>
+            <router-link class="side-item" to="/files" @click="sideOpen = false"><span>🗂️</span> 文件</router-link>
+            <router-link class="side-item" to="/photos" @click="sideOpen = false"><span>🖼️</span> 照片</router-link>
+            <router-link class="side-item" to="/trash" @click="sideOpen = false"><span>🗑️</span> 回收站</router-link>
+            <router-link class="side-item" to="/activity" @click="sideOpen = false"><span>🔔</span> 家庭动态</router-link>
+            <div class="side-group">分享</div>
+            <router-link class="side-item" to="/shares" @click="sideOpen = false"><span>🔗</span> 我的分享</router-link>
+            <template v-if="isAdmin">
+              <div class="side-group">管理</div>
+              <router-link class="side-item" to="/admin" @click="sideOpen = false"><span>👥</span> 成员与权限</router-link>
+              <router-link class="side-item" to="/notify-ops" @click="sideOpen = false"><span>📣</span> 通知运营</router-link>
+              <router-link class="side-item" to="/settings" @click="sideOpen = false"><span>⚙️</span> 系统设置</router-link>
+              <router-link class="side-item" to="/governance" @click="sideOpen = false"><span>🧹</span> 治理工具</router-link>
+              <router-link class="side-item" to="/status" @click="sideOpen = false"><span>🩺</span> 运行状态</router-link>
+            </template>
+          </nav>
+        </aside>
+        <div v-if="sideOpen" class="side-scrim" @click="sideOpen = false"></div>
+        <div class="main-col">
+          <!-- 成员视角预览横幅（admin 专用） -->
+          <div v-if="previewAs" style="position:sticky;top:0;z-index:70;display:flex;gap:10px;align-items:center;justify-content:center;padding:7px 12px;font-size:13px;background:var(--accent,#4f7cff);color:#fff">
+            <span>👁 正在以 <b>{{ previewAs }}</b> 的视角浏览（只读预览，操作仍按你的管理员权限执行）</span>
+            <button class="btn sm" style="background:#fff;color:#1f2430;border:none;font-weight:600" @click="exitPreview">退出视角</button>
+          </div>
+          <header class="topbar">
+            <button class="side-toggle" title="导航" @click.stop="sideOpen = !sideOpen">☰</button>
+            <router-link to="/" class="brand" title="回到总览">
+              <img class="logo" src="/static/favicon.svg" alt="LAN Share" /><span class="brand-name">LAN Share</span>
+            </router-link>
         <button class="disk-badge" :class="{ low: disk?.warning }" v-if="disk"
                 :title="`磁盘已用 ${diskPct}%，点击查看详情`" @click.stop="showDisk = true">
           <span class="bar"><i :style="{ width: diskPct + '%' }" /></span>
@@ -125,12 +159,13 @@ watchEffect(() => {
               <div><div class="um-name">{{ displayName }}</div>
                 <div class="um-role">{{ me.role === 'admin' ? '管理员' : me.role === 'guest' ? '访客' : '成员' }}</div></div>
             </div>
-            <router-link class="um-item" to="/" @click="menuOpen = false"><span>🗂️</span> 文件</router-link>
+            <router-link v-if="isAdmin" class="um-item" to="/" @click="menuOpen = false"><span>📊</span> 总览</router-link>
+            <router-link class="um-item" to="/files" @click="menuOpen = false"><span>🗂️</span> 文件</router-link>
             <router-link class="um-item" to="/photos" @click="menuOpen = false"><span>🖼️</span> 照片</router-link>
             <router-link class="um-item" to="/trash" @click="menuOpen = false"><span>🗑️</span> 回收站</router-link>
-            <router-link class="um-item" to="/shares" @click="menuOpen = false"><span>🔗</span> 分享管理</router-link>
+            <router-link class="um-item" to="/shares" @click="menuOpen = false"><span>🔗</span> 我的分享</router-link>
             <router-link class="um-item" to="/activity" @click="menuOpen = false"><span>🔔</span> 家庭动态</router-link>
-            <router-link v-if="me.role === 'admin'" class="um-item" to="/admin" @click="menuOpen = false"><span>⚙️</span> 管理</router-link>
+            <router-link v-if="me.role === 'admin'" class="um-item" to="/admin" @click="menuOpen = false"><span>👥</span> 成员与权限</router-link>
             <button class="um-item" @click="closeMenu(); showDisk = true"><span>💾</span> 存储空间</button>
             <div class="um-divider" />
             <div class="um-theme">
@@ -147,7 +182,11 @@ watchEffect(() => {
           </div>
         </teleport>
       </header>
-      <router-view :me="me" :key="route.fullPath" />
+      <div class="console-body">
+        <router-view :me="me" :key="route.fullPath" />
+      </div>
+        </div>
+      </div>
     </template>
 
     <div v-else class="page"><div class="card empty">跳转登录…</div></div>

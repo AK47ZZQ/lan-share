@@ -957,6 +957,153 @@
     "summary": "Admin Delete Album"
    }
   },
+  "/api/admin/audit": {
+   "get": {
+    "description": "审计日志近况（audit_log 自带 AUDIT_KEEP 水位）。",
+    "operationId": "admin_audit_api_admin_audit_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 100,
+       "maximum": 500,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Audit"
+   }
+  },
+  "/api/admin/devices": {
+   "get": {
+    "description": "活跃 App 设备（device_tokens）。",
+    "operationId": "admin_devices_api_admin_devices_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Admin Devices"
+   }
+  },
+  "/api/admin/devices/{device_id}": {
+   "delete": {
+    "operationId": "admin_revoke_device_api_admin_devices__device_id__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "device_id",
+      "required": true,
+      "schema": {
+       "title": "Device Id",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Revoke Device"
+   }
+  },
+  "/api/admin/duplicates": {
+   "get": {
+    "description": "疑似重复：同尺寸聚类（size 相同即归组，不做全盘哈希）。\nwasted = 组尺寸 × (组内数 − 1)，按浪费字节降序。",
+    "operationId": "admin_duplicates_api_admin_duplicates_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "min_size",
+      "required": false,
+      "schema": {
+       "default": 1048576,
+       "minimum": 0,
+       "title": "Min Size",
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 200,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Duplicates"
+   }
+  },
   "/api/admin/export": {
    "post": {
     "description": "导出成员数据：私人空间 + 直传(incoming)子树全量 zip，附 manifest.json\n（账号信息/分享/设备/通知统计）。\n\n边界声明（写进 manifest）：共享空间里的文件无逐文件归属元数据，不在本\n导出范围；照片时间线引用的文件若落在上述两棵树内会自然包含。走 /api/zip\n同一套短时效票据，下载一次即删。",
@@ -1266,6 +1413,47 @@
     "summary": "Admin Delete Invite"
    }
   },
+  "/api/admin/large-files": {
+   "get": {
+    "description": "大文件 TOP N（跳过隐藏目录）。",
+    "operationId": "admin_large_files_api_admin_large_files_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "limit",
+      "required": false,
+      "schema": {
+       "default": 50,
+       "maximum": 200,
+       "minimum": 1,
+       "title": "Limit",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Large Files"
+   }
+  },
   "/api/admin/notifications/broadcast/{bid}/remind": {
    "post": {
     "description": "提醒未读：对仍处未读的成员再推一次站外 webhook（站内不重复落）。",
@@ -1505,6 +1693,23 @@
     "summary": "Admin Broadcast Notify"
    }
   },
+  "/api/admin/overview": {
+   "get": {
+    "description": "控制台总览：一张聚合快照（全部 COUNT/SUM，单次往返拼装）。",
+    "operationId": "admin_overview_api_admin_overview_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Admin Overview"
+   }
+  },
   "/api/admin/public-url": {
    "get": {
     "operationId": "get_public_url_api_admin_public_url_get",
@@ -1555,6 +1760,60 @@
      }
     },
     "summary": "Set Public Url"
+   }
+  },
+  "/api/admin/sessions": {
+   "get": {
+    "description": "活跃 Web 会话（token_hash 仅作吊销句柄，不回传原文令牌——库里本就只有哈希）。",
+    "operationId": "admin_sessions_api_admin_sessions_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Admin Sessions"
+   }
+  },
+  "/api/admin/sessions/{token_hash}": {
+   "delete": {
+    "operationId": "admin_revoke_session_api_admin_sessions__token_hash__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "token_hash",
+      "required": true,
+      "schema": {
+       "title": "Token Hash",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Revoke Session"
    }
   },
   "/api/admin/users": {
