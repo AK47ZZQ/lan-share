@@ -923,8 +923,12 @@ class _MePageState extends ConsumerState<MePage> {
               margin: EdgeInsets.zero,
               child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),
-                  child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  // Wrap 而非 Row：入口 6 个（v0.25 传输迁入）超出一行宽度，
+                  // 放不下自动换行，行内仍按 spaceAround 分布
+                  child: Wrap(
+                      alignment: WrapAlignment.spaceAround,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      runSpacing: 4,
                       children: [
                         if (!isGuest)
                           _quickTile(Icons.backup_outlined, '自动备份', () =>

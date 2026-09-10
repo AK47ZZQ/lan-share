@@ -127,7 +127,6 @@ watchEffect(() => {
             </div>
             <router-link class="um-item" to="/" @click="menuOpen = false"><span>🗂️</span> 文件</router-link>
             <router-link class="um-item" to="/photos" @click="menuOpen = false"><span>🖼️</span> 照片</router-link>
-            <router-link class="um-item" to="/kb" @click="menuOpen = false"><span>🕸️</span> 知识图谱</router-link>
             <router-link class="um-item" to="/trash" @click="menuOpen = false"><span>🗑️</span> 回收站</router-link>
             <router-link class="um-item" to="/shares" @click="menuOpen = false"><span>🔗</span> 分享管理</router-link>
             <router-link class="um-item" to="/activity" @click="menuOpen = false"><span>🔔</span> 家庭动态</router-link>

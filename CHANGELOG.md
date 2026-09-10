@@ -2,6 +2,39 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — 服务端 v3.38 + App v0.26.0+71：知识库/图谱整体下线 + 宫格溢出修复
+
+主人决策：知识图谱"算了算了"，删掉所有 KB 功能、笔记回到原有功能；顺带修
+「我的」页功能宫格溢出。
+**门禁：pytest 203 passed / ruff / mypy 全绿 / dart analyze 0 / flutter test 152 /
+web 6 passed + vue-tsc 构建。**
+
+**删除面（三端）**
+- 服务端：`app/api/kb.py` + `app/services/kb.py`（graph/backlinks/neighbors/
+  names/context/reindex 六端点）与 main.py 挂载；`tests/test_kb.py`（31 条）与
+  test_v37_notes_kb 的 kb 段（4 条）；conftest 的 `reset_kb_state`；PyYAML 依赖。
+  契约快照重导：**117 → 111 路径**。
+- App：`data/kb.dart`（客户端镜像解析）+ `ui/kb_graph_page.dart`（图谱页）+
+  batch076 测试（26 条）；notes_page 图谱入口/`[[` 补全/frontmatter 自动维护/
+  反链面板/预览双链可点；doc_viewer 双链跳转与 kblink 预处理。
+- Web：`views/KbView.vue` + `kb.ts` + `/kb` 路由 + 菜单入口 + api.ts kb 段 +
+  FileViewer 双链渲染（preprocessWikilinks/kbOpen 事件链）；dist 重建
+  （index-BwxLIFF8.js）。
+
+**保留（笔记主功能化成果不受影响）**
+- 底栏 笔记 一级页签、分类横滑栏（含空分类）、点按预览优先、条目复制路径、
+  `/api/notes/list` 的 categories+abs_path 契约与回归测试。
+
+**修复**
+- 「我的」页功能宫格 6 个入口（v0.25 传输迁入后）单行 Row 溢出屏幕外——
+  改 `Wrap`（spaceAround + runSpacing），放不下自动换行。
+
+**上线与分发**
+- 服务已重启（lan-share-api），healthz 8765/8766 双口 200；`/api/kb/graph` 已登录
+  访问 404；notes categories 正常；web 新包已生效。
+- APK：v0.26.0+71，104438524 B，sha256 88e8f78b…，aapt 核对 versionCode 71；
+  三件套同步 versions.json 61 条；`/api/app/latest`·`history` 线上核验通过。
+
 ## 2026-09-10 — 服务端 v3.37 + App v0.25.0+70：笔记主功能化 & 知识库完善
 
 依据主人 5 项需求（底栏换位 / 手机复制路径 / 空分类修复 / KB 完善 / 预览优先）。

@@ -17,10 +17,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
-import '../data/kb.dart';
 import 'doc_extract.dart';
 import 'notes_page.dart';
 import 'rich_note_editor.dart';
@@ -306,58 +304,12 @@ class _DocViewerPageState extends State<DocViewerPage> {
 
   String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
-  /// [[ ]] 双链跳转（v0.24）：库根优先取笔记页记忆的目录（shared_preferences
-  /// 'notes_last_dir'，红队 V6：用父目录当根会让解析域比服务端窄、共享根笔记
-  /// 触发 path='' 422）；懒拉 names 解析目标 → 笔记编辑器
-  Future<void> _onKbLink(String? href) async {
-    final target = kblinkTarget(href);
-    if (target == null || !mounted) return;
-    try {
-      final sp = await SharedPreferences.getInstance();
-      var dir = sp.getString('notes_last_dir') ?? '';
-      if (dir.isEmpty) {
-        dir = widget.path.contains('/')
-            ? widget.path.substring(0, widget.path.lastIndexOf('/'))
-            : '';
-      }
-      if (!mounted) return;
-      if (dir.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('先在笔记页选过笔记目录才能跳转双链')));
-        return;
-      }
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/kb/names', queryParameters: {'path': dir});
-      final names = ((r.data as List?) ?? const [])
-          .whereType<Map>()
-          .map((m) => Map<String, dynamic>.from(m))
-          .toList();
-      if (!mounted) return;
-      final path = resolveLinkTarget(names, target, dir);
-      if (path == null || !mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('「$target」不存在（可从图谱页幽灵节点创建）')));
-        return;
-      }
-      final i = path.lastIndexOf('/');
-      if (i < 0) return;
-      await openNoteEditor(context,
-          dir: path.substring(0, i), name: path.substring(i + 1));
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('跳转失败，请稍后重试')));
-    }
-  }
-
   // ── 渲染壳 ──────────────────────────────────────────────
 
   Widget _markdown(String data, {bool images = false}) => Markdown(
-        // [[ ]] 双链预处理（v0.24）：转 kblink: 伪协议，onTapLink 里跳编辑器
-        data: preprocessWikilinks(data),
+        data: data,
         selectable: true,
         padding: const EdgeInsets.all(16),
-        onTapLink: (text, href, title) => _onKbLink(href),
         sizedImageBuilder: images
             ? (config) {
                 final uri = config.uri;

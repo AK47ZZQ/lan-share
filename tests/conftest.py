@@ -51,7 +51,6 @@ from app.main import app  # noqa: E402
 from app.api import auth as _auth, photos as _photos, share as _share  # noqa: E402
 from app.api import webdav as _webdav  # noqa: E402
 from app.security import reset_auth_gates  # noqa: E402
-from app.services import kb as _kb  # noqa: E402
 
 ADMIN_USER = "admin"
 ADMIN_PASS = "test-pass-123"
@@ -76,13 +75,11 @@ def _reset_in_memory_state():
     _share.reset_share_state()
     _auth.reset_pair_codes()
     _photos.reset_scan_throttle()
-    _kb.reset_kb_state()
     _webdav.reset_dav_locks()
     yield
     reset_auth_gates()
     _share.reset_share_state()
     _auth.reset_pair_codes()
-    _kb.reset_kb_state()
     _webdav.reset_dav_locks()
 
 

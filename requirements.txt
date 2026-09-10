@@ -22,7 +22,6 @@ pillow-heif==1.6.0          # HEIC 缩略图（缺失时 filetools.ensure_heif_s
 pyotp==2.10.0               # TOTP（_totp_match_step ±1 窗口语义）
 qrcode==7.4.2               # 分享二维码（服务端动态生成）
 python-multipart==0.0.32    # FastAPI 文件上传解析
-PyYAML==6.0.3               # 知识库 frontmatter（services/kb 仅 safe_load + 64KB 上限）
 tzdata==2025.3
 
 # ── 开发/门禁（check.bat 四段）─────────────────────────────
