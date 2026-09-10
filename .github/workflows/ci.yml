@@ -1,0 +1,85 @@
+name: ci
+
+# 11 号复审批次 1（P1-2）+ 批次 3（PG 覆盖）：
+# 此前质量门禁只靠人记得跑 check.bat，且测试只跑 SQLite、生产跑 PostgreSQL。
+# 本工作流把"门禁"变成"push 即强制"，并让同一套测试在**两条引擎**上各跑一遍。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality-gate:
+    name: pytest (SQLite) + ruff + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: ruff（错误级 + pyflakes + bugbear）
+        run: python -m ruff check app tests server.py
+
+      - name: mypy
+        run: python -m mypy app
+
+      - name: pytest（SQLite · 默认引擎）
+        run: python -m pytest tests/ -q
+
+  pg-coverage:
+    name: pytest (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lanshare
+          POSTGRES_PASSWORD: lanshare
+          POSTGRES_DB: lanshare
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lanshare"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 同一套测试、同一个夹具；只换 DATABASE_URL —— 覆盖 _PgConn/_pg_sql/
+      # _PG_SCHEMA 这条**生产真正在跑**的代码路（此前零自动化覆盖）。
+      - name: pytest（PostgreSQL · 临时 schema 隔离）
+        env:
+          LANSHARE_TEST_PG_URL: postgresql://lanshare:lanshare@127.0.0.1:5432/lanshare
+        run: python -m pytest tests/ -q
+
+  web-tests:
+    name: web 单元测试（node:test，零依赖）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: node --test
+        working-directory: web
+        run: npm test
