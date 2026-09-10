@@ -74,8 +74,10 @@ class _FeedbackPageState extends State<FeedbackPage>
       final dio = await ApiClient.I.dio();
       final r = await dio.get('/api/feedback');
       if (!mounted) return;
+      final d = r.data;
+      final rows = (d is Map ? d['items'] : d) as List? ?? const [];
       setState(() {
-        _items = ((r.data as List?) ?? const [])
+        _items = rows
             .whereType<Map>()
             .map((m) => Map<String, dynamic>.from(m))
             .toList();

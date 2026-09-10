@@ -964,6 +964,17 @@ class _MePageState extends ConsumerState<MePage> {
                   onTap: () => Navigator.push(context,
                       MaterialPageRoute(builder: (_) => const FeedbackPage())),
                   ))),
+        // ── 管理（仅管理员）：提前到普通功能之后（9-11 反馈 #b304）——
+        if (session.role == 'admin')
+          _group(context, '管理', [
+            ListTile(
+              leading: const Icon(Icons.admin_panel_settings_outlined),
+              title: const Text('管理面板'),
+              subtitle: const Text('成员/邀请/授权矩阵/系统设置'),
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AdminPage())),
+            ),
+          ]),
         // ── 外观与通知 ────────────────────────────────────────
         _group(context, '外观与通知', [
           ListTile(
@@ -1088,17 +1099,6 @@ class _MePageState extends ConsumerState<MePage> {
                 MaterialPageRoute(builder: (_) => const AboutPage())),
           ),
         ]),
-        // ── 管理（仅管理员）：与普通功能分区隔离（9-10 布局重构）──
-        if (session.role == 'admin')
-          _group(context, '管理', [
-            ListTile(
-              leading: const Icon(Icons.admin_panel_settings_outlined),
-              title: const Text('管理面板'),
-              subtitle: const Text('成员/邀请/授权矩阵/系统设置'),
-              onTap: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const AdminPage())),
-            ),
-          ]),
         const Divider(),
         ListTile(
           leading: Icon(Icons.logout, color: cs.error),
