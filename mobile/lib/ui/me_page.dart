@@ -923,8 +923,8 @@ class _MePageState extends ConsumerState<MePage> {
               margin: EdgeInsets.zero,
               child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),
-                  // Wrap 而非 Row：入口 6 个（v0.25 传输迁入）超出一行宽度，
-                  // 放不下自动换行，行内仍按 spaceAround 分布
+                  // Wrap 而非 Row：5 项一行正好放下；将来再加入口也只会
+                  // 自动换行而不是溢出屏幕，行内仍按 spaceAround 分布
                   child: Wrap(
                       alignment: WrapAlignment.spaceAround,
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -948,11 +948,6 @@ class _MePageState extends ConsumerState<MePage> {
                         _quickTile(Icons.delete_outline, '回收站', () =>
                             Navigator.push(context, MaterialPageRoute(
                                 builder: (_) => const TrashPage()))),
-                        if (session.role == 'admin')
-                          _quickTile(Icons.admin_panel_settings_outlined,
-                              '管理面板', () => Navigator.push(context,
-                                  MaterialPageRoute(
-                                      builder: (_) => const AdminPage()))),
                       ]))),
         ),
         // ── 外观与通知 ────────────────────────────────────────
@@ -1079,6 +1074,17 @@ class _MePageState extends ConsumerState<MePage> {
                 MaterialPageRoute(builder: (_) => const AboutPage())),
           ),
         ]),
+        // ── 管理（仅管理员）：与普通功能分区隔离（9-10 布局重构）──
+        if (session.role == 'admin')
+          _group(context, '管理', [
+            ListTile(
+              leading: const Icon(Icons.admin_panel_settings_outlined),
+              title: const Text('管理面板'),
+              subtitle: const Text('成员/邀请/授权矩阵/系统设置'),
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AdminPage())),
+            ),
+          ]),
         const Divider(),
         ListTile(
           leading: Icon(Icons.logout, color: cs.error),

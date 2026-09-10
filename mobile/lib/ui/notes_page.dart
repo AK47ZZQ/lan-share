@@ -647,10 +647,12 @@ class _NotesPageState extends State<NotesPage> {
 
   // ── 分类侧栏 + 卡片列表（9.6-P1-7 方案 B）────────────────
 
-  /// 左侧分类栏：可开合；分类可嵌套；分类与"未分类"都是拖拽落点
-  /// （长按笔记条目拖进来即移动）
+  /// 左侧分类栏：覆盖式抽屉（宽约 70% 屏宽，点右侧空白收回）；分类可嵌套；
+  /// 分类与"未分类"都是拖拽落点（长按笔记条目拖进来即移动）
   Widget _catPanel(ThemeData th) {
     final cs = th.colorScheme;
+    final double panelW =
+        (MediaQuery.of(context).size.width * 0.7).clamp(230.0, 320.0);
     Widget dropWrap(String? cat, Widget child) => DragTarget<String>(
         builder: (ctx, candidates, _) => Container(
             decoration: BoxDecoration(
@@ -661,10 +663,10 @@ class _NotesPageState extends State<NotesPage> {
     return AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
-        width: _catsOpen ? 190 : 0,
+        width: _catsOpen ? panelW : 0,
         child: ClipRect(
             child: SizedBox(
-                width: _catsOpen ? 190 : 0,
+                width: _catsOpen ? panelW : 0,
                 child: Container(
                     color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
                     child: Column(children: [
@@ -686,7 +688,11 @@ class _NotesPageState extends State<NotesPage> {
                             leading: Icon(Icons.apps, size: 20,
                                 color: _catFilter == null && !_favOnly ? cs.primary : null),
                             title: const Text('全部', style: TextStyle(fontSize: 13.5)),
-                            onTap: () => setState(() { _catFilter = null; _favOnly = false; }))),
+                            onTap: () => setState(() {
+                              _catFilter = null;
+                              _favOnly = false;
+                              _catsOpen = false;
+                            }))),
                         dropWrap('', ListTile(
                             dense: true,
                             selected: _catFilter == '' && !_favOnly,
@@ -695,14 +701,16 @@ class _NotesPageState extends State<NotesPage> {
                             title: const Text('未分类', style: TextStyle(fontSize: 13.5)),
                             trailing: Text('${_countOf('')}',
                                 style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                            onTap: () => setState(() { _catFilter = ''; _favOnly = false; }))),
+                            onTap: () => setState(
+                                () { _catFilter = ''; _favOnly = false; _catsOpen = false; }))),
                         ListTile(
                             dense: true,
                             selected: _favOnly,
                             leading: Icon(_favOnly ? Icons.star : Icons.star_border,
                                 size: 20, color: _favOnly ? cs.tertiary : null),
                             title: const Text('收藏', style: TextStyle(fontSize: 13.5)),
-                            onTap: () => setState(() => _favOnly = !_favOnly)),
+                            onTap: () => setState(
+                                () => _favOnly = !_favOnly)),
                         if (_catTree.isNotEmpty)
                           const Padding(
                               padding: EdgeInsets.fromLTRB(12, 8, 8, 2),
@@ -750,8 +758,10 @@ class _NotesPageState extends State<NotesPage> {
               icon: const Icon(Icons.delete_outline, size: 16),
               tooltip: '删除分类',
               onPressed: () => _deleteCategory(node.path)),
-          onTap: () => setState(
-              () => _catFilter = selected ? null : node.path))),
+          onTap: () => setState(() {
+            _catFilter = selected ? null : node.path;
+            _catsOpen = false;
+          }))),
       if (expanded)
         for (final c in node.childList) _catTile(c, depth + 1, th, dropWrap),
     ]);
@@ -1155,9 +1165,27 @@ class _NotesPageState extends State<NotesPage> {
                   icon: const Icon(Icons.folder_open),
                   label: const Text('选择目录')),
             ]))
-          : Row(children: [
-              _catPanel(Theme.of(context)),
-              Expanded(child: _listBody(Theme.of(context))),
+          : Stack(children: [
+              Positioned.fill(child: _listBody(Theme.of(context))),
+              // 覆盖式分类抽屉（9-10 交互修复）：不再内联挤压笔记列表；
+              // 展开时右侧留遮罩空白，点空白即收回
+              Positioned.fill(
+                  child: IgnorePointer(
+                      ignoring: !_catsOpen,
+                      child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeOut,
+                          color: _catsOpen
+                              ? Colors.black.withValues(alpha: 0.30)
+                              : Colors.transparent,
+                          child: Row(children: [
+                            _catPanel(Theme.of(context)),
+                            Expanded(
+                                child: GestureDetector(
+                                    onTap: () =>
+                                        setState(() => _catsOpen = false),
+                                    child: const SizedBox.expand())),
+                          ])))),
             ]),
       bottomNavigationBar: _selecting
           ? SafeArea(
@@ -1466,19 +1494,37 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       canPop: !_dirty,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop || !_dirty) return;
-        final discard = await showDialog<bool>(
-            context: context,
-            builder: (dctx) => AlertDialog(
-                    title: const Text('放弃未保存的修改？'),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(dctx, false),
-                          child: const Text('继续编辑')),
-                      FilledButton(
-                          onPressed: () => Navigator.pop(dctx, true),
-                          child: const Text('放弃')),
-                    ]));
-        if (discard == true && context.mounted) Navigator.pop(context);
+        // 返回即存（9-10 交互优化）：有改动时返回 = 自动保存后退出，
+        // 不再每次弹"放弃修改？"打断；内容为空视为误触，按放弃处理
+        // （本地草稿保留，重开可恢复）；仅保存失败才弹确认
+        if (_ctrl.text.trim().isEmpty) {
+          if (context.mounted) Navigator.pop(context);
+          return;
+        }
+        final ok = await _save(silent: true);
+        if (!mounted) return;
+        if (!ok) {
+          if (!context.mounted) return;
+          final discard = await showDialog<bool>(
+              context: context,
+              builder: (dctx) => AlertDialog(
+                      title: const Text('保存失败，要放弃这次修改吗？'),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(dctx, false),
+                            child: const Text('继续编辑')),
+                        FilledButton(
+                            onPressed: () => Navigator.pop(dctx, true),
+                            child: const Text('放弃')),
+                      ]));
+          if (discard == true && context.mounted) Navigator.pop(context);
+          return;
+        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('已保存到 $_remotePath'),
+            duration: const Duration(seconds: 2)));
+        Navigator.pop(context);
       },
       child: Scaffold(
         appBar: AppBar(
