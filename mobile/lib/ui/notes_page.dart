@@ -8,14 +8,15 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
+import '../data/api/files_api.dart';
+import '../data/api/notes_api.dart';
 import 'doc_viewer.dart';
 import 'dir_picker_page.dart';
 import 'rich_note_editor.dart';
@@ -224,12 +225,9 @@ class _NotesPageState extends State<NotesPage> {
 
   Future<void> _load() async {
     try {
-      final dio = await ApiClient.I.dio();
       // v0.21：聚合列表端点——一次拿到全部笔记（含子分类与前 200 字摘要），
       // 分类/移动/重命名/删除仍走 files 通道
-      final r = await dio.get('/api/notes/list',
-          queryParameters: {'path': _dir!, 'sort': _sort});
-      final items = (r.data['items'] as List? ?? const []);
+      final (items, cats) = await NotesApi.list(dir: _dir!, sort: _sort);
       final notes = <_Note>[];
       for (final e in items) {
         final m = e as Map;
@@ -244,12 +242,6 @@ class _NotesPageState extends State<NotesPage> {
             mtime: (m['mtime'] as num?)?.toDouble() ?? 0,
             ctime: (m['ctime'] as num?)?.toDouble() ?? 0,
             absPath: m['abs_path'] as String?));
-      }
-      final cats = <String, int>{};
-      for (final c in (r.data['categories'] as List? ?? const [])) {
-        final m = c as Map;
-        final path = (m['path'] as String?) ?? '';
-        if (path.isNotEmpty) cats[path] = (m['count'] as num?)?.toInt() ?? 0;
       }
       if (!mounted) return;
       setState(() {
@@ -268,8 +260,6 @@ class _NotesPageState extends State<NotesPage> {
       });
     }
   }
-
-  String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
   Future<void> _newNote() async {
     final nameCtrl = TextEditingController();
@@ -324,9 +314,8 @@ class _NotesPageState extends State<NotesPage> {
     if (!mounted) return;
     // 同名预检（review P2-6）：/api/upload 对同名文件是静默覆盖，新建变顶替
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/files/${_enc(d)}');
-      final exists = (r.data['items'] as List? ?? const []).any((e) =>
+      final items = await FilesApi.listDir(d);
+      final exists = items.any((e) =>
           ((e as Map)['name'] as String?)?.toLowerCase() ==
               '$name$ext'.toLowerCase());
       if (exists && mounted) {
@@ -387,8 +376,7 @@ class _NotesPageState extends State<NotesPage> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/rename', data: {'path': n.path, 'new_name': newName});
+      await FilesApi.rename(n.path, newName);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('已重命名'), duration: Duration(seconds: 2)));
@@ -410,11 +398,7 @@ class _NotesPageState extends State<NotesPage> {
     if (paths.isEmpty) return;
     final destDir = cat.isEmpty ? _dir! : '${_dir!}/$cat';
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/move', data: {
-        'sources': paths,
-        'dest_dir': destDir,
-      });
+      await FilesApi.move(paths, destDir);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(cat.isEmpty ? '已移到未分类' : '已移动到 $cat'),
@@ -495,9 +479,7 @@ class _NotesPageState extends State<NotesPage> {
     final segs = name.split('/').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
     if (segs.isEmpty) return;
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post(
-          '/api/mkdir/${_enc('${_dir!}/${segs.join('/')}')}');
+      await FilesApi.mkdir('${_dir!}/${segs.join('/')}');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('分类已创建'),
@@ -531,7 +513,6 @@ class _NotesPageState extends State<NotesPage> {
                 ]));
     if (ok != true || !mounted) return;
     try {
-      final dio = await ApiClient.I.dio();
       if (count > 0) {
         // 只搬该分类直属+子级里的笔记（startsWith 前缀），再删目录
         final paths = (_notes ?? const <_Note>[])
@@ -540,11 +521,10 @@ class _NotesPageState extends State<NotesPage> {
             .map((n) => n.path)
             .toList();
         if (paths.isNotEmpty) {
-          await dio.post('/api/move',
-              data: {'sources': paths, 'dest_dir': _dir!});
+          await FilesApi.move(paths, _dir!);
         }
       }
-      await dio.delete('/api/files/${_enc('${_dir!}/$cat')}');
+      await FilesApi.delete('${_dir!}/$cat');
       if (!mounted) return;
       if (_catFilter == cat) _catFilter = null;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -622,10 +602,9 @@ class _NotesPageState extends State<NotesPage> {
     if (ok != true || !mounted) return;
     var done = 0, fail = 0;
     try {
-      final dio = await ApiClient.I.dio();
       for (final p in _selected.toList()) {
         try {
-          await dio.delete('/api/files/${_enc(p)}');
+          await FilesApi.delete(p);
           done++;
         } catch (_) {
           fail++;
@@ -1374,14 +1353,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
       // /preview/ 通道（v0.17.2）：/files/ 被 Caddy forward_auth 拦
       // （authcheck 只认 Cookie），App Bearer 必 401；/preview 对非图片
       // 回 FileResponse，与下载引擎同款
-      final r = await dio.get<List<int>>(
-          '/preview/${_enc(_remotePath)}',
-          options: Options(responseType: ResponseType.bytes));
-      final text = utf8.decode(r.data ?? const [], allowMalformed: true);
+      final bytes = await FilesApi.previewBytes(_remotePath);
+      final text = utf8.decode(bytes, allowMalformed: true);
       if (!mounted) return;
       setState(() {
         _ctrl.text = text;
@@ -1439,23 +1415,15 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         .then((sp) => sp.setString(_draftKey(_remotePath), v));
   }
 
-  String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
-
   /// silent=true 为自动保存：成功不弹 SnackBar（避免打扰），失败仍提示
   Future<bool> _save({bool silent = false}) async {
     if (_saving) return false;
     setState(() => _saving = true);
     try {
-      final dio = await ApiClient.I.dio();
       // on_dup=overwrite（改进建议 9.6-P0-12）：就地编辑直接覆盖源文件，
       // 不走"旧文件进回收站"，杜绝回收站堆积同一笔记的多个副本
-      await dio.post(
-          '/api/upload?path=${Uri.encodeComponent(widget.dir)}'
-          '&on_dup=overwrite',
-          data: FormData.fromMap({
-            'file': MultipartFile.fromString(_ctrl.text,
-                filename: widget.name),
-          }));
+      await FilesApi.uploadText(widget.dir, widget.name, _ctrl.text,
+          overwrite: true);
       if (!mounted) return true;
       // 保存成功清草稿（v0.18）
       // ignore: discarded_futures
@@ -1468,19 +1436,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                 duration: const Duration(seconds: 2)));
       }
       return true;
-    } on DioException catch (e) {
+    } catch (e) {
       if (!mounted) return false;
-      final d = e.response?.data;
-      final detail = d is Map && d['detail'] != null
-          ? d['detail'].toString()
-          : null;
+      // 服务端 detail 优先（errors.dart 统一文案），其余回退通用提示
+      final msg = errDetail(e);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(detail ?? '保存失败，请稍后重试')));
-      return false;
-    } catch (_) {
-      if (!mounted) return false;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('保存失败，请稍后重试')));
+          content: Text(msg.isEmpty ? '保存失败，请稍后重试' : msg)));
       return false;
     } finally {
       if (mounted) setState(() => _saving = false);

@@ -10,12 +10,12 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:html_editor_enhanced/html_editor.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
+import '../data/api/files_api.dart';
 
 /// 常用表情快捷面板（系统键盘自带 emoji，这里给"像笔记 App"的快捷入口）
 const _kEmojis = [
@@ -132,12 +132,9 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
       // /preview/ 通道：与纯文本笔记同款（/files/ 被 Caddy forward_auth 拦）
-      final r = await dio.get<List<int>>(
-          '/preview/${_enc(_remotePath)}',
-          options: Options(responseType: ResponseType.bytes));
-      _initialHtml = utf8.decode(r.data ?? const [], allowMalformed: true);
+      final bytes = await FilesApi.previewBytes(_remotePath);
+      _initialHtml = utf8.decode(bytes, allowMalformed: true);
       if (!mounted) return;
       setState(() => _loading = false);
     } catch (e) {
@@ -150,26 +147,17 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
     }
   }
 
-  String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
-
   /// silent=true 为自动保存：成功不弹 SnackBar（避免打扰），失败仍提示
   Future<bool> _save({bool silent = false}) async {
     if (_saving) return false;
     setState(() => _saving = true);
     try {
       final html = await _ctrl.getText(); // 包内返回非空 Future<String>
-      final dio = await ApiClient.I.dio();
       // on_dup=overwrite（改进建议 9.6-P0-12）：就地编辑直接覆盖源文件，
       // 不走"旧文件进回收站"，杜绝回收站堆积同一笔记的多个副本
-      await dio.post(
-          '/api/upload?path=${Uri.encodeComponent(widget.dir)}'
-          '&on_dup=overwrite',
-          data: FormData.fromMap({
-            'file': MultipartFile.fromString(
-                html.isEmpty ? '<p></p>' : html,
-                filename: widget.name,
-                contentType: DioMediaType('text', 'html')),
-          }));
+      await FilesApi.uploadText(widget.dir, widget.name,
+          html.isEmpty ? '<p></p>' : html,
+          mimeType: 'text/html', overwrite: true);
       if (!mounted) return true;
       setState(() => _dirty = false);
       if (!silent) {
@@ -178,19 +166,12 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
                 duration: const Duration(seconds: 2)));
       }
       return true;
-    } on DioException catch (e) {
+    } catch (e) {
       if (!mounted) return false;
-      final d = e.response?.data;
-      final detail = d is Map && d['detail'] != null
-          ? d['detail'].toString()
-          : null;
+      // 服务端 detail 优先（errors.dart 统一文案），其余回退通用提示
+      final msg = errDetail(e);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(detail ?? '保存失败，请稍后重试')));
-      return false;
-    } catch (_) {
-      if (!mounted) return false;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('保存失败，请稍后重试')));
+          content: Text(msg.isEmpty ? '保存失败，请稍后重试' : msg)));
       return false;
     } finally {
       if (mounted) setState(() => _saving = false);
