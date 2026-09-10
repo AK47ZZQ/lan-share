@@ -221,6 +221,9 @@ share/admin/system 三组开关，存 settings `notify_prefs_user_<uid>`），�
 | POST | `/api/admin/notifications/draft` | ⚙️ | 保存草稿 `{title, body?, user_ids?, scheduled_at?}`（unix 秒；`scheduled_at` 非空即定时广播，到期由服务端周期任务自动发送）；`{id}` |
 | POST | `/api/admin/notifications/draft/{bid}/send` | ⚙️ | 立即发送草稿/定时项（已发送 409） |
 | DELETE | `/api/admin/notifications/draft/{bid}` | ⚙️ | 删除草稿/定时项（已发送的不可删） |
+| GET | `/api/admin/notifications?username=&limit=` | ⚙️ | 全站站内通知（v3.40，新→旧 ≤200）；`username` 可选按成员筛；已删成员行回退 `#uid` |
+| DELETE | `/api/admin/notifications/{nid}` | ⚙️ | 删除任意成员的单条站内通知（v3.40） |
+| DELETE | `/api/admin/notifications/broadcast/{bid}` | ⚙️ | **彻底删除广播**（v3.40）：`admin_broadcasts` 记录 + 已送达全部站内行（含已读）一并清除；`{notifications_removed}` |
 
 > 广播写库于 `admin_broadcasts` 表（双引擎迁移 v3.31）；`notifications.broadcast_id`
 > 列为存量库自动补列。定时广播由 startup 周期任务（60s）扫描到期 `scheduled` 记录发送。
@@ -265,3 +268,38 @@ share/admin/system 三组开关，存 settings `notify_prefs_user_<uid>`），�
 | GET | `/healthz` | 🔓 | `{status, db, data_dir, disk_free_gb, disk_used_pct}` |
 | GET | `/api/disk/detail` | 🔑 | 全员可查；`categories` 仅 admin；成员返回 `private_used/quota_bytes` |
 | GET | `/api/qr?text=` | 🔑 | 任意文本二维码 SVG（**ECC-Q + 中心云朵 logo**，分享码同源） |
+
+## 反馈通道（v0.28 / v3.41）
+
+落盘于 `data/反馈/`（每条一个 md，frontmatter：编号/类型/状态/备注/标题/版本/设备/用户；
+截图在 `反馈/img/`）。目录即状态：`待处理/`=已提交、`进行中/`=处理中、`已完成/`=
+frontmatter 细状态（已修复/已实装/已拒绝/已暂缓）。`看板.md` 由服务端自动重生成。
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| POST | `/api/feedback` | 🔑 | multipart：`title`(≤80 必填)/`type`(idea\|bug\|other)/`body`(≤2000)/`app_ver`/`device`/`files`(截图≤3，单张≤12MB)；限 20 条/天/人；落 `待处理/` 并刷新看板 |
+| GET | `/api/feedback` | 🔑 | 本人列表；**admin 全量**（含 user 字段），新→旧 |
+| GET | `/api/feedback/{fid}` | 🔑 | 详情（含 body 与图片 URL 列表）；仅本人/admin |
+| GET | `/api/feedback/{fid}/img/{name}` | 🔑 | 截图读取（鉴权：本人/admin；文件名防穿越校验） |
+| GET | `/api/admin/feedback` | ⚙️ | 全量视角 |
+
+## 管理台（v3.39–v3.42）
+
+Web 站长工作台供数层；全部 ⚙️。状态流转约定：反馈由 Agent 直接改 md 文件，
+无回写 API。
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/admin/overview` | ⚙️ | 总览聚合：users/photos/shares/trash/blobs/sessions/devices 计数 + 磁盘 + `app_latest` + server_time |
+| GET | `/api/admin/large-files?limit=` | ⚙️ | 全库大文件 TOP（跳过隐藏目录），`{items:[{path,size,mtime}], total_files, total_size}` |
+| GET | `/api/admin/duplicates?min_size=&limit=` | ⚙️ | 疑似重复（同尺寸聚类，不做全盘哈希）：`{groups:[{size,paths,wasted}], group_count}` |
+| GET | `/api/admin/audit?limit=` | ⚙️ | 审计日志近况（新→旧） |
+| GET | `/api/admin/sessions` | ⚙️ | 活跃 Web 会话（`token_hash` 仅作吊销句柄） |
+| DELETE | `/api/admin/sessions/{token_hash}` | ⚙️ | 吊销单个会话（对端下一跳即 401） |
+| DELETE | `/api/admin/sessions` | ⚙️ | **全站会话清空**（v3.40），保留当前请求自身会话；`{revoked}` |
+| GET | `/api/admin/devices` | ⚙️ | 活跃 App 设备（device_tokens） |
+| DELETE | `/api/admin/devices/{id}` | ⚙️ | 吊销设备（App 需重新配对） |
+| POST | `/api/admin/users/{uid}/kick` | ⚙️ | **按账号一键下线**（v3.40）：`{scope: all\|web\|app}`；对自己拒绝 all/web（400 防自踢）；`{sessions, devices}` |
+| GET | `/api/announcements` | 🔑 | 公告栏（新→旧 ≤10），登录即可见 |
+| POST | `/api/admin/announcements` | ⚙️ | 发布公告 `{title≤80, body≤500}` |
+| DELETE | `/api/admin/announcements/{aid}` | ⚙️ | 删除公告 |

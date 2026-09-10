@@ -32,6 +32,11 @@
   表（广播记录/草稿/定时）；`photo_comments` / `photo_reactions` 不再建表
   （功能下线，存量库旧表保留不删）
 - `data/.avatars/<uid>.jpg`：用户头像（v0.17，点前缀目录，不进照片扫描/文件列表）
+- `data/反馈/`：App 反馈通道落盘（v0.28）。目录即状态：`待处理/`（已提交）、
+  `进行中/`（处理中）、`已完成/`（frontmatter 细状态：已修复/已实装/已拒绝/已暂缓）；
+  每条一个 md（frontmatter：编号/类型/状态/备注/标题/版本/设备/用户）+ `img/` 截图；
+  `看板.md` 由服务端在列表查询/新反馈提交时自动重生成（勿手编）。Agent 工作流：
+  `ls 待处理/` 领任务 → 处理完移入 `已完成/` 并改 frontmatter 状态+备注
 - `tests/test_pg_sql_dialect.py`：PG 方言回归（v0.17；LIKE 字面 `%` 必须被
   `_pg_sql` 翻倍）
 

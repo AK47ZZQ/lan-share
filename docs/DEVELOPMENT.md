@@ -145,6 +145,9 @@ app/
 ├── api/appver.py      App 版本分发（sha256 缓存）
 ├── api/healthreport.py 健康日报（HTTP 探活 + Webhook）
 ├── api/notes.py       笔记聚合列表
+├── api/console.py     管理台（v3.39）：总览聚合/大文件 TOP/疑似重复/审计/会话与设备（含 kick/全清）
+├── api/feedback.py    反馈通道（v0.28）：multipart 提交（截图≤3）/own-only 列表/详情/截图鉴权读取；
+│                       落盘 data/反馈/（待处理|进行中|已完成 三目录即状态）+ 看板.md 自动重生成
 server.py             纯入口（NSSM server:app；uvicorn __main__ 块不可删——漏了服务秒退）
 web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/views/ 九个页面；
                       构建产物 dist/ 由 main.py 直供（gitignore node_modules + dist）
