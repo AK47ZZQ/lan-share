@@ -22,3 +22,7 @@ String errDetail(Object e, {int max = 120}) {
   if (s.length <= max) return s;
   return '${s.substring(0, max)}…';
 }
+
+/// 无响应的网络故障（连接失败/超时，非服务端拒绝）——首页"网络断开"
+/// 横幅判定（T7 裸 dio 收编：UI 层不再 import dio，经此判定）
+bool isNetworkError(Object e) => e is DioException && e.response == null;

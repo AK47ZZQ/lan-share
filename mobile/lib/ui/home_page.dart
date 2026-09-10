@@ -3,7 +3,6 @@
 // 只读概览加少量动作（立即备份/跳转）；细节操作仍归各职能页。
 import 'dart:async';
 
-import 'package:dio/dio.dart' show DioException;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,7 +12,8 @@ import '../backup/backup_keys.dart';
 import '../backup/backup_bridge.dart';
 import '../backup/backup_round.dart';
 import '../data/activity.dart';
-import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
+import '../data/api/home_api.dart';
 import '../data/auto_switch.dart';
 import '../data/local/prefs.dart';
 import '../data/media_kinds.dart';
@@ -76,7 +76,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   /// 权限/资源问题各有自己的展示，不该伪装成断网。一轮 30s 周期三路全失败
   /// 即满 3 次 → 出横幅
   void _netMarkFail(Object e) {
-    if (!(e is DioException && e.response == null)) return;
+    if (!isNetworkError(e)) return;
     _netFails++;
     if (_netFails >= 3 && !_netDown && mounted) {
       setState(() => _netDown = true);
@@ -312,14 +312,13 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   Future<void> _loadDisk() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/disk');
+      final d = await HomeApi.disk();
       if (!mounted) return;
       setState(() {
-        _diskUsed = (r.data['used_bytes'] as num?)?.toInt() ?? 0;
-        _diskTotal = (r.data['total_bytes'] as num?)?.toInt() ?? 0;
-        _diskFree = (r.data['free_bytes'] as num?)?.toInt() ?? 0;
-        _shareSize = r.data['share_size'] as String? ?? '';
+        _diskUsed = d.used;
+        _diskTotal = d.total;
+        _diskFree = d.free;
+        _shareSize = d.shareSize;
       });
       _netMarkOk();
     } catch (e) {
@@ -331,10 +330,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   /// v0.20 扩面：不再只留图片/视频——文档/音频/压缩包等以类型色块显示
   Future<void> _loadRecent() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/recent', queryParameters: {'limit': 100});
-      final items = (r.data as List)
-          .whereType<Map>()
+      final items = (await HomeApi.recent(limit: 100))
           .map((e) => _RecentUpload(
               path: (e['path'] as String?) ?? '',
               name: (e['name'] as String?) ?? '',
@@ -354,11 +350,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     // dio() 内部有 await（prefs/secure store）且本方法被 fire-and-forget
     // 调用：包进 try 防未捕获异步异常（二次审查修复）
     try {
-      final dio = await ApiClient.I.dio();
       try {
-        final r =
-            await dio.get('/api/activity', queryParameters: {'limit': 30});
-        final items = ActivityItem.listFrom(r.data);
+        final items = await HomeApi.activity(limit: 30);
         if (!mounted) return;
         setState(() => _activity = items);
       } catch (e) {
@@ -366,10 +359,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       }
       // 通知未读数顺带刷新（0.8.0）：铃铛徽标用（复用同一 dio，0.8.1 审查修复）
       try {
-        final r2 = await dio.get('/api/notifications');
+        final unread = await HomeApi.notifUnread();
         if (!mounted) return;
-        setState(() =>
-            _notifUnread = (r2.data['unread'] as num?)?.toInt() ?? 0);
+        setState(() => _notifUnread = unread);
       } catch (e) {
         _netMarkFail(e);
       }
