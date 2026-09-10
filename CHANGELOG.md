@@ -2,7 +2,7 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
-## 2026-09-10 — 服务端 v3.37 + App v0.25.0-dev：笔记主功能化 & 知识库完善
+## 2026-09-10 — 服务端 v3.37 + App v0.25.0+70：笔记主功能化 & 知识库完善
 
 依据主人 5 项需求（底栏换位 / 手机复制路径 / 空分类修复 / KB 完善 / 预览优先）。
 **门禁：pytest 238 passed（SQLite）/ ruff / mypy 全绿 / dart analyze 0 / vue-tsc 0 / web 6 项。**
@@ -19,7 +19,8 @@
   **空分类按目录自身物理归属过 visible()**（path=/ 时防"他人目录存在性"泄露）。
 - `/api/kb/context`：`note` 增 `abs_path`（图谱/Agent 定位同一文件用）。
 
-**App（v0.25.0-dev，未发版——须 flutter test + 真机验证后构建 APK）**
+**App（v0.25.0+70，已发版：flutter test 179 通过后构建 release 并分发三件套，
+sha256 2229f55f…，线上 /api/app/latest·history 核验通过）**
 - 底栏换位：`首页/照片/文件/笔记/我的`；传输页改 Navigator.push（首页传输卡、
   文件页入口、"我的"宫格三处可达）。
 - 笔记页：分类横滑栏（分类优先显示，含空分类）+ 点按改**预览优先**
