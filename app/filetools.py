@@ -15,6 +15,10 @@ from app.db import _db, _db_lock
 
 # ─── 文件工具 ─────────────────────────────────────────────
 
+# 笔记扩展名单一事实源：notes 列表与 kb 知识库引擎共用（api/notes.py 转引，
+# 两套视图口径永不漂移）
+NOTE_EXTS = {".md", ".markdown", ".txt", ".html", ".htm"}
+
 _heif_registered = False
 
 

@@ -3,6 +3,7 @@
 // 图片缩放平移/中图档、文本/Markdown/代码/CSV 渲染、docx、音频连播、视频倍速/画中画。
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, type Me } from '../api'
+import { preprocessWikilinks } from '../kb'
 import { confirmDlg, dlg, human, promptDlg, toast } from '../ui'
 import { AUD_EXTS, DOCX_EXTS, extOfName, IMG_EXTS, TEXT_EXTS, THUMB_EXTS, VID_EXTS } from '../filekinds'
 import Modal from './Modal.vue'
@@ -70,7 +71,19 @@ const emit = defineEmits<{
   close: []
   share: [item: ViewerItem]
   refresh: []
+  /** [[ ]] 双链点击（v0.24）：父级解析目标后切换预览文件；未监听时点击无动作 */
+  kbOpen: [target: string]
 }>()
+
+/** 双链事件委托：取被点 <a data-kblink> 的目标上抛（preventDefault 防跳页顶） */
+function onMdClick(ev: MouseEvent) {
+  const el = ev.target as HTMLElement | null
+  const a = el?.closest?.('a[data-kblink]') as HTMLElement | null
+  if (!a) return
+  ev.preventDefault()
+  const t = a.dataset.kblink
+  if (t) emit('kbOpen', decodeURIComponent(t))
+}
 
 const enc = (p: string) => p.split('/').filter(Boolean).map(encodeURIComponent).join('/')
 
@@ -300,7 +313,8 @@ async function loadTextLike() {
       if (raw.length > MAX_CHARS) { raw = raw.slice(0, MAX_CHARS); textTruncated.value = true }
       if (e === '.md') {
         textKind.value = 'md'
-        htmlText.value = purify.sanitize(marked.parse(raw, { async: false }) as string)
+        // [[ ]] 双链（v0.24）：先转内联 <a data-kblink>，点击经 onMdClick 委托上抛
+        htmlText.value = purify.sanitize(marked.parse(preprocessWikilinks(raw), { async: false }) as string)
       } else if (e === '.csv') {
         textKind.value = 'csv'
         csvRows.value = raw.split(/\r?\n/).slice(0, 500).map(l => l.split(','))
@@ -627,7 +641,7 @@ function iconOf(it: ViewerItem): string {
             <div v-if="loadingText" class="fv-loading"><span class="fv-spin" /></div>
             <template v-else>
               <p v-if="textTruncated" class="fv-trunc">⚠ 文件较大，仅显示前一部分</p>
-              <article v-if="textKind === 'md'" class="fv-prose" v-html="htmlText" />
+              <article v-if="textKind === 'md'" class="fv-prose" v-html="htmlText" @click="onMdClick" />
               <table v-else-if="textKind === 'csv'" class="fv-csv">
                 <tr v-for="(row, ri) in csvRows" :key="ri">
                   <td v-for="(cell, ci) in row" :key="ci">{{ cell }}</td>

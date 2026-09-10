@@ -19,11 +19,10 @@ from typing import cast
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.config import SHARE_ROOT
-from app.filetools import human_size
+from app.filetools import NOTE_EXTS, human_size
 from app.security import require_user
-from app.spaces import resolve
+from app.spaces import resolve, visible
 
-NOTE_EXTS = {".md", ".markdown", ".txt", ".html", ".htm"}
 MAX_NOTES = 2000
 _SUMMARY_LEN = 200
 _HEAD_BYTES = 8 * 1024
@@ -74,6 +73,11 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
         except OSError:
             continue
         if p.name.startswith(".") or any(part.startswith(".") for part in p.relative_to(base).parts):
+            continue
+        # 可见性过滤（红队 2026-09-10 V1 同款收口）：path=/ 时根会覆盖他人
+        # private/incoming——没有这道闸，摘要就泄露他人私人笔记正文
+        share_rel = p.relative_to(SHARE_ROOT)
+        if not visible(_user, share_rel.parts):
             continue
         # 分类 = 笔记目录下相对子路径（''=根/未分类），正斜杠
         rel = p.relative_to(base).as_posix()

@@ -2,6 +2,38 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — v0.24.0+69：知识库与图谱（双链/图谱/agent 三层，全端上线）
+
+知识库 = 笔记的第三种视图（方案 A 加层，零新存储）：`data/笔记/知识库与图谱功能设计方案（待确认）.md` v2 定稿 → M-K0~K4 一版全交付。
+
+- **M-K0 服务端**：`app/services/kb.py` 引擎（wikilink/别名/路径解析、撞名
+  裁决同目录>最短路>casefold、PyYAML 归一化、缓存指纹=排序(relpath,size,mtime)
+  哈希、LRU4+每根构建锁、确定性 FR 预布局+`.kb/layout.json` 增量持久化）+
+  `app/api/kb.py` 六端点（graph/backlinks/neighbors/names/context/reindex，
+  全部 require_user+resolve 同源授权）；依赖 +PyYAML==6.0.3（safe_load+64KB）
+- **M-K1 App 图谱页**：CustomPainter 手绘力导向（服务端预布局零仿真冷启动）、
+  拖节点局部增量/平移/双指缩放、长按高亮一跳、筛选抽屉（含"只看幽灵=待写
+  清单"）、搜索定位脉冲、ghost 一键创建；LOD >300 隐标签/>800 边降透明
+- **M-K2 编辑器双链**：`[[` 补全浮层（/api/kb/names 数据源）、保存时
+  frontmatter 自动维护 created/updated、反链面板（含摘录）、md 预览与
+  DocViewer 的 `[[ ]]` 渲染成可点链接
+- **M-K3 agent 层**：context 端点（全文≤20KB 字节+一跳邻居摘要）+
+  `docs/KB-CONVENTIONS.md`《知识库约定》（含 curl 接入示例）
+- **M-K4 web 图谱**：`/kb` 路由 Canvas 2D 手绘 KbView（与 App 同规格），
+  FileViewer 落点 + marked 双链渲染（kbOpen 事件页内跳转）+ 节点卡反链
+- **测试与审查**：pytest 179→**210**（test_kb.py 31 条）；flutter test
+  152→**179**（batch076 26 条）；契约快照 111→**117 路径**；
+  dart analyze 0 / vue-tsc+vite 绿
+- **双路审查收口**（审查代理 + 红队对抗代理，全部实证复现）：
+  - **P0 级越权（红队 V1/V2）**：`path=/` 全库扫描不过 visible()，member 可见
+    他人 private/incoming 笔记元数据/摘要/反链摘录与幽灵名——kb 全部出口加
+    `_vis_plan` 可见性收口 + 幽灵需可见源；**notes.py 同款存量洞一并修**
+  - 红队 V3 摘录逐目标重读放大冷构建→构建循环单次读取；V4 只读请求不落盘
+    `.kb/`（persist=write 权限）；V5 三端解析不一致→客户端严格镜像服务端
+    （带路径不回退文件名/别名、撞名 casefold 裁决）；V7 病态 YAML 预检
+    （连续括号>64 跳过）；审查 P1-2 context 改字节级截断；V8 web label 转义
+  - 门禁：check.bat 四段全绿（pip-audit 的 httpx2/httpcore2 为共享 venv 存量）
+
 ## 2026-09-10 — v0.23.1+68：重构批三轮审查收口
 
 v0.23.0 重构批经 3 轮审查（自查 → 双路对抗审查代理 → 对抗性补测回归）：

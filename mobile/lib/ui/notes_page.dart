@@ -14,7 +14,9 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
+import '../data/kb.dart';
 import 'dir_picker_page.dart';
+import 'kb_graph_page.dart';
 import 'rich_note_editor.dart';
 
 const _kNotesLastDir = 'notes_last_dir';
@@ -979,6 +981,16 @@ class _NotesPageState extends State<NotesPage> {
                         : '全选')),
               ]
             : [
+          // 知识图谱（v0.24）：以当前目录为根出图
+          IconButton(
+              tooltip: '知识图谱',
+              icon: const Icon(Icons.hub_outlined),
+              onPressed: _dir == null
+                  ? null
+                  : () {
+                      Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => KbGraphPage(dir: _dir!)));
+                    }),
           // 排序（9.6-P1-7）：修改时间/创建时间/名称
           IconButton(
               tooltip: '排序',
@@ -1179,6 +1191,10 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
   bool _preview = false; // md 源码/渲染切换（v0.18）
   String? _error;
   Timer? _autoTimer; // 自动保存定时器（改进建议 9.6-P0-12）
+  // ── 知识库双链（v0.24）────────────────────────────────
+  List<Map<String, dynamic>>? _kbNames; // /api/kb/names 补全数据源
+  CompletionContext? _complCtx; // 当前 `[[partial` 补全上下文
+  List<Map<String, dynamic>> _complItems = const [];
 
   bool get _isMd =>
       widget.name.toLowerCase().endsWith('.md') ||
@@ -1232,6 +1248,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
       setState(() => _loading = false);
       _focus.requestFocus();
       await _restoreDraft(remote: null);
+      _loadNames();
       return;
     }
     try {
@@ -1248,6 +1265,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
         _ctrl.text = text;
         _loading = false;
       });
+      _loadNames();
       await _restoreDraft(remote: text);
     } catch (e) {
       if (!mounted) return;
@@ -1298,6 +1316,251 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     // ignore: discarded_futures
     SharedPreferences.getInstance()
         .then((sp) => sp.setString(_draftKey(_remotePath), v));
+    _updateCompletion();
+  }
+
+  // ── 知识库双链（v0.24）：[[ 补全 / 反链 / 预览可点 ────────
+  Future<void> _loadNames() async {
+    if (!_isMd) return;
+    try {
+      final dio = await ApiClient.I.dio();
+      final r =
+          await dio.get('/api/kb/names', queryParameters: {'path': widget.dir});
+      if (!mounted) return;
+      setState(() => _kbNames = ((r.data as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList());
+    } catch (_) {
+      // 补全数据拿不到不阻塞编辑
+    }
+  }
+
+  /// 当前笔记在 names 数据里的目录（解析相对链接用）；找不到回退 ''
+  String get _kbCurrentDir {
+    final self = '${widget.dir}/${widget.name}'.toLowerCase();
+    for (final n in _kbNames ?? const <Map<String, dynamic>>[]) {
+      if ((n['path'] as String?)?.toLowerCase() == self) {
+        final p = n['path'] as String? ?? '';
+        final i = p.lastIndexOf('/');
+        return i < 0 ? '' : p.substring(0, i);
+      }
+    }
+    return '';
+  }
+
+  void _updateCompletion() {
+    if (!_isMd || _kbNames == null || _preview) {
+      _clearCompletion();
+      return;
+    }
+    final caret = _ctrl.selection.baseOffset;
+    final ctx = completionContextAt(_ctrl.text, caret);
+    if (ctx == null) {
+      _clearCompletion();
+      return;
+    }
+    final q = ctx.partial.toLowerCase();
+    String stem(String name) {
+      final i = name.lastIndexOf('.');
+      return i > 0 ? name.substring(0, i) : name;
+    }
+
+    final items = <Map<String, dynamic>>[];
+    for (final n in _kbNames!) {
+      final stemN = stem((n['name'] as String?) ?? '');
+      final aliases = ((n['aliases'] as List?) ?? const [])
+          .map((a) => a.toString())
+          .toList();
+      final hit = q.isEmpty ||
+          stemN.toLowerCase().contains(q) ||
+          aliases.any((a) => a.toLowerCase().contains(q));
+      if (!hit) continue;
+      items.add({
+        'label': stemN,
+        'insert': stemN,
+        'alias': '',
+        'ghost': n['ghost'] == true,
+      });
+      for (final a in aliases) {
+        if (a.toLowerCase().contains(q)) {
+          items.add({
+            'label': '$stemN（$a）',
+            'insert': stemN,
+            'alias': a,
+            'ghost': false,
+          });
+        }
+      }
+      if (items.length > 8) break;
+    }
+    // 前缀命中排前
+    items.sort((a, b) =>
+        ((b['label'] as String).toLowerCase().startsWith(q) ? 1 : 0) -
+        ((a['label'] as String).toLowerCase().startsWith(q) ? 1 : 0));
+    setState(() {
+      _complCtx = ctx;
+      _complItems = items.take(8).toList();
+    });
+  }
+
+  void _clearCompletion() {
+    if (_complCtx == null && _complItems.isEmpty) return;
+    _complCtx = null;
+    _complItems = const [];
+  }
+
+  void _applyCompletion(Map<String, dynamic> item) {
+    final ctx = _complCtx;
+    if (ctx == null) return;
+    var insert = item['insert'] as String? ?? '';
+    if (insert.isEmpty) insert = ctx.partial;
+    // 含目录的目标用「路径|名」写法，确保服务端按路径解析
+    if (insert.contains('/')) {
+      insert = '$insert|${insert.split('/').last}';
+    }
+    final (text, caret) = applyCompletion(_ctrl.text, ctx, insert);
+    _ctrl.value = TextEditingValue(
+        text: text, selection: TextSelection.collapsed(offset: caret));
+    setState(() {
+      _complCtx = null;
+      _complItems = const [];
+      _dirty = true;
+    });
+    // ignore: discarded_futures
+    SharedPreferences.getInstance()
+        .then((sp) => sp.setString(_draftKey(_remotePath), text));
+  }
+
+  /// 反链面板（M-K2）：谁链到了这篇
+  Future<void> _showBacklinks() async {
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/kb/backlinks', queryParameters: {
+        'path': widget.dir,
+        'file': _remotePath,
+      });
+      if (!mounted) return;
+      final data = (r.data as Map?) ?? const {};
+      final back = ((data['backlinks'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final out = ((data['outgoing'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      showModalBottomSheet<void>(
+          context: context,
+          showDragHandle: true,
+          isScrollControlled: true,
+          builder: (bctx) => SafeArea(
+              child: Container(
+                  constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(bctx).size.height * 0.6),
+                  child: ListView(padding: const EdgeInsets.only(bottom: 8),
+                      children: [
+                    Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+                        child: Text('链接 · ${back.length} 反链 / ${out.length} 出链',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(bctx).colorScheme.primary))),
+                    if (back.isEmpty && out.isEmpty)
+                      const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(
+                              child: Text('还没有链接。在其他笔记里写 [[这篇的文件名]] '
+                                  '即可建立连接，图谱页也会长出这条边。',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      fontSize: 12.5, color: Colors.grey)))),
+                    for (final b in back)
+                      ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.link, size: 18),
+                          title: Text((b['name'] as String?) ?? '',
+                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13.5)),
+                          subtitle: (b['excerpt'] as String?) != null &&
+                                  (b['excerpt'] as String).isNotEmpty
+                              ? Text(b['excerpt'] as String,
+                                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11.5))
+                              : null,
+                          onTap: () {
+                            final p = b['path'] as String? ?? '';
+                            final i = p.lastIndexOf('/');
+                            if (i < 0) return;
+                            Navigator.pop(bctx);
+                            openNoteEditor(context,
+                                dir: p.substring(0, i),
+                                name: p.substring(i + 1));
+                          }),
+                    if (out.isNotEmpty)
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+                          child: Text('出链',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(bctx)
+                                      .colorScheme
+                                      .onSurfaceVariant))),
+                    for (final o in out)
+                      ListTile(
+                          dense: true,
+                          leading: Icon(
+                              (o['ghost'] == true)
+                                  ? Icons.help_outline
+                                  : Icons.logout,
+                              size: 18),
+                          title: Text((o['name'] as String?) ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 13.5)),
+                          onTap: (o['ghost'] == true ||
+                                  (o['path'] as String? ?? '').isEmpty)
+                              ? null
+                              : () {
+                                  final p = o['path'] as String;
+                                  final i = p.lastIndexOf('/');
+                                  if (i < 0) return;
+                                  Navigator.pop(bctx);
+                                  openNoteEditor(context,
+                                      dir: p.substring(0, i),
+                                      name: p.substring(i + 1));
+                                }),
+                  ]))));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('反链获取失败')));
+    }
+  }
+
+  /// 预览里点 [[链接]]：解析目标 → 跳编辑器；未命中提示可从图谱创建
+  Future<void> _onPreviewLink(String? href) async {
+    final target = kblinkTarget(href);
+    if (target == null || !mounted) return;
+    var names = _kbNames;
+    if (names == null) {
+      await _loadNames();
+      names = _kbNames;
+    }
+    final path = resolveLinkTarget(names ?? const [], target, _kbCurrentDir);
+    if (!mounted) return;
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('「$target」还不存在——可在图谱页点幽灵节点一键创建')));
+      return;
+    }
+    final i = path.lastIndexOf('/');
+    if (i < 0) return;
+    await openNoteEditor(context,
+        dir: path.substring(0, i), name: path.substring(i + 1));
+    if (mounted) _loadContent();
   }
 
   String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
@@ -1308,6 +1571,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
     setState(() => _saving = true);
     try {
       final dio = await ApiClient.I.dio();
+      // frontmatter 自动维护（v0.24 M-K2）：md 非空保存时补 created/
+      // 刷 updated（用户手写字段不覆盖）；纯文本不动
+      if (_isMd && _ctrl.text.trim().isNotEmpty) {
+        _ctrl.text = touchFrontmatter(_ctrl.text);
+      }
       // on_dup=overwrite（改进建议 9.6-P0-12）：就地编辑直接覆盖源文件，
       // 不走"旧文件进回收站"，杜绝回收站堆积同一笔记的多个副本
       await dio.post(
@@ -1374,6 +1642,12 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
           title: Text(_title,
               style: const TextStyle(fontSize: 14)),
           actions: [
+            // 反链面板（v0.24 M-K2）：谁链到了这篇——双链价值的一半
+            if (!_loading && _error == null)
+              IconButton(
+                  tooltip: '反链与出链',
+                  icon: const Icon(Icons.link),
+                  onPressed: _showBacklinks),
             // md 渲染切换（v0.18）：源码/预览一键切（编辑态切走也保留内容）
             if (_isMd && !_loading && _error == null)
               IconButton(
@@ -1415,9 +1689,11 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                   ])
                 : _preview
                     ? Markdown(
-                        data: _ctrl.text,
+                        data: preprocessWikilinks(_ctrl.text),
                         selectable: true,
                         padding: const EdgeInsets.all(16),
+                        onTapLink: (text, href, title) =>
+                            _onPreviewLink(href),
                         styleSheet: MarkdownStyleSheet(
                           p: const TextStyle(fontSize: 15, height: 1.55),
                           h1: const TextStyle(
@@ -1427,23 +1703,65 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                           h3: const TextStyle(
                               fontSize: 17, fontWeight: FontWeight.w600),
                         ))
-                    : Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: TextField(
-                        controller: _ctrl,
-                        focusNode: _focus,
-                        maxLines: null,
-                        expands: true,
-                        textAlignVertical: TextAlignVertical.top,
-                        keyboardType: TextInputType.multiline,
-                        onChanged: _onChanged,
-                        style: const TextStyle(
-                            fontSize: 14.5,
-                            height: 1.55,
-                            fontFamily: 'monospace'),
-                        decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            hintText: '# 标题\n\n用 Markdown 写笔记…'))),
+                    : Stack(children: [
+                        Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: TextField(
+                                controller: _ctrl,
+                                focusNode: _focus,
+                                maxLines: null,
+                                expands: true,
+                                textAlignVertical: TextAlignVertical.top,
+                                keyboardType: TextInputType.multiline,
+                                onChanged: _onChanged,
+                                style: const TextStyle(
+                                    fontSize: 14.5,
+                                    height: 1.55,
+                                    fontFamily: 'monospace'),
+                                decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    hintText:
+                                        '# 标题\n\n用 Markdown 写笔记…\n\n'
+                                        '输入 [[ 可链接到另一篇笔记'))),
+                        // [[ 补全浮层（v0.24 M-K2）：文件名/别名模糊匹配
+                        if (_complCtx != null && _complItems.isNotEmpty)
+                          Positioned(
+                              left: 8,
+                              right: 8,
+                              bottom: 8,
+                              child: Material(
+                                  elevation: 6,
+                                  borderRadius: BorderRadius.circular(12),
+                                  color: cs.surface,
+                                  child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                          maxHeight: 260),
+                                      child: ListView(shrinkWrap: true,
+                                          children: [
+                                            for (final item in _complItems)
+                                              ListTile(
+                                                  dense: true,
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  leading: Icon(
+                                                      (item['ghost'] == true)
+                                                          ? Icons.help_outline
+                                                          : Icons.description_outlined,
+                                                      size: 18,
+                                                      color: (item['ghost'] == true)
+                                                          ? cs.onSurfaceVariant
+                                                          : cs.primary),
+                                                  title: Text(
+                                                      item['label'] as String,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: const TextStyle(
+                                                          fontSize: 13.5)),
+                                                  onTap: () =>
+                                                      _applyCompletion(item)),
+                                          ])))),
+                      ]),
       ),
     );
   }
