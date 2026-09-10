@@ -48,6 +48,14 @@ desktop.ini
 *.log
 *.tmp
 
+# ---- Agent/工具链会话产物（11 号复审批次 0）----
+# .workbuddy/ 是 AI 协作工具的项目数据目录（工作记忆），非源码；
+# test-reports/ 是测试/审查过程产物。均不入库，避免污染仓库与泄露会话上下文。
+.workbuddy/
+test-reports/
+# Flutter 工具链临时状态
+mobile/.flutter_tool_state
+
 # ---- 文档/截图临时文件（测试/审查过程产物）----
 screen_*.png
 debug_*.png
