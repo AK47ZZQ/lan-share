@@ -50,8 +50,8 @@ def test_feedback_create_list_and_visibility(auth, client):
     assert r.status_code == 200, r.text
     fid = r.json()["id"]
 
-    # 文件落盘（Agent 工作面）
-    fb_file = SHARE_ROOT / "反馈" / f"{fid}.md"
+    # 文件落盘（Agent 工作面）：新反馈进 待处理/（目录即状态）
+    fb_file = SHARE_ROOT / "反馈" / "待处理" / f"{fid}.md"
     assert fb_file.is_file()
     text = fb_file.read_text(encoding="utf-8")
     assert "状态: 已提交" in text and f"用户: {mname}" in text
@@ -93,20 +93,29 @@ def test_feedback_image_authz(auth, client):
 
 
 def test_agent_flips_status_via_file(auth, client):
-    """Agent 工作流：直接改 frontmatter 的 状态/备注 → 列表即时反映。"""
+    """Agent 工作流：完成后把文件移入 已完成/ 并改 frontmatter 细状态+备注
+    （目录定粗状态，frontmatter 定完成细分）→ 列表即时反映。"""
     m, _ = _member(client)
     fid = _post_feedback(m, f"想法-{_rand()}", ftype="idea").json()["id"]
 
-    f = SHARE_ROOT / "反馈" / f"{fid}.md"
-    text = f.read_text(encoding="utf-8")
+    src = SHARE_ROOT / "反馈" / "待处理" / f"{fid}.md"
+    dst = SHARE_ROOT / "反馈" / "已完成" / f"{fid}.md"
+    text = src.read_text(encoding="utf-8")
     text = text.replace("状态: 已提交", "状态: 已实装") \
-               .replace("备注:", "备注: v0.28.0+74 已实装")
-    f.write_text(text, encoding="utf-8")
+               .replace("备注:", "备注: v0.28.1+75 已实装")
+    dst.write_text(text, encoding="utf-8")
+    src.unlink()
 
     hit = next(i for i in m.get("/api/feedback").json()["items"]
                if i["id"] == fid)
     assert hit["status"] == "已实装"
-    assert hit["note"] == "v0.28.0+74 已实装"
+    assert hit["note"] == "v0.28.1+75 已实装"
+
+    # 看板已自动生成，包含统计与待办区
+    kanban = SHARE_ROOT / "反馈" / "看板.md"
+    assert kanban.is_file()
+    kb = kanban.read_text(encoding="utf-8")
+    assert "待处理" in kb and "已完成" in kb
 
 
 def test_feedback_validation(auth):

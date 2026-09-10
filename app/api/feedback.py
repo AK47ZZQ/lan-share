@@ -10,6 +10,12 @@
 - 防刷：每人每天 20 条（allow_rate）。
 
 frontmatter 用平铺 "键: 值" 行（不引 YAML 依赖），冒号全半角都认。
+
+反馈量增长后的定位成本问题（9-11 主人提出）：**目录即状态**——
+反馈/待处理/（已提交）、反馈/进行中/（处理中）、反馈/已完成/（细状态在
+frontmatter：已修复/已实装/已拒绝/已暂缓）。Agent 领任务 = ls 待处理/，
+状态流转 = 移动文件；另由服务端在每次列表读写时自动重生成 反馈/看板.md
+（统计+待办清单），一眼全局。看板.md 不进列表、不进治理视图。
 """
 import os
 import re
@@ -29,6 +35,10 @@ router = APIRouter()
 
 FB_DIR = "反馈"
 IMG_DIR = "img"
+KANBAN = "看板.md"
+# 目录即状态（粗三档）：目录名 → 该目录下的默认状态
+STATUS_DIRS = {"待处理": "已提交", "进行中": "处理中"}
+DONE_DIR = "已完成"
 TYPES = ("idea", "bug", "other")
 _MAX_IMAGES = 3
 _MAX_PER_DAY = 20
@@ -37,6 +47,8 @@ _MAX_PER_DAY = 20
 def _dir() -> Path:
     d = SHARE_ROOT / FB_DIR
     d.mkdir(exist_ok=True)
+    for sub in (*STATUS_DIRS, DONE_DIR):
+        (d / sub).mkdir(exist_ok=True)
     return d
 
 
@@ -71,19 +83,37 @@ def _parse(text: str) -> dict | None:
     return meta
 
 
+def _find_file(fid: str) -> Path | None:
+    """在三个状态子目录里定位反馈文件（状态流转=移动文件，位置不定）。"""
+    for sub in STATUS_DIRS:
+        p = _dir() / sub / f"{fid}.md"
+        if p.is_file():
+            return p
+    p = _dir() / DONE_DIR / f"{fid}.md"
+    return p if p.is_file() else None
+
+
 def _load_one(fid: str) -> dict | None:
-    f = _dir() / f"{fid}.md"
-    if not f.is_file():
-        return None
-    return _parse(f.read_text(encoding="utf-8", errors="replace"))
+    p = _find_file(fid)
+    return _parse(p.read_text(encoding="utf-8", errors="replace")) if p else None
 
 
 def _list_all() -> list[dict]:
+    """递归三个状态子目录；状态 = 目录派生（已完成目录取 frontmatter 细状态），
+    新→旧排序。看板.md 在根目录、不在子目录，天然不进列表。"""
     out = []
-    for f in sorted(_dir().glob("*.md"), reverse=True):
+    for f in sorted(_dir().rglob("*.md"), reverse=True):
+        if f.parent == _dir():
+            continue  # 根目录散文件（旧布局/看板）不入列表
         mm = _parse(f.read_text(encoding="utf-8", errors="replace"))
-        if mm:
-            out.append(mm)
+        if not mm:
+            continue
+        sub = f.parent.name
+        if sub in STATUS_DIRS:
+            mm["状态"] = STATUS_DIRS[sub]
+        elif sub == DONE_DIR and not mm.get("状态"):
+            mm["状态"] = "已实装"
+        out.append(mm)
     return out
 
 
@@ -160,10 +190,58 @@ async def feedback_create(request: Request,
         "---\n\n"
         f"{body.strip()[:2000]}\n"
     )
-    (_dir() / f"{fid}.md").write_text(md, encoding="utf-8")
+    (_dir() / "待处理" / f"{fid}.md").write_text(md, encoding="utf-8")
+    _regen_kanban()
     audit("feedback.create", target=title[:40],
           detail=f"type={type} images={len(files)}", ip=client_ip(request))
     return {"ok": True, "id": fid}
+
+
+def _regen_kanban() -> None:
+    """自动重生成 反馈/看板.md：Agent 读写这一份文件即知全局，
+    不必逐条通读。每次列表被查询/新反馈提交时触发（几十条规模零开销）。"""
+    items = _list_all()
+    buckets: dict[str, list[dict]] = {d: [] for d in (*STATUS_DIRS, DONE_DIR)}
+    for mm in items:
+        if mm["状态"] in STATUS_DIRS.values():
+            sub = next(d for d, st in STATUS_DIRS.items() if st == mm["状态"])
+        else:
+            sub = DONE_DIR
+        buckets[sub].append(mm)
+    done_stats: dict[str, int] = {}
+    for mm in buckets[DONE_DIR]:
+        done_stats[mm["状态"]] = done_stats.get(mm["状态"], 0) + 1
+    stat_line = " · ".join(
+        f"{d} {len(b)}" for d, b in buckets.items())
+    done_line = " / ".join(f"{k} {v}" for k, v in sorted(done_stats.items())) or "空"
+
+    def _row(mm: dict) -> str:
+        return (f"- [{mm.get('类型', 'other')}·{mm.get('编号', '')}] "
+                f"{mm.get('标题', '')}"
+                f"（{mm.get('版本', '')} · {mm.get('用户', '')}）")
+
+    lines = [
+        "# 反馈看板（服务端自动生成，勿手编；数据源 = 本目录 md 文件）",
+        "",
+        "> Agent 工作流：领任务看 `待处理/`；开工把文件移入 `进行中/`；",
+        "> 完成后移入 `已完成/` 并改 frontmatter 的 状态（已修复/已实装/已拒绝/已暂缓）+ 备注 + 更新。",
+        f"> 统计：{stat_line}（已完成细分：{done_line}）",
+        "",
+    ]
+    red = buckets["待处理"]
+    lines.append(f"## 🔴 待处理（{len(red)}）")
+    lines += [_row(mm) for mm in red] if red else ["（空）"]
+    lines.append("")
+    prog = buckets["进行中"]
+    lines.append(f"## 🟡 进行中（{len(prog)}）")
+    lines += [f"- [{mm.get('状态')}] {mm.get('标题', '')}（{mm.get('编号', '')} · 备注：{mm.get('备注', '') or '无'}）"
+              for mm in prog] if prog else ["（空）"]
+    lines.append("")
+    done = buckets[DONE_DIR][:10]
+    lines.append(f"## ✅ 已完成（共 {len(buckets[DONE_DIR])}，最近 {len(done)}）")
+    lines += [f"- [{mm.get('状态')}] {mm.get('标题', '')}（{mm.get('编号', '')} · 备注：{mm.get('备注', '') or '无'}）"
+              for mm in done] if done else ["（空）"]
+    (_dir() / KANBAN).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @router.get("/api/feedback")
@@ -176,6 +254,7 @@ def feedback_list(_user=Depends(require_user)):
         if not is_admin and mm.get("用户") != me:
             continue
         items.append(_to_item(mm))
+    _regen_kanban()
     return {"items": items}
 
 
