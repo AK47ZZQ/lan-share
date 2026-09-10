@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // 控制台总览（v3.39 定位更新）：一屏看全站——存储/成员/照片/分享/回收站/
 // 秒传库/会话设备/App 版本 + 最近动态。全部只读聚合（/api/admin/overview）。
-import { computed, onMounted, ref } from 'vue'
+// v3.46：45s 静默自动刷新（页签不可见时暂停省资源，切回即补刷一轮；
+// 静默失败保留旧数据不惊扰）。首页公告也随轮询更新。
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, type Announcement, type ConsoleOverview, type ActivityItem } from '../api'
 import { ACTION_NAMES, fmtTs, human } from '../ui'
 
@@ -16,14 +18,35 @@ const diskBarStyle = computed(() => {
   return { width: `${Math.min(pct, 100)}%`, background: color }
 })
 
-onMounted(async () => {
+async function load(silent = false) {
   try {
     const [o, acts_, anns_] = await Promise.all([
       api.adminOverview(), api.activity(40), api.announcements()])
     ov.value = o
     acts.value = acts_.slice(0, 8)
     anns.value = anns_.items
-  } catch (e) { err.value = (e as Error).message }
+    err.value = ''
+  } catch (e) {
+    // 静默轮询失败保留旧数据（网络抖动不该把工作台刷成错误页）
+    if (!silent) err.value = (e as Error).message
+  }
+}
+
+const REFRESH_MS = 45_000
+let timer: number | undefined
+function onVisChange() {
+  if (document.visibilityState === 'visible') void load(true)
+}
+onMounted(async () => {
+  await load()
+  timer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void load(true)
+  }, REFRESH_MS)
+  document.addEventListener('visibilitychange', onVisChange)
+})
+onBeforeUnmount(() => {
+  if (timer) window.clearInterval(timer)
+  document.removeEventListener('visibilitychange', onVisChange)
 })
 </script>
 
