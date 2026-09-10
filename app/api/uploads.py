@@ -13,6 +13,7 @@ from typing import Optional
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.config import (MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE, SHARE_ROOT, UPLOAD_SESSION_TTL,
@@ -23,6 +24,7 @@ from app.roles import ADMIN
 from app.security import audit, client_ip, require_user
 from app.filetools import clean_filename, human_size, move_to_trash, save_upload, to_rel
 from app.spaces import enforce_quota, resolve, sample_readable
+from app.store import users as users_store
 from app.api.photos import photos_scan_bump
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
@@ -64,6 +66,41 @@ class UploadInitBody(BaseModel):
     sha256: Optional[str] = None  # 客户端预计算（≤100MB 才算）；finish 时服务端必校验
 
 
+# ── 同步 DB 助手（11 号复审批次 3，P2-2）──────────────────────
+# 上传四端点都是 async（要 await 请求体流），元数据库访问是同步的：
+# 在 async 里直接调 _db() = 事件循环内做 PG 往返，单进程 uvicorn 下阻塞全体请求。
+# 统一抽成同步函数、由 run_in_threadpool 执行。
+def _session_usage(user_id: int):
+    """在途会话数与未完成总量（防配额绕过限流）。"""
+    return _db().execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(total_size),0) AS total "
+        "FROM upload_sessions WHERE user_id=?", (user_id,)).fetchone()
+
+
+def _get_session(sid: str):
+    return _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
+
+
+def _get_blob_sample(sha256: str):
+    return _db().execute("SELECT sample_path FROM blobs WHERE sha256=?", (sha256,)).fetchone()
+
+
+def _create_session(sid: str, dest_dir: str, filename: str, total_size: int,
+                    sha256: str | None, user_id: int) -> None:
+    with _db_lock:
+        _db().execute(
+            "INSERT INTO upload_sessions(id, dest_dir, filename, total_size, sha256, "
+            "created_at, user_id) VALUES(?,?,?,?,?,?,?)",
+            (sid, dest_dir, filename, total_size, sha256, time.time(), user_id))
+        _db().commit()
+
+
+def _drop_session(sid: str) -> None:
+    with _db_lock:
+        _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
+        _db().commit()
+
+
 def _chunk_dir(sid: str) -> Path:
     return SHARE_ROOT / ".chunks" / sid
 
@@ -102,10 +139,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                             detail=f"File too large for chunked upload (max {human_size(MAX_CHUNKED_SIZE)})")
     # 分片真实字节落在 .chunks（配额扫描视野外）：不限流的话一个成员开 N 个
     # 64GB 会话即可绕过配额灌满磁盘（红队 P2）——并发会话与未完成总量双上限
-    row = _db().execute(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(total_size),0) AS total "
-        "FROM upload_sessions WHERE user_id=?",
-        (_user["user_id"],)).fetchone()
+    row = await run_in_threadpool(_session_usage, _user["user_id"])
     if row["n"] >= 8:
         raise HTTPException(status_code=429, detail="上传会话过多，请先完成或取消在途任务")
     if row["total"] + body.size > MAX_CHUNKED_SIZE:
@@ -115,7 +149,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
 
     # 秒传：库里有同 sha256 内容（服务端算的，可信），直接硬链接
     if body.sha256:
-        row = _db().execute("SELECT sample_path FROM blobs WHERE sha256=?", (body.sha256,)).fetchone()
+        row = await run_in_threadpool(_get_blob_sample, body.sha256)
         if row:
             sample = Path(row["sample_path"])
             # 秒传越权防线（对抗审查 CRIT-1，Dedup Oracle）：blobs 是全局表，
@@ -154,14 +188,9 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                     logging.warning("instant upload hardlink failed: %s", e)
 
     sid = secrets.token_urlsafe(16)
-    _chunk_dir(sid).mkdir(parents=True, exist_ok=True)
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO upload_sessions(id, dest_dir, filename, total_size, sha256, "
-            "created_at, user_id) VALUES(?,?,?,?,?,?,?)",
-            (sid, body.dest_dir, dest.name, body.size, body.sha256, time.time(),
-             _user["user_id"]))
-        _db().commit()
+    await run_in_threadpool(_chunk_dir(sid).mkdir, parents=True, exist_ok=True)
+    await run_in_threadpool(_create_session, sid, body.dest_dir, dest.name,
+                            body.size, body.sha256, _user["user_id"])
     return {"instant": False, "session": sid, "chunk_size": chunk_size_for(body.size),
             "max_chunk_size": MAX_CHUNK_SIZE, "received": []}
 
@@ -169,7 +198,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
 @router.get("/api/upload/state/{sid}")
 async def upload_state(sid: str, _user=Depends(require_user)):
     """断点续传：查询已收到的块序号。"""
-    row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
+    row = await run_in_threadpool(_get_session, sid)
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
     _session_owner_guard(row, _user)
@@ -182,7 +211,7 @@ async def upload_state(sid: str, _user=Depends(require_user)):
 @router.post("/api/upload/chunk/{sid}")
 async def upload_chunk(request: Request, sid: str, index: int = Query(...),
                        _user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
+    row = await run_in_threadpool(_get_session, sid)
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
     _session_owner_guard(row, _user)
@@ -219,16 +248,15 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
 
 def _destroy_upload_session(sid: str, d: Path):
     """销毁分片会话：分片目录 + DB 记录一并清除（finish 校验失败强制客户端
-    重新 init，重缴会话数/总量/配额三道闸，R1-P2-6）。"""
-    shutil.rmtree(d, ignore_errors=True)   # 1024 分片上限，亚秒级；调用方异步上下文
-    with _db_lock:
-        _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
-        _db().commit()
+    重新 init，重缴会话数/总量/配额三道闸，R1-P2-6）。同步函数，调用方自行
+    决定是否进线程池。"""
+    shutil.rmtree(d, ignore_errors=True)   # 1024 分片上限，亚秒级
+    _drop_session(sid)
 
 
 @router.post("/api/upload/finish/{sid}")
 async def upload_finish(request: Request, sid: str, _user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM upload_sessions WHERE id=?", (sid,)).fetchone()
+    row = await run_in_threadpool(_get_session, sid)
     if not row:
         raise HTTPException(status_code=404, detail="Upload session not found")
     _session_owner_guard(row, _user)
@@ -242,8 +270,7 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
 
     owner = _user
     if row["user_id"] and row["user_id"] != _user["user_id"]:
-        owner = _db().execute("SELECT * FROM users WHERE id=?",
-                              (row["user_id"],)).fetchone()
+        owner = users_store.get(row["user_id"])
         if not owner:
             raise HTTPException(status_code=403, detail="Forbidden")
     dest_dir = resolve(owner, row["dest_dir"] or "", "write")
@@ -291,9 +318,7 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
     os.replace(tmp, dest)
     deduped = register_blob(dest, real_sha, size)
     shutil.rmtree(d, ignore_errors=True)
-    with _db_lock:
-        _db().execute("DELETE FROM upload_sessions WHERE id=?", (sid,))
-        _db().commit()
+    await run_in_threadpool(_drop_session, sid)
     rel = to_rel(dest)
     audit("upload", rel, human_size(size), client_ip(request))
     # v0.20：新文件落盘后清零照片扫描节流——下一次照片页请求必扫，

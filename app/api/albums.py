@@ -18,7 +18,7 @@ from app.db import _db, _db_lock
 from app.roles import ADMIN, GUEST
 from app.security import audit, client_ip, preview_user, require_admin, require_user
 from app.spaces import visible
-from app.store.settings import FEATURED_ALBUMS
+from app.settings import FEATURED_ALBUMS
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
 router = APIRouter()

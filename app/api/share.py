@@ -5,12 +5,14 @@ import secrets
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 import qrcode
 import qrcode.image.svg  # noqa: F401 子模块必须显式导入，SvgPathImage 才存在
 from fastapi import (APIRouter, Depends, Form, HTTPException, Request)
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -21,10 +23,11 @@ from app.roles import ADMIN
 from app.security import (audit, client_ip, get_bearer_user, get_session_user,
                           preview_user, require_user)
 from app.filetools import human_size, safe_path, to_rel
-from app.store.settings import PUBLIC_BASE_URL, get_setting
+from app.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
 from app.services import cleanup
 from app.spaces import resolve
+from app.store import users as users_store
 from app.api.auth import SharePrepareBody
 from app.api.notify import insert_notification, push_webhook
 
@@ -58,9 +61,7 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
     form = await request.form()
     raw_target = form.get("target")
     if raw_target and str(raw_target).strip():
-        trow = _db().execute(
-            "SELECT id, username FROM users WHERE LOWER(username)=LOWER(?) AND is_active=1",
-            (str(raw_target).strip(),)).fetchone()
+        trow = users_store.get_active_by_username_ci(str(raw_target).strip())
         if not trow:
             raise HTTPException(status_code=404, detail="目标成员不存在或已停用")
         target_id = trow["id"]
@@ -71,16 +72,13 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
     if password:
         salt = secrets.token_bytes(16)
         pwd_hash = salt.hex() + "$" + hashlib.sha256(salt + password.encode()).hexdigest()
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO shares(token, path, name, size, created_at, expires_at, password_hash, max_downloads, owner_id, password_plain, target_user_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-             (token, to_rel(target_path), target_path.name,
-             target_path.stat().st_size if target_path.is_file() else None,
-             time.time(), time.time() + expires_hours * 3600, pwd_hash, max_downloads,
-             _user["user_id"] if "user_id" in _user.keys() else None,
-             None, target_id))
-        _db().commit()
+    await run_in_threadpool(_insert_share, _ShareRow(
+        token=token, rel=to_rel(target_path), name=target_path.name,
+        size=target_path.stat().st_size if target_path.is_file() else None,
+        created_at=time.time(), expires_at=time.time() + expires_hours * 3600,
+        pwd_hash=pwd_hash, max_downloads=max_downloads,
+        owner_id=_user["user_id"] if "user_id" in _user.keys() else None,
+        target_id=target_id))
     # 站内通知统一出口（9.6-P2-14）：偏好关闭的接收方不再落库
     if target_id:
         insert_notification(target_id, "share",
@@ -97,6 +95,33 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
             "target": target_username,
             # 提取码不再落库（R1-P2-5）：仅创建响应返回一次，供创建者当场记录
             "password": password or None}
+
+
+@dataclass
+class _ShareRow:
+    """create_share 的落库参数（同步写助手 _insert_share 的入参）。"""
+    token: str
+    rel: str
+    name: str
+    size: int | None
+    created_at: float
+    expires_at: float
+    pwd_hash: str | None
+    max_downloads: int | None
+    owner_id: int | None
+    target_id: int | None
+
+
+def _insert_share(r: _ShareRow) -> None:
+    """落一条分享（同步；经 run_in_threadpool 调用，见 P2-2）。"""
+    with _db_lock:
+        _db().execute(
+            "INSERT INTO shares(token, path, name, size, created_at, expires_at, "
+            "password_hash, max_downloads, owner_id, password_plain, target_user_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (r.token, r.rel, r.name, r.size, r.created_at, r.expires_at,
+             r.pwd_hash, r.max_downloads, r.owner_id, None, r.target_id))
+        _db().commit()
 
 
 def _target_guard(s: sqlite3.Row, request: Request) -> bool:
@@ -293,8 +318,7 @@ def list_shares(request: Request, _user=Depends(require_user)):
     viewer = preview_user(request, _user)   # admin 成员视角预览
     is_admin = viewer["role"] == ADMIN
     rows = _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall()
-    uid_map = {r["id"]: r["username"]
-               for r in _db().execute("SELECT id, username FROM users").fetchall()}
+    uid_map = users_store.id_to_username_map()
     active = {}
     for s in rows:
         # v2 遗留分享（owner_id 为 NULL）仅 admin 可见/管理，成员不可见

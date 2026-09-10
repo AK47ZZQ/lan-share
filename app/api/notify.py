@@ -21,7 +21,8 @@ from pydantic import BaseModel
 
 from app.db import _db, _db_lock
 from app.security import audit, require_admin, require_user
-from app.store.settings import (NOTIFY_PREFS_PREFIX, NOTIFY_WEBHOOK_URL,
+from app.store import users as users_store
+from app.settings import (NOTIFY_PREFS_PREFIX, NOTIFY_WEBHOOK_URL,
                                 get_setting, set_setting)
 
 
@@ -145,8 +146,7 @@ class NotifyBody(BaseModel):
 
 def _resolve_targets(user_ids: list[int] | None) -> list[dict]:
     """定向成员 or 全体在职用户（沿用原 /api/admin/notify 语义）。"""
-    rows = _db().execute(
-        "SELECT id, username, nickname FROM users WHERE is_active=1").fetchall()
+    rows = users_store.list_active_brief()
     if user_ids:
         want = set(user_ids)
         return [r for r in rows if r["id"] in want]

@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from app.config import PROJECT_ROOT, SHARE_ROOT
 from app.filetools import human_size
 from app.security import audit, client_ip, require_user
-from app.store.settings import PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT, get_setting
+from app.settings import PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT, get_setting
 
 DIST_DIR = "App安装包"
 APK_MIME = "application/vnd.android.package-archive"

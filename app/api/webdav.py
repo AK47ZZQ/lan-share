@@ -18,7 +18,6 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
-from app.db import _db
 from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail)
 from app.filetools import RESERVED_NAME, clean_filename, human_size, to_rel
@@ -26,6 +25,7 @@ from app.spaces import enforce_quota, resolve, sync_grants_on_move
 from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy
 from app.filetools import move_to_trash
 from app.spaces import cross_space_guard, is_own_private_root
+from app.store import users as users_store
 
 # ─── WebDAV ───────────────────────────────────────────────
 # 挂载为网络磁盘：RaiDrive / WinSCP / Cyberduck / ES文件管理器等客户端连 https://<host>:8765/dav/
@@ -61,7 +61,7 @@ async def _dav_auth(request: Request):
         audit("login_locked", username, f"{'pub ' if pub else ''}{remaining}s", client_ip(request))
         raise HTTPException(status_code=401, detail="Locked",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
-    row = _db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    row = users_store.get_by_username(username)
     if row and not row["is_active"]:
         audit("login_disabled", username, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="Unauthorized",

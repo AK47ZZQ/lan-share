@@ -18,7 +18,9 @@ from pydantic import BaseModel
 
 from app.config import (COOKIE_NAME, DEVICE_TOKEN_MAX, DEVICE_TOKEN_TTL, SESSION_TTL,
                         SHARE_ROOT)
-from app.db import _db, _db_lock
+from app.db import _db, _db_lock, transaction
+from app.roles import ADMIN
+from app.store import users as users_store
 from app.security import (audit, allow_rate, clear_login_fails, client_ip, create_session,
                           get_bearer_user, get_session_user, hash_password, is_https,
                           is_public_entry, login_locked_remaining, record_login_fail,
@@ -48,7 +50,14 @@ class SharePrepareBody(BaseModel):
 
 
 def user_count() -> int:
-    return _db().execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+    return users_store.count()
+
+
+def _drop_session(token_hash: str) -> None:
+    """吊销单个 Cookie 会话（同步；经 run_in_threadpool 调用，见 P2-2）。"""
+    with _db_lock:
+        _db().execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+        _db().commit()
 
 
 def set_session_cookie(response: Response, request: Request, user_id: int):
@@ -92,15 +101,16 @@ async def setup(body: AuthBody, request: Request, response: Response):
         raise HTTPException(status_code=403, detail="管理员已存在")
     # scrypt 求值（约 100-300ms）放全局锁外 + 线程池，避免占住 _db_lock 并阻塞事件循环
     new_hash = await run_in_threadpool(hash_password, body.password)
-    # 检查 + 插入同锁（否则空库并发 setup 可建出双管理员）
-    with _db_lock:
-        if user_count() > 0:
-            raise HTTPException(status_code=403, detail="管理员已存在")
-        _db().execute("INSERT INTO users(username, password_hash, created_at, role) VALUES(?,?,?,'admin')",
-                      (username, new_hash, time.time()))
-        _db().commit()
-    uid = _db().execute("SELECT id FROM users WHERE username=?",
-                        (username,)).fetchone()["id"]
+    # 检查 + 插入同锁（否则空库并发 setup 可建出双管理员）。
+    # 同步块整体进线程池：事件循环内不得做 PG 往返（11 号复审 P2-2）
+    def _create_first_admin() -> int:
+        with _db_lock:
+            if user_count() > 0:
+                raise HTTPException(status_code=403, detail="管理员已存在")
+            users_store.create(username, new_hash, ADMIN)
+        return users_store.id_by_username(username)
+
+    uid = await run_in_threadpool(_create_first_admin)
     audit("setup", username, ip=client_ip(request))
     set_session_cookie(response, request, uid)
     return {"ok": True}
@@ -114,7 +124,7 @@ def _login_gate(username: str, request: Request):
         audit("login_locked", username, f"{'pub ' if pub else ''}{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
-    row = _db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    row = users_store.get_by_username(username)
     if row and not row["is_active"]:
         audit("login_disabled", username, ip=client_ip(request))
         raise HTTPException(status_code=403, detail="账号已停用")
@@ -186,10 +196,7 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
         if matched is None or matched <= (row["totp_last_step"] or 0):
             _fail()
             raise HTTPException(status_code=401, detail="动态验证码错误")
-        with _db_lock:
-            _db().execute("UPDATE users SET totp_last_step=? WHERE id=?",
-                          (matched, row["id"]))
-            _db().commit()
+        users_store.set_totp_last_step(row["id"], matched)
     elif _RC_RE.match(rc):
         # 恢复码路径：SHA256 命中库存即消费（库内只存哈希，用一枚少一枚）
         hashes = json.loads(row["totp_rc"]) if row["totp_rc"] else []
@@ -198,10 +205,7 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
             _fail()
             raise HTTPException(status_code=401, detail="恢复码无效或已用掉")
         hashes.remove(h)
-        with _db_lock:
-            _db().execute("UPDATE users SET totp_rc=? WHERE id=?",
-                          (json.dumps(hashes), row["id"]))
-            _db().commit()
+        users_store.set_totp_recovery_codes(row["id"], json.dumps(hashes))
         used_rc = True
     else:
         _fail()
@@ -217,9 +221,7 @@ async def login_totp(body: TotpLoginBody, request: Request, response: Response):
 async def logout(request: Request, response: Response):
     tok = request.cookies.get(COOKIE_NAME)
     if tok:
-        with _db_lock:
-            _db().execute("DELETE FROM sessions WHERE token_hash = ?", (_sha(tok),))
-            _db().commit()
+        await run_in_threadpool(_drop_session, _sha(tok))
     audit("logout", ip=client_ip(request))
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"ok": True}
@@ -243,9 +245,7 @@ async def me(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     def _prof():
-        row = _db().execute(
-            "SELECT nickname, avatar_path FROM users WHERE id=?",
-            (_uid(user),)).fetchone()
+        row = users_store.get_profile(_uid(user))
         return (row["nickname"] if row and row["nickname"] else "",
                 row["avatar_path"] if row and row["avatar_path"] else "")
 
@@ -279,12 +279,8 @@ _USER_COLS = frozenset({"password_hash", "nickname", "avatar_path"})
 
 
 def _user_field(user, col: str):
-    """会话行列不全（无 password_hash/nickname 等）：按 uid 回查 users 表。"""
-    if col not in _USER_COLS:
-        raise ValueError(f"column not allowed: {col}")
-    row = _db().execute(f"SELECT {col} FROM users WHERE id=?",
-                        (_uid(user),)).fetchone()
-    return row[col] if row else None
+    """会话行列不全（无 password_hash/nickname 等）：按 uid 回查白名单列。"""
+    return users_store.get_allowed_field(_uid(user), col)
 
 
 @router.post("/api/auth/verify-password")
@@ -339,10 +335,7 @@ async def update_profile(body: ProfileBody, request: Request,
     nick = _clean_nickname(body.nickname)
 
     def _save() -> None:
-        with _db_lock:   # SQLite 写必须全局锁+commit：否则隐式事务持 RESERVED 锁
-            _db().execute("UPDATE users SET nickname=? WHERE id=?",
-                          (nick, _uid(user)))
-            _db().commit()
+        users_store.set_nickname(_uid(user), nick)
 
     await run_in_threadpool(_save)
     audit("profile_nickname", user["username"], nick or "(清空)",
@@ -401,10 +394,7 @@ async def upload_avatar(request: Request, file: UploadFile = File(...),
             f".{os.getpid()}-{secrets.token_hex(4)}.tmp")
         tmp.write_bytes(data)
         os.replace(tmp, dest)
-        with _db_lock:   # 同 update_profile：写库全局锁+commit
-            _db().execute("UPDATE users SET avatar_path=? WHERE id=?",
-                          (rel, _uid(user)))
-            _db().commit()
+        users_store.set_avatar_path(_uid(user), rel)
 
     rel = f".avatars/{_uid(user)}.jpg"
     await run_in_threadpool(_write)
@@ -415,8 +405,7 @@ async def upload_avatar(request: Request, file: UploadFile = File(...),
 @router.get("/api/auth/avatar/{username}")
 def get_avatar(username: str, _user=Depends(require_user)):
     # def（非 async）：DB 往返与磁盘 stat 进线程池，不阻塞事件循环（项目规范）
-    row = _db().execute("SELECT id, avatar_path FROM users WHERE username=?",
-                        (username,)).fetchone()
+    row = users_store.get_avatar_path_by_username(username)
     if row is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     if "avatar_path" in row.keys() and row["avatar_path"]:
@@ -458,14 +447,12 @@ class TotpRcBody(BaseModel):
 @router.post("/api/auth/totp/setup")
 def totp_setup(user=Depends(require_user)):
     """生成 TOTP 密钥（未验证前不生效），返回密钥与 otpauth:// URI（前端转二维码）。"""
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     if row["totp_enabled"]:
         raise HTTPException(status_code=400, detail="两步验证已启用")
     secret = pyotp.random_base32()
     with _db_lock:
-        _db().execute("UPDATE users SET totp_secret=?, totp_enabled=0, totp_last_step=NULL WHERE id=?",
-                      (secret, user["user_id"]))
-        _db().commit()
+        users_store.set_totp_secret(user["user_id"], secret)
     uri = pyotp.totp.TOTP(secret).provisioning_uri(name=row["username"], issuer_name="LAN Share")
     return {"secret": secret, "otpauth": uri}
 
@@ -474,7 +461,7 @@ def totp_setup(user=Depends(require_user)):
 def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
     """用动态验证码确认开通（证明认证器已正确录入）。开通时生成一次性恢复码，
     明文仅本响应返回一次，供认证器不可用时顶替第二因子。"""
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     if row["totp_enabled"]:
         raise HTTPException(status_code=400, detail="两步验证已启用")
     if not row["totp_secret"]:
@@ -485,9 +472,7 @@ def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
         raise HTTPException(status_code=400, detail="验证码错误，请重试")
     codes, rc_json = _gen_recovery_codes()
     with _db_lock:
-        _db().execute("UPDATE users SET totp_enabled=1, totp_rc=? WHERE id=?",
-                      (rc_json, user["user_id"]))
-        _db().commit()
+        users_store.enable_totp(user["user_id"], rc_json)
     audit("totp_enabled", row["username"], ip="")
     return {"ok": True, "recovery_codes": codes}
 
@@ -495,7 +480,7 @@ def totp_enable(body: TotpCodeBody, user=Depends(require_user)):
 @router.post("/api/auth/totp/rc")
 async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require_user)):
     """重新生成恢复码（需原密码）：旧码全部作废。用于码没用过却弄丢了的情况。"""
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     if not row["totp_enabled"]:
         raise HTTPException(status_code=400, detail="两步验证未启用")
     if not await _verify_pw(body.old_password, row["password_hash"]):
@@ -503,8 +488,7 @@ async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require
         raise HTTPException(status_code=403, detail="原密码错误")
     codes, rc_json = _gen_recovery_codes()
     with _db_lock:
-        _db().execute("UPDATE users SET totp_rc=? WHERE id=?", (rc_json, user["user_id"]))
-        _db().commit()
+        users_store.set_totp_recovery_codes(user["user_id"], rc_json)
     audit("totp_rc_regen", row["username"], ip=client_ip(request))
     return {"ok": True, "recovery_codes": codes}
 
@@ -512,15 +496,12 @@ async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require
 @router.post("/api/auth/totp/disable")
 async def totp_disable(request: Request, body: TotpDisableBody, user=Depends(require_user)):
     """关闭两步验证：需原密码确认（会话被劫持时不能随手关掉）。"""
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     if not await _verify_pw(body.old_password, row["password_hash"]):
         audit("totp_disable_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     with _db_lock:
-        _db().execute("UPDATE users SET totp_secret=NULL, totp_enabled=0, totp_rc=NULL, "
-                      "totp_last_step=NULL WHERE id=?",
-                      (user["user_id"],))
-        _db().commit()
+        users_store.clear_totp(user["user_id"])
     audit("totp_disabled", row["username"], ip=client_ip(request))
     return {"ok": True}
 
@@ -533,7 +514,7 @@ class PasswordBody(BaseModel):
 @router.post("/api/auth/password")
 async def change_password(request: Request, response: Response, body: PasswordBody,
                           user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）；
     # 公网侧失败只记公网侧（与登录/_dav_auth 同策略，防跨入口锁人）
     pub = is_public_entry(request)
@@ -549,13 +530,17 @@ async def change_password(request: Request, response: Response, body: PasswordBo
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="新密码至少 8 位")
     new_hash = await run_in_threadpool(hash_password, body.new_password)
-    with _db_lock:
-        _db().execute("UPDATE users SET password_hash=? WHERE id=?",
-                      (new_hash, row["id"]))
-        # 改密后吊销全部旧会话与设备 Token（与 admin 重置同语义），重新签发当前 Cookie
-        _db().execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
-        _db().execute("DELETE FROM device_tokens WHERE user_id=?", (row["id"],))
-        _db().commit()
+    # 改密 + 吊销旧会话/设备必须同一事务（P2-6）：只改了密码却没吊销
+    # 旧 Token，等于"改密不生效"（旧凭据仍可用）。
+    # 同步块进线程池（P2-2）：事件循环内不做 PG 往返
+    def _persist_password() -> None:
+        with _db_lock, transaction():
+            users_store.set_password_hash(row["id"], new_hash)
+            # 改密后吊销全部旧会话与设备 Token（与 admin 重置同语义）
+            _db().execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+            _db().execute("DELETE FROM device_tokens WHERE user_id=?", (row["id"],))
+
+    await run_in_threadpool(_persist_password)
     audit("password_change", row["username"], ip=client_ip(request))
     set_session_cookie(response, request, row["id"])
     return {"ok": True}
@@ -569,7 +554,7 @@ class UsernameBody(BaseModel):
 @router.post("/api/auth/username")
 async def change_username(request: Request, body: UsernameBody,
                           user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     # 密码确认失败同样计入防爆破锁定（否则会话被劫持后可无限试密码）；
     # 公网侧失败只记公网侧（与登录/_dav_auth 同策略，防跨入口锁人）
     pub = is_public_entry(request)
@@ -602,15 +587,13 @@ class WebDavPasswordBody(BaseModel):
 @router.get("/api/auth/webdav-password")
 def webdav_password_status(user=Depends(require_user)):
     """只暴露是否已设置，绝不回传哈希。"""
-    row = _db().execute("SELECT webdav_password_hash FROM users WHERE id=?",
-                        (user["user_id"],)).fetchone()
-    return {"set": bool(row and row["webdav_password_hash"])}
+    return {"set": bool(users_store.get_webdav_password_hash(user["user_id"]))}
 
 
 @router.post("/api/auth/webdav-password")
 async def set_webdav_password(request: Request, body: WebDavPasswordBody,
                               user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM users WHERE id=?", (user["user_id"],)).fetchone()
+    row = users_store.get(user["user_id"])
     # 与改密同款防线：密码确认失败计入防爆破锁定（否则会话被劫持后可无限试）。
     # 公网侧失败只记公网侧，避免公网攻击者锁掉本人 LAN 登录（与 _dav_auth 同策略）
     pub = is_public_entry(request)
@@ -630,9 +613,7 @@ async def set_webdav_password(request: Request, body: WebDavPasswordBody,
     else:
         new_hash = None
     with _db_lock:
-        _db().execute("UPDATE users SET webdav_password_hash=? WHERE id=?",
-                      (new_hash, row["id"]))
-        _db().commit()
+        users_store.set_webdav_password_hash(row["id"], new_hash)
     audit("webdav_password_set" if new_hash else "webdav_password_clear",
           row["username"], ip=client_ip(request))
     return {"ok": True, "set": bool(new_hash)}
@@ -795,8 +776,7 @@ async def pair_claim(request: Request, body: PairClaimBody):
         audit("pair_claim_fail", ip=ip)
         raise HTTPException(status_code=401, detail="配对码无效或已过期")
     user_id, _ = hit
-    row = _db().execute("SELECT id, username FROM users WHERE id=?",
-                        (user_id,)).fetchone()
+    row = users_store.get(user_id)
     if not row:
         raise HTTPException(status_code=401, detail="配对码无效或已过期")
     name = body.name.strip()

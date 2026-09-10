@@ -4,6 +4,11 @@
 各写各的），key 字符串散落 6 文件 23 处——改一个 settings key 要跨文件搜全仓，
 新增设置项靠人肉对齐。此后读写一律走本模块，key 一律引用这里导出的常量。
 
+**位置（11 号复审批次 2，A2）**：原住 `app/store/settings.py`，导致安全核心
+`app/security.py` 反向 import 服务层（分层倒置）。settings 本质是"可运行时修改的
+配置"，不是业务仓储，故与 `config.py`/`db.py` 同层放在 `app/settings.py`；
+`app/store/` 留给真正的表仓储（users/shares/sessions）。
+
 例外：需要"锁内读-改-写"复合操作（如精选专辑 _mutate_albums）可保留自管
 SQL，但 key 仍须引用本模块常量。"""
 from app.db import _db, _db_lock

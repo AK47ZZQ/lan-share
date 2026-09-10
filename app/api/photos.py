@@ -21,6 +21,7 @@ from app.roles import ADMIN, MEMBER
 from app.security import preview_user, require_user
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support, to_rel
 from app.spaces import resolve, visible
+from app.store import users as users_store
 from app.api.albums import load_albums as _load_albums
 
 ensure_heif_support()   # HEIC/HEIF 解码注册（照片时间线 EXIF/元数据需要）
@@ -257,7 +258,7 @@ def photos_scan_bump():
 
 
 def _known_users() -> set[str]:
-    return {r["username"] for r in _db().execute("SELECT username FROM users")}
+    return users_store.list_usernames()
 
 
 def _photo_uploader(rel: str, users: set[str] | None = None) -> str:
@@ -346,8 +347,7 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     # 拍摄者昵称映射（v0.17 资料体系）：客户端显示优先昵称，筛选仍传 username
     nicks: dict[str, str] = {}
     try:
-        for u in _db().execute(
-                "SELECT username, nickname FROM users WHERE nickname != ''"):
+        for u in users_store.list_nickname_rows():
             nicks[u["username"]] = u["nickname"]
     except (sqlite3.Error, OSError) as e:
         # 只吞 DB 瞬时故障并留痕；其它异常照常上抛（别把故障降级成假 200）

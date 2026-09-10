@@ -2,6 +2,62 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-10 — 服务端 v3.36：独立复审修复批（工程流程 + 生产等价性 + 架构收口）
+
+依据《项目记忆/11-独立工程复审》执行（该报告 P0/P1/P2/A 全部逐条落地，见其 §九
+执行记录）。**门禁终态：pytest 231 passed（SQLite）/ PG 全量另核 / ruff · mypy 全绿 /
+web npm test 6 passed。**
+
+**工程流程（P0）**
+- **`app/roles.py` 入库**：该模块被 9 个模块（含 security/spaces 安全内核）import
+  却从未进版本库 —— fresh clone 会 ImportError 起不来。
+- **整批 v3.35 与历史改动分 4 个逻辑提交入库**，工作区清零，重建回滚点。
+
+**生产/测试等价性（P1）**
+- **双引擎测试**：`conftest` 支持 `LANSHARE_TEST_PG_URL` —— 在目标库的**临时
+  schema** 里建表（`search_path` 隔离，不碰生产 `public` 表，也不需要 CREATEDB
+  权限），同一套测试改跑 PostgreSQL，用完 DROP SCHEMA。PG 侧 `_PgConn` /
+  `_pg_sql` / `_PG_SCHEMA` 这条**生产真正在跑**的代码路此前零覆盖。
+- **新增 `.github/workflows/ci.yml`**：ruff + mypy + pytest(SQLite) 与
+  pytest(PG, postgres:16 service 容器) 并行，web 单测独立作业。
+- **跨引擎 schema 漂移守卫**（`test_pg_schema_parity.py`）：加表/加列只改
+  SQLite 分支漏了 PG → 门禁直接红（"生产库缺列"事故的直接探测器）。
+
+**安全与正确性（P2）**
+- **Webhook 重定向逐跳复校验**：原实现 urlopen 默认跟随 302，"发送前校验"只校验
+  起点，公网域名 302 到 `127.0.0.1` 即可绕过。出网出口显式化为
+  `notify._webhook_open` 命名桩点（原测试 patch 的是 stdlib 全局，改实现会被静默绕过）。
+- **WebDAV 真锁**：原 `LOCK` 返回 token 却不记状态（假锁），并发 PUT 可互踩。
+  改为 RFC 4918 语义的进程内锁表（他人写 423 / 非锁主 UNLOCK 403 / 到期自释放），
+  PUT/MKCOL/DELETE/MOVE/COPY 全部加守卫；不用锁的客户端零影响。
+- **真事务**：新增引擎中立、嵌套感知的 `db.transaction()`；改密+吊销、重置密码+
+  吊销、PATCH 角色/激活/配额、删号、**邀请码 redeem 建号+认领** 改真事务
+  （此前靠补偿删除，中途崩溃留孤儿账号）。`_db_lock` 改 **RLock**，根治嵌套自死锁
+  （R1-P0-1 同类）。
+- **PG 连接有界化**：全局登记 + 上限（`SHARE_PG_MAX_CONN`，默认 16）+ 空闲 300s
+  回收 + 死线程孤儿回收 + atexit 统一关闭，不改任何调用方。
+
+**架构收口（A）**
+- **users 表单一主人**：新增 `app/store/users.py` 语义仓储，原散落 **11 个模块
+  80 条 SQL** 全部迁出，业务模块不再认识表结构（加一列只改 db.py DDL + 仓储）。
+- **settings 降 L0**：`app/store/settings.py` → `app/settings.py`，消除
+  security → store 分层倒置；`app/store/` 留给表仓储。
+- **async 路由禁裸 DB**：trash / share / uploads / auth 共 **27 处**同步 DB 往返
+  全部抽同步助手 + `run_in_threadpool`（单进程 uvicorn 下曾会阻塞全体请求）。
+
+**回归守卫（新增 3 条 AST 级守卫，把"约定"变成 CI 可执行断言）**
+- `users` 表 SQL 只允许出现在 store 与 db.py；
+- `async def` 自身作用域内禁止 `_db()`；
+- PG schema 必须覆盖 SQLite 全部表与列。
+
+**Web 端补测（原四端唯一零测试）**
+- `web/test/`：Node 内置 runner，零依赖零网络；含 `filekinds.ts` ↔
+  `app/filetools.py` 跨端扩展名契约守卫（历史"三端漂移"事故同类）。
+
+**已知未做（见 11 号报告 §9.3）**：12.5G 用户数据清理（需站长决策）、照片全盘
+扫描改增量索引（需独立批次）、拆 god 文件（Flutter 侧本机无法 `flutter test`
+验证）、运维项（需运维窗口）。**服务未重启**（本工作区即线上，需主人确认）。
+
 ## 2026-09-10 — 服务端 v3.35：安全加固与"约定收口"第一批
 
 依据《项目记忆/09-项目建议报告》与《10-改进计划-v3.35》执行，**行为等价 + 纯增强**，

@@ -1,5 +1,6 @@
 """认证与安全：审计、scrypt 密码、会话、防爆破、限速、client_ip、公网入口判定。"""
 import hashlib
+import logging
 import hmac
 import secrets
 import sqlite3
@@ -15,8 +16,9 @@ from app.config import (AUDIT_KEEP, COOKIE_NAME, DEVICE_TOKEN_TTL, LOGIN_LOCK_SE
                         LOGIN_MAX_FAILS, SESSION_RENEW_AFTER, SESSION_TTL)
 from app.db import _db, _db_lock
 from app.roles import ADMIN
-from app.store import settings
-from app.store.settings import get_setting
+from app import settings
+from app.settings import get_setting
+from app.store import users
 
 # 当前请求的登录用户名：中间件注入，audit() 自动带上（公开入口为空串）
 _audit_user: ContextVar[str] = ContextVar("audit_user", default="")
@@ -81,11 +83,7 @@ def get_session_user(request: Request) -> Optional[sqlite3.Row]:
     if not tok:
         return None
     th = _sha(tok)
-    row = _db().execute(
-        "SELECT s.expires_at, s.user_id, u.username, u.role, u.is_active, u.quota_bytes, "
-        "u.totp_secret, u.totp_enabled, u.totp_rc "
-        "FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
-        (th,)).fetchone()
+    row = users.principal_by_session(th)
     if not row:
         return None
     now = time.time()
@@ -110,11 +108,7 @@ def get_bearer_user(request: Request) -> Optional[sqlite3.Row]:
     if not auth.startswith("Bearer "):
         return None
     th = _sha(auth[7:].strip())
-    row = _db().execute(
-        "SELECT t.id AS device_id, t.user_id, t.expires_at, t.last_seen, "
-        "u.username, u.role, u.is_active, u.quota_bytes, u.totp_enabled, u.totp_rc "
-        "FROM device_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
-        (th,)).fetchone()
+    row = users.principal_by_device(th)
     if not row or not row["is_active"]:
         return None
     now = time.time()
@@ -173,8 +167,7 @@ def preview_user(request: Request, user: sqlite3.Row) -> "sqlite3.Row | dict":
     as_name = (request.headers.get("x-as-user") or "").strip()
     if not as_name or user["role"] != ADMIN:
         return user
-    row = _db().execute(
-        "SELECT * FROM users WHERE username=? AND is_active=1", (as_name,)).fetchone()
+    row = users.get_active_by_username(as_name)
     if not row:
         raise HTTPException(status_code=404, detail="预览目标成员不存在或已停用")
     audit("preview_as", as_name, ip=client_ip(request))
@@ -228,8 +221,10 @@ def _netlocs_cached():
                 allset.add(netloc)
                 if key == settings.PUBLIC_BASE_URL:
                     primary = netloc
-    except Exception:
-        pass
+    except Exception as e:
+        # 不能静默：读不出来会退化成"没有公网入口"（healthz 裸奔 + 防爆破不分账），
+        # 必须留痕才排得到障（11 号复审 P3）
+        logging.warning("public_netlocs 读取 settings 失败（按无公网入口处理）: %s", e)
     _netloc_cache[:] = [primary, allset, now]
     return primary, allset
 

@@ -11,8 +11,9 @@ import re
 from fastapi import HTTPException
 
 from app.config import SHARE_ROOT
-from app.db import _db, _db_lock
+from app.db import _db_lock
 from app.security import audit
+from app.store import users as users_store
 
 
 def clean_username(name: str) -> str:
@@ -53,11 +54,9 @@ def rename_user_everywhere(uid: int, old_name: str, new_name: str,
     """
     dir_fail_action, inc_fail_action = _AUDIT_ACTIONS[scope]
     with _db_lock:
-        if _db().execute("SELECT 1 FROM users WHERE LOWER(username)=LOWER(?)",
-                         (new_name,)).fetchone():
+        if users_store.exists_username_ci(new_name):
             raise HTTPException(status_code=409, detail="该用户名已被占用")
-        _db().execute("UPDATE users SET username=? WHERE id=?", (new_name, uid))
-        _db().commit()
+        users_store.set_username(uid, new_name)
 
     from app.api.albums import rename_album_owner
     rename_album_owner(old_name, new_name)   # 精选专辑归属跟随（R2-P2-3）
@@ -73,8 +72,7 @@ def rename_user_everywhere(uid: int, old_name: str, new_name: str,
             # 本人数据"消失"（R1-P2-4）。专辑归属也要改回去（R3-P1：已在
             # rename 尝试前翻成新名，不回滚则创建者失去编辑权）
             with _db_lock:
-                _db().execute("UPDATE users SET username=? WHERE id=?", (old_name, uid))
-                _db().commit()
+                users_store.set_username(uid, old_name)
             rename_album_owner(new_name, old_name)
             audit(dir_fail_action, f"{old_name} → {new_name}", ip=ip)
             raise HTTPException(status_code=500,

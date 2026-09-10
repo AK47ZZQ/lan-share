@@ -22,7 +22,8 @@ from fastapi.concurrency import run_in_threadpool
 from app.config import PROJECT_ROOT, SHARE_ROOT
 from app.db import _db
 from app.security import audit, client_ip, require_admin
-from app.store.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
+from app.store import users as users_store
+from app.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
                                 NOTIFY_WEBHOOK_URL, get_setting, set_setting)
 
 # 备份产物目录：backup.bat（Task Scheduler 03:30 独立跑）的落点，服务端只读状态
@@ -97,12 +98,13 @@ def gather_health(probe_public: bool = False) -> dict:
     used_pct = round(du.used / du.total * 100, 1)
     counts = {}
     try:
-        for name, sql in (("users", "SELECT COUNT(*) c FROM users"),
-                          ("photos", "SELECT COUNT(*) c FROM photos"),
-                          ("shares", "SELECT COUNT(*) c FROM shares"),
-                          ("devices", "SELECT COUNT(*) c FROM device_tokens")):
+        _counters = (("users", users_store.count),
+                     ("photos", lambda: _db().execute("SELECT COUNT(*) c FROM photos").fetchone()["c"]),
+                     ("shares", lambda: _db().execute("SELECT COUNT(*) c FROM shares").fetchone()["c"]),
+                     ("devices", lambda: _db().execute("SELECT COUNT(*) c FROM device_tokens").fetchone()["c"]))
+        for name, fn in _counters:
             try:
-                counts[name] = _db().execute(sql).fetchone()["c"]
+                counts[name] = fn()
             except Exception:
                 counts[name] = None
     except Exception:

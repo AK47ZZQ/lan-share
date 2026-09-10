@@ -25,6 +25,31 @@ router = APIRouter()
 _VPATH_RE = re.compile(r"^(shared|private):(.*)$", re.I)
 
 
+# ── 同步 DB 助手（11 号复审批次 3，P2-2）──────────────────────
+# 本模块路由都是 async（要 await 文件系统操作），而元数据库访问是同步的：
+# 直接在 async 里调 _db() 会在事件循环内做 PG 往返，单进程 uvicorn 下阻塞全体
+# 请求。统一抽成同步函数、由 run_in_threadpool 执行——与项目既有规范一致
+#（中间件与其它路由都这么做，此前这几处是漏网的）。
+def _select_all_trash():
+    return _db().execute("SELECT * FROM trash ORDER BY deleted_at DESC").fetchall()
+
+
+def _select_trash(trash_id: int):
+    return _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
+
+
+def _drop_trash_row(trash_id: int) -> None:
+    with _db_lock:
+        _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
+        _db().commit()
+
+
+def _clear_trash() -> None:
+    with _db_lock:
+        _db().execute("DELETE FROM trash")
+        _db().commit()
+
+
 def _trash_rel_parts(orig_path: str) -> list[str] | None:
     """回收站 orig_path → 物理路径段（供 visible() 判归属）。历史入口存过
     vpath 形态（"private:<名>"，无用户段，归属不可判定）→ 返回 None，
@@ -40,7 +65,7 @@ def _trash_rel_parts(orig_path: str) -> list[str] | None:
 
 @router.get("/api/trash")
 async def list_trash(_user=Depends(require_user)):
-    rows = _db().execute("SELECT * FROM trash ORDER BY deleted_at DESC").fetchall()
+    rows = await run_in_threadpool(_select_all_trash)
     is_admin = _user["role"] == ADMIN
     items = []
     for r in rows:
@@ -64,7 +89,7 @@ async def list_trash(_user=Depends(require_user)):
 
 @router.post("/api/trash/{trash_id}/restore")
 async def restore_trash(request: Request, trash_id: int, _user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
+    row = await run_in_threadpool(_select_trash, trash_id)
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
     # 与删除入口同款可见性校验（review 2026-09-02 P1-1）：缺了它，成员可枚举
@@ -77,26 +102,22 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
         raise HTTPException(status_code=403, detail="Forbidden")
     trash_path = SHARE_ROOT / row["trash_path"]
     if not trash_path.exists():
-        with _db_lock:
-            _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
-            _db().commit()
+        await run_in_threadpool(_drop_trash_row, trash_id)
         raise HTTPException(status_code=404, detail="Trash file missing")
     dest = resolve(_user, row["orig_path"], "write")
     if dest.exists():
         stem, suffix = dest.stem, dest.suffix
         dest = dest.with_name(f"{stem} (恢复){suffix}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(trash_path), str(dest))
-    with _db_lock:
-        _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
-        _db().commit()
+    await run_in_threadpool(shutil.move, str(trash_path), str(dest))
+    await run_in_threadpool(_drop_trash_row, trash_id)
     audit("restore", to_rel(dest), ip=client_ip(request))
     return {"ok": True, "path": to_rel(dest)}
 
 
 @router.delete("/api/trash/{trash_id}")
 async def delete_trash_item(request: Request, trash_id: int, _user=Depends(require_user)):
-    row = _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
+    row = await run_in_threadpool(_select_trash, trash_id)
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
     parts = _trash_rel_parts(row["orig_path"])
@@ -110,10 +131,8 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     if trash_path.is_dir():
         await run_in_threadpool(shutil.rmtree, trash_path, True)
     else:
-        trash_path.unlink(missing_ok=True)
-    with _db_lock:
-        _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
-        _db().commit()
+        await run_in_threadpool(trash_path.unlink, True)
+    await run_in_threadpool(_drop_trash_row, trash_id)
     audit("trash_delete", row["name"], ip=client_ip(request))
     return {"ok": True}
 
@@ -124,8 +143,6 @@ async def empty_trash(request: Request, _admin=Depends(require_admin)):
     if trash_root.exists():
         # 同 delete_trash_item：rmtree 进线程池（R1-P2-8）
         await run_in_threadpool(shutil.rmtree, trash_root, True)
-    with _db_lock:
-        _db().execute("DELETE FROM trash")
-        _db().commit()
+    await run_in_threadpool(_clear_trash)
     audit("trash_empty", ip=client_ip(request))
     return {"ok": True}
