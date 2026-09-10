@@ -2,6 +2,23 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — Web v3.48：api.ts 按域拆模块（门面保兼容，纯重构）
+
+07 审查重构小尾巴：462 行的 api.ts 拆成 api/ 目录九个文件，**调用方 25 个
+文件零改动**（原导出全部保留，`api` 对象仍为单一入口）：
+- `api/types.ts` 类型全集 · `api/core.ts` handle/enc/jpost/getAs（401 豁免
+  与成员视角预览头统一在此）。
+- 域对象：`authApi`（登录/两步/资料/账号安全/设备配对）、`consoleApi`
+  （管理台/审计/通知运营/成员权限/邀请授权/webhook/日报/公网地址/导出）、
+  `notifyApi`（站内通知/家庭动态/成员）、`filesApi`（文件/回收站/搜索/磁盘）、
+  `photosApi`（时间线/相册）、`sharesApi`（分享/取件/公开取件 publicApi）、
+  `api/upload.ts`（分块上传引擎/秒传/公网大文件提醒）。
+- 门面 api.ts：`export *` + 各域展开合并为 `api`，键名与拆分前一致。
+- 门禁：vue-tsc 0 错 + build 绿（线上 hash 更新）；浏览器实测登录态下
+  总览/运行状态两页数据加载正常（adminOverview/auditLog/轮询三接口全通）。
+- 排查记录：BroadcastItem 手抄漏 3 字段被 vue-tsc 抓住——拆分时类型必须
+  逐字搬运，不凭印象重写。
+
 ## 2026-09-11 — v3.47：操作审计按类型筛选（/api/admin/audit + 运行状态页）
 
 v3.39 方向内已批准候选③。在现有审计数据上加筛选，不动表结构与留痕逻辑：
