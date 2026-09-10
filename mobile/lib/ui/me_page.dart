@@ -16,9 +16,9 @@ import 'notes_page.dart';
 import 'transfers_page.dart';
 import 'admin_page.dart';
 import 'backup_settings_page.dart';
-import 'package:dio/dio.dart' show DioException, FormData, MultipartFile;
 import 'package:file_picker/file_picker.dart';
 
+import '../data/api/account_api.dart';
 import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
@@ -78,18 +78,15 @@ class _MePageState extends ConsumerState<MePage> {
     _server = await Prefs.lastAddress();
     if (mounted) setState(() {});
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/auth/webdav-password');
-      if (mounted) setState(() => _webdavSet = r.data['set'] as bool? ?? false);
+      final webdavSet = await AccountApi.webdavPwdStatus();
+      if (mounted) setState(() => _webdavSet = webdavSet);
     } catch (_) {/* 端点不可用保持未知 */}
     try {
       final pi = await PackageInfo.fromPlatform();
       if (mounted) setState(() => _version = pi.version);
     } catch (_) {}
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/auth/devices');
-      final list = ((r.data['devices'] as List?) ?? const []).map((e) {
+      final list = (await AccountApi.listDevices()).map((e) {
         final m = e as Map;
         return _Device(
             id: (m['id'] as num?)?.toInt() ?? 0,
@@ -222,9 +219,8 @@ class _MePageState extends ConsumerState<MePage> {
       ),
     );
     if (ok != true) return;
-    final dio = await ApiClient.I.dio();
     try {
-      await dio.delete('/api/auth/devices/${d.id}');
+      await AccountApi.revokeDevice(d.id);
       if (d.current) {
         // 吊销的是本机：清 Token 回登录页
         if (mounted) ref.read(sessionProvider.notifier).logout();
@@ -374,11 +370,7 @@ class _MePageState extends ConsumerState<MePage> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/auth/password', data: {
-        'old_password': oldCtrl.text,
-        'new_password': newCtrl.text,
-      });
+      await AccountApi.changePassword(oldCtrl.text, newCtrl.text);
       _toast('密码已修改（网页端会话需重新登录）');
     } catch (e) {
       _toast('修改失败：${_detail(e)}');
@@ -422,9 +414,7 @@ class _MePageState extends ConsumerState<MePage> {
     final newName = nameCtrl.text.trim();
     if (newName.isEmpty || newName == session.username) return;
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/auth/username',
-          data: {'new_username': newName, 'password': pwdCtrl.text});
+      await AccountApi.changeUsername(newName, pwdCtrl.text);
       if (!mounted) return;
       await Prefs.setUsername(newName);
       if (!mounted) return;
@@ -477,14 +467,10 @@ class _MePageState extends ConsumerState<MePage> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/auth/webdav-password', data: {
-        'current_password': curCtrl.text,
-        'webdav_password': newPwd,
-      });
+      final setNow = await AccountApi.setWebdavPwd(curCtrl.text, newPwd);
       if (!mounted) return;
-      setState(() => _webdavSet = r.data['set'] as bool? ?? false);
-      _toast(r.data['set'] == true
+      setState(() => _webdavSet = setNow);
+      _toast(setNow
           ? 'WebDAV 独立密码已生效（挂载客户端需改用新密码）'
           : '已清除：WebDAV 回退用登录密码挂载');
     } catch (e) {
@@ -497,10 +483,9 @@ class _MePageState extends ConsumerState<MePage> {
     String? code;
     int expires = 0;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/pair/code');
-      code = r.data['code'] as String?;
-      expires = (r.data['expires_in'] as num?)?.toInt() ?? 180;
+      final pc = await AccountApi.pairCode();
+      code = pc.code;
+      expires = pc.expires;
     } catch (e) {
       _toast('生成失败：${_detail(e)}');
       return;
@@ -806,14 +791,8 @@ class _MePageState extends ConsumerState<MePage> {
                       : () async {
                           setD(() => busy = true);
                           try {
-                            final dio = await ApiClient.I.dio();
                             if (newAvatar != null) {
-                              await dio.post('/api/auth/avatar',
-                                  data: FormData.fromMap({
-                                    'file': await MultipartFile.fromFile(
-                                        newAvatar!.path,
-                                        filename: 'avatar.jpg'),
-                                  }));
+                              await AccountApi.uploadAvatar(newAvatar!.path);
                               await ref
                                   .read(sessionProvider.notifier)
                                   .refreshFromMe();
@@ -826,21 +805,14 @@ class _MePageState extends ConsumerState<MePage> {
                                   .updateProfile(nick);
                             }
                             if (bctx.mounted) Navigator.pop(bctx, true);
-                          } on DioException catch (e) {
-                            final d = e.response?.data;
-                            final detail = d is Map && d['detail'] != null
-                                ? d['detail'].toString()
-                                : '保存失败';
+                          } catch (e) {
+                            // 服务端 detail 优先（errors.dart 统一文案）
                             if (bctx.mounted) setD(() => busy = false);
                             if (mounted) {
+                              final msg = errDetail(e, max: 120);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(detail)));
-                            }
-                          } catch (_) {
-                            if (bctx.mounted) setD(() => busy = false);
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('保存失败，请稍后重试')));
+                                  SnackBar(content: Text(
+                                      msg.isEmpty ? '保存失败' : msg)));
                             }
                           }
                         },

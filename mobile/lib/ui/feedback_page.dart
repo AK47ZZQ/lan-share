@@ -5,12 +5,12 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/errors.dart';
+import '../data/api/feedback_api.dart';
 
 class FeedbackPage extends StatefulWidget {
   const FeedbackPage({super.key});
@@ -71,16 +71,10 @@ class _FeedbackPageState extends State<FeedbackPage>
       _error = null;
     });
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/feedback');
+      final rows = await FeedbackApi.list();
       if (!mounted) return;
-      final d = r.data;
-      final rows = (d is Map ? d['items'] : d) as List? ?? const [];
       setState(() {
-        _items = rows
-            .whereType<Map>()
-            .map((m) => Map<String, dynamic>.from(m))
-            .toList();
+        _items = rows;
         _loading = false;
       });
     } catch (e) {
@@ -116,20 +110,18 @@ class _FeedbackPageState extends State<FeedbackPage>
     }
     setState(() => _sending = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final fd = FormData.fromMap({
-        'title': title,
-        'type': _type,
-        'body': _bodyCtrl.text.trim(),
-        'app_ver': _appVer,
-        'device': _device,
-        'files': [
+      await FeedbackApi.submit(
+        title: title,
+        type: _type,
+        body: _bodyCtrl.text.trim(),
+        appVer: _appVer,
+        device: _device,
+        images: [
           for (final i in _images)
             if (i.bytes != null)
-              MultipartFile.fromBytes(i.bytes!, filename: i.name),
+              FeedbackImage(bytes: i.bytes!, name: i.name),
         ],
-      });
-      await dio.post('/api/feedback', data: fd);
+      );
       if (!mounted) return;
       _toast('已提交，处理状态会在历史里更新');
       setState(() {
@@ -139,15 +131,11 @@ class _FeedbackPageState extends State<FeedbackPage>
       });
       _tab.animateTo(1);
       _loadHistory();
-    } on DioException catch (e) {
+    } catch (e) {
       if (!mounted) return;
-      final d = e.response?.data;
-      _toast(d is Map && d['detail'] != null
-          ? d['detail'].toString()
-          : '提交失败，请稍后重试');
-    } catch (_) {
-      if (!mounted) return;
-      _toast('提交失败，请稍后重试');
+      // 服务端 detail 优先（errors.dart 统一文案），其余回退通用提示
+      final msg = errDetail(e);
+      _toast(msg.isEmpty ? '提交失败，请稍后重试' : msg);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -404,10 +392,7 @@ class _FeedbackPageState extends State<FeedbackPage>
 
   Future<Uint8List?> _fetchImage(String url) async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get<List<int>>(url,
-          options: Options(responseType: ResponseType.bytes));
-      return Uint8List.fromList(r.data ?? const []);
+      return await FeedbackApi.fetchBytes(url);
     } catch (_) {
       return null;
     }
