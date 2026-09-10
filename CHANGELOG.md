@@ -2,6 +2,18 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — Web v3.49：AdminView 按 tab 拆分（纯重构）
+
+07 审查重构小尾巴收尾件：320 行的 AdminView 拆成父组件 + 三页签子组件
+（web/src/components/admin/）：
+- `UsersPane`（成员列表/角色/视角预览/账号弹窗/配额/导出/踢下线/停用删除，
+  弹窗状态随行内聚）、`InvitesPane`（建码/复制/撤销）、`GrantsPane`
+  （批量授权表单/成员筛选/撤销）。
+- 数据仍由父组件集中加载（users/invites/grants/dirOptions），保持"切页签
+  不重新请求"的原行为；各页签变更后 emit('refresh') 回连父级 loadAll。
+- 门禁：vue-tsc 0 错 + build 绿；浏览器实测三页签渲染与交互正常
+  （成员 4 行/邀请按钮/授权批量表单+目录选项，截图留证）。
+
 ## 2026-09-11 — Web v3.48：api.ts 按域拆模块（门面保兼容，纯重构）
 
 07 审查重构小尾巴：462 行的 api.ts 拆成 api/ 目录九个文件，**调用方 25 个
