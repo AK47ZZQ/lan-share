@@ -5,6 +5,12 @@ import 'package:dio/dio.dart';
 
 import 'api_client.dart';
 
+/// 文件超过大小上限（doc_viewer 预检用；UI 据此提示"先下载后再打开"）
+class FileTooLarge implements Exception {
+  final int limit;
+  FileTooLarge(this.limit);
+}
+
 class FilesApi {
   FilesApi._();
   static Future<Dio> _dio() => ApiClient.I.dio();
@@ -45,6 +51,31 @@ class FilesApi {
     final dio = await _dio();
     final r = await dio.get<List<int>>('/preview/${_enc(path)}',
         options: Options(responseType: ResponseType.bytes));
+    return r.data ?? const [];
+  }
+
+  /// 带大小预检的预览下载（doc_viewer）：HEAD content-length 超过 [maxBytes]
+  /// 抛 FileTooLarge；HEAD 不被支持（405）或非 4xx 视为预检通过直接下载。
+  /// [onProgress] 透传下载进度（15 分钟 receiveTimeout，大文档渲染用）。
+  static Future<List<int>> previewChecked(String path,
+      {required int maxBytes, void Function(int, int)? onProgress}) async {
+    final dio = await _dio();
+    final enc = _enc(path);
+    try {
+      final head = await dio.head('/preview/$enc');
+      final cl = head.headers.value('content-length');
+      if (cl != null && int.tryParse(cl) != null && int.parse(cl) > maxBytes) {
+        throw FileTooLarge(maxBytes);
+      }
+    } on DioException catch (e) {
+      if (e.error is FileTooLarge) rethrow;
+      final st = e.response?.statusCode;
+      if (st != null && st >= 400 && st != 405) rethrow;
+    }
+    final r = await dio.get<List<int>>('/preview/$enc',
+        options: Options(responseType: ResponseType.bytes,
+            receiveTimeout: const Duration(minutes: 15)),
+        onReceiveProgress: onProgress);
     return r.data ?? const [];
   }
 

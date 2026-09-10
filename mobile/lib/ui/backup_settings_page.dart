@@ -13,7 +13,8 @@ import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
 import '../backup/backup_round.dart';
 import '../backup/media_source.dart';
-import '../data/api/api_client.dart';
+import '../data/api/api_client.dart'; // verify-password（x-login-flow 特化）暂留 UI，T7 收编留账
+import '../data/api/files_api.dart';
 import '../data/api/purge.dart' show purgeServerFiles;
 import '../state/session.dart';
 import '../transfer/transfer_task.dart' show humanSize;
@@ -1381,13 +1382,12 @@ class _ServerAlbumsPageState extends ConsumerState<ServerAlbumsPage> {
           username.contains(r'\') || username.contains('..')) {
         throw Exception('用户名异常');
       }
-      final dio = await ApiClient.I.dio();
       final out = <_ServerAlbum>[];
       for (final e in const [('image', '照片'), ('video', '视频')]) {
         try {
           final seg = '${e.$2}/${Uri.encodeComponent(username)}';
-          final r = await dio.get('/api/files/$seg');
-          for (final it in (r.data['items'] as List? ?? const [])) {
+          final items = await FilesApi.listDir(seg);
+          for (final it in items) {
             final m = it as Map;
             if (m['is_dir'] != true) continue;
             out.add(_ServerAlbum(
@@ -1434,8 +1434,7 @@ class _ServerAlbumsPageState extends ConsumerState<ServerAlbumsPage> {
     if (ok != true || !mounted) return;
     setState(() => _deleting = a.path);
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.delete('/api/files/${a.path.split("/").map(Uri.encodeComponent).join("/")}');
+      await FilesApi.delete(a.path);
       // 账本同步清理：该相册的全部备份记录（done/missing 等）一并移除，
       // 否则"已备份 N 项"与实际不符、重开备份又会秒传重建目录
       try {

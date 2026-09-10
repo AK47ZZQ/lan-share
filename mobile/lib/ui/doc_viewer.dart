@@ -11,14 +11,13 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/files_api.dart';
 import 'doc_extract.dart';
 import 'notes_page.dart';
 import 'rich_note_editor.dart';
@@ -129,28 +128,17 @@ class _DocViewerPageState extends State<DocViewerPage> {
   }
 
   Future<List<int>> _fetch({required int limit, void Function(int, int?)? onProgress}) async {
-    final dio = await ApiClient.I.dio();
-    final enc = _enc(widget.path);
     // 走 /preview/ 而非 /files/（v0.17.2）：Caddy 对 /files/* 挂了
     // forward_auth→/authcheck，而 authcheck 只查 Cookie 会话不认 App 的
     // Bearer——App 侧 /files 恒 401（还触发拦截器登出）。/preview 对
     // 非图片直接回 FileResponse，且走正常反代（下载引擎同款通道）。
+    // HEAD 大小预检/15 分钟超时/进度透传已收进 data 层（T7 第四批）。
     try {
-      final head = await dio.head('/preview/$enc');
-      final cl = head.headers.value('content-length');
-      if (cl != null && int.tryParse(cl) != null && int.parse(cl) > limit) {
-        throw _TooLarge(limit);
-      }
-    } on DioException catch (e) {
-      if (e.error is _TooLarge) rethrow;
-      final st = e.response?.statusCode;
-      if (st != null && st >= 400 && st != 405) rethrow;
+      return await FilesApi.previewChecked(widget.path,
+          maxBytes: limit, onProgress: onProgress);
+    } on FileTooLarge {
+      throw _TooLarge(limit);
     }
-    final r = await dio.get<List<int>>('/preview/$enc',
-        options: Options(responseType: ResponseType.bytes,
-            receiveTimeout: const Duration(minutes: 15)),
-        onReceiveProgress: onProgress);
-    return r.data ?? const [];
   }
 
   Future<String> _toTempFile(List<int> bytes, String suffix) async {
@@ -282,15 +270,10 @@ class _DocViewerPageState extends State<DocViewerPage> {
               SnackBar(content: Text('系统没有能打开这类文件的应用')));
         }
       }
-    } on DioException catch (e) {
-      if (e.error is _TooLarge) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              content: Text('文件超过 100MB，请先下载后再打开')));
-        }
-      } else if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('打开失败，请稍后重试')));
+    } on _TooLarge {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('文件超过 100MB，请先下载后再打开')));
       }
     } catch (_) {
       if (mounted) {
@@ -301,8 +284,6 @@ class _DocViewerPageState extends State<DocViewerPage> {
       if (mounted) setState(() => _openingExternal = false);
     }
   }
-
-  String _enc(String p) => p.split('/').map(Uri.encodeComponent).join('/');
 
   // ── 渲染壳 ──────────────────────────────────────────────
 

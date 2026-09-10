@@ -7,15 +7,14 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:dio/dio.dart' show Options, ResponseType;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
 
-import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
+import '../data/api/files_api.dart';
 import '../data/api/media_proxy.dart';
 import '../data/api/purge.dart';
 import '../data/local/gallery_saver.dart';
@@ -300,14 +299,12 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('正在下载原图…'), duration: Duration(seconds: 2)));
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get<List<int>>('/preview/${encPath(it.path)}',
-          options: Options(responseType: ResponseType.bytes));
+      final bytes = await FilesApi.previewBytes(it.path);
       final tmp = File(
           '${(await getTemporaryDirectory()).path}'
           '/lanshare-viewer-${DateTime.now().millisecondsSinceEpoch}'
           '${it.name.contains('.') ? it.name.substring(it.name.lastIndexOf('.')) : ''}');
-      await tmp.writeAsBytes(r.data ?? const [], flush: true);
+      await tmp.writeAsBytes(bytes, flush: true);
       final err = await GallerySaver.save(tmp.path, isVideo: it.isVideo);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
