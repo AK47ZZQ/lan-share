@@ -144,12 +144,22 @@ def admin_duplicates(_admin=Depends(require_admin),
 
 
 @router.get("/api/admin/audit")
-def admin_audit(_admin=Depends(require_admin), limit: int = Query(100, ge=1, le=500)):
-    """审计日志近况（audit_log 自带 AUDIT_KEEP 水位）。"""
+def admin_audit(_admin=Depends(require_admin), limit: int = Query(100, ge=1, le=500),
+                action: str = Query("", max_length=64)):
+    """审计日志近况（audit_log 自带 AUDIT_KEEP 水位）。
+
+    action 非空时按前缀筛选（如 login → login/login_fail/login_locked；
+    share → share_download 等），响应带 actions（现存 DISTINCT 动作全集，
+    表受 AUDIT_KEEP 水位约束不无限涨）供前端下拉。"""
+    acts = sorted({r["action"] for r in
+                   _db().execute("SELECT DISTINCT action FROM audit_log").fetchall()})
+    where, args = "", []
+    if action:
+        where, args = " WHERE action LIKE ?", [action.replace("%", "") + "%"]
     rows = _db().execute(
-        "SELECT ts, ip, action, target, detail, username FROM audit_log "
-        "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-    return {"items": [dict(r) for r in rows]}
+        "SELECT ts, ip, action, target, detail, username FROM audit_log" + where +
+        " ORDER BY id DESC LIMIT ?", (*args, limit)).fetchall()
+    return {"items": [dict(r) for r in rows], "actions": acts}
 
 
 @router.get("/api/admin/sessions")

@@ -102,6 +102,12 @@ def test_audit_returns_recent_entries(auth):
     top = j["items"][0]
     for k in ("ts", "ip", "action", "target", "detail", "username"):
         assert k in top
+    # v3.47 类型筛选：actions 全集 + 前缀筛选命中行全部以该前缀开头
+    assert isinstance(j["actions"], list) and j["actions"]
+    j2 = auth.get("/api/admin/audit",
+                  params={"limit": 100, "action": j["actions"][0].split("_")[0]}).json()
+    prefix = j["actions"][0].split("_")[0]
+    assert all(row["action"].startswith(prefix) for row in j2["items"])
 
 
 # ── 会话与设备治理 ────────────────────────────────────────────

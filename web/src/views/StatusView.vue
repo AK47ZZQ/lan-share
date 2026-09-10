@@ -10,6 +10,8 @@ const ov = ref<ConsoleOverview | null>(null)
 const audits = ref<AuditItem[]>([])
 const auditOpen = ref(false)
 const auditBusy = ref(false)
+const auditAction = ref('')
+const auditActions = ref<string[]>([])
 
 async function loadAll() {
   try { ov.value = await api.adminOverview() } catch (e) { err.value = (e as Error).message }
@@ -18,7 +20,11 @@ async function loadAll() {
 }
 async function loadAudit() {
   auditOpen.value = true; auditBusy.value = true
-  try { audits.value = (await api.auditLog(80)).items } catch (e) { toastErr((e as Error).message) } finally { auditBusy.value = false }
+  try {
+    const r = await api.auditLog(80, auditAction.value)
+    audits.value = r.items
+    auditActions.value = r.actions   // 全集（不随筛选变化），供下拉
+  } catch (e) { toastErr((e as Error).message) } finally { auditBusy.value = false }
 }
 function toastErr(msg: string) { err.value = msg }
 
@@ -61,10 +67,14 @@ onMounted(loadAll)
         <div style="font-size:13.5px;font-weight:600">📜 审计日志</div>
         <span style="font-size:12px;color:var(--text-3)">登录/分享/删除/吊销等操作留痕（最近 80 条）</span>
         <div style="flex:1" />
+        <select v-model="auditAction" style="font-size:13px" @change="loadAudit">
+          <option value="">全部类型</option>
+          <option v-for="a in auditActions" :key="a" :value="a">{{ a }}</option>
+        </select>
         <button class="btn ghost sm" :disabled="auditBusy" @click="loadAudit">{{ auditOpen ? '刷新' : '查看' }}</button>
       </div>
       <template v-if="auditOpen">
-        <div v-if="!audits.length" class="empty">暂无记录</div>
+        <div v-if="!audits.length" class="empty">{{ auditAction ? '该类型暂无记录' : '暂无记录' }}</div>
         <div v-for="(a, i) in audits" :key="i" class="act-row">
           <span class="act-time">{{ fmtTs(a.ts) }}</span>
           <span class="act-text">

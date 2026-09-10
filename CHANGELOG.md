@@ -2,6 +2,20 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — v3.47：操作审计按类型筛选（/api/admin/audit + 运行状态页）
+
+v3.39 方向内已批准候选③。在现有审计数据上加筛选，不动表结构与留痕逻辑：
+- **服务端**：GET /api/admin/audit 新增 `action` 查询参数（前缀匹配，
+  如 login → login/login_fail/login_locked）；响应新增 `actions` 字段
+  （audit_log 现存 DISTINCT 动作全集，受 AUDIT_KEEP 水位约束）供下拉。
+  **契约有意变更**：contracts/openapi.json 已重导出（仍 130 路径，
+  变化在该端点参数与响应 schema）。
+- **Web**：运行状态页审计卡加"全部类型"下拉（63 种动作），切换即带参
+  重查；空结果提示"该类型暂无记录"。
+- 门禁：ruff/mypy 绿 / pytest 220（含新筛选断言 + 契约快照）/ build 绿；
+  重启后线上核验（login 筛选 50 条全前缀命中）；浏览器实测下拉筛选
+  80 行全为 login*（截图留证）。
+
 ## 2026-09-11 — Web v3.46：总览页 45s 自动轮询（页签不可见即暂停）
 
 v3.39 方向内已批准候选②：站长把总览挂在大屏/常开页签上也能看到新数据。

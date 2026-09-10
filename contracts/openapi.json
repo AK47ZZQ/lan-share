@@ -1103,7 +1103,7 @@
   },
   "/api/admin/audit": {
    "get": {
-    "description": "审计日志近况（audit_log 自带 AUDIT_KEEP 水位）。",
+    "description": "审计日志近况（audit_log 自带 AUDIT_KEEP 水位）。\n\naction 非空时按前缀筛选（如 login → login/login_fail/login_locked；\nshare → share_download 等），响应带 actions（现存 DISTINCT 动作全集，\n表受 AUDIT_KEEP 水位约束不无限涨）供前端下拉。",
     "operationId": "admin_audit_api_admin_audit_get",
     "parameters": [
      {
@@ -1116,6 +1116,17 @@
        "minimum": 1,
        "title": "Limit",
        "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "action",
+      "required": false,
+      "schema": {
+       "default": "",
+       "maxLength": 64,
+       "title": "Action",
+       "type": "string"
       }
      }
     ],

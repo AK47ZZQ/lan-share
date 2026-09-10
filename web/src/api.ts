@@ -134,7 +134,7 @@ export const api = {
   adminOverview: () => fetch('/api/admin/overview').then(r => handle<ConsoleOverview>(r)),
   largeFiles: (limit = 50) => fetch(`/api/admin/large-files?limit=${limit}`).then(r => handle<{ items: LargeFileItem[]; total_files: number; total_size: number }>(r)),
   duplicates: (minSize: number, limit = 50) => fetch(`/api/admin/duplicates?min_size=${minSize}&limit=${limit}`).then(r => handle<{ groups: DupGroup[]; group_count: number }>(r)),
-  auditLog: (limit = 100) => fetch(`/api/admin/audit?limit=${limit}`).then(r => handle<{ items: AuditItem[] }>(r)),
+  auditLog: (limit = 100, action = '') => fetch(`/api/admin/audit?limit=${limit}${action ? `&action=${encodeURIComponent(action)}` : ''}`).then(r => handle<{ items: AuditItem[]; actions: string[] }>(r)),
   adminSessions: () => fetch('/api/admin/sessions').then(r => handle<{ items: AdminSession[] }>(r)),
   revokeAdminSession: (tokenHash: string) => fetch(`/api/admin/sessions/${encodeURIComponent(tokenHash)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   adminDevices: () => fetch('/api/admin/devices').then(r => handle<{ items: AdminDevice[] }>(r)),
