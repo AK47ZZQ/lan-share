@@ -10,6 +10,7 @@ import ShareView from './views/ShareView.vue'
 import UpView from './views/UpView.vue'
 import ActivityView from './views/ActivityView.vue'
 import NotifyOpsView from './views/NotifyOpsView.vue'
+import ShareOpsView from './views/ShareOpsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import GovernanceView from './views/GovernanceView.vue'
 import StatusView from './views/StatusView.vue'
@@ -30,6 +31,7 @@ export const router = createRouter({
     { path: '/activity', name: 'activity', component: ActivityView },
     { path: '/admin', name: 'admin', component: AdminView, meta: { admin: true } },
     { path: '/notify-ops', name: 'notify-ops', component: NotifyOpsView, meta: { admin: true } },
+    { path: '/share-ops', name: 'share-ops', component: ShareOpsView, meta: { admin: true } },
     { path: '/settings', name: 'settings', component: SettingsView, meta: { admin: true } },
     { path: '/governance', name: 'governance', component: GovernanceView, meta: { admin: true } },
     { path: '/status', name: 'status', component: StatusView, meta: { admin: true } },
