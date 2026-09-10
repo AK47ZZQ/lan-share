@@ -1286,6 +1286,16 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 size: 44)));
   }
 
+  /// 复制所选条目的服务器真实路径（abs_path 优先，旧服务端回退逻辑路径）；
+  /// 多选每行一条，方便批量交给脚本/Agent 处理。文件夹同样适用。
+  Future<void> _copySelectedPaths() async {
+    final entries = _selectedEntries;
+    final text = entries.map((e) => e.absPath ?? '/${e.path}').join('\n');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    _toast(entries.length > 1 ? '已复制 ${entries.length} 个路径' : '已复制路径');
+  }
+
   Widget _selectionBar(bool canManage) {
     final entries = _selectedEntries;
     final multi = entries.length > 1;
@@ -1305,6 +1315,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     _op(Icons.download_outlined, '下载', _downloadSelected),
                   if (multi)
                     _op(Icons.folder_zip_outlined, '打包', _zipSelected),
+                  _op(Icons.terminal, '复制路径', () => _copySelectedPaths()),
                   if (!multi && hasFile && canManage)
                     _op(Icons.link_outlined, '分享', _shareSingle),
                   if (canManage)
