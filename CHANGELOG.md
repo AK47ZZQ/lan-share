@@ -2,6 +2,25 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — 服务端 v3.43：auth.py 按域拆路由（纯重构，契约零变更）
+
+07 审查报告重构小尾巴第 1 项：793 行的 auth.py 按端点自然域拆成五个
+APIRouter 模块，挂载方式对齐 api/ 既有结构（main.py 统一 include）：
+- **auth.py（会话域）**：state/setup/login/logout/authcheck/me/verify-password
+  + 会话助手（set_session_cookie、login_gate、uid 公共化供兄弟模块引用）。
+- **totp.py**：/api/login/totp + /api/auth/totp/*（开通/恢复码/关闭）。
+- **profile.py**：昵称/头像三端点（.avatars 目录管理随行）。
+- **account.py**：改密/改用户名/WebDAV 独立密码（防爆破锁定策略原样保留）。
+- **devices.py**：设备 Token 三端点 + 配对码两端点（reset_pair_codes 随迁）。
+- 顺手归位：SharePrepareBody 从 auth.py 移回真正的主人 share.py
+  （模型 docstring 会进 OpenAPI description，用普通注释防契约漂移）。
+- 路径/行为/契约快照 100% 不变；test_contract 钉死。测试引用同步：
+  conftest reset_pair_codes→devices、test_paircode→devices、
+  test_totprc→totp。
+- 门禁：ruff/mypy 41 文件全绿 / pytest 220（SQLite）/ 契约快照一致；
+  重启后 debug 会话线上冒烟 login/state/me/devices/webdav-password/
+  totp setup/pair code 全通。
+
 ## 2026-09-11 — 服务端 v3.42：反馈看板（目录即状态，定位零通读）
 
 主人提出：反馈多起来后，逐条通读才能分辨"做完/待做"太费时间。头脑风暴定稿：

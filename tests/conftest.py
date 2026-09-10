@@ -49,7 +49,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.api import auth as _auth, photos as _photos, share as _share  # noqa: E402
-from app.api import webdav as _webdav  # noqa: E402
+from app.api import webdav as _webdav, devices as _devices  # noqa: E402
 from app.security import reset_auth_gates  # noqa: E402
 
 ADMIN_USER = "admin"
@@ -73,13 +73,13 @@ def client():
 def _reset_in_memory_state():
     reset_auth_gates()
     _share.reset_share_state()
-    _auth.reset_pair_codes()
+    _devices.reset_pair_codes()
     _photos.reset_scan_throttle()
     _webdav.reset_dav_locks()
     yield
     reset_auth_gates()
     _share.reset_share_state()
-    _auth.reset_pair_codes()
+    _devices.reset_pair_codes()
     _webdav.reset_dav_locks()
 
 

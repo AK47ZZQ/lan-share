@@ -24,8 +24,10 @@ from app.api import uploads, trash, previews          # files 按域拆出（07 
 from app.api import photos, albums, qr                # system 按域拆出（07 批次 3B）
 from app.api import console                           # 管理台（v3.39 Web 控制台）
 from app.api import feedback                          # 反馈通道（v0.28）
+from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
 
-for _mod in (admin, appver, auth, files, uploads, trash, previews, share,
+for _mod in (admin, appver, auth, totp, profile, account, devices, files,
+             uploads, trash, previews, share,
              webdav, system, notify, healthreport, photos, albums, qr, notes,
              console, feedback):
     app.include_router(_mod.router)

@@ -28,11 +28,16 @@ from app.api.qr import qr_svg_response
 from app.services import cleanup
 from app.spaces import resolve
 from app.store import users as users_store
-from app.api.auth import SharePrepareBody
 from app.api.notify import insert_notification, push_webhook
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装（07 审查批次 2 消循环）
 router = APIRouter()
+
+
+class SharePrepareBody(BaseModel):
+    # 创建分享前校验密码（原在 auth.py，随 07 小尾巴拆分归位分享域）；
+    # 注释不用 docstring——pydantic 会把它带进 OpenAPI description，契约就漂了
+    password: Optional[str] = None
 
 
 @router.post("/api/share")

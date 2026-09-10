@@ -12,7 +12,7 @@ from conftest import ADMIN_PASS, ADMIN_USER
 
 from app.db import _db
 from app.main import app
-import app.api.auth as _auth
+import app.api.devices as _devices
 
 
 @pytest.fixture()
@@ -70,7 +70,7 @@ def test_pair_code_expiry(client):
     admin = _admin(client)
     code = admin.post("/api/pair/code").json()["code"]
     # 手工置过期（不改产品行为，白盒拨时钟）
-    _auth._pair_codes[code] = (_auth._pair_codes[code][0], time.time() - 1)
+    _devices._pair_codes[code] = (_devices._pair_codes[code][0], time.time() - 1)
     assert _bare(client).post("/api/pair/claim",
                               json={"code": code}).status_code == 401
 

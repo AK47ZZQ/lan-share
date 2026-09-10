@@ -11,7 +11,7 @@ from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
 
 from app.db import _db, _db_lock
 from app.main import app
-import app.api.auth as _auth
+import app.api.totp as _totp
 
 
 @pytest.fixture(autouse=True)
@@ -62,13 +62,13 @@ def test_enable_returns_ten_unique_hashes_not_plaintext(client):
     admin = _admin(client)
     _, codes = _enable(admin, ADMIN_USER, ADMIN_PASS)
     assert len(codes) == 10 and len(set(codes)) == 10
-    assert all(_auth._RC_RE.match(c) for c in codes)
+    assert all(_totp._RC_RE.match(c) for c in codes)
     # 库内只存 SHA256：明文不入库，哈希可对上
     row = _db().execute(
         "SELECT totp_rc FROM users WHERE username=?", (ADMIN_USER,)).fetchone()
     stored = json.loads(row["totp_rc"])
     assert codes[0] not in stored and len(stored) == 10
-    assert _auth._rc_hash(codes[0]) in stored
+    assert _totp._rc_hash(codes[0]) in stored
     # me 暴露剩余数
     assert admin.get("/api/auth/me").json()["totp_rc_left"] == 10
 
