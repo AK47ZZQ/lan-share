@@ -5,7 +5,7 @@
 //   悬停高亮一跳邻居 / 搜索定位脉冲 / 适配视图
 // · 节点落点：FileViewer 预览（双链点击经 kbOpen 事件在页内跳转）
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api, type KbGraphData, type KbName, type KbNode, type Me } from '../api'
+import { api, type KbContext, type KbGraphData, type KbName, type KbNode, type Me } from '../api'
 import { categoryHue, resolveKbTarget } from '../kb'
 import DirPicker from '../components/DirPicker.vue'
 import FileViewer, { type ViewerItem } from '../components/FileViewer.vue'
@@ -38,6 +38,33 @@ const showFilter = ref(false)
 interface BlItem { path: string; name: string; excerpt?: string; ghost: boolean }
 const bl = ref<{ backlinks: BlItem[]; outgoing: BlItem[] } | null>(null)
 const blLoading = ref(false)
+// v0.25 点按=显示内容：选中笔记节点拉 /api/kb/context（正文头 + abs_path）
+const kbCtx = ref<KbContext | null>(null)
+const ctxLoading = ref(false)
+async function loadCtx() {
+  const n = selected.value
+  if (!n || n.ghost || n.external || n.kind === 'folder' || !n.path) { kbCtx.value = null; return }
+  ctxLoading.value = true
+  try { kbCtx.value = await api.kbContext(root.value, n.path) } catch { kbCtx.value = null } finally { ctxLoading.value = false }
+}
+const ctxExcerpt = computed(() => {
+  const c = kbCtx.value?.note.content ?? ''
+  return c.length > 320 ? c.slice(0, 320) + '…' : c
+})
+/** 分类枢纽的直属成员（含子分类下的笔记，按名排序） */
+function folderChildren(f: KbNode): KbNode[] {
+  return (graph.value?.nodes ?? [])
+    .filter(m => m.kind !== 'folder' && !m.ghost &&
+      (m.category === f.path || m.category.startsWith(f.path + '/')))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+/** 点分类枢纽 → 只看该分类（复用分类过滤器） */
+function pickFolder(f: KbNode) {
+  fCategory.value = f.path
+  selectedId.value = null
+  fitView()
+  scheduleDraw()
+}
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 let ctx: CanvasRenderingContext2D | null = null
@@ -93,11 +120,13 @@ const filterOn = computed(() =>
 const hueColor = (hue: number): string => `hsl(${hue} 55% 58%)`
 
 function nodeColor(n: KbNode): string {
+  if (n.kind === 'folder') return 'var(--accent)'
   if (n.ghost) return 'rgba(128,128,140,0.5)'
   if (n.external) return 'var(--accent-2)'
   return hueColor(categoryHue(n.category))
 }
 function nodeRadius(n: KbNode): number {
+  if (n.kind === 'folder') return 11
   if (n.ghost) return 7
   if (n.external) return 6
   return 8 + Math.min(8, (n.out + n.ind) * 1.2)
@@ -454,7 +483,7 @@ onMounted(() => {
   window.addEventListener('resize', scheduleDraw)
   load()
 })
-watch(selectedId, () => { bl.value = null })
+watch(selectedId, () => { bl.value = null; loadCtx() })
 onBeforeUnmount(() => {
   const cv = canvasRef.value
   if (cv) cv.removeEventListener('wheel', onWheel)
@@ -526,7 +555,10 @@ watch(root, () => load())
         <span class="flex1" />
         <button class="btn sm ghost" @click="selectedId = null">✕</button>
       </div>
-      <div class="kb-meta">
+      <div v-if="selected.kind === 'folder'" class="kb-meta">
+        分类 · {{ selected.count }} 篇（含子分类） · {{ selected.path }}
+      </div>
+      <div v-else class="kb-meta">
         度 {{ selected.out + selected.ind }}（入 {{ selected.ind }} / 出 {{ selected.out }}）
         {{ selected.category ? ' · ' + selected.category : '' }}
         {{ selected.ghost ? ' · 幽灵（未创建）' : '' }}
@@ -535,10 +567,30 @@ watch(root, () => load())
       <div v-if="selected.tags.length" class="kb-meta">
         <span v-for="t in selected.tags" :key="t" class="kb-tag">#{{ t }}</span>
       </div>
-      <p v-if="selected.summary" class="kb-summary">{{ selected.summary }}</p>
+      <!-- v0.25 点按=显示内容：分类给成员清单，笔记给正文预览 -->
+      <div v-if="selected.kind === 'folder'" class="kb-bl">
+        <div v-if="folderChildren(selected).length" class="kb-bl">
+          <button v-for="c in folderChildren(selected).slice(0, 8)" :key="c.id"
+                  class="kb-bl-item" @click="selectedId = c.id">
+            <strong>{{ c.name }}</strong>
+            <span v-if="c.summary" class="kb-bl-ex">{{ c.summary.slice(0, 60) }}</span>
+          </button>
+          <div v-if="folderChildren(selected).length > 8" class="kb-meta">
+            …共 {{ selected.count }} 篇
+          </div>
+        </div>
+        <div v-else class="kb-meta">空分类——还没有笔记。</div>
+      </div>
+      <p v-else-if="ctxLoading" class="kb-meta">加载内容…</p>
+      <p v-else-if="ctxExcerpt" class="kb-summary">{{ ctxExcerpt }}</p>
+      <p v-else-if="selected.summary" class="kb-summary">{{ selected.summary }}</p>
       <div class="kb-actions">
-        <button v-if="!bl" class="btn sm ghost" :disabled="blLoading" @click="loadBacklinks">
+        <button v-if="selected.kind !== 'folder' && !selected.ghost && !bl"
+                class="btn sm ghost" :disabled="blLoading" @click="loadBacklinks">
           {{ blLoading ? '加载中…' : '反链' }}
+        </button>
+        <button v-if="selected.kind === 'folder'" class="btn sm" @click="pickFolder(selected)">
+          只看该分类
         </button>
         <button v-if="!selected.ghost && selected.path" class="btn sm" @click="openNode(selected)">打开</button>
       </div>

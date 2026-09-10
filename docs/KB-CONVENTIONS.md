@@ -87,3 +87,17 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 3. 写入：双链写 `[[文件名（不含扩展名）|别名]]`；文件名即节点名；
    新笔记建议补 frontmatter（App 保存会自动维护 created/updated）。
 4. 幽灵节点代表计划中的笔记；为 ghost 建内容 = 新建同名文件即可。
+
+
+## v3.37 增量：分类枢纽节点（folder hubs）
+
+- `GET /api/kb/graph` 响应新增：
+  - `nodes[]` 中 `kind: "folder"` 的节点（`id: "folder:<分类路径>"`、
+    `path: <分类路径>`、`count: 后代笔记数`）——**含空分类**；
+  - 顶层 `folders[]`（同数据的扁平清单，便于渲染分类侧栏）。
+- **边语义不变**：`edges` 仍只含 `[[知识链接]]`；目录归属**不在 edges 里**
+  （客户端按 `note.category` 自行把笔记归到枢纽下绘制）。度数/孤岛/反链的
+  口径全部维持"知识链接"，未被目录归属污染。
+- `GET /api/kb/context` 的 `note` 新增 `abs_path`（服务器真实存储路径）。
+- 失效指纹已纳入**目录**：空分类的建/删/改名会触发重建。
+- 可见性：非空枢纽随"任一后代可见"可见；空枢纽按目录物理归属过 `visible()`。

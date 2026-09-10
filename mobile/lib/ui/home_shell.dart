@@ -1,5 +1,7 @@
-// 主壳：底部导航（首页/照片/文件/传输/我的）。0.4.2 起首页为综合面板，
+// 主壳：底部导航（首页/照片/文件/笔记/我的）。0.4.2 起首页为综合面板，
 // 打开 App 先看概览不再直落照片墙。
+// v0.25：笔记升级为一级页签（知识库成为主功能），传输降级为"我的"页入口
+//（传输是传输态而非目的地，底栏给更高频的笔记；传输页仍可从首页/文件页/我的进入）。
 // M-A4：接管系统分享接收——冷启动/热分享统一在壳层消费（只有登录后才有壳）。
 // 0.6.0：应用锁——冷启动/切回 App 需指纹或面部解锁；解不开可用"退出登录"
 //        逃生（密码重登），不会永久锁死。
@@ -17,6 +19,7 @@ import '../state/session.dart';
 import '../state/settings.dart';
 import 'files_page.dart';
 import 'home_page.dart';
+import 'notes_page.dart';
 import 'me_page.dart';
 import 'photos_page.dart';
 import 'transfers_page.dart';
@@ -31,6 +34,13 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserver {
   int _tab = 0;
   bool _consuming = false; // 分享消费互斥（incoming 推送与 initState 拉取并发）
+
+  /// 传输页（v0.25 起不再是底栏页签）：统一从这里 push，
+  /// 首页传输卡/文件页传输入口/"我的"页宫格三处共用。
+  void _openTransfers() {
+    Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const TransfersPage()));
+  }
   final LockGate _lockGate = LockGate(); // 生命周期→落锁判定（单测覆盖）
 
   @override
@@ -155,15 +165,16 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: _tab == 0 ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       child: Scaffold(
+      // 传输页改走 Navigator.push（不再占底栏页签）——保留原页面与全部功能
       body: IndexedStack(index: _tab, children: [
         HomePage(
             onGoPhotos: () => setState(() => _tab = 1),
             onGoFiles: () => setState(() => _tab = 2),
-            onGoTransfers: () => setState(() => _tab = 3),
+            onGoTransfers: _openTransfers,
             onGoMe: () => setState(() => _tab = 4)),
         PhotosPage(onGoFiles: () => setState(() => _tab = 2)),
-        FilesPage(onGoTransfers: () => setState(() => _tab = 3)),
-        const TransfersPage(),
+        FilesPage(onGoTransfers: _openTransfers),
+        const NotesPage(),
         MePage(onGoFiles: () => setState(() => _tab = 2)),
       ]),
       bottomNavigationBar: NavigationBar(
@@ -176,8 +187,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
               selectedIcon: Icon(Icons.photo), label: '照片'),
           NavigationDestination(icon: Icon(Icons.folder_outlined),
               selectedIcon: Icon(Icons.folder), label: '文件'),
-          NavigationDestination(icon: Icon(Icons.swap_vert_circle_outlined),
-              selectedIcon: Icon(Icons.swap_vert_circle), label: '传输'),
+          NavigationDestination(icon: Icon(Icons.edit_note_outlined),
+              selectedIcon: Icon(Icons.edit_note), label: '笔记'),
           NavigationDestination(icon: Icon(Icons.person_outline),
               selectedIcon: Icon(Icons.person), label: '我的'),
         ],

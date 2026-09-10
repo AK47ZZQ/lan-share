@@ -63,10 +63,23 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
         raise HTTPException(status_code=404, detail="笔记目录不存在")
     needle = q.strip().lower()
     items: list[dict[str, object]] = []
+    dirs: set[str] = set()      # 分类目录（相对笔记根，正斜杠；含**空目录**）
     for p in base.rglob("*"):
         if len(items) >= MAX_NOTES:
             break
+        rel = p.relative_to(base).as_posix()
         try:
+            if p.is_dir():
+                # 分类目录单独收集（v3.37）：此前分类树只从笔记的 category 字段
+                # 聚合——**空分类没有任何笔记，侧栏永远看不到**（实测踩到：
+                # 新建分类成功、文件夹也在，笔记侧栏却"没反应"）。
+                if rel in ("", "."):
+                    continue
+                if p.name.startswith(".") or any(
+                        part.startswith(".") for part in p.relative_to(base).parts):
+                    continue
+                dirs.add(rel)
+                continue
             if not p.is_file() or p.suffix.lower() not in NOTE_EXTS:
                 continue
             stat = p.stat()
@@ -80,7 +93,6 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
         if not visible(_user, share_rel.parts):
             continue
         # 分类 = 笔记目录下相对子路径（''=根/未分类），正斜杠
-        rel = p.relative_to(base).as_posix()
         category = rel.rsplit("/", 1)[0] if "/" in rel else ""
         summary = _summary_of(p, p.suffix.lower())
         if needle and needle not in p.name.lower() and needle not in summary.lower():
@@ -95,6 +107,21 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
             "mtime": stat.st_mtime,
             "ctime": stat.st_ctime,
             "summary": summary,
+            # 服务器真实存储路径（v3.37，与 files 列表同语义）：手机端"复制路径"
+            # 用——跨端与台式 Agent 沟通时直接给绝对路径
+            "abs_path": str(p).replace("\\", "/"),
+        })
+    # 分类清单：路径 + 名称 + **后代笔记数**（含空分类，count=0）。
+    # 空分类也下发是本次修复的核心：客户端分类树按"有笔记"聚合会漏掉新建的空分类。
+    categories = []
+    for d in sorted(dirs):
+        cnt = sum(1 for it in items
+                  if str(it["category"]) == d
+                  or str(it["category"]).startswith(f"{d}/"))
+        categories.append({
+            "path": d,
+            "name": d.rsplit("/", 1)[-1],
+            "count": cnt,
         })
     if sort == "name":
         items.sort(key=lambda i: str(i["name"]).lower())
@@ -103,4 +130,4 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
     else:
         items.sort(key=lambda i: -cast(float, i["mtime"]))
     # mtime/ctime（秒级 double）保留下发：客户端本地过滤/置顶后需要重排
-    return {"total": len(items), "items": items}
+    return {"total": len(items), "items": items, "categories": categories}

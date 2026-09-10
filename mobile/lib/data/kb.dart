@@ -5,7 +5,8 @@ import 'dart:math' as math;
 /// 图谱节点（/api/kb/graph 的 nodes 项）
 class KbNode {
   final String id;
-  final String path; // SHARE_ROOT 相对路径；ghost 为空串
+  final String path; // SHARE_ROOT 相对路径；ghost 为空串；folder=分类路径
+  final String kind; // ''=笔记 'folder'=分类枢纽（v0.25）
   final String name;
   final String category; // 相对图谱根的父目录，''=根
   final List<String> tags;
@@ -16,10 +17,12 @@ class KbNode {
   final bool external;
   final bool orphan;
   final String summary;
+  final int count; // folder：后代笔记数
   double x;
   double y;
   KbNode({
     required this.id,
+    this.kind = '',
     required this.path,
     required this.name,
     required this.category,
@@ -31,6 +34,7 @@ class KbNode {
     required this.external,
     required this.orphan,
     required this.summary,
+    this.count = 0,
     required this.x,
     required this.y,
   });
@@ -38,6 +42,8 @@ class KbNode {
   factory KbNode.fromJson(Map m) => KbNode(
         id: (m['id'] as String?) ?? '',
         path: (m['path'] as String?) ?? '',
+        kind: (m['kind'] as String?) ?? '',
+        count: (m['count'] as num?)?.toInt() ?? 0,
         name: (m['name'] as String?) ?? '',
         category: (m['category'] as String?) ?? '',
         tags: ((m['tags'] as List?) ?? const [])
@@ -56,6 +62,8 @@ class KbNode {
         y: (m['y'] as num?)?.toDouble() ?? 0,
       );
 
+  bool get isFolder => kind == 'folder';
+
   int get degree => out + ind;
 }
 
@@ -67,9 +75,38 @@ class KbEdge {
   KbEdge(this.src, this.dst, this.weight);
 }
 
+/// 分类枢纽（v0.25）：图谱响应顶层的分类清单（含空分类）。
+class KbFolder {
+  final String id; // folder:<分类路径>
+  final String path; // 分类路径（相对图谱根）
+  final String name; // 末段显示名
+  final String parent; // 父分类路径，''=根
+  final int count; // 后代笔记数（含子分类）
+  final double x, y;
+  KbFolder({
+    required this.id,
+    required this.path,
+    required this.name,
+    required this.parent,
+    required this.count,
+    required this.x,
+    required this.y,
+  });
+  factory KbFolder.fromJson(Map m) => KbFolder(
+        id: (m['id'] as String?) ?? '',
+        path: (m['path'] as String?) ?? '',
+        name: (m['name'] as String?) ?? '',
+        parent: (m['parent'] as String?) ?? '',
+        count: (m['count'] as num?)?.toInt() ?? 0,
+        x: (m['x'] as num?)?.toDouble() ?? 0,
+        y: (m['y'] as num?)?.toDouble() ?? 0,
+      );
+}
+
 class KbGraph {
   final List<KbNode> nodes;
   final List<KbEdge> edges;
+  final List<KbFolder> folders; // 分类枢纽（v0.25，含空分类）
   final int ghosts;
   final int orphans;
   final Map<String, KbNode> byId;
@@ -77,6 +114,7 @@ class KbGraph {
   KbGraph({
     required this.nodes,
     required this.edges,
+    this.folders = const [],
     required this.ghosts,
     required this.orphans,
   })  : byId = {for (final n in nodes) n.id: n},
@@ -107,10 +145,15 @@ class KbGraph {
               (e.length > 2 ? (e[2] as num?)?.toInt() : 1) ?? 1,
             ))
         .toList();
+    final folders = ((data['folders'] as List?) ?? const [])
+        .whereType<Map>()
+        .map(KbFolder.fromJson)
+        .toList();
     final stats = (data['stats'] as Map?) ?? const {};
     return KbGraph(
       nodes: nodes,
       edges: edges,
+      folders: folders,
       ghosts: (stats['ghosts'] as num?)?.toInt() ?? 0,
       orphans: (stats['orphans'] as num?)?.toInt() ?? 0,
     );
@@ -154,7 +197,7 @@ class KbFilter {
         if (category!.isEmpty) {
           if (n.category.isNotEmpty) return false;
         } else if (n.category != category! &&
-            !n.category.startsWith('$category!/')) {
+            !n.category.startsWith('$category/')) {
           return false;
         }
       }

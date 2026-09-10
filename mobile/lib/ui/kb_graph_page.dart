@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 
 import '../data/api/api_client.dart';
 import '../data/kb.dart';
+import 'doc_viewer.dart';
 import 'notes_page.dart';
 
 class KbGraphPage extends StatefulWidget {
@@ -27,6 +28,9 @@ class _KbGraphPageState extends State<KbGraphPage>
   KbGraph? _graph;
   bool _loading = true;
   String? _error;
+  // v0.25 点按=显示内容：选中笔记节点后拉 /api/kb/context（全文头 + abs_path）
+  Map<String, dynamic>? _ctx;
+  bool _ctxLoading = false;
   final _filter = KbFilter();
   String? _selectedId; // 点按选中的节点
   String? _highlightId; // 长按高亮（一跳邻居）
@@ -141,6 +145,7 @@ class _KbGraphPageState extends State<KbGraphPage>
   }
 
   Color _nodeColor(KbNode n, ColorScheme cs, Brightness bright) {
+    if (n.isFolder) return cs.primary;
     if (n.ghost) return cs.onSurface.withValues(alpha: 0.35);
     if (n.external) return cs.tertiary;
     final hue = categoryHue(n.category);
@@ -240,6 +245,30 @@ class _KbGraphPageState extends State<KbGraphPage>
       _selectedId = hit?.id;
       _highlightId = null;
     });
+    if (hit != null) _loadCtx(hit);
+  }
+
+  /// 选中笔记节点 → 拉取内容头（图谱点按即读，不再只是元数据卡片）。
+  /// 幽灵/外链/分类枢纽没有正文可拉，直接清空。
+  Future<void> _loadCtx(KbNode n) async {
+    if (n.ghost || n.external || n.isFolder || n.path.isEmpty) {
+      _ctx = null;
+      return;
+    }
+    setState(() => _ctxLoading = true);
+    try {
+      final dio = await ApiClient.I.dio();
+      final r = await dio.get('/api/kb/context',
+          queryParameters: {'path': widget.dir, 'file': n.path});
+      if (!mounted) return;
+      setState(() {
+        _ctx = (r.data as Map).cast<String, dynamic>();
+        _ctxLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() { _ctx = null; _ctxLoading = false; });
+    }
   }
 
   void _onLongPressStart(LongPressStartDetails d) {
@@ -266,6 +295,7 @@ class _KbGraphPageState extends State<KbGraphPage>
           size.height / 2 - n.y * targetScale);
     });
     _pulseCtrl.forward(from: 0);
+    _loadCtx(n);
   }
 
   Set<String> _highlightSet() {
@@ -404,11 +434,22 @@ class _KbGraphPageState extends State<KbGraphPage>
   // ── 节点卡片 / ghost 创建 ──────────────────────────────
   void _openNote(KbNode n) {
     if (n.path.isEmpty) return;
-    final seg = n.path.split('/')..removeLast();
-    final dir = seg.join('/');
-    openNoteEditor(context, dir: dir, name: n.name).then((_) {
+    // v0.25：预览优先（带格式渲染），编辑在预览页点编辑笔
+    Navigator.push(context, MaterialPageRoute(
+        builder: (_) => DocViewerPage(path: n.path, name: n.name))).then((_) {
       if (mounted) _load();
     });
+  }
+
+  /// 复制服务器真实路径（v0.25）：来自 /api/kb/context 的 abs_path，
+  /// 手机端发给台式 Agent 即可定位同一文件。
+  Future<void> _copyPath(KbNode n) async {
+    final abs = (_ctx?['note'] as Map?)?['abs_path'] as String?;
+    await Clipboard.setData(ClipboardData(
+        text: abs ?? '/${n.path.isEmpty ? widget.dir : n.path}'));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已复制服务器路径')));
   }
 
   Future<void> _createGhost(KbNode n) async {
@@ -426,6 +467,32 @@ class _KbGraphPageState extends State<KbGraphPage>
     final n = g.byId[_selectedId];
     if (n == null) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
+    final isFolder = n.isFolder;
+
+    // 分类枢纽：列出直属成员预览；笔记：正文预览（/api/kb/context）
+    List<KbNode> children = const [];
+    if (isFolder) {
+      children = g.nodes
+          .where((m) =>
+              !m.isFolder &&
+              !m.ghost &&
+              (m.category == n.path ||
+                  m.category.startsWith('${n.path}/')))
+          .toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+    }
+    final note = (_ctx?['note'] as Map?) ?? const {};
+    final content = (note['content'] as String?) ?? '';
+    final truncated = note['truncated'] == true;
+
+    final meta = isFolder
+        ? '分类 · ${n.count} 篇（含子分类）'
+        : '度 ${n.degree}（入 ${n.ind} / 出 ${n.out}）'
+            '${n.category.isEmpty ? '' : ' · ${n.category}'}'
+            '${n.ghost ? ' · 幽灵（未创建）' : ''}'
+            '${n.external ? ' · 库外笔记' : ''}'
+            '${(n.orphan && !n.ghost) ? ' · 孤岛' : ''}';
+
     return Positioned(
         left: 12,
         right: 12,
@@ -445,8 +512,8 @@ class _KbGraphPageState extends State<KbGraphPage>
                             height: 10,
                             decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color:
-                                    _nodeColor(n, cs, Theme.of(context).brightness))),
+                                color: _nodeColor(
+                                    n, cs, Theme.of(context).brightness))),
                         const SizedBox(width: 8),
                         Expanded(
                             child: Text(n.name,
@@ -461,12 +528,7 @@ class _KbGraphPageState extends State<KbGraphPage>
                             onPressed: () => setState(() => _selectedId = null)),
                       ]),
                       const SizedBox(height: 4),
-                      Text(
-                          '度 ${n.degree}（入 ${n.ind} / 出 ${n.out}）'
-                          '${n.category.isEmpty ? '' : ' · ${n.category}'}'
-                          '${n.ghost ? ' · 幽灵（未创建）' : ''}'
-                          '${n.external ? ' · 库外笔记' : ''}'
-                          '${n.orphan && !n.ghost ? ' · 孤岛' : ''}',
+                      Text(meta,
                           style: TextStyle(
                               fontSize: 11.5, color: cs.onSurfaceVariant)),
                       if (n.tags.isNotEmpty)
@@ -478,29 +540,76 @@ class _KbGraphPageState extends State<KbGraphPage>
                                     style: TextStyle(
                                         fontSize: 11, color: cs.tertiary))
                             ])),
-                      if (n.summary.isNotEmpty)
+                      // ── 内容区（v0.25 点按即读）──────────────────
+                      if (isFolder)
                         Padding(
                             padding: const EdgeInsets.only(top: 4),
-                            child: Text(n.summary,
-                                maxLines: 2,
+                            child: Text(
+                                children.isEmpty
+                                    ? '空分类——还没有笔记'
+                                    : children
+                                        .take(4)
+                                        .map((c) => '· ${c.name}')
+                                        .join('\n'),
+                                maxLines: 4,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                     fontSize: 12,
-                                    height: 1.35,
-                                    color: cs.onSurfaceVariant))),
+                                    height: 1.4,
+                                    color: cs.onSurfaceVariant)))
+                      else if (!n.ghost && !n.external)
+                        Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: _ctxLoading
+                                ? const Padding(
+                                    padding: EdgeInsets.symmetric(vertical: 6),
+                                    child: SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2)))
+                                : Text(
+                                    content.isNotEmpty
+                                        ? (truncated ? '$content…' : content)
+                                        : (n.summary.isEmpty
+                                            ? '（空笔记）'
+                                            : n.summary),
+                                    maxLines: 4,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        height: 1.4,
+                                        color: cs.onSurfaceVariant))),
                       const SizedBox(height: 8),
                       Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                        if (n.ghost)
+                        if (isFolder)
+                          FilledButton.tonalIcon(
+                              onPressed: () {
+                                _filter.category = n.path;
+                                _filter.tag = '';
+                                _filter.query = '';
+                                setState(() => _selectedId = null);
+                              },
+                              icon: const Icon(Icons.filter_alt_outlined,
+                                  size: 16),
+                              label: const Text('只看该分类'))
+                        else if (n.ghost)
                           FilledButton.tonalIcon(
                               onPressed: () => _createGhost(n),
                               icon: const Icon(Icons.add_circle_outline,
                                   size: 18),
                               label: const Text('创建这篇笔记'))
-                        else if (n.path.isNotEmpty)
+                        else if (n.path.isNotEmpty) ...[
+                          FilledButton.tonalIcon(
+                              onPressed: () => _copyPath(n),
+                              icon: const Icon(Icons.copy_outlined, size: 16),
+                              label: const Text('复制路径')),
+                          const SizedBox(width: 6),
                           FilledButton.icon(
                               onPressed: () => _openNote(n),
                               icon: const Icon(Icons.open_in_new, size: 16),
-                              label: const Text('打开'))
+                              label: const Text('打开')),
+                        ]
                       ]),
                     ]))));
   }

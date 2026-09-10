@@ -27,7 +27,6 @@ import 'notifications_page.dart';
 import 'recent_page.dart';
 import 'shares_page.dart';
 import 'storage_detail_page.dart';
-import 'notes_page.dart';
 import 'trash_page.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
@@ -821,10 +820,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                 children: [
                   _quick(Icons.photo_outlined, '照片', widget.onGoPhotos),
                   _quick(Icons.folder_outlined, '文件', widget.onGoFiles),
-                  _quick(Icons.edit_note_outlined, '笔记', () {
-                    Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => const NotesPage()));
-                  }),
+                  // v0.25：笔记已升为底栏页签，快捷栏让位给传输（传输页不再占底栏）
+                  _quick(Icons.swap_vert_circle_outlined, '传输',
+                      widget.onGoTransfers),
                   _quick(Icons.delete_outline, '回收站', () {
                     Navigator.push(context,
                         MaterialPageRoute(builder: (_) => const TrashPage()));

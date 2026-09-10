@@ -253,23 +253,53 @@ def _scan(root: Path) -> list[_Entry]:
     return entries
 
 
+def _scan_dirs(root: Path) -> list[str]:
+    """分类目录清单（相对图谱根，正斜杠，含**空目录**，隐藏目录跳过）。
+
+    独立于笔记扫描：空分类没有任何笔记文件，只看 entries 会漏掉——
+    mkdir 后图谱/侧栏看不到新分类（实测踩到，指纹已含目录故缓存会正确失效）。
+    """
+    out: list[str] = []
+    for p in root.rglob("*"):
+        try:
+            if not p.is_dir():
+                continue
+            rel = p.relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        if rel in ("", "."):
+            continue
+        if any(seg.startswith(".") for seg in rel.split("/")):
+            continue
+        out.append(rel)
+    out.sort()
+    return out
+
+
 def _fingerprint(root: Path) -> str:
     """失效指纹：排序 (relpath, size, mtime_ns) 列表哈希。
 
-    只统计笔记口径内的文件（与 _scan 同过滤）——rename/move 改 relpath、
-    编辑改 mtime、增删改数量，全覆盖；非笔记文件变化与图谱无关，不掺和。
+    统计笔记口径内的文件**与分类目录**（与 _scan 同过滤）——rename/move 改
+    relpath、编辑改 mtime、增删改数量，全覆盖；非笔记文件变化与图谱无关，
+    不掺和。目录必须计入（v3.37）：分类枢纽节点入图后，**空分类**的建/删/改名
+    不改变任何笔记文件，漏掉目录会导致图谱不重建、新分类永远不出现（实测踩到）。
     """
     rows: list[str] = []
     for p in root.rglob("*"):
         try:
-            if not p.is_file() or p.suffix.lower() not in NOTE_EXTS:
-                continue
             rel = p.relative_to(root)
+            if rel.as_posix() in ("", "."):
+                continue
+            parts = rel.parts
+            if any(seg.startswith(".") for seg in parts):
+                continue
+            if p.is_dir():
+                rows.append(f"d\x00{rel.as_posix()}")
+                continue
+            if p.suffix.lower() not in NOTE_EXTS:
+                continue
             st = p.stat()
         except (OSError, ValueError):
-            continue
-        parts = rel.parts
-        if any(seg.startswith(".") for seg in parts):
             continue
         rows.append(f"{rel.as_posix()}\x00{st.st_size}\x00{st.st_mtime_ns}")
     rows.sort()
@@ -283,18 +313,28 @@ class _Built:
     外链候选与 ghost_srcs 幽灵溯源都在出口按请求者可见性过滤——
     外链暴露"根外文件存在性"、幽灵在根=SHARE_ROOT 时可能源自他人私人
     笔记（红队 V1/V2），两者都必须按 visible() 收口。"""
-    __slots__ = ("fp", "graph", "excerpts", "ext_edges", "ext_cand", "ghost_srcs")
+    __slots__ = ("fp", "graph", "excerpts", "ext_edges", "ext_cand", "ghost_srcs",
+                 "folders", "folder_members", "root_rel")
 
     def __init__(self, fp: str, graph: dict[str, Any],
                  excerpts: dict[tuple[str, str], str],
                  ext_edges: list[Edge], ext_cand: dict[str, str],
-                 ghost_srcs: dict[str, list[str]]):
+                 ghost_srcs: dict[str, list[str]],
+                 folders: list[dict[str, Any]] | None = None,
+                 folder_members: dict[str, list[str]] | None = None,
+                 root_rel: str = ""):
         self.fp = fp
         self.graph = graph
         self.excerpts = excerpts    # (目标 id, 源 id) → 摘录
         self.ext_edges = ext_edges  # [源 id, ext id, weight]
         self.ext_cand = ext_cand    # ext id → 根外文件相对 SHARE_ROOT 路径
         self.ghost_srcs = ghost_srcs  # ghost id → 链接它的源节点 id 列表
+        # v3.37 分类枢纽：folder id → 全部后代笔记 id（可见性判定用：
+        # 任一后代可见 ⇒ 该分类节点可见，父级随子级自动可见）
+        self.folder_members = folder_members or {}
+        self.folders = folders or []
+        # 图谱根相对 SHARE_ROOT 的路径（""=根本身）——空分类枢纽的可见性判定用
+        self.root_rel = root_rel
 
 
 def _pick_entry(cands: list[_Entry], src: _Entry) -> _Entry:
@@ -442,6 +482,51 @@ def build_graph(root: Path, fp: str | None = None, persist: bool = True) -> _Bui
     for gid in sorted(ghosts):
         nodes.append(ghosts[gid])
 
+    # ── 分类枢纽节点（v3.37）：分类=笔记目录下的子文件夹（含**空目录**），
+    # 自动挂载为其下笔记的枢纽——新建分类/新笔记在下次指纹变更时自动入图，
+    # 无需手工连边。枢纽边**只用于布局聚类**（把同分类笔记拉到一起），
+    # 不进 g["edges"]：度数/反链/孤岛语义保持"知识链接"纯净，不被目录
+    # 归属污染（否则每篇有分类的笔记都不再是孤岛，"孤岛"功能失效）。
+    folders: dict[str, dict[str, Any]] = {}
+    folder_members: dict[str, list[str]] = {}
+    for dpath in _scan_dirs(root):
+        parts = [seg for seg in dpath.split("/") if seg]
+        for i in range(len(parts)):
+            sub = "/".join(parts[:i + 1])
+            fid = f"folder:{sub}"
+            if fid not in folders:
+                folders[sub] = {
+                    "id": fid, "name": parts[i], "path": sub,
+                    "parent": "/".join(parts[:i]), "x": 0.0, "y": 0.0,
+                    # 与笔记节点同构的字段（布局/物化代码按统一形状访问）
+                    "category": "/".join(parts[:i]), "tags": [], "aliases": [],
+                    "out": 0, "ind": 0, "ghost": False, "external": False,
+                    "orphan": False, "summary": "", "kind": "folder",
+                }
+                folder_members[fid] = []
+    for e in entries:
+        parts = [seg for seg in e.category.split("/") if seg]
+        for i in range(len(parts)):
+            folder_members[f"folder:{'/'.join(parts[:i + 1])}"].append(e.rel_share)
+    folder_edges: list[Edge] = []
+    for sub in sorted(folders):
+        parent = folders[sub]["parent"]
+        if parent:
+            folder_edges.append([f"folder:{parent}", f"folder:{sub}", 1])
+    for e in entries:
+        if e.category:
+            folder_edges.append([f"folder:{e.category}", e.rel_share, 1])
+    folder_list = []
+    for sub in sorted(folders):
+        n = dict(folders[sub])
+        n["count"] = len(folder_members[n["id"]])
+        nodes.append(n)
+        folder_list.append(dict(n))   # 顶层清单与节点同构（count 一并下发）
+    try:
+        root_rel = root.relative_to(SHARE_ROOT).as_posix()
+    except ValueError:
+        root_rel = ""
+
     edges: list[Edge] = [[s, d, w] for (s, d), w in sorted(edge_w.items())]
     ext_edges: list[Edge] = [[s, d, w] for (s, d), w in sorted(ext_w.items())]
     deg_out: dict[str, int] = {}
@@ -453,16 +538,25 @@ def build_graph(root: Path, fp: str | None = None, persist: bool = True) -> _Bui
         n["out"] = deg_out.get(n["id"], 0)
         n["ind"] = deg_in.get(n["id"], 0)
         n["orphan"] = n["out"] == 0 and n["ind"] == 0
+    for n in nodes:
+        if n.get("kind") == "folder":
+            # 枢纽的度 = 目录归属边（子分类 + 成员笔记）；孤岛语义只对笔记成立
+            n["out"] = sum(1 for s, _d, _w in folder_edges if s == n["id"])
+            n["ind"] = sum(1 for _s, d, _w in folder_edges if d == n["id"])
+            n["orphan"] = False
 
     graph = {"nodes": nodes, "edges": edges,
+             "folders": folder_list,
              "stats": {"nodes": len(nodes), "edges": len(edges),
                        "ghosts": sum(1 for n in nodes if n["ghost"]),
                        "orphans": sum(1 for n in nodes if n["orphan"])},
              "builtAt": time.time()}
-    _layout(nodes, edges, root, persist=persist)
+    _layout(nodes, edges + folder_edges, root, persist=persist)
     if fp is None:
         fp = _fingerprint(root)
-    return _Built(fp, graph, excerpts, ext_edges, ext_cand, ghost_srcs)
+    return _Built(fp, graph, excerpts, ext_edges, ext_cand, ghost_srcs,
+                  folders=folder_list, folder_members=folder_members,
+                  root_rel=root_rel)
 
 
 # ─── 布局（确定性力仿真 + 持久化增量）──────────────────────
@@ -742,10 +836,26 @@ def _vis_plan(built: _Built, user: Row) -> tuple[set[str], set[str]]:
     """
     vis: set[str] = set()
     for n in built.graph["nodes"]:
-        if n["ghost"]:
+        if n["ghost"] or n.get("kind") == "folder":
             continue
         if visible(user, str(n["path"]).split("/")):
             vis.add(n["id"])
+    # 分类枢纽：任一后代笔记可见 ⇒ 可见（members 已含全部后代，
+    # 父级随子级自动成立，无需再传播）。**空分类没有成员可供判定**，
+    # 必须按目录自身的物理归属过 visible()——path=/ 时它会落在他人
+    # private/incoming 下，直接放行会泄露"他人目录存在性"（安全测试抓到）。
+    rr = built.root_rel
+    for n in built.graph["nodes"]:
+        if n.get("kind") != "folder":
+            continue
+        members = built.folder_members.get(n["id"], [])
+        if members:
+            if any(m in vis for m in members):
+                vis.add(n["id"])
+        else:
+            dir_rel = f"{rr}/{n['path']}" if rr else str(n["path"])
+            if visible(user, [p for p in dir_rel.split("/") if p]):
+                vis.add(n["id"])
     ghosts_ok = {gid for gid, srcs in built.ghost_srcs.items()
                  if any(s in vis for s in srcs)}
     return vis, ghosts_ok
@@ -801,7 +911,8 @@ def _materialize(built: _Built, user: Row) -> dict[str, Any]:
             "x": round(cx + math.cos(ang) * rad, 2),
             "y": round(cy + math.sin(ang) * rad, 2),
         })
-    return {"nodes": nodes, "edges": edges,
+    folders = [f for f in g.get("folders", []) if f["id"] in vis]
+    return {"nodes": nodes, "edges": edges, "folders": folders,
             "stats": {"nodes": len(nodes), "edges": len(edges),
                       "ghosts": sum(1 for n in nodes if n["ghost"]),
                       "orphans": sum(1 for n in nodes if n["orphan"])},
@@ -828,7 +939,7 @@ def _node_by_path(g: dict[str, Any], file_rel: str) -> Node | None:
     """按 SHARE_ROOT 相对路径找节点（casefold，Windows 文件系统语义）。"""
     want = os.path.normpath(file_rel).replace("\\", "/").casefold()
     for n in g["nodes"]:
-        if not n["ghost"] and not n["external"] \
+        if not n["ghost"] and not n["external"] and not n.get("kind") == "folder" \
                 and str(n["path"]).casefold() == want:
             return n
     return None
@@ -941,7 +1052,10 @@ def context(user: Row, root: Path, file_rel: str,
     return {
         "note": {"path": center["path"], "name": center["name"],
                  "tags": center["tags"], "aliases": center["aliases"],
-                 "content": content, "truncated": truncated},
+                 "content": content, "truncated": truncated,
+                 # 服务器真实存储路径（v3.37）：图谱节点卡片"复制路径"用，
+                 # 手机端把它发给台式 Agent 即可定位同一文件
+                 "abs_path": str(SHARE_ROOT / str(center["path"])).replace("\\", "/")},
         "links": outgoing, "backlinks": incoming,
         "builtAt": g["builtAt"],
     }

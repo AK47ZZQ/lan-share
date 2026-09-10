@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'about_page.dart';
 import 'notes_page.dart';
+import 'transfers_page.dart';
 import 'admin_page.dart';
 import 'backup_settings_page.dart';
 import 'package:dio/dio.dart' show DioException, FormData, MultipartFile;
@@ -929,6 +930,10 @@ class _MePageState extends ConsumerState<MePage> {
                           _quickTile(Icons.backup_outlined, '自动备份', () =>
                               Navigator.push(context, MaterialPageRoute(
                                   builder: (_) => const BackupSettingsPage()))),
+                        if (!isGuest)
+                          _quickTile(Icons.swap_vert_circle_outlined, '传输', () =>
+                              Navigator.push(context, MaterialPageRoute(
+                                  builder: (_) => const TransfersPage()))),
                         if (!isGuest)
                           _quickTile(Icons.share_outlined, '我的分享', () =>
                               Navigator.push(context, MaterialPageRoute(

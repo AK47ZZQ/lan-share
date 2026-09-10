@@ -10,11 +10,14 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData;
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
 import '../data/kb.dart';
+import 'doc_viewer.dart';
 import 'dir_picker_page.dart';
 import 'kb_graph_page.dart';
 import 'rich_note_editor.dart';
@@ -57,6 +60,10 @@ class _NotesPageState extends State<NotesPage> {
   // v0.21 分类体系（改进建议 9.6-P1-7 方案 B）：
   //   分类 = 笔记目录下子文件夹（嵌套），数据来自 /api/notes/list 聚合
   String? _catFilter;            // null=全部分类 ''=未分类 其他=分类路径
+  // v0.25：服务端下发的分类清单（path→后代笔记数）。**含空分类**——
+  // 旧版只从笔记的 category 聚合，空分类永远不出现（新建分类"显示成功
+  // 但侧栏看不到"的根因）。
+  final Map<String, int> _serverCats = {};
   bool _favOnly = false;         // 只看收藏
   String _sort = 'modified';     // modified | created | name
   Set<String> _pinned = {};      // 置顶（本地偏好，存完整路径）
@@ -95,14 +102,23 @@ class _NotesPageState extends State<NotesPage> {
     await sp.setStringList(_kStarred, _starred.toList());
   }
 
-  /// 分类树（从笔记的 category 字段聚合）：嵌套子路径合并成节点
+  /// 分类路径全集 = 服务端 categories（**含空分类**）∪ 笔记的 category
+  Set<String> get _allCatPaths {
+    final paths = <String>{};
+    for (final n in _notes ?? const <_Note>[]) {
+      if (n.category.isNotEmpty) paths.add(n.category);
+    }
+    paths.addAll(_serverCats.keys);
+    return paths;
+  }
+
+  /// 分类树（从分类路径全集聚合）：嵌套子路径合并成节点
   List<_CatNode> get _catTree {
     final root = <_CatNode>{};
-    for (final n in _notes ?? const <_Note>[]) {
-      if (n.category.isEmpty) continue;
+    for (final cat in _allCatPaths) {
       var cur = root;
       var acc = '';
-      for (final seg in n.category.split('/')) {
+      for (final seg in cat.split('/')) {
         acc = acc.isEmpty ? seg : '$acc/$seg';
         final hit = cur.where((c) => c.name == seg).toList();
         final node = hit.isEmpty
@@ -149,7 +165,7 @@ class _NotesPageState extends State<NotesPage> {
       all = all.where((n) {
         if (_catFilter!.isEmpty) return n.category.isEmpty;
         return n.category == _catFilter! ||
-            n.category.startsWith('$_catFilter!/');
+            n.category.startsWith('$_catFilter/');
       }).toList();
     }
     List<_Note> sorted;
@@ -228,10 +244,23 @@ class _NotesPageState extends State<NotesPage> {
             summary: (m['summary'] as String?) ?? '',
             ext: (m['ext'] as String?) ?? '',
             mtime: (m['mtime'] as num?)?.toDouble() ?? 0,
-            ctime: (m['ctime'] as num?)?.toDouble() ?? 0));
+            ctime: (m['ctime'] as num?)?.toDouble() ?? 0,
+            absPath: m['abs_path'] as String?));
+      }
+      final cats = <String, int>{};
+      for (final c in (r.data['categories'] as List? ?? const [])) {
+        final m = c as Map;
+        final path = (m['path'] as String?) ?? '';
+        if (path.isNotEmpty) cats[path] = (m['count'] as num?)?.toInt() ?? 0;
       }
       if (!mounted) return;
-      setState(() { _notes = notes; _loading = false; });
+      setState(() {
+        _notes = notes;
+        _serverCats
+          ..clear()
+          ..addAll(cats);
+        _loading = false;
+      });
     } catch (e) {
       if (!mounted) return;
       final s = e.toString();
@@ -767,12 +796,74 @@ class _NotesPageState extends State<NotesPage> {
                 style: const TextStyle(fontSize: 12, color: Colors.grey))),
       ]);
     }
-    return RefreshIndicator(
+    // v0.25 分类优先：先给分类横滑栏（全部/未分类/各分类，含空分类），
+    // 再是笔记列表——分类是一级导航，不再藏进侧栏
+    return Column(children: [
+      if (!_searching && !_selecting) _catChips(Theme.of(context).colorScheme),
+      Expanded(
+          child: RefreshIndicator(
         onRefresh: () async => _load(),
         child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 88),
             itemCount: _filtered.length,
-            itemBuilder: (_, i) => _noteCard(_filtered[i], cs)));
+            itemBuilder: (_, i) => _noteCard(_filtered[i], cs))),
+        ),
+    ]);
+  }
+
+  /// 分类快捷栏（v0.25）：全部 / 未分类 / 各分类（含空分类，count=0）。
+  /// 空分类也显示——新建分类立刻可见，不再"创建成功却找不到"。
+  Widget _catChips(ColorScheme cs) {
+    final top = _catTree;
+    return SizedBox(
+        height: 44,
+        child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 2),
+            children: [
+              _chip(cs, '全部 ${_notes?.length ?? 0}', _catFilter == null,
+                  () => setState(() { _catFilter = null; _favOnly = false; })),
+              _chip(cs, '未分类 ${_countOf('')}', _catFilter == '',
+                  () => setState(() { _catFilter = ''; _favOnly = false; })),
+              for (final c in top)
+                _chip(cs, '${c.name} ${_countOf(c.path)}',
+                    _catFilter == c.path,
+                    () => setState(() {
+                      _catFilter = c.path;
+                      _favOnly = false;
+                      _expandedCats.add(c.path);
+                    })),
+            ]));
+  }
+
+  Widget _chip(ColorScheme cs, String label, bool selected,
+      VoidCallback onTap) {
+    final bg = selected ? cs.primaryContainer : cs.surfaceContainerHighest
+        .withValues(alpha: 0.6);
+    return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(18),
+            child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                        color: selected
+                            ? cs.primary
+                            : cs.outlineVariant.withValues(alpha: 0.5))),
+                child: Text(label,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                        color: selected
+                            ? cs.onPrimaryContainer
+                            : cs.onSurfaceVariant)))));
   }
 
   Widget _noteCard(_Note n, ColorScheme cs) {
@@ -794,7 +885,10 @@ class _NotesPageState extends State<NotesPage> {
                     sel ? _selected.remove(n.path) : _selected.add(n.path));
                 return;
               }
-              await openNoteEditor(context, dir: _dir!, name: n.name);
+              // v0.25：点按默认**带格式预览**（DocViewerPage 渲染 md/文本），
+              // 要改再点预览页的编辑笔进编辑器——阅读是高频动作，不该先见源码。
+              await Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => DocViewerPage(path: n.path, name: n.name)));
               if (mounted) {
                 setState(() => _loading = true);
                 _load();
@@ -910,6 +1004,12 @@ class _NotesPageState extends State<NotesPage> {
                   title: Text(starred ? '取消收藏' : '收藏'),
                   onTap: () => Navigator.pop(bctx, 'star')),
               ListTile(
+                  leading: const Icon(Icons.copy_outlined),
+                  title: const Text('复制路径'),
+                  subtitle: Text(n.absPath ?? '/${n.path}',
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onTap: () => Navigator.pop(bctx, 'copypath')),
+              ListTile(
                   leading: const Icon(Icons.drive_file_move_outlined),
                   title: const Text('移动到分类'),
                   onTap: () => Navigator.pop(bctx, 'move')),
@@ -931,6 +1031,14 @@ class _NotesPageState extends State<NotesPage> {
         break;
       case 'star':
         _toggleStar(n);
+        break;
+      case 'copypath':
+        await Clipboard.setData(
+            ClipboardData(text: n.absPath ?? '/${n.path}'));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('已复制服务器路径')));
+        }
         break;
       case 'move':
         final cat = await _pickCategory();
@@ -1152,11 +1260,14 @@ class _Note {
   final String ext;      // 含点的扩展名（.md/.txt/.html）
   final double mtime;
   final double ctime;
+  // v0.25：服务器真实存储路径（/api/notes/list 下发，与 files 列表同语义）
+  // ——"复制路径"用：手机端直接把绝对路径发给台式上的 Agent
+  final String? absPath;
   const _Note(
       {required this.name, required this.path,
       required this.sizeHuman, required this.modified,
       this.category = '', this.summary = '', this.ext = '',
-      this.mtime = 0, this.ctime = 0});
+      this.mtime = 0, this.ctime = 0, this.absPath});
 }
 
 /// 分类树节点（从笔记 category 聚合而来；可变，树构建期使用）

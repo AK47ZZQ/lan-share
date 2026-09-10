@@ -1,4 +1,4 @@
-# LAN Share — 家庭团队网盘（服务端 v3.36 · App v0.24.0+69）
+# LAN Share — 家庭团队网盘（服务端 v3.37 · App v0.25.0-dev（未发版））
 
 家用小团队（2–20 人）的多用户网盘。局域网与公网（樱花FRP）功能完全对等，
 支持多角色成员、私人/共享双空间、目录授权、断点续传、秒传去重、回收站、
@@ -155,7 +155,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 史脱节）。APK 经自家分享链接在 `App安装包/lanshare.apk` 分发（30 天有效，同文件
 覆盖 + 新建分享）；新版本通过 App 内「关于与检查更新」升级，无需手动换包。
 R8 已关（WorkManager/Room 在裁剪下启动即崩，见 `docs/DEVELOPMENT.md`）。
-**当前测试基线：pytest 231 项（SQLite）+ PostgreSQL 双引擎 229 项 / web 单测 6 项 / Dart 179 项 / 契约 117 路径 / analyze 0 / ruff·mypy 全绿。**
+**当前测试基线：pytest 238 项（SQLite）+ PostgreSQL 双引擎 / web 单测 6 项 + vue-tsc / Dart 179 项 + analyze 0 / 契约 117 路径 / ruff·mypy 全绿。**
 完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
 
 **WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
@@ -263,6 +263,15 @@ M-K2 编辑器双链四件套 / M-K3 agent 层与约定文档 / M-K4 web `/kb`�
 红队对抗审查后收口——可见性收口/三端解析镜像/字节截断等 8 项修复）。
 挂账 v2：`[[#锚点]]` 小节锚、代码块内 `[[ ]]` 跳过解析、rename 断链 fixup、
 web 端笔记视图。
+
+**笔记主功能化 & 知识库完善 ✅**（服务端 v3.37 + App v0.25-dev：底栏换位
+笔记↔传输；`/api/notes/list` 下发 **categories 含空分类** + abs_path——修复"新建
+分类成功但侧栏看不到"；KB 图谱自动挂载**分类枢纽节点**（kind=folder，空分类也入
+图，失效指纹纳入目录）；`/api/kb/context` 增 abs_path；App 笔记点按改**预览优先**
+/ 分类横滑栏 / 复制路径 / 图谱点按即读；Web /kb 同步：枢纽渲染 + 点按显示内容 +
+只看该分类。**App 未发版**——须 flutter test + 真机验证后构建 APK。已实测抓到并
+修复两处历史 bug：App 分类过滤 `'$_cat!/'` 字面量 `!`、Web 同款；服务端已上线核验
+（Web dist 已构建生效））。
 
 **服务端 v3.36 ✅**（独立复审修复批：`app/roles.py` 与整批历史改动入库 + 回滚点；
 **双引擎测试**（同一套用例跑 SQLite 与 PostgreSQL，PG 侧此前零覆盖）；新增 CI

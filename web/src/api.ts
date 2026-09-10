@@ -39,10 +39,22 @@ export interface KbNode {
   tags: string[]; aliases: string[]
   out: number; ind: number; ghost: boolean; external: boolean; orphan: boolean
   summary: string; x: number; y: number
+  kind?: string; count?: number // v0.25：'folder'=分类枢纽（count=后代笔记数）
 }
 export type KbEdge = [string, string, number]
+// v0.25：分类枢纽（含空分类）——图谱自动关联分类与笔记
+export interface KbFolder {
+  id: string; path: string; name: string; parent: string
+  count: number; x: number; y: number
+}
+export interface KbContext {
+  note: { path: string; name: string; content: string; truncated: boolean; abs_path: string }
+  links: { path: string; name: string; summary: string; ghost: boolean }[]
+  backlinks: { path: string; name: string; summary: string; ghost: boolean }[]
+  builtAt: number
+}
 export interface KbGraphData {
-  nodes: KbNode[]; edges: KbEdge[]
+  nodes: KbNode[]; edges: KbEdge[]; folders?: KbFolder[]
   stats: { nodes: number; edges: number; ghosts: number; orphans: number }
   builtAt: number
 }
@@ -93,6 +105,8 @@ export const api = {
   kbNames: (path: string) => fetch(`/api/kb/names?path=${encodeURIComponent(path)}`).then(r => handle<KbName[]>(r)),
   kbBacklinks: (path: string, file: string) =>
     fetch(`/api/kb/backlinks?path=${encodeURIComponent(path)}&file=${encodeURIComponent(file)}`).then(r => handle<KbBacklinks>(r)),
+  kbContext: (path: string, file: string) =>
+    fetch(`/api/kb/context?path=${encodeURIComponent(path)}&file=${encodeURIComponent(file)}`).then(r => handle<KbContext>(r)),
   adminAddAlbum: (title: string, month: string) => jpost('/api/admin/albums', { title, month }).then(r => handle<{ ok: boolean }>(r)),
   adminDeleteAlbum: (id: string) => fetch(`/api/admin/albums/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => handle<{ ok: boolean }>(r)),
   // 相册共创：成员可建精选专辑（admin/创建者可删）
