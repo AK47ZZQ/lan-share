@@ -20,7 +20,8 @@ from starlette.background import BackgroundTask
 
 from app.config import SHARE_ROOT
 from app.roles import ADMIN
-from app.security import audit, client_ip, preview_user, require_user
+from app.api.deps import preview_viewer
+from app.security import audit, client_ip, require_user
 from app.filetools import (clean_filename, dir_tree, file_dict, human_size,
                            move_to_trash, to_rel)
 from app.spaces import (cross_space_guard, enforce_quota, is_own_private_root,
@@ -50,8 +51,8 @@ def download_file(path: str = "", _user=Depends(require_user)):
 
 @router.get("/api/files/{path:path}")
 @router.get("/api/files")
-def list_files(request: Request, path: str = "", _user=Depends(require_user)):
-    user = preview_user(request, _user)   # admin 成员视角预览（X-As-User，只读）
+def list_files(request: Request, path: str = "", user=Depends(preview_viewer)):
+    # admin 成员视角预览（X-As-User，只读）——preview_viewer 依赖（B2 收编）
     target = resolve(user, path, "read")
     if not target.exists():
         raise HTTPException(status_code=404, detail="Directory not found")

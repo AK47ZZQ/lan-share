@@ -14,6 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from app.config import SHARE_ROOT
+from app.api.deps import ensure_exists
 from app.security import require_user
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support
 from app.spaces import resolve
@@ -51,8 +52,7 @@ async def preview_file(path: str, w: int | None = Query(default=None),
     """文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/，
     w 量化到固定阶梯），公网/移动端省流量；缩放超过中档位后前端自行改拉原图。"""
     target = resolve(_user, path, "read")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+    ensure_exists(target)
     mime, _ = mimetypes.guess_type(str(target))
     # filename 走 starlette 的 RFC5987 编码（中文文件名直接拼头会炸 latin-1）
     if w and target.suffix.lower() in IMG_EXTS:
@@ -97,8 +97,7 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
     自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。"""
     from PIL import Image
     target = resolve(_user, path, "read")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="Not found")
+    ensure_exists(target, detail="Not found")
     ext = target.suffix.lower()
     if ext not in IMG_EXTS | VID_EXTS:
         raise HTTPException(status_code=404, detail="No thumbnail for this type")

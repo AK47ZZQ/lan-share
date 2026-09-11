@@ -15,7 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.roles import ADMIN, GUEST
-from app.security import audit, client_ip, preview_user, require_admin, require_user
+from app.api.deps import preview_viewer
+from app.security import audit, client_ip, require_admin, require_user
 from app.services.albums import load_albums, mutate_albums as _mutate_albums
 from app.spaces import visible
 
@@ -34,11 +35,10 @@ def _visible_album_items(user, items: list) -> list[str]:
 
 
 @router.get("/api/albums")
-def list_albums(request: Request, _user=Depends(require_user)):
+def list_albums(request: Request, user=Depends(preview_viewer)):
     # v0.14：items 不随列表下发（50 专辑 × 500 路径会把时间线首页拖肥），
     # 列表只给 count/cover，全量条目走 GET /api/albums/{id}。
     # cover/count 都按请求者可见性过滤（P1/P2：不可见路径名不下发）
-    user = preview_user(request, _user)
     out = []
     for a in load_albums():
         items = _visible_album_items(user, a.get("items") or [])

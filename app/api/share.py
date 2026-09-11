@@ -20,8 +20,9 @@ from starlette.background import BackgroundTask
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, TICKET_TTL
 from app.db import _db
 from app.roles import ADMIN
+from app.api.deps import ensure_share_owner, get_share_or_404, preview_viewer
 from app.security import (audit, client_ip, get_bearer_user, get_session_user,
-                          preview_user, require_user)
+                          require_user)
 from app.filetools import human_size, safe_path, to_rel
 from app.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
@@ -307,10 +308,9 @@ def share_qr(token: str, request: Request, _user=Depends(require_user)):
 
 
 @router.get("/api/shares")
-def list_shares(request: Request, _user=Depends(require_user)):
+def list_shares(request: Request, viewer=Depends(preview_viewer)):
     now = time.time()
     shares_store.purge_expired(now)
-    viewer = preview_user(request, _user)   # admin 成员视角预览
     is_admin = viewer["role"] == ADMIN
     rows = shares_store.list_all()
     uid_map = users_store.id_to_username_map()
@@ -345,12 +345,9 @@ def list_shares(request: Request, _user=Depends(require_user)):
 @router.get("/api/shares/{token}/history")
 def share_history(token: str, _user=Depends(require_user)):
     """某分享的取件记录（下载成功 + 密码错误尝试）。仅创建者与 admin。"""
-    s = shares_store.get_by_token(token)
-    if not s:
-        raise HTTPException(status_code=404, detail="Share not found")
+    s = get_share_or_404(token)
     # 无主（v2 遗留）分享归 admin 管；owner_id None 不再等同"人人可管"
-    if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    ensure_share_owner(_user, s)
     rows = _db().execute(
         "SELECT ts, ip, action FROM audit_log "
         "WHERE (action='share_download' AND target=?) OR (action='share_badpwd' AND target=?) "
@@ -361,11 +358,8 @@ def share_history(token: str, _user=Depends(require_user)):
 
 @router.delete("/api/shares/{token}")
 def revoke_share(request: Request, token: str, _user=Depends(require_user)):
-    s = shares_store.get_by_token(token)
-    if not s:
-        raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    s = get_share_or_404(token)
+    ensure_share_owner(_user, s)
     if shares_store.delete_by_token(token):
         audit("share_revoke", token, ip=client_ip(request))
         return {"ok": True}
@@ -381,11 +375,8 @@ class ShareEditBody(BaseModel):
 @router.patch("/api/shares/{token}")
 def edit_share(request: Request, token: str, body: ShareEditBody,
                _user=Depends(require_user)):
-    s = shares_store.get_by_token(token)
-    if not s:
-        raise HTTPException(status_code=404, detail="Share not found")
-    if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    s = get_share_or_404(token)
+    ensure_share_owner(_user, s)
     if body.expires_hours is None and body.max_downloads is None:
         raise HTTPException(status_code=400, detail="没有要修改的字段")
     # 与 create_share 同上限（R1-P1-1）：过大值会让 datetime.fromtimestamp 抛

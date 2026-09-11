@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.config import SHARE_ROOT
 from app.roles import ADMIN, MEMBER
-from app.security import preview_user, require_user
+from app.api.deps import preview_viewer
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support, to_rel
 from app.spaces import resolve, visible
 from app.store import photos as photos_store
@@ -255,13 +255,12 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
                 album: str | None = Query(default=None),
                 sort: str = Query(default="taken", pattern="^(taken|added)$"),
                 refresh: bool = Query(default=False),
-                _user=Depends(require_user)):
+                user=Depends(preview_viewer)):
     """照片时间线：默认按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）；
     sort=added 按入库时间倒序（二维码/手机上传的照片按 EXIF 落历史月份，
     时间线顶部"看不到新照片"的感知问题——入库排序让新上传永远在最前）。
     可按 month=YYYY-MM 与 uploader、media_type=photo|video、album=<精选专辑id>
     过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
-    user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos(force=refresh)
     users = _known_users()
     # 可见性下推 SQL（R1-P2-10）：member/admin 的 visible() 语义可用路径前缀
@@ -340,9 +339,8 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
 
 
 @router.get("/api/photos/facets")
-def photo_facets(request: Request, _user=Depends(require_user)):
+def photo_facets(request: Request, user=Depends(preview_viewer)):
     """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。"""
-    user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos()
     users = _known_users()
     rows = photos_store.list_paths_by_taken()
@@ -364,9 +362,9 @@ def photo_facets(request: Request, _user=Depends(require_user)):
     }
 @router.get("/api/photo/meta")
 def photo_meta(request: Request, path: str = Query(..., min_length=1),
-               _user=Depends(require_user)):
+               user=Depends(preview_viewer)):
     """图片元数据：原始尺寸 + 拍摄设备（EXIF）。预览信息面板用。"""
-    user = preview_user(request, _user)   # 与列表接口一致：admin 视角下按成员身份解析
+    # 与列表接口一致：admin 视角下按成员身份解析（preview_viewer 依赖）
     target = resolve(user, path, "read")
     if not target.is_file() or target.suffix.lower() not in IMG_EXTS:
         raise HTTPException(status_code=404, detail="Not an image")
