@@ -10,6 +10,7 @@ import '../data/api/api_client.dart';
 import '../ui/widgets/prompt_dialog.dart';
 import '../data/api/errors.dart';
 import '../state/session.dart';
+import 'widgets/kit.dart';
 
 class _AdminUser {
   final int id;
@@ -146,12 +147,6 @@ class _AdminPageState extends ConsumerState<AdminPage>
     setState(() => _dirOptions = out..sort());
   }
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), width: 360));
-  }
-
   Future<bool> _confirm(String title, String content,
       {String okText = '确定'}) async {
     final ok = await showDialog<bool>(
@@ -272,7 +267,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                     // 请求（0.8.1 审查修复；二次审查补 0 语义与小数展示）
                     final n = double.tryParse(gb);
                     if (gb.isNotEmpty && (n == null || n < 0)) {
-                      _toast('请输入正数 GB，或留空提交表示不限');
+                      showToast('请输入正数 GB，或留空提交表示不限');
                       return;
                     }
                     await _patchUser(u.id, {
@@ -290,7 +285,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                         obscure: true, okText: '保存', allowEmpty: true);
                     if (v == null) return;
                     if (v.isNotEmpty && v.length < 8) {
-                      _toast('密码至少 8 位（留空提交=清除）');
+                      showToast('密码至少 8 位（留空提交=清除）');
                       return;
                     }
                     await _post(
@@ -378,7 +373,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
       // 与改自己密码/WebDAV 密码同款下限（R1-P3）：短密码提交到服务端只会
       // 得到一条 400，当场反馈更直观
       if (newPwd.length < 8) {
-        _toast('密码至少 8 位');
+        showToast('密码至少 8 位');
         return;
       }
       await _post('/api/admin/users/${u.id}/password', {'value': newPwd},
@@ -390,10 +385,10 @@ class _AdminPageState extends ConsumerState<AdminPage>
     try {
       final dio = await ApiClient.I.dio();
       await dio.patch('/api/admin/users/$uid', data: body);
-      _toast('已更新');
+      showToast('已更新');
       _loadAll();
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
   }
 
@@ -402,10 +397,10 @@ class _AdminPageState extends ConsumerState<AdminPage>
     try {
       final dio = await ApiClient.I.dio();
       await dio.post(path, data: body);
-      if (okMsg != null) _toast(okMsg);
+      if (okMsg != null) showToast(okMsg);
       _loadAll();
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
   }
 
@@ -415,10 +410,10 @@ class _AdminPageState extends ConsumerState<AdminPage>
     try {
       final dio = await ApiClient.I.dio();
       await dio.delete(path);
-      if (okMsg != null) _toast(okMsg);
+      if (okMsg != null) showToast(okMsg);
       _loadAll();
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
   }
 
@@ -450,7 +445,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                     TextButton(
                         onPressed: () async {
                           await ClipboardSet.setText(code);
-                          _toast('已复制');
+                          showToast('已复制');
                         },
                         child: const Text('复制')),
                     FilledButton(
@@ -459,7 +454,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   ]));
       _loadAll();
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -469,7 +464,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   Future<void> _addGrantBatch() async {
     if (_busy) return;
     if (_gUsers.isEmpty || _gPaths.isEmpty) {
-      _toast('先选成员和目录');
+      showToast('先选成员和目录');
       return;
     }
     setState(() => _busy = true);
@@ -496,7 +491,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
       if (mounted) setState(() => _busy = false);
     }
     if (!mounted) return;
-    _toast(fail == 0
+    showToast(fail == 0
         ? '已创建 $ok 条授权（${_gUsers.length} 位成员 × ${_gPaths.length} 个目录）'
         : '已创建 $ok 条，失败 $fail 条');
     setState(() {
@@ -525,14 +520,14 @@ class _AdminPageState extends ConsumerState<AdminPage>
   Future<void> _updateGrant(_Grant g,
       {required bool canWrite, int extendHours = 0}) async {
     if (extendHours > 0 && g.expiresAt == null) {
-      _toast('该授权已是永久，无需延长');
+      showToast('该授权已是永久，无需延长');
       return;
     }
     int? hours;
     if (g.expiresAt != null) {
       final left = g.expiresAt! - DateTime.now().millisecondsSinceEpoch ~/ 1000;
       if (left <= 0) {
-        _toast('授权已过期，请删除后重新授权');
+        showToast('授权已过期，请删除后重新授权');
         return;
       }
       hours = (left / 3600).ceil() + extendHours;
@@ -546,12 +541,12 @@ class _AdminPageState extends ConsumerState<AdminPage>
         'can_write': canWrite,
         'expires_hours': ?hours,
       });
-      _toast(extendHours > 0
+      showToast(extendHours > 0
           ? '已延长 ${_memberName(g.userId)} 的「${g.path.split('/').last}」'
           : '已改为${canWrite ? '读写' : '只读'}');
       _loadAll();
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
   }
 
@@ -619,9 +614,9 @@ class _AdminPageState extends ConsumerState<AdminPage>
       final dio = await ApiClient.I.dio();
       await dio.post('/api/admin/public-url',
           data: {'url': _pubUrl.text.trim(), 'url_alt': _pubAlt.text.trim()});
-      _toast('公网地址已保存');
+      showToast('公网地址已保存');
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -634,9 +629,9 @@ class _AdminPageState extends ConsumerState<AdminPage>
       final dio = await ApiClient.I.dio();
       await dio.post('/api/admin/webhook',
           data: {'url': _hookUrl.text.trim()});
-      _toast('推送地址已保存');
+      showToast('推送地址已保存');
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -648,9 +643,9 @@ class _AdminPageState extends ConsumerState<AdminPage>
     try {
       final dio = await ApiClient.I.dio();
       await dio.post('/api/admin/webhook/test');
-      _toast('测试消息已发送，去手机上看看');
+      showToast('测试消息已发送，去手机上看看');
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -726,10 +721,10 @@ class _AdminPageState extends ConsumerState<AdminPage>
         if (targets.isNotEmpty) 'user_ids': targets.toList(),
       });
       final n = (r.data['sent'] as num?)?.toInt() ?? 0;
-      _toast('已推送给 $n 人'
+      showToast('已推送给 $n 人'
           '${(r.data['webhook'] as bool? ?? false) ? '，站外 webhook 同步发送' : ''}');
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -955,7 +950,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
               icon: const Icon(Icons.copy_outlined, size: 20),
               onPressed: () async {
                 await ClipboardSet.setText(i.code);
-                _toast('已复制');
+                showToast('已复制');
               }),
           IconButton(
               tooltip: '删除记录',

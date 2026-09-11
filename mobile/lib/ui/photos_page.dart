@@ -30,8 +30,10 @@ import 'album_detail_page.dart';
 import 'photo_models.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
+import 'theme/responsive.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/prompt_dialog.dart';
+import 'widgets/kit.dart';
 
 class PhotosPage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -289,7 +291,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final id = r.data['id'] as String?;
       if (!mounted) return;
       if (id == null || id.isEmpty) {
-        _toast('创建失败');
+        showToast('创建失败');
         _loadAlbums();
         return;
       }
@@ -301,7 +303,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               openPicker: true)));
       if (mounted) _loadAlbums();   // 添加了照片/直接返回都刷新列表计数
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
   }
 
@@ -388,16 +390,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (!mounted) return;
       setState(() =>
           _albums = _albums?.where((x) => x.id != a.id).toList());
-      _toast('已删除');
+      showToast('已删除');
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
-  }
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   static String _monthLabel(String ym) {
@@ -923,8 +919,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             // v0.13 换 waterfall_flow（该包即为此修复的社区版，API 同型）。
             SliverWaterfallFlow(
                 gridDelegate:
-                    const SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3, mainAxisSpacing: 2, crossAxisSpacing: 2),
+                    SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+                        // v1.0 响应式：列数随窗口档位自适应（手机 3 / 横屏 4 /
+                        // 平板 6）。此前固定 3 列，平板上缩略图被撑到 300+ px，
+                        // 一屏只看得到 6 张；改列数只动 delegate 参数，Sliver
+                        // 结构与虚拟化路径不变（性能红线）
+                        crossAxisCount: context.gridColumns(),
+                        mainAxisSpacing: 2, crossAxisSpacing: 2),
                 delegate: SliverChildBuilderDelegate(
                     addRepaintBoundaries: true,
                     (context, j) {
@@ -942,7 +943,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                           Hero(
                               tag: 'ph-${item.path}',
                               child: AuthImage(
-                                  url: '$_base/thumb/${encPath(item.path)}')),
+                                  url: '$_base/thumb/${encPath(item.path)}',
+                                  // 无障碍（v1.0）：缩略图网格里没有任何文字，
+                                  // 读屏至少要知道这是照片还是视频
+                                  semanticLabel:
+                                      item.isVideo ? '视频' : '照片')),
                           // 视频角标：▶ + 时长（0.6.0）
                           if (item.isVideo)
                             Positioned(

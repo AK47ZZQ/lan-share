@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 
 import '../../data/media_kinds.dart';
+import 'design_tokens.dart';
 
 /// ── 主题色板（0.8.5 主题引擎）────────────────────────────
 /// 每套色板 = M3 种子色 + 品牌渐变（云朵块所在的品牌头）+ 深色底。
@@ -91,29 +92,29 @@ class PaletteScope extends InheritedWidget {
 }
 
 /// ── 品牌常量（云朵 + 渐变底）──────────────────────────────
+/// v1.0 起圆角/阴影改由 [Radii] / [Shadows] 供给（单一事实源），此处保留
+/// Brand 作为语义别名——既有页面继续用 Brand.xxx 不受影响。
 abstract final class Brand {
   /// 云朵图标（登录页品牌头的核心图案，全 App 复用）
   static const IconData cloud = Icons.cloud_outlined;
 
   /// 品牌头圆角（底部大弧，登录页同款）
-  static const double headerRadius = 32;
+  static const double headerRadius = Radii.header;
 
   /// 云朵块的圆角
-  static const double cloudTileRadius = 20;
+  static const double cloudTileRadius = Radii.card;
 
   /// 卡片圆角（App 级）
-  static const double cardRadius = 20;
+  static const double cardRadius = Radii.card;
 
   /// 小号控件圆角
-  static const double controlRadius = 12;
+  static const double controlRadius = Radii.control;
+
+  /// 底部弹层上圆角
+  static const double sheetRadius = Radii.sheet;
 
   /// 卡片阴影（浅色）/ 发光（暗色）
-  static List<BoxShadow> shadow(Color color) => [
-        BoxShadow(
-            color: color.withValues(alpha: 0.06),
-            blurRadius: 18,
-            offset: const Offset(0, 6)),
-      ];
+  static List<BoxShadow> shadow(Color color) => Shadows.low(color);
 }
 
 /// 文件类型 → 品牌色块（文件页统一图标语义：圆角方块 + 类型色 + 白字形）
@@ -247,7 +248,8 @@ abstract final class AppTheme {
         centerTitle: false,
         titleTextStyle: textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.w700, color: scheme.onSurface),
-        iconTheme: IconThemeData(color: scheme.onSurfaceVariant),
+        iconTheme: IconThemeData(
+            color: scheme.onSurfaceVariant, size: IconSizes.lg),
       ),
       // 品牌圆角：全局基础形状阶梯
       cardTheme: CardThemeData(
@@ -265,12 +267,33 @@ abstract final class AppTheme {
         surfaceTintColor: Colors.transparent,
         indicatorColor: scheme.primary.withValues(alpha: isDark ? 0.22 : 0.14),
         indicatorShape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14)),
+            borderRadius: Radii.all(Radii.md)),
         labelTextStyle: WidgetStatePropertyAll(TextStyle(
             fontSize: 11.5,
             fontWeight: FontWeight.w600,
             color: scheme.onSurfaceVariant)),
         height: 68,
+      ),
+      // 悬浮动作按钮（文件页"上传"）：品牌色 + 16 圆角 + 浮层阴影。
+      // M3 默认 FAB 是 16 squircle，这里显式对齐并收窄阴影范围，避免
+      // 在浅色卡片流里出现一块过重的色斑
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: scheme.primary,
+        foregroundColor: scheme.onPrimary,
+        elevation: 2,
+        focusElevation: 3,
+        hoverElevation: 3,
+        highlightElevation: 1,
+        shape: RoundedRectangleBorder(borderRadius: Radii.all(Radii.fab)),
+        extendedTextStyle:
+            const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+      ),
+      // 图标按钮：品牌圆角水波纹（尺寸不动，避免打乱 AppBar/列表行布局）
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(
+          shape:
+              RoundedRectangleBorder(borderRadius: Radii.bControl),
+        ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
@@ -305,11 +328,12 @@ abstract final class AppTheme {
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(Brand.controlRadius),
-          borderSide: BorderSide(color: dividerColor, width: 0.8),
+          borderSide: BorderSide(color: dividerColor, width: Strokes.widthInput),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(Brand.controlRadius),
-          borderSide: BorderSide(color: scheme.primary, width: 1.6),
+          borderSide:
+              BorderSide(color: scheme.primary, width: Strokes.widthStrong),
         ),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
@@ -323,8 +347,9 @@ abstract final class AppTheme {
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: sheetBg,
         surfaceTintColor: Colors.transparent,
-        shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(
+                top: Radius.circular(Radii.sheet))),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
@@ -343,7 +368,7 @@ abstract final class AppTheme {
       ),
       chipTheme: ChipThemeData(
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(999)),
+            borderRadius: Radii.all(Radii.pill)),
         side: BorderSide(color: dividerColor),
         backgroundColor: chipBg,
       ),
@@ -352,6 +377,12 @@ abstract final class AppTheme {
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Brand.controlRadius)),
+      ),
+      // 长按提示（桌面端 hover 也走它）：深底白字，与 SnackBar 同语言
+      tooltipTheme: TooltipThemeData(
+        decoration: BoxDecoration(
+            color: snackBg, borderRadius: Radii.bXs),
+        textStyle: const TextStyle(color: Colors.white, fontSize: 12.5),
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: scheme.primary,
@@ -374,15 +405,48 @@ abstract final class AppTheme {
     final base = b == Brightness.dark
         ? Typography.material2021(platform: TargetPlatform.android).white
         : Typography.material2021(platform: TargetPlatform.android).black;
+    // v1.0 排版规范：字号收敛为 8 级（28→11.5），标题行高 1.25~1.4、
+    // 正文 1.45~1.5——中文行高必须大于英文，否则密排成"黑块"；
+    // letterSpacing 一律归零，M3 默认给 label 加了 0.1~0.5 字距，
+    // 中文字符间会显得松散。
     return base.copyWith(
+      displaySmall: base.displaySmall?.copyWith(
+          fontSize: 28,
+          fontWeight: FontWeight.w700,
+          height: 1.25,
+          letterSpacing: 0),
+      headlineSmall: base.headlineSmall?.copyWith(
+          fontSize: 22,
+          fontWeight: FontWeight.w700,
+          height: 1.3,
+          letterSpacing: 0),
       titleLarge: base.titleLarge?.copyWith(
-          fontSize: 18, fontWeight: FontWeight.w700, letterSpacing: 0),
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+          height: 1.3,
+          letterSpacing: 0),
       titleMedium: base.titleMedium?.copyWith(
-          fontSize: 15.5, fontWeight: FontWeight.w600),
-      bodyLarge: base.bodyLarge?.copyWith(fontSize: 15),
-      bodyMedium: base.bodyMedium?.copyWith(fontSize: 13.5, height: 1.45),
-      bodySmall: base.bodySmall?.copyWith(fontSize: 12, height: 1.4),
-      labelLarge: base.labelLarge?.copyWith(fontSize: 14, fontWeight: FontWeight.w600),
+          fontSize: 15.5,
+          fontWeight: FontWeight.w600,
+          height: 1.35,
+          letterSpacing: 0),
+      titleSmall: base.titleSmall?.copyWith(
+          fontSize: 13.5,
+          fontWeight: FontWeight.w600,
+          height: 1.4,
+          letterSpacing: 0),
+      bodyLarge: base.bodyLarge?.copyWith(
+          fontSize: 15, height: 1.5, letterSpacing: 0),
+      bodyMedium: base.bodyMedium?.copyWith(
+          fontSize: 13.5, height: 1.45, letterSpacing: 0),
+      bodySmall: base.bodySmall?.copyWith(
+          fontSize: 12, height: 1.4, letterSpacing: 0),
+      labelLarge: base.labelLarge?.copyWith(
+          fontSize: 14, fontWeight: FontWeight.w600, letterSpacing: 0),
+      labelMedium: base.labelMedium?.copyWith(
+          fontSize: 12.5, fontWeight: FontWeight.w600, letterSpacing: 0),
+      labelSmall: base.labelSmall?.copyWith(
+          fontSize: 11.5, fontWeight: FontWeight.w600, letterSpacing: 0),
     );
   }
 }
@@ -401,8 +465,9 @@ class _FadeSlideTransitionsBuilder extends PageTransitionsBuilder {
     Widget child,
   ) {
     if (route.settings.name == '/no-animation') return child;
+    // 页面转场曲线取自 Motion 令牌（enter/exit），改令牌即全站转场统一变
     final curved = CurvedAnimation(
-        parent: animation, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
+        parent: animation, curve: Motion.enter, reverseCurve: Motion.exit);
     return FadeTransition(
       opacity: curved,
       child: SlideTransition(

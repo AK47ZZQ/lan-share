@@ -19,7 +19,9 @@ import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import 'photo_models.dart';
 import 'photo_viewer.dart';
+import 'theme/responsive.dart';
 import 'widgets/auth_image.dart';
+import 'widgets/kit.dart';
 
 class AlbumDetailPage extends ConsumerStatefulWidget {
   final String id;
@@ -98,7 +100,7 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
-      _toast('加载失败：${errDetail(e)}');
+      showToast('加载失败：${errDetail(e)}');
     }
   }
 
@@ -123,7 +125,7 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
       if (t != null) n++;
     }
     setState(() => _sel.clear());
-    _toast('已加入下载队列 $n 张');
+    showToast('已加入下载队列 $n 张');
   }
 
   Future<void> _removeSelected() async {
@@ -149,7 +151,7 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
       _changed = true;
       await _reload();
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
   }
 
@@ -174,14 +176,8 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
       _deleted = true;
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
-  }
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   @override
@@ -271,10 +267,12 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                         ])
                       : CustomScrollView(slivers: [
                           SliverWaterfallFlow(
-                              gridDelegate: const SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 3,
-                                  mainAxisSpacing: 2,
-                                  crossAxisSpacing: 2),
+                              gridDelegate:
+                                  SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+                                      // v1.0：列数随窗口档位自适应（3/4/6）
+                                      crossAxisCount: context.gridColumns(),
+                                      mainAxisSpacing: 2,
+                                      crossAxisSpacing: 2),
                               delegate: SliverChildBuilderDelegate(
                                   addRepaintBoundaries: true, (context, i) {
                                 final item = _items[i];
@@ -497,7 +495,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
               (m['count'] as num?)?.toInt() ?? 0,
       }..removeWhere((k, _) => k.isEmpty);
     } catch (_) {
-      _toast('月份列表加载失败');
+      showToast('月份列表加载失败');
       return;
     }
     if (!mounted) return;
@@ -539,9 +537,9 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
         if (list.length < 500) break;
       }
     } catch (e) {
-      _toast(errDetail(e));
+      showToast(errDetail(e));
     }
-    _toast(added > 0 ? '已选入 $added 张' : '该月照片都已加入或已在专辑里');
+    showToast(added > 0 ? '已选入 $added 张' : '该月照片都已加入或已在专辑里');
   }
 
   /// 分批提交（审查 P2：服务端单次上限 500，按月全选大月份会整体 400；
@@ -551,7 +549,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
   Future<void> _save() async {
     if (_sel.isEmpty || _saving > 0) return;
     if (widget.existing.length + _sel.length > 500) {
-      _toast('专辑最多 500 项，当前已有 ${widget.existing.length} 项');
+      showToast('专辑最多 500 项，当前已有 ${widget.existing.length} 项');
       return;
     }
     final paths = _sel.toList();
@@ -573,7 +571,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
     }
   }
 
-  void _toast(String msg) {
+  void showToast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
@@ -618,8 +616,9 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                   : CustomScrollView(controller: _scroll, slivers: [
                       SliverWaterfallFlow(
                           gridDelegate:
-                              const SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 3,
+                              SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+                                  // v1.0：列数随窗口档位自适应（3/4/6）
+                                  crossAxisCount: context.gridColumns(),
                                   mainAxisSpacing: 2,
                                   crossAxisSpacing: 2),
                           delegate: SliverChildBuilderDelegate(

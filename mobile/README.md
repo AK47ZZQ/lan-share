@@ -2,10 +2,13 @@
 
 > **App 子模块技术文档**：工程结构 / 传输协议 / 备份与分享机制 / 构建签名。
 > 功能总览、里程碑状态与版本历史见根目录 `README.md` 与 `CHANGELOG.md`
-> （当前 **v0.21.3+64**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
+> （当前 **v0.28.3+77**）——本文不重复演进史，只讲 mobile/ 内部怎么工作。
 
 家庭网盘 LAN Share 的原生移动客户端。需求见 `docs/DESIGN-v3/APP-REQUIREMENTS.md`，
-技术方案见 `docs/DESIGN-v3/APP-DESIGN.md`。
+技术方案见 `docs/DESIGN-v3/APP-DESIGN.md`，**视觉与响应式规范见
+`docs/DESIGN-v3/APP-VISUAL-SPEC.md`**——改界面前必读；令牌单一事实源在
+`lib/ui/theme/design_tokens.dart` 与 `responsive.dart`，页面里禁止再写
+间距/圆角/字号字面量。
 
 ## 目录结构
 
@@ -34,16 +37,32 @@ lib/
 ├── transfer/               ★ M-A2 传输核心（纯 Dart，可单测，双端共享）
 │   ├── transfer_task.dart  任务模型 + 队列 JSON 落盘载体
 │   └── transfer_engine.dart 上传 init→chunk→finish / 下载 Range / 调度
-└── ui/                     首页(沉浸渐变欢迎头+卡片综合面板/最近上传) /
-                            照片(拍摄·入库双序时间线+查看器平移手势/长按菜单) /
-                            文件(双布局+新建 md·txt / 复制路径 / 上传二维码) /
-                            传输中心(汇总条) /
-                            笔记(分类体系：侧栏嵌套树/卡片列表带摘要/置顶收藏/
-                            拖拽与批量移动/排序切换；md·txt·html 三编辑器带
-                            30s+失焦自动保存，on_dup=overwrite 覆盖保存) /
-                            通知中心(分类过滤/单条已读·滑动删除/偏好开关) /
-                            分享管理 / 我的(备份设置/授权卡/验证器/更新) /
-                            登录页 v2(预检/生物识别/配对码) / 管理面板
+└── ui/                     ★ 页面层 + 主题层（v1.0 起拆出 theme/，见下行）
+    ├── theme/app_theme.dart      ★ 主题引擎：Palette 六色板 + M3 亮/暗/AMOLED
+    ├── theme/design_tokens.dart  ★ v1.0 设计令牌：间距(4pt 网格)/圆角/动效/图标/
+    │                             阴影/描边——单一事实源，不 import 任何项目文件
+    ├── theme/responsive.dart     ★ v1.0 响应式：断点 600/840、清单页限宽 720、
+    │                             列数自适应、sliverGutter(sliver 限宽，不动虚拟化)
+    ├── widgets/brand.dart        ★ 品牌组件：BrandCloud/BrandHeader/EmptyState/
+    │                             FileTypeTile/SectionTitle（装饰图形已 ExcludeSemantics）
+    ├── widgets/kit.dart          ★ v1.0 共享件：showToast / showConfirmDialog
+    │                             （收编原先 11 份重复 _toast；提示挂 App 级
+    │                             scaffoldMessengerKey，不依赖页面 context）
+    └── 各页面.dart                首页(沉浸渐变欢迎头+卡片综合面板/最近上传) /
+                                 照片(拍摄·入库双序时间线+查看器平移手势/长按菜单) /
+                                 文件(双布局+新建 md·txt / 复制路径 / 上传二维码) /
+                                 传输中心(汇总条) /
+                                 笔记(分类体系：侧栏嵌套树/卡片列表带摘要/置顶收藏/
+                                 拖拽与批量移动/排序切换；md·txt·html 三编辑器带
+                                 30s+失焦自动保存，on_dup=overwrite 覆盖保存) /
+                                 通知中心(分类过滤/单条已读·滑动删除/偏好开关) /
+                                 分享管理 / 我的(备份设置/授权卡/验证器/更新) /
+                                 登录页 v2(预检/生物识别/配对码) / 管理面板
+
+v1.0 起：备份相关页面已从 `backup_settings_page` 拆为 4 个文件（见上，`export`
+门面保调用方零改动）；请求一律经 `data/api/` 各域模块，**UI 层不得直连 dio**——
+由 `scripts/check-ui-layering.py` 守卫（已接入 `check.bat` 第五段与 CI），
+存量基线见 `scripts/ui_layering_baseline.txt`（数字只准降不准升）。
 
 android/app/src/main/kotlin/app/lanshare/lanshare_app/   ★ M-A3/M-A4 原生薄桥
 ├── LanshareApp.kt          Application + 通知渠道 + MediaStore Observer（防抖 10s）

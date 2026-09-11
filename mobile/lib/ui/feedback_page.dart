@@ -11,6 +11,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/feedback_api.dart';
+import 'widgets/kit.dart';
 
 class FeedbackPage extends StatefulWidget {
   const FeedbackPage({super.key});
@@ -91,7 +92,7 @@ class _FeedbackPageState extends State<FeedbackPage>
   Future<void> _pickImages() async {
     final room = 3 - _images.length;
     if (room <= 0) {
-      _toast('最多 3 张截图');
+      showToast('最多 3 张截图');
       return;
     }
     final res = await FilePicker.platform.pickFiles(
@@ -105,7 +106,7 @@ class _FeedbackPageState extends State<FeedbackPage>
   Future<void> _submit() async {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
-      _toast('先写个标题');
+      showToast('先写个标题');
       return;
     }
     setState(() => _sending = true);
@@ -123,7 +124,7 @@ class _FeedbackPageState extends State<FeedbackPage>
         ],
       );
       if (!mounted) return;
-      _toast('已提交，处理状态会在历史里更新');
+      showToast('已提交，处理状态会在历史里更新');
       setState(() {
         _titleCtrl.clear();
         _bodyCtrl.clear();
@@ -135,15 +136,10 @@ class _FeedbackPageState extends State<FeedbackPage>
       if (!mounted) return;
       // 服务端 detail 优先（errors.dart 统一文案），其余回退通用提示
       final msg = errDetail(e);
-      _toast(msg.isEmpty ? '提交失败，请稍后重试' : msg);
+      showToast(msg.isEmpty ? '提交失败，请稍后重试' : msg);
     } finally {
       if (mounted) setState(() => _sending = false);
     }
-  }
-
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   @override

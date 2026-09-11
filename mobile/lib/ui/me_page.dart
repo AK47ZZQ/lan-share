@@ -29,12 +29,14 @@ import '../data/net.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import 'theme/app_theme.dart';
+import 'theme/responsive.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 import 'shares_page.dart';
 import 'trash_page.dart';
 import 'verifier_page.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/server_picker.dart' show shortHost, showServerPicker;
+import 'widgets/kit.dart';
 
 class MePage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
@@ -203,7 +205,7 @@ class _MePageState extends ConsumerState<MePage> {
     // 只刷缩略图一项会让本项显示清理前的陈旧占用（E2E 实测踩中）
     await _loadCacheSize();
     _loadAppCacheSize();
-    _toast('已清理');
+    showToast('已清理');
   }
 
   Future<void> _revoke(_Device d) async {
@@ -362,18 +364,18 @@ class _MePageState extends ConsumerState<MePage> {
     //（v0.13 E2E 实测机制，见 prompt_dialog 头注释）
     if (ok != true || !mounted) return;
     if (newCtrl.text.length < 8) {
-      _toast('新密码至少 8 位');
+      showToast('新密码至少 8 位');
       return;
     }
     if (newCtrl.text != againCtrl.text) {
-      _toast('两次输入的新密码不一致');
+      showToast('两次输入的新密码不一致');
       return;
     }
     try {
       await AccountApi.changePassword(oldCtrl.text, newCtrl.text);
-      _toast('密码已修改（网页端会话需重新登录）');
+      showToast('密码已修改（网页端会话需重新登录）');
     } catch (e) {
-      _toast('修改失败：${_detail(e)}');
+      showToast('修改失败：${_detail(e)}');
     } finally {
       oldCtrl.dispose();
       newCtrl.dispose();
@@ -421,10 +423,10 @@ class _MePageState extends ConsumerState<MePage> {
       ref.read(sessionProvider.notifier).applyRename(newName);
       // 缩略图 key 含旧用户名路径：清掉避免旧目录名驻留本地（0.8.1 审查修复）
       unawaited(AuthCacheManager.I.emptyCache());
-      _toast('用户名已改为 $newName（私人目录已同步改名）');
+      showToast('用户名已改为 $newName（私人目录已同步改名）');
       setState(() {});
     } catch (e) {
-      _toast('修改失败：${_detail(e)}');
+      showToast('修改失败：${_detail(e)}');
     }
   }
 
@@ -463,18 +465,18 @@ class _MePageState extends ConsumerState<MePage> {
     if (ok != true || !mounted) return;
     final newPwd = newCtrl.text;
     if (newPwd.isNotEmpty && newPwd.length < 8) {
-      _toast('WebDAV 密码至少 8 位（留空=清除）');
+      showToast('WebDAV 密码至少 8 位（留空=清除）');
       return;
     }
     try {
       final setNow = await AccountApi.setWebdavPwd(curCtrl.text, newPwd);
       if (!mounted) return;
       setState(() => _webdavSet = setNow);
-      _toast(setNow
+      showToast(setNow
           ? 'WebDAV 独立密码已生效（挂载客户端需改用新密码）'
           : '已清除：WebDAV 回退用登录密码挂载');
     } catch (e) {
-      _toast('保存失败：${_detail(e)}');
+      showToast('保存失败：${_detail(e)}');
     }
   }
 
@@ -487,12 +489,12 @@ class _MePageState extends ConsumerState<MePage> {
       code = pc.code;
       expires = pc.expires;
     } catch (e) {
-      _toast('生成失败：${_detail(e)}');
+      showToast('生成失败：${_detail(e)}');
       return;
     }
     if (!mounted) return;
     if (code == null || code.isEmpty) {
-      _toast('生成失败：服务端未返回配对码');
+      showToast('生成失败：服务端未返回配对码');
       return;
     }
     await showDialog<void>(
@@ -553,12 +555,12 @@ class _MePageState extends ConsumerState<MePage> {
           .whereType<String>()
           .toList();
     } catch (e) {
-      _toast('生成失败：${_detail(e)}');
+      showToast('生成失败：${_detail(e)}');
       return;
     }
     if (!mounted) return;
     if (codes.isEmpty) {
-      _toast('生成失败：服务端未返回恢复码');
+      showToast('生成失败：服务端未返回恢复码');
       return;
     }
     await showDialog<void>(
@@ -594,7 +596,7 @@ class _MePageState extends ConsumerState<MePage> {
     final la = LocalAuthentication();
     try {
       if (!await la.canCheckBiometrics) {
-        _toast('本机未录入指纹/面部，无法开启应用锁');
+        showToast('本机未录入指纹/面部，无法开启应用锁');
         return;
       }
       // 开启验证本身记为"本进程已解锁"：开关验证弹窗关闭的 resumed 竞态
@@ -609,7 +611,7 @@ class _MePageState extends ConsumerState<MePage> {
       if (!passed) return;
       await ref.read(settingsProvider.notifier).setAppLock(true);
     } catch (_) {
-      _toast('生物识别不可用，无法开启应用锁');
+      showToast('生物识别不可用，无法开启应用锁');
       ref.read(sessionUnlockedProvider.notifier).state = false;
     } finally {
       ref.read(biometricBusyProvider.notifier).state = false;
@@ -638,13 +640,7 @@ class _MePageState extends ConsumerState<MePage> {
     // 缩略图也占着临时目录：应用缓存统计连带刷新（E2E 实测踩中陈旧值）
     await _loadCacheSize();
     _loadAppCacheSize();
-    _toast('已清理');
-  }
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+    showToast('已清理');
   }
 
   static String _detail(Object e) => errDetail(e);
@@ -657,14 +653,14 @@ class _MePageState extends ConsumerState<MePage> {
     if (current == null) return;
     await showServerPicker(context, current: current, onPick: (url) async {
       final ok = await ensureAddressTrusted(context, url,
-          onAutoTrusted: () => _toast('指纹与已信任服务器一致，已自动信任此入口'));
+          onAutoTrusted: () => showToast('指纹与已信任服务器一致，已自动信任此入口'));
       if (!ok || !mounted) return;
       await ApiClient.I.switchServer(url);
       await Prefs.rememberAddress(url);
       AutoSwitch.I.noteManualPick(); // 手动选择后 10 分钟内自动切换不干预
       if (!mounted) return;
       setState(() => _server = url);
-      _toast('已切换到 ${shortHost(url)}');
+      showToast('已切换到 ${shortHost(url)}');
     });
   }
 
@@ -827,7 +823,7 @@ class _MePageState extends ConsumerState<MePage> {
       ),
     );
     if (saved == true && mounted) {
-      _toast('资料已更新');
+      showToast('资料已更新');
       setState(() {});
     }
   }
@@ -840,7 +836,15 @@ class _MePageState extends ConsumerState<MePage> {
     final isGuest = session.role == 'guest';
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
-      body: ListView(padding: const EdgeInsets.only(bottom: 24), children: [
+      // v1.0 内容限宽：宽屏（平板/横屏）下居中且不超过 720 逻辑像素
+      // （含两侧 12 边距）——设置项文字不再横跨整屏；手机竖屏零变化
+      body: AdaptiveContent(
+          maxWidth: Breakpoints.contentMaxWidth + 24,
+          // padding 必须为零：各分组自带 12 边距（改造前就是它承担页边距），
+          // 这里再叠一层会变成 24——本组件只负责"宽屏居中限宽"这一件事
+          padding: EdgeInsets.zero,
+          child: ListView(
+              padding: const EdgeInsets.only(bottom: 24), children: [
         // ── 身份 + 连接（重点置顶）────────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -884,7 +888,7 @@ class _MePageState extends ConsumerState<MePage> {
                         await ref
                             .read(settingsProvider.notifier)
                             .setAutoSwitch(v);
-                        if (mounted) _toast(v ? '已开启自动切换' : '已关闭自动切换');
+                        if (mounted) showToast(v ? '已开启自动切换' : '已关闭自动切换');
                       },
                     ),
                   ]))),
@@ -1104,7 +1108,7 @@ class _MePageState extends ConsumerState<MePage> {
         Center(child: Text('LAN Share App · v$_version',
             style: const TextStyle(fontSize: 11, color: Colors.grey))),
         const SizedBox(height: 24),
-      ]),
+      ])),
     );
   }
 

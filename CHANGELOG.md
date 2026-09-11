@@ -2,6 +2,139 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — App v0.28.3+77：结构整改批次 A + 视觉规范 v1.0 发版（纯加固，无新功能）
+
+把 09-11 三个「未发版」批次（视觉规范 v1.0 / 批次 A 整改 / 批次 A 复查）一并
+打包上线。**用户可见的变化刻意压到最小**：① 修掉「操作提示在返回上一页后静默
+丢失」（提示改挂 App 级 messenger）；② 平板宽屏下提示条不再横跨整屏（限宽
+480）；③ 读屏（TalkBack）从完全不可用到底部主干可用（照片有描述、装饰图形
+不占焦点、空态连读）；④ 手机竖屏观感零变化，平板/横屏下内容限宽 720 居中、
+照片墙 3/4/6 列自适应。其余全部是内部工程加固（拆文件/收编重复件/分层守卫/
+测试 152→191）。发版前独立复审 0 个 P0/P1，2 个 P2（focusedBorder 硬编码、
+规范文档漏改 0.6）已修并复跑门禁全绿。
+- 门禁：dart analyze 0 / flutter test 191 全绿 / UI 分层守卫 51/51 基线通过；
+  aapt 0.28.3/77（104619352 B，sha256 ac9b790b…），三件套 67 条；线上
+  `/api/app/latest`+`/history` 已核验，App「检查更新」到 0.28.3 即可看到。
+
+## 2026-09-11 — App 整改批次 A 复查（4 轮 review + 3 轮对抗性审查，随 v0.28.3+77 发版）
+
+对批次 A 的全部改动做多轮自审与对抗性审查，**发现 7 项问题并全部修复**。
+
+**Review 发现**
+
+1. **死代码（最重）**：批次 A 新建的 `Motion` / `IconSizes` 令牌、`responsiveValue` /
+   `AdaptiveContent` / `AdaptiveSplit`、`showToastLong`、`Gap` 的 8 个便利常量
+   **全部零调用点**——这正是本仓自我批评过的"建了基础设施没人用"，我自己犯了
+   同款；更糟的是新增的 25 项测试**只验令牌取值、不验是否被使用**，给了虚假的
+   安全感。**处理**：能用的接进真实调用（`Motion.enter/exit` → 页面转场曲线、
+   `IconSizes.lg` → AppBar 图标、`AdaptiveContent` → me_page 限宽、`Gap` →
+   responsive 内部），其余按 YAGNI 删除（`AdaptiveSplit` / `responsiveValue` /
+   `showToastLong` / Gap 便利常量）。
+2. `AdaptiveContent` 的 `constrainHeight` 参数写成
+   `constrainHeight ? double.infinity : double.infinity`——三元两边相同，参数
+   形同虚设，删除。
+3. **分层守卫的路径守卫缺陷**：脚本用相对路径，目录不存在时 `os.walk` 返回空、
+   counts 也为空，于是"扫到 0 处违规"被当成**通过**——静默假绿比报错危险得多。
+   加"目录存在"与"扫到 0 个 dart 文件"双检查。
+4. 守卫正则要求点链无空格，`ApiClient . I . dio` 可绕过；改为
+   `ApiClient\s*\.\s*I\s*\.\s*dio`（顺带拦"方法引用"写法）。
+
+**对抗性审查发现**
+
+5. **me_page 限宽改造引入边距回归**：改用 `AdaptiveContent` 后，其默认
+   `pagePaddingH` 与各分组自带的 12 边距**叠加成 24**，违反"手机竖屏零变化"的
+   承诺。修：传 `padding: EdgeInsets.zero`，让组件只负责"宽屏居中限宽"。
+6. **收编 `_toast` 抹掉了平板优化**：`admin_page` 原本自带 `width: 360`（宽屏下
+   提示不该横跨整屏），统一时被一并删除。修：`showToast` 按屏宽自适应（宽于
+   600 时限宽 480）——把这个优化从"某页特例"提升为**全 App 共用行为**。
+7. `trash_page` 里 `Colors.red` 硬编码 + `fontSize: 12` 字面量（恰好就在我刚
+   立下的"不许写字面量"规矩旁边）→ 改 `cs.error` 与 `textTheme.bodySmall`。
+
+**同时修正 10 处文档引用**（已删 API 仍被 CHANGELOG / STATUS / HANDOVER /
+PROJECT-LAYOUT / 01-架构 / mobile README / APP-VISUAL-SPEC / 评价报告提及）。
+
+门禁：`dart analyze lib` 0 问题 / `flutter test` **191 全绿** / 分层守卫通过
+（存量 51 处）。
+
+**方法论（已进 03 踩坑清单）**：**测试通过不等于东西有用**。25 项新测试全绿，
+却完全掩盖了"新建令牌与组件零调用"这一事实——测试护栏防的是"改坏"，而
+"建了不用"要靠另一类检查（本次靠 grep 调用点发现）。两者都要有。
+
+## 2026-09-11 — App 结构与护栏整改（批次 A，随 v0.28.3+77 发版）
+
+主人要求按评价建议全量整改、把五个维度拉到 5 分。执行中先确认了边界：
+**iOS 适配 / 离线模式 / i18n 属新功能开发**（需真机构建与验证），**全量重写页面
+在 UI 零护栏下风险大于收益**（评价报告 §九已列为"明确不建议"）。故按
+「**先补护栏、再拆结构**」推进——没有护栏就重构等于闭眼做手术。本批交付：
+
+- **补上 UI 层测试护栏**（此前 152 项测试里只有 5 处能测 UI、golden 0 个）：
+  新增 `test/ui_widgets_test.dart`（25 项）——品牌组件渲染、主题里 9 类组件样式
+  的落地值、中文排版规则、无障碍语义。**用属性断言而非像素 golden**：CI 跑
+  Linux、baseline 在 Windows 生成，字体渲染差异会让 golden 必然假红，护栏的
+  价值在"能守住"而非"长得像 golden"。
+- **收编 11 份重复 `_toast`**：新建 `ui/widgets/kit.dart`，删除 11 个页面里各自
+  的实现（已发生微漂移：admin_page 多传 `width: 360`、feedback_page 漏 `mounted`），
+  改写 91 处调用点。提示改挂 App 级 `scaffoldMessengerKey`——调用点不传 context，
+  既避开 91 处 `use_build_context_synchronously` 警告，又修掉「页面在 await 期间
+  被 pop 后提示静默丢失」的真实缺陷。另提供 `showConfirmDialog` 统一危险操作确认框。
+- **拆分 `backup_settings_page.dart`**（1523 行装 4 个页面类）→ 4 个文件
+  （826 / 379 / 179 / 184 行），用 `export` 门面保既有调用方零改动。
+- **收编回收站 4 处裸 dio** 到新的 `data/api/trash_api.dart`（响应模型随之下沉，
+  契约只解析一处）。
+- **新建 UI 分层守卫** `scripts/check-ui-layering.py`：`lib/ui/` 不得 import dio
+  或调 `ApiClient.I.dio()`。用「**每文件违规数**基线」而非行号基线——行号随任何
+  编辑漂移，基线会天天假红。已接入 `check.bat`（第五段）与 CI。存量 55 处登记
+  为基线，本批回收站清零后降至 **51 处**（数字只准降不准升）。
+- **补无障碍**（此前全仓 `Semantics`/`semanticLabel` **0 处**）：从共享组件层
+  打底——`BrandCloud`/`FileTypeTile`/`SectionTitle` 图标 `ExcludeSemantics`
+  （装饰图形不占语义），`EmptyState` 用 `MergeSemantics` 合并成一句连读，
+  `AuthImage` 新增 `semanticLabel`（照片墙缩略图是读屏唯一信息来源，已接）。
+- 门禁：`dart analyze lib` 0 问题 / `flutter test` **191 全绿**（166 + 25 新增）/
+  `python scripts/check-ui-layering.py` 通过。
+- 过程中测试当场抓出**文档与代码不一致**：规范写"输入框常态描边 0.6"、代码是
+  0.8。处理方式不是改测试迁就代码，而是把 0.8 收进 `Strokes.widthInput`
+  （输入框作为可交互控件本就该比静态卡片略粗）并让文档对齐。
+- ⚠️ 环境坑：本仓 Dart 文件**行尾 CRLF/LF 混用**（`feedback_page`/`me_page` 是
+  CRLF，`admin_page`/`files_page` 是 LF）。批量脚本若只匹配 `\n`，会漏掉 CRLF
+  文件里的定义，进而把 `void _toast(` 定义行也当调用替换——**批量改写前必须
+  先 dry-run 核对命中数**（本次靠此拦下一次会破坏 2 个文件的替换）。
+
+## 2026-09-11 — App 视觉规范 v1.0：设计令牌 + 响应式适配（随 v0.28.3+77 发版）
+
+主人要求"设计并实现 Flutter 移动端 UI 与视觉美化方案"（风格/配色/排版/核心
+页面布局/交互元素外观/多尺寸适配）。审计后确认 v0.8.4/v0.8.5 已建成的主题引擎
+（六色板 + Material 3 + 品牌组件库）**不推倒重做**——那样会破坏既有观感与全部
+UI 测试；真正的缺口是**响应式完全缺失**（平板/横屏下卡片被拉满整屏、照片墙
+固定 3 列）与**令牌散落各页**（间距 8/12/16 混用无单源）。故按"新增基础设施 +
+页面最小改动"推进，**手机竖屏观感零变化**。
+
+- **新增令牌层** `lib/ui/theme/design_tokens.dart`：`Gap` 间距 8 档（4pt 基准
+  网格）/ `Radii` 圆角 8 档 / `Motion` 动效 / `IconSizes` / `Shadows` 4 档 /
+  `Strokes`。该文件**不 import 任何项目文件**（纯 Flutter 基础库），避免与
+  `app_theme.dart` 形成循环依赖。
+- **新增响应式** `lib/ui/theme/responsive.dart`：断点 600 / 840 三档 +
+  `WindowSize` + `ResponsiveContext` 扩展（`pagePadding` / `gridColumns`）+
+  `AdaptiveContent`（清单页限宽）+ **`sliverGutter()`**（sliver 场景限宽，
+  把留白折算进 `SliverPadding`，**不动 Sliver 结构**，守住照片墙性能红线）。
+  核心策略是"**内容不无限拉伸**"：超过 720 逻辑像素即居中留白。
+- **主题改造** `app_theme.dart`：`Brand` 四个圆角常量改指向 `Radii` 形成单一
+  事实源（旧引用零改动）；排版补全 8 级层级 + 中文行高 1.25–1.5 +
+  `letterSpacing` 全归零（M3 默认给 label 加的 0.1–0.5 字距会让中文发散）；
+  新增 FAB（16 圆角）/ IconButton / Tooltip 品牌化主题。
+- **页面适配**：首页与「我的」内容限宽 720 居中（品牌头仍铺满全宽）；照片墙
+  与专辑瀑布流 3 → 3/4/6 列自适应；文件页网格列数从自定义 440/640 阈值统一到
+  全局断点（3/4/5）。
+- **规范文档** `docs/DESIGN-v3/APP-VISUAL-SPEC.md`：11 节——风格定位、配色体系、
+  字体排版、空间令牌、响应式规范、三个核心页面、交互元素 17 类外观表、动效、
+  可访问性、落地清单、**改 UI 自检清单**。
+- 门禁：`dart analyze lib` 0 问题 / `flutter test` **166 全绿**（原 152 + 新增
+  14 项令牌阶梯与断点边界回归）；后端未动故未跑 check.bat。**未构建 APK、未改
+  version——随下次发版三件套一起上线**。
+- ⚠️ 环境插曲：`flutter analyze` 在沙箱下分析服务器 exit 255 崩溃，改跑 dart SDK
+  原生分析器（`bin/cache/dart-sdk/bin/dart.exe analyze lib`）稳定秒回；flutter
+  命令除原有四件套外**还需 `LOCALAPPDATA`**（否则报 pub cache 找不到直接退出）。
+  两条均已进 `项目记忆/03-踩坑清单.md`。
+
 ## 2026-09-11 — App v0.28.2+76：修分类侧边栏透明叠影（反馈 7063）
 
 反馈看板第三条反馈（主人手机 10:57 提交，附截图）当日闭环：

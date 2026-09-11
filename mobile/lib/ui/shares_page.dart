@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import '../data/local/prefs.dart';
 import '../share/share_service.dart';
 import 'widgets/qr_dialog.dart';
+import 'widgets/kit.dart';
 
 class SharesPage extends StatefulWidget {
   const SharesPage({super.key});
@@ -109,10 +110,10 @@ class _SharesPageState extends State<SharesPage> {
       await ShareService.edit(s.token,
           expiresHours: hours,
           maxDownloads: maxText.isEmpty ? null : int.parse(maxText));
-      _toast('已保存');
+      showToast('已保存');
       await _load();
     } catch (_) {
-      _toast('保存失败（数值需为正整数）');
+      showToast('保存失败（数值需为正整数）');
     }
   }
 
@@ -180,12 +181,6 @@ class _SharesPageState extends State<SharesPage> {
         ? '【LAN Share】${s.name}\n取件链接：$url\n提取码：${s.password ?? "见分享管理"}'
         : '【LAN Share】${s.name}\n取件链接：$url';
     await Share.share(text, subject: s.name);
-  }
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   static String _addrTag(String a) {

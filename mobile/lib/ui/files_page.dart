@@ -37,8 +37,10 @@ import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'recent_page.dart';
 import 'share_create_sheet.dart';
+import 'theme/responsive.dart';
 import 'trash_page.dart';
 import 'upload_qr_page.dart';
+import 'widgets/kit.dart';
 
 class Entry {
   final String name;
@@ -230,7 +232,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       }
     } catch (_) {
       // 空吞会静默残留旧列表（R1-P3）：至少给个反馈
-      _toast('刷新失败');
+      showToast('刷新失败');
     }
   }
 
@@ -257,7 +259,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       await dio.post('/api/mkdir/$base${Uri.encodeComponent(name.trim())}');
       await _refresh();
     } catch (e) {
-      _toast('创建失败：${_detail(e)}');
+      showToast('创建失败：${_detail(e)}');
     }
   }
 
@@ -287,7 +289,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           data: {'path': e.path, 'new_name': name.trim()});
       await _refresh();
     } catch (e2) {
-      _toast('重命名失败：${_detail(e2)}');
+      showToast('重命名失败：${_detail(e2)}');
     }
   }
 
@@ -320,7 +322,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
     if (!mounted) return;
     setState(() => _deleting = false);
-    _toast(failed > 0 ? '已删 $done 项，$failed 项失败' : '已删除 $done 项');
+    showToast(failed > 0 ? '已删 $done 项，$failed 项失败' : '已删除 $done 项');
     await _refresh();
   }
 
@@ -343,7 +345,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
             }));
     } catch (e) {
       // 断网/服务端 5xx 时静默失败连刷新都不做，用户会以为成功（review 0.12.0 P2）
-      _toast('${copy ? "复制" : "移动"}失败：${_detail(e)}');
+      showToast('${copy ? "复制" : "移动"}失败：${_detail(e)}');
       return;
     }
     if (!mounted) return;
@@ -352,7 +354,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         .map((m) => m['ok'] == true)
         .toList();
     final okCount = results.where((v) => v).length;
-    _toast(results.isEmpty
+    showToast(results.isEmpty
         ? (copy ? '复制完成' : '移动完成')
         : okCount == results.length
             ? '已${copy ? "复制" : "移动"} $okCount 项到「${dest.split('/').last}」'
@@ -370,12 +372,6 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         context: context,
         builder: (dctx) => PromptDialog(
             title: title, label: label, hint: hint, initial: initial));
-  }
-
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   static String _detail(Object e) {
@@ -805,7 +801,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
     setState(() => _selected.clear());
     widget.onGoTransfers?.call();
-    _toast(n > 0 ? '已加入下载队列 $n 个文件' : '任务已在队列中');
+    showToast(n > 0 ? '已加入下载队列 $n 个文件' : '任务已在队列中');
   }
 
   void _shareSingle() {
@@ -824,7 +820,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     final paths = _selectedEntries.map((e) => e.path).toList();
     if (paths.isEmpty) return;
     setState(() => _zipping = true);
-    _toast('正在打包 ${paths.length} 项…');
+    showToast('正在打包 ${paths.length} 项…');
     File? f;
     try {
       final dio = await ApiClient.I.dio();
@@ -832,7 +828,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       final url = r.data['url'] as String?;
       final name = r.data['name'] as String? ?? 'share.zip';
       if (url == null || url.isEmpty) {
-        _toast('打包失败：服务端未返回下载地址');
+        showToast('打包失败：服务端未返回下载地址');
         return;
       }
       final tmp = await getTemporaryDirectory();
@@ -840,10 +836,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       f = File(
           '${tmp.path}/zip-${DateTime.now().millisecondsSinceEpoch}-$name');
       await dio.download(url, f.path);
-      _toast('打包完成');
+      showToast('打包完成');
       await Share.shareXFiles([XFile(f.path)], subject: name);
     } catch (e) {
-      _toast('打包失败：${errDetail(e)}');
+      showToast('打包失败：${errDetail(e)}');
     } finally {
       // 不立刻删：shareXFiles 返回时接收方 App 才开始读 content URI，
       // 此刻删文件会让分享读到刚删除的目标（R1-P2）；残留由系统随
@@ -1066,10 +1062,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     ]);
   }
 
-  int get _gridColumns {
-    final w = MediaQuery.of(context).size.width;
-    return w >= 640 ? 5 : w >= 440 ? 4 : 3;
-  }
+  /// 网格列数（v1.0 统一到全局断点：手机 3 / 横屏 4 / 平板 5）。
+  /// 原实现用 440/640 两档自定义阈值，与照片墙/专辑的断点不一致；
+  /// 文件格子带文件名标签，故不用照片墙的 6 列（避免列宽过窄）
+  int get _gridColumns => context.gridColumns(compact: 3, medium: 4, expanded: 5);
 
   Widget _pinnedRow(String p) => ListTile(
       dense: true,
@@ -1293,7 +1289,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     final text = entries.map((e) => e.absPath ?? '/${e.path}').join('\n');
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    _toast(entries.length > 1 ? '已复制 ${entries.length} 个路径' : '已复制路径');
+    showToast(entries.length > 1 ? '已复制 ${entries.length} 个路径' : '已复制路径');
   }
 
   Widget _selectionBar(bool canManage) {

@@ -18,6 +18,7 @@ import '../transfer/local_files.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'widgets/open_local.dart';
+import 'widgets/kit.dart';
 
 enum _Filter { all, active, done, failed }
 
@@ -580,12 +581,6 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
   int get _totalSize =>
       _files.fold(0, (sum, f) => sum + f.size);
 
-  void _toast(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
-  }
-
   Future<void> _clearAll() async {
     if (_files.isEmpty) return;
     final ok = await showDialog<bool>(
@@ -613,7 +608,7 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
         n++;
       } catch (_) {}
     }
-    _toast(n == _files.length ? '已清空 $n 个文件' : '已清空 $n 个，部分文件被占用');
+    showToast(n == _files.length ? '已清空 $n 个文件' : '已清空 $n 个，部分文件被占用');
     _load();
   }
 
@@ -630,7 +625,7 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
         } catch (_) {}
       }
     } catch (_) {}
-    _toast(n > 0 ? '已清理 $n 个残留分片' : '没有可清理的残留分片');
+    showToast(n > 0 ? '已清理 $n 个残留分片' : '没有可清理的残留分片');
     _load();
   }
 
@@ -653,9 +648,9 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
     if (ok != true) return;
     try {
       await File(f.path).delete();
-      _toast('已删除');
+      showToast('已删除');
     } catch (_) {
-      _toast('删除失败（文件可能被占用）');
+      showToast('删除失败（文件可能被占用）');
     }
     _load();
   }

@@ -11,8 +11,12 @@ class AuthImage extends StatefulWidget {
   final BoxFit fit;
   final Widget Function(BuildContext)? placeholder;
   final Widget Function(BuildContext, Object error)? errorBuilder;
+
+  /// 无障碍语义标签（v1.0）。照片墙、最近上传等**没有相邻文字**的图片必须传，
+  /// 否则读屏用户只听到一句"图片"；若旁边已有文件名文字则留空，避免念两遍。
+  final String? semanticLabel;
   const AuthImage({super.key, required this.url, this.fit = BoxFit.cover,
-      this.placeholder, this.errorBuilder});
+      this.placeholder, this.errorBuilder, this.semanticLabel});
 
   @override
   State<AuthImage> createState() => _AuthImageState();
@@ -73,7 +77,10 @@ class _AuthImageState extends State<AuthImage> {
   Widget build(BuildContext context) {
     final instant = _instant;
     if (instant != null) {
-      return Image.file(instant, fit: widget.fit, gaplessPlayback: true);
+      return Image.file(instant,
+          fit: widget.fit,
+          gaplessPlayback: true,
+          semanticLabel: widget.semanticLabel);
     }
     return FutureBuilder<File>(
       future: _future,
@@ -92,7 +99,10 @@ class _AuthImageState extends State<AuthImage> {
                   color: Color(0x33888888),
                   child: Icon(Icons.broken_image_outlined));
         }
-        return Image.file(snap.data!, fit: widget.fit, gaplessPlayback: true);
+        return Image.file(snap.data!,
+            fit: widget.fit,
+            gaplessPlayback: true,
+            semanticLabel: widget.semanticLabel);
       },
     );
   }

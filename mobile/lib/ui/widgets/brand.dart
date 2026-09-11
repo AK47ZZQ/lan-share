@@ -1,10 +1,18 @@
 // 品牌组件库（0.8.4 UI 重设计批）：云朵 Logo、渐变品牌头、空态三件套、
 // 品牌化文件类型图标。全部无状态纯展示组件，focus 在复用与一致性。
+//
+// v1.0 无障碍改造（2026-09-11）：此前全仓 `Semantics`/`semanticLabel` 为 0 处，
+// 读屏用户打开 App 只能听到一串无意义的图形与拼读的路径。这里按
+// 「装饰性图形一律 ExcludeSemantics、信息性文字交给原文字」的原则处理共享
+// 组件——改这一处，全部使用方一起受益。
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
 /// 云朵 Logo：白底圆角块（登录页品牌头同款玻璃感）
+///
+/// 纯装饰元素：语义由相邻文字承担（品牌头有问候语、空态有标题），
+/// 读屏跳过它，否则会多念一个无信息的图形。
 class BrandCloud extends StatelessWidget {
   final double size;
   final bool onGradient; // 是否置于品牌渐变上（白块+白云）——浅色背景场景
@@ -18,15 +26,17 @@ class BrandCloud extends StatelessWidget {
         : cs.primary.withValues(alpha: 0.12);
     final iconColor =
         onGradient ? Colors.white : cs.primary;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: tile,
-        borderRadius:
-            BorderRadius.circular(Brand.cloudTileRadius * size / 56),
+    return ExcludeSemantics(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: tile,
+          borderRadius:
+              BorderRadius.circular(Brand.cloudTileRadius * size / 56),
+        ),
+        child: Icon(Brand.cloud, color: iconColor, size: size * 0.55),
       ),
-      child: Icon(Brand.cloud, color: iconColor, size: size * 0.55),
     );
   }
 }
@@ -78,6 +88,9 @@ class BrandHeader extends StatelessWidget {
 }
 
 /// 空态三件套：品牌云朵 + 一句标题 + 引导按钮（替代散落的"还没xx"灰字）
+///
+/// 语义合并成一个节点：读屏连着念"还没有照片，去文件页上传"，
+/// 而不是分三次跳焦点；`action` 按钮保持独立可点。
 class EmptyState extends StatelessWidget {
   final String title;
   final String? hint;
@@ -94,32 +107,37 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.symmetric(vertical: padding, horizontal: 24),
-      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        const BrandCloud(size: 64, onGradient: false),
-        const SizedBox(height: 14),
-        Text(title,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 14.5,
-                fontWeight: FontWeight.w600,
-                color: cs.onSurfaceVariant)),
-        if (hint != null) ...[
-          const SizedBox(height: 6),
-          Text(hint!,
+    return MergeSemantics(
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: padding, horizontal: 24),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const BrandCloud(size: 64, onGradient: false),
+          const SizedBox(height: 14),
+          Text(title,
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 12.5, color: cs.onSurfaceVariant)),
-        ],
-        const SizedBox(height: 14),
-        ?action,
-      ]),
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurfaceVariant)),
+          if (hint != null) ...[
+            const SizedBox(height: 6),
+            Text(hint!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 12.5, color: cs.onSurfaceVariant)),
+          ],
+          const SizedBox(height: 14),
+          ?action,
+        ]),
+      ),
     );
   }
 }
 
 /// 品牌化文件类型图标：圆角方块 + 类型色 + 白字形（替代裸露 Material 图标）
+///
+/// 纯装饰：它总是紧邻文件名或扩展名文字出现（文件列表 / 最近上传），
+/// 语义由那些文字承担，读屏跳过可避免"PDF"被念两遍。
 class FileTypeTile extends StatelessWidget {
   final String ext; // 带点小写扩展名，如 .pdf
   final IconData icon;
@@ -134,17 +152,19 @@ class FileTypeTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = fileTypeColor(ext);
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [color.withValues(alpha: 0.85), color]),
-        borderRadius: BorderRadius.circular(size * 0.28),
+    return ExcludeSemantics(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [color.withValues(alpha: 0.85), color]),
+          borderRadius: BorderRadius.circular(size * 0.28),
+        ),
+        child: Icon(icon, color: Colors.white, size: size * 0.52),
       ),
-      child: Icon(icon, color: Colors.white, size: size * 0.52),
     );
   }
 }
@@ -161,7 +181,8 @@ class SectionTitle extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Row(children: [
       if (icon != null) ...[
-        Icon(icon, size: 17, color: cs.primary),
+        // 小图标是语气强调，信息在标题文字里——不额外占用语义
+        ExcludeSemantics(child: Icon(icon, size: 17, color: cs.primary)),
         const SizedBox(width: 6),
       ],
       Expanded(

@@ -1,4 +1,4 @@
-# 项目目录布局与关键路径（v0.21 更新）
+# 项目目录布局与关键路径（2026-09-11 更新）
 
 > 结论先行：**唯一真源是本仓库**。生产路径、构建镜像全部是指向/镜像本仓库的辅助目录，改代码只改这里。
 
@@ -60,3 +60,22 @@
   `backup/backup_keys.dart`（备份 prefs 键常量）+ `test/upload_client_test.dart`
 - 媒体扩展名三端对齐基准：服务端 `app/filetools.py`（web filekinds.ts /
   mobile media_kinds.dart 各持对齐副本）
+
+## v1.0 视觉规范批新增的落点（2026-09-11，App 未发版）
+
+- `mobile/lib/ui/theme/design_tokens.dart`：**设计令牌单一事实源**——`Gap`
+  间距（4pt 网格 8 档）/`Radii` 圆角（8 档）/`Motion` 动效/`IconSizes`/
+  `Shadows` 阴影/`Strokes` 描边。**有意不 import 任何项目文件**（纯 Flutter
+  基础库），由 app_theme 反向依赖，避免循环 import。
+- `mobile/lib/ui/theme/responsive.dart`：断点 600/840 + `WindowSize` +
+  `ResponsiveContext` 扩展（pagePadding/gridColumns/isLandscape）+
+  `AdaptiveContent`（清单页限宽）+ `sliverGutter()`（sliver 场景限宽，把
+  留白折算进 SliverPadding，**不动 Sliver 结构**）。
+- `mobile/test/visual_tokens_test.dart`：14 项令牌阶梯与断点边界回归
+  （599/600/839/840 四边界 + 限宽收敛 720），App 测试基线 **152→166**。
+- `docs/DESIGN-v3/APP-VISUAL-SPEC.md`：视觉设计规范 v1.0（11 节，含改 UI
+  自检清单）——改 App 视觉/布局/配色以它为准。
+- 被改造的页面：`home_page`（内容限宽 720）、`me_page`（同）、`photos_page`
+  与 `album_detail_page`（瀑布流列数 3→3/4/6 自适应）、`files_page`（网格
+  列数从自定义 440/640 阈值统一到全局断点）、`ui/theme/app_theme.dart`
+  （Brand 圆角指向 Radii 单源 + 排版 8 级 + FAB/IconButton/Tooltip 主题）。

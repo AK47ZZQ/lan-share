@@ -68,6 +68,25 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
   （{"version","build","filename","sha256","notes"}）放进共享空间
   `App安装包/` 即完成发版（/api/app/latest|download）；App 对比 build 号
   自动提示，无需再手动发分享链接换包
+- **改 App 界面/视觉**：先读 `docs/DESIGN-v3/APP-VISUAL-SPEC.md`（视觉设计规范
+  v1.0）——间距/圆角/字号/颜色一律取 `lib/ui/theme/design_tokens.dart` 与
+  `responsive.dart` 的令牌，页面里**禁止再写字面量**；断点 600/840、清单页
+  限宽 720、网格列数走 `context.gridColumns()`。改令牌必须同步
+  `test/visual_tokens_test.dart`（14 项阶梯与断点边界回归）。
+- **本机 Git Bash 跑 flutter 的实测可用形状**（2026-09-11 实测 166 全绿）：
+  ```
+  env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+    "PROGRAMFILES(X86)=C:\Program Files (x86)" \
+    "LOCALAPPDATA=C:\Users\<你的用户名>\AppData\Local" \
+    "ANDROID_HOME=C:\tools\android-sdk" "JAVA_HOME=C:\tools\jdk-21.0.12.1+1" \
+    /c/tools/flutter/bin/flutter.bat test
+  ```
+  五个条件缺一不可（`PROGRAMFILES(X86)` / `LOCALAPPDATA` / `ANDROID_HOME` /
+  `JAVA_HOME` 四个环境变量 + 去代理；缺 `PROGRAMFILES(X86)` 秒退且无输出；
+  缺 `LOCALAPPDATA` 报 pub cache 找不到直接失败）。`flutter analyze` 在沙箱下
+  分析服务器 **exit 255 崩溃**，改跑
+  `C:\tools\flutter\bin\cache\dart-sdk\bin\dart.exe analyze lib`（原生可执行
+  文件，稳定且秒回）。完整记录见 `项目记忆/03-踩坑清单.md` 09-11 v1.0 批。
 - **交付前必过**：`dart analyze` 零问题 + `flutter test` + 安卓模拟器全流程
   （登录→信任框→照片/文件/我的/分享接收/分享管理）；模拟器经 NAT 可直连宿主机
   LAN 地址。⚠️ **改了 Kotlin 必须再跑一次真构建**——`dart analyze`/`flutter test`
@@ -209,4 +228,6 @@ docs/            API.md / SECURITY.md / DEVELOPMENT.md / STATUS-v3.md / GIT.md /
 ## 更新文档的责任
 
 改了 API、安全行为、前端交互约定或部署方式，**同一次提交里**更新
-`docs/API.md`、`docs/SECURITY.md`、`README.md` 与 `CHANGELOG.md`。文档过期比没有文档更糟。
+`docs/API.md`、`docs/SECURITY.md`、`README.md` 与 `CHANGELOG.md`；改了
+**App 视觉/布局/响应式**则同步 `docs/DESIGN-v3/APP-VISUAL-SPEC.md` 与
+`项目记忆/01-架构与现状.md` 的测试基线数字。文档过期比没有文档更糟。

@@ -30,6 +30,11 @@ jobs:
       - name: ruff（错误级 + pyflakes + bugbear）
         run: python -m ruff check app tests server.py
 
+      # App 侧分层守卫（2026-09-11）：UI 层不得直连 dio——07 审查把这判为 P1，
+      # 纯静态扫描、无需 Dart 工具链，故并入本 job（基线见 scripts/ui_layering_baseline.txt）
+      - name: UI 分层守卫（mobile/lib/ui 不得直连 dio）
+        run: python scripts/check-ui-layering.py
+
       - name: mypy
         run: python -m mypy app
 

@@ -28,9 +28,10 @@ import 'recent_page.dart';
 import 'shares_page.dart';
 import 'storage_detail_page.dart';
 import 'trash_page.dart';
+import 'theme/app_theme.dart';
+import 'theme/responsive.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
-import 'theme/app_theme.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   final VoidCallback onGoPhotos, onGoFiles, onGoTransfers, onGoMe;
@@ -401,6 +402,10 @@ class _HomePageState extends ConsumerState<HomePage> {
     // （问候+头像+微数据，从状态栏铺满），滚动收窄为纯色工具条
     final topInset = MediaQuery.of(context).padding.top;
     final session = ref.watch(sessionProvider);
+    // 内容限宽（v1.0 响应式）：手机竖屏 = 12（与原值一致，零变化）；
+    // 平板/横屏下自动加宽两侧留白，使卡片流居中且不超过 720 逻辑像素，
+    // 避免一行正文横跨千余像素。品牌头不参与限宽（保持铺满全宽的沉浸感）
+    final gutter = sliverGutter(context, base: 12);
     return AnnotatedRegion<SystemUiOverlayStyle>(
         value: SystemUiOverlayStyle.light,
         child: RefreshIndicator(
@@ -423,7 +428,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           if (_netDown)
             SliverToBoxAdapter(
                 child: Container(
-                    margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                    margin: EdgeInsets.fromLTRB(gutter, 12, gutter, 0),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
@@ -438,7 +443,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   TextStyle(fontSize: 12, color: cs.error))),
                     ]))),
           SliverPadding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              padding: EdgeInsets.fromLTRB(gutter, 12, gutter, 8),
               sliver: SliverReorderableList(
               onReorderStart: (_) => _dragHintOnce(),
               // v3.41+：onReorderItem 的 newIndex 已自适应移除项，无需 -1 修正

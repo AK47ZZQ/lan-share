@@ -17,6 +17,7 @@ import 'transfer/transfer_engine.dart';
 import 'ui/home_shell.dart';
 import 'ui/login_page.dart';
 import 'ui/theme/app_theme.dart';
+import 'ui/widgets/kit.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -127,6 +128,9 @@ class LanShareApp extends ConsumerWidget {
       return MaterialApp(
         title: 'LAN Share',
         debugShowCheckedModeBanner: false,
+        // 轻提示挂 App 级 messenger：不依赖页面 BuildContext，页面在 await
+        // 期间被 pop 也不丢提示（详见 ui/widgets/kit.dart 注释）
+        scaffoldMessengerKey: rootMessengerKey,
         themeMode: settings.themeMode,
         // 0.8.4 主题系统：brand tokens + 亮/暗/AMOLED 三套，0.8.5 挂色板。
         // AMOLED 开关生效于"暗色生效"的场合（dark 或 system 且系统为暗）。
