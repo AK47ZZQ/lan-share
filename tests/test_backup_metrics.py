@@ -8,6 +8,8 @@ C:/lan-share-backup 的外部计划任务产物）。
 import json
 import time
 
+from conftest import MEMBER_PASS
+
 from app.config import BACKUP_DIR
 from app.services import backup as backup_svc
 from app.services import metrics as metrics_svc
@@ -108,3 +110,14 @@ def test_disk_watchdog_cooldown(tmp_path, monkeypatch):
     monkeypatch.setattr(metrics_svc, "disk_used_pct", lambda: 50.0)
     assert metrics_svc.disk_watchdog(push=lambda t, b: fired.append(t)) is False
     assert len(fired) == 2
+
+
+def test_metrics_endpoint_requires_admin(client):
+    """/api/metrics 只读快照：member 访问 403（admin 专属）。"""
+    from test_extras import _mk_member, _member_session, _rand
+    username = "mx" + _rand()
+    _mk_member(client, username, MEMBER_PASS)
+    m = _member_session(client, username, MEMBER_PASS)
+    assert m.get("/api/metrics").status_code == 403
+    # 匿名 401
+    assert client.get("/api/metrics").status_code == 401

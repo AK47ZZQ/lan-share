@@ -104,3 +104,51 @@ def test_search_still_finds_files_by_name(client):
     r = _q(c, "预算表")
     assert r.status_code == 200
     assert any(x["kind"] == "file" and "预算表2026" in x["name"] for x in r.json())
+
+
+def test_search_like_wildcards_are_literal(client):
+    """LIKE 通配符（%/_）按字面匹配而非通配（store 统一 ESCAPE 转义）。"""
+    username = f"ntw{_rand()}"
+    _mk_member(client, username, MEMBER_PASS)
+    _write_note(f"private/{username}/笔记/pct.md", "进度 100% 完成 的主题")
+    _write_note(f"private/{username}/笔记/under.md", "snake_case 命名风格")
+    note_index.refresh_index()
+    c = _member_session(client, username, MEMBER_PASS)
+    # "% 完" 若被当通配符会命中任意以"完"结尾的行；字面语义只命中 100%
+    hits = [x for x in _q(c, "100% 完").json() if x.get("kind") == "note"]
+    assert hits and "pct.md" in hits[0]["path"]
+    # 下划线按字面
+    hits2 = [x for x in _q(c, "snake_case").json() if x.get("kind") == "note"]
+    assert hits2 and "under.md" in hits2[0]["path"]
+
+
+def test_search_html_notes_hit_text_not_markup(client):
+    """html 笔记镜像去标签：命中的是可读文本，markup 噪声不参与命中。"""
+    username = f"nth{_rand()}"
+    _mk_member(client, username, MEMBER_PASS)
+    _write_note(f"private/{username}/笔记/页.html",
+                "<html><body><h1>家庭公约</h1><script>var x=1;</script>"
+                "<p>每周大扫除一次</p></body></html>")
+    note_index.refresh_index()
+    c = _member_session(client, username, MEMBER_PASS)
+    assert any("/页.html" in x["path"] for x in _q(c, "大扫除").json())
+    # script 内容已剥离：不命中
+    assert not any("/页.html" in x["path"] for x in _q(c, "var x").json())
+
+
+def test_refresh_index_caps_at_max_notes(client, monkeypatch):
+    """数量护栏：单轮聚合上限 MAX_NOTES（防误选网盘根目录全盘扫描）。"""
+    from app.services import note_index as ni
+    seen_counts = []
+
+    real_scan = ni.note_search_store.apply_scan
+
+    def spy(upserts, gone):
+        seen_counts.append(len(upserts))
+        real_scan(upserts, gone)
+
+    monkeypatch.setattr(ni.note_search_store, "apply_scan", spy)
+    for i in range(ni.MAX_NOTES + 5):
+        _write_note(f"private/{ADMIN_USER}/bulk/n{i}.md", f"bulk {i}")
+    ni.refresh_index()
+    assert seen_counts and seen_counts[0] <= ni.MAX_NOTES
