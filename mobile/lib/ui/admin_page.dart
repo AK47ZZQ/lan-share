@@ -6,59 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/admin_api.dart';
 import '../ui/widgets/prompt_dialog.dart';
 import '../data/api/errors.dart';
 import '../state/session.dart';
 import 'widgets/kit.dart';
-
-class _AdminUser {
-  final int id;
-  final String username;
-  final String role;
-  final bool isActive;
-  final int? quotaBytes;
-  final String quotaHuman;
-  final String createdAt;
-  final bool totpEnabled;
-  final bool webdavSet;
-  _AdminUser.fromJson(Map<String, dynamic> j)
-      : id = (j['id'] as num?)?.toInt() ?? 0,
-        username = j['username'] as String? ?? '',
-        role = j['role'] as String? ?? 'member',
-        isActive = j['is_active'] as bool? ?? true,
-        quotaBytes = (j['quota_bytes'] as num?)?.toInt(),
-        quotaHuman = j['quota_human'] as String? ?? '',
-        createdAt = j['created_at'] as String? ?? '',
-        totpEnabled = j['totp_enabled'] as bool? ?? false,
-        webdavSet = j['webdav_set'] as bool? ?? false;
-}
-
-class _Grant {
-  final int id;
-  final int userId;
-  final String path;
-  final bool canWrite;
-  final int? expiresAt;
-  _Grant.fromJson(Map<String, dynamic> j)
-      : id = (j['id'] as num?)?.toInt() ?? 0,
-        userId = (j['user_id'] as num?)?.toInt() ?? 0,
-        path = j['path'] as String? ?? '',
-        canWrite = j['can_write'] as bool? ?? false,
-        expiresAt = (j['expires_at'] as num?)?.toInt();
-}
-
-class _Invite {
-  final String code;
-  final String role;
-  final bool expired;
-  final bool used;
-  _Invite.fromJson(Map<String, dynamic> j)
-      : code = j['code'] as String? ?? '',
-        role = j['role'] as String? ?? '',
-        expired = j['expired'] as bool? ?? false,
-        used = j['used'] as bool? ?? false;
-}
 
 class AdminPage extends ConsumerStatefulWidget {
   const AdminPage({super.key});
@@ -70,9 +22,9 @@ class _AdminPageState extends ConsumerState<AdminPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tab =
       TabController(length: 3, vsync: this);
-  List<_AdminUser>? _users;
-  List<_Invite>? _invites;
-  List<_Grant>? _grants;
+  List<AdminUser>? _users;
+  List<AdminInvite>? _invites;
+  List<AdminGrant>? _grants;
   String? _error;
   // 授权表单
   final _gUsers = <int>{};
@@ -104,21 +56,21 @@ class _AdminPageState extends ConsumerState<AdminPage>
 
   Future<void> _loadAll() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final users = (await dio.get('/api/admin/users'))
-          .data as List;
-      final invites = (await dio.get('/api/admin/invites')).data as List;
-      final grants = (await dio.get('/api/admin/grants')).data as List;
-      final pub = await dio.get('/api/public-url');
-      final hook = await dio.get('/api/admin/webhook');
+      // 加载顺序保持原样：五个端点顺序拉取（users → invites → grants
+      // → 公网入口 → webhook），任一失败整体进错误态可重试
+      final users = await AdminApi.users();
+      final invites = await AdminApi.invites();
+      final grants = await AdminApi.grants();
+      final pub = await AdminApi.publicUrl();
+      final hookUrl = await AdminApi.webhookUrl();
       if (!mounted) return;
       setState(() {
-        _users = users.map((e) => _AdminUser.fromJson(e)).toList();
-        _invites = invites.map((e) => _Invite.fromJson(e)).toList();
-        _grants = grants.map((e) => _Grant.fromJson(e)).toList();
-        _pubUrl.text = pub.data['public_base_url'] as String? ?? '';
-        _pubAlt.text = pub.data['public_base_url_alt'] as String? ?? '';
-        _hookUrl.text = hook.data['url'] as String? ?? '';
+        _users = users;
+        _invites = invites;
+        _grants = grants;
+        _pubUrl.text = pub.base;
+        _pubAlt.text = pub.alt;
+        _hookUrl.text = hookUrl;
         _error = null;
       });
       _loadDirs();
@@ -133,15 +85,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   Future<void> _loadDirs() async {
     final out = <String>[];
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/files');
-      for (final e in (r.data['items'] as List)) {
-        final m = e as Map;
-        if (m['is_dir'] != true) continue;
-        final name = m['name'] as String;
-        if (name == 'private' || name == 'incoming') continue;
-        out.add(m['path'] as String);
-      }
+      out.addAll(await AdminApi.sharedTopDirs());
     } catch (_) {/* 无权目录跳过 */}
     if (!mounted) return;
     setState(() => _dirOptions = out..sort());
@@ -201,7 +145,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
 
   String _memberName(int uid) =>
       _users?.firstWhere((u) => u.id == uid,
-          orElse: () => _AdminUser.fromJson({
+          orElse: () => AdminUser.fromJson({
                 'id': uid,
                 'username': '已删除(#$uid)',
                 'role': 'member',
@@ -211,7 +155,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
       '已删除(#$uid)';
 
   // ── 成员操作 ─────────────────────────────────────────────
-  Future<void> _userSheet(_AdminUser u) async {
+  Future<void> _userSheet(AdminUser u) async {
     final me = ref.read(sessionProvider).username;
     await showModalBottomSheet<void>(
         context: context,
@@ -226,7 +170,10 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   onTap: () async {
                     Navigator.pop(ctx);
                     final role = await _pickRole(u.role);
-                    if (role != null) await _patchUser(u.id, {'role': role});
+                    if (role != null) {
+                      await _run(() => AdminApi.setUserRole(u.id, role),
+                          okMsg: '已更新');
+                    }
                   }),
               ListTile(
                   leading: const Icon(Icons.edit_outlined),
@@ -245,8 +192,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                               '将解除 ${u.username} 的两步验证（含恢复码），不动密码。')) {
                             return;
                           }
-                          await _post('/api/admin/users/${u.id}/totp-disable',
-                              {},
+                          await _run(() => AdminApi.disableTotp(u.id),
                               okMsg: '已解除 ${u.username} 的两步验证');
                         }
                       : null),
@@ -270,10 +216,10 @@ class _AdminPageState extends ConsumerState<AdminPage>
                       showToast('请输入正数 GB，或留空提交表示不限');
                       return;
                     }
-                    await _patchUser(u.id, {
-                      'quota_bytes':
-                          gb.isEmpty || n == 0 ? 0 : (n! * (1 << 30)).round()
-                    });
+                    await _run(
+                        () => AdminApi.setUserQuota(
+                            u.id, gb.isEmpty || n == 0 ? 0 : (n! * (1 << 30)).round()),
+                        okMsg: '已更新');
                   }),
               ListTile(
                   leading: const Icon(Icons.key_outlined),
@@ -288,9 +234,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                       showToast('密码至少 8 位（留空提交=清除）');
                       return;
                     }
-                    await _post(
-                        '/api/admin/users/${u.id}/webdav-password',
-                        {'value': v},
+                    await _run(() => AdminApi.setWebdavPassword(u.id, v),
                         okMsg: v.isEmpty
                             ? '已清除 WebDAV 独立密码'
                             : 'WebDAV 密码已更新');
@@ -302,7 +246,8 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   title: Text(u.isActive ? '停用账号' : '启用账号'),
                   onTap: () async {
                     Navigator.pop(ctx);
-                    await _patchUser(u.id, {'is_active': !u.isActive});
+                    await _run(() => AdminApi.setUserActive(u.id, !u.isActive),
+                        okMsg: '已更新');
                   }),
               if (u.username != me)
                 ListTile(
@@ -318,7 +263,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                           okText: '删除')) {
                         return;
                       }
-                      await _del('/api/admin/users/${u.id}',
+                      await _run(() => AdminApi.deleteUser(u.id),
                           okMsg: '已删除（其授权/会话一并清除）');
                       _gUsers.remove(u.id);
                     }),
@@ -347,7 +292,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   }
 
   /// 改用户名（管理员直改，私人目录/incoming 同步改名）→ 重置密码二选一流
-  Future<void> _credFlow(_AdminUser u) async {
+  Future<void> _credFlow(AdminUser u) async {
     final action = await showModalBottomSheet<String>(
         context: context,
         builder: (ctx) => SafeArea(
@@ -364,7 +309,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (action == 'rename') {
       final newName = await _prompt('改用户名 — ${u.username}', '新用户名');
       if (newName == null || newName == u.username) return;
-      await _post('/api/admin/users/${u.id}/username', {'value': newName},
+      await _run(() => AdminApi.setUsername(u.id, newName),
           okMsg: '用户名已改为 $newName');
     } else if (action == 'reset') {
       final newPwd = await _prompt('重置密码 — ${u.username}', '新密码（至少 8 位）',
@@ -376,40 +321,16 @@ class _AdminPageState extends ConsumerState<AdminPage>
         showToast('密码至少 8 位');
         return;
       }
-      await _post('/api/admin/users/${u.id}/password', {'value': newPwd},
+      await _run(() => AdminApi.setPassword(u.id, newPwd),
           okMsg: '密码已重置（其两步验证同步解除、设备 Token 全部吊销）');
     }
   }
 
-  Future<void> _patchUser(int uid, Map<String, Object?> body) async {
+  /// "执行 → 提示 → 重载"统一薄壳：请求本体已下沉 AdminApi，这里只管
+  /// 成功 toast（可选）与 _loadAll，失败统一 errDetail 弹 toast
+  Future<void> _run(Future<void> Function() op, {String? okMsg}) async {
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.patch('/api/admin/users/$uid', data: body);
-      showToast('已更新');
-      _loadAll();
-    } catch (e) {
-      showToast(errDetail(e));
-    }
-  }
-
-  Future<void> _post(String path, Map<String, Object?> body,
-      {String? okMsg}) async {
-    try {
-      final dio = await ApiClient.I.dio();
-      await dio.post(path, data: body);
-      if (okMsg != null) showToast(okMsg);
-      _loadAll();
-    } catch (e) {
-      showToast(errDetail(e));
-    }
-  }
-
-  /// DELETE 类操作（邀请撤销/授权撤销/删成员）：0.8.0 误用 POST 全部 405，
-  /// 删除按钮失效的根因（0.8.1 审查修复）
-  Future<void> _del(String path, {String? okMsg}) async {
-    try {
-      final dio = await ApiClient.I.dio();
-      await dio.delete(path);
+      await op();
       if (okMsg != null) showToast(okMsg);
       _loadAll();
     } catch (e) {
@@ -422,10 +343,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio
-          .post('/api/admin/invites', data: {'role': role, 'hours': 72});
-      final code = r.data['code'] as String? ?? '';
+      final code = await AdminApi.createInvite(role);
       if (!mounted || code.isEmpty) return;
       await showDialog<void>(
           context: context,
@@ -470,17 +388,14 @@ class _AdminPageState extends ConsumerState<AdminPage>
     setState(() => _busy = true);
     var ok = 0, fail = 0;
     try {
-      final dio = await ApiClient.I.dio();
       for (final uid in _gUsers) {
         for (final p in _gPaths) {
           try {
-            await dio.post('/api/admin/grants', data: {
-              'user_id': uid,
-              'path': p,
-              'can_read': true,
-              'can_write': _gWrite,
-              if (_gExpiry > 0) 'expires_hours': _gExpiry,
-            });
+            await AdminApi.upsertGrant(
+                userId: uid,
+                path: p,
+                canWrite: _gWrite,
+                expiresHours: _gExpiry > 0 ? _gExpiry : null);
             ok++;
           } catch (_) {
             fail++;
@@ -511,13 +426,13 @@ class _AdminPageState extends ConsumerState<AdminPage>
     return '剩 ${left.inDays} 天';
   }
 
-  bool _grantExpired(_Grant g) =>
+  bool _grantExpired(AdminGrant g) =>
       g.expiresAt != null &&
       g.expiresAt! * 1000 < DateTime.now().millisecondsSinceEpoch;
 
   /// 修改授权（v0.20）：upsert 语义。续期=原剩余+延长时间；永久授权
   /// 续期无意义直接提示；读写切换保留原有效期
-  Future<void> _updateGrant(_Grant g,
+  Future<void> _updateGrant(AdminGrant g,
       {required bool canWrite, int extendHours = 0}) async {
     if (extendHours > 0 && g.expiresAt == null) {
       showToast('该授权已是永久，无需延长');
@@ -533,14 +448,11 @@ class _AdminPageState extends ConsumerState<AdminPage>
       hours = (left / 3600).ceil() + extendHours;
     }
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/admin/grants', data: {
-        'user_id': g.userId,
-        'path': g.path,
-        'can_read': true,
-        'can_write': canWrite,
-        'expires_hours': ?hours,
-      });
+      await AdminApi.upsertGrant(
+          userId: g.userId,
+          path: g.path,
+          canWrite: canWrite,
+          expiresHours: hours);
       showToast(extendHours > 0
           ? '已延长 ${_memberName(g.userId)} 的「${g.path.split('/').last}」'
           : '已改为${canWrite ? '读写' : '只读'}');
@@ -551,7 +463,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   }
 
   /// 单条授权操作菜单（v0.20）：续期/改读写/撤销收进一处，不再只有撤销
-  void _grantSheet(_Grant g) {
+  void _grantSheet(AdminGrant g) {
     final expired = _grantExpired(g);
     showModalBottomSheet(
         context: context,
@@ -600,7 +512,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                           color: Theme.of(ctx).colorScheme.error)),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _del('/api/admin/grants/${g.id}', okMsg: '已撤销');
+                    _run(() => AdminApi.deleteGrant(g.id), okMsg: '已撤销');
                   }),
               const SizedBox(height: 8),
             ])));
@@ -611,9 +523,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/admin/public-url',
-          data: {'url': _pubUrl.text.trim(), 'url_alt': _pubAlt.text.trim()});
+      await AdminApi.savePublicUrl(_pubUrl.text.trim(), _pubAlt.text.trim());
       showToast('公网地址已保存');
     } catch (e) {
       showToast(errDetail(e));
@@ -626,9 +536,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/admin/webhook',
-          data: {'url': _hookUrl.text.trim()});
+      await AdminApi.saveWebhook(_hookUrl.text.trim());
       showToast('推送地址已保存');
     } catch (e) {
       showToast(errDetail(e));
@@ -641,8 +549,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/admin/webhook/test');
+      await AdminApi.testWebhook();
       showToast('测试消息已发送，去手机上看看');
     } catch (e) {
       showToast(errDetail(e));
@@ -714,15 +621,12 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (ok != true || !mounted) return;
     setState(() => _busy = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/admin/notify', data: {
-        'title': titleCtrl.text.trim(),
-        'body': bodyCtrl.text.trim(),
-        if (targets.isNotEmpty) 'user_ids': targets.toList(),
-      });
-      final n = (r.data['sent'] as num?)?.toInt() ?? 0;
-      showToast('已推送给 $n 人'
-          '${(r.data['webhook'] as bool? ?? false) ? '，站外 webhook 同步发送' : ''}');
+      final r = await AdminApi.notify(
+          title: titleCtrl.text.trim(),
+          body: bodyCtrl.text.trim(),
+          userIds: targets.isEmpty ? null : targets.toList());
+      showToast('已推送给 ${r.sent} 人'
+          '${r.webhook ? '，站外 webhook 同步发送' : ''}');
     } catch (e) {
       showToast(errDetail(e));
     } finally {
@@ -956,9 +860,8 @@ class _AdminPageState extends ConsumerState<AdminPage>
               tooltip: '删除记录',
               icon: Icon(Icons.close,
                   size: 20, color: cs.error),
-              onPressed: () => _del(
-                  '/api/admin/invites/${Uri.encodeComponent(i.code)}',
-                  okMsg: '已删除')),
+              onPressed: () =>
+                  _run(() => AdminApi.deleteInvite(i.code), okMsg: '已删除')),
         ])),
       if (invites.isEmpty)
         const Padding(

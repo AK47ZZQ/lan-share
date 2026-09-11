@@ -116,4 +116,17 @@ class ShareService {
 
   static Future<String> linkOnCurrent(String token) async =>
       linkOn(await Prefs.lastAddress(), token);
+
+  /// 创建分享失败的用户可读原因（UI 不必 import dio 解 response.detail）：
+  /// 服务端中文 detail 优先，其次 HTTP 状态码兜底；非 dio 异常原样串出。
+  /// 文案与 share_create_sheet 原地解析逐字一致。
+  static String createErrorText(Object e) {
+    if (e is DioException) {
+      final d = e.response?.data;
+      return d is Map && d['detail'] != null
+          ? d['detail'].toString()
+          : '创建失败（HTTP ${e.response?.statusCode ?? '?'}）';
+    }
+    return '创建失败：$e';
+  }
 }

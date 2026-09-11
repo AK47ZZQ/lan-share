@@ -2,7 +2,7 @@
 // 复用 /api/files 浏览协议；顶部面包屑支持回跳，"选这里"返回当前目录。
 import 'package:flutter/material.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/files_api.dart';
 
 class DirEntry {
   final String name;
@@ -40,10 +40,8 @@ class _DirPickerPageState extends State<DirPickerPage> {
       _error = null;
     });
     try {
-      final dio = await ApiClient.I.dio();
-      final enc = path.split('/').map(Uri.encodeComponent).join('/');
-      final r = await dio.get(path.isEmpty ? '/api/files' : '/api/files/$enc');
-      final dirs = (r.data['items'] as List)
+      final items = await FilesApi.browse(path);
+      final dirs = items
           .map((e) => DirEntry(e['name'] as String, e['path'] as String,
               e['is_private_root'] as bool? ?? false))
           .toList()

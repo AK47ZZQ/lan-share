@@ -6,7 +6,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:dio/dio.dart' show DioException, Options;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,7 +14,7 @@ import '../backup/backup_bridge.dart';
 import '../backup/backup_config.dart';
 import '../backup/backup_ledger.dart';
 import '../backup/backup_round.dart';
-import '../data/api/api_client.dart'; // verify-password（x-login-flow 特化）暂留 UI，T7 收编留账
+import '../data/api/account_api.dart'; // verify-password 口令复核（x-login-flow 特化收编 data 层）
 import '../data/api/purge.dart' show purgeServerFiles;
 import '../state/session.dart';
 import '../transfer/transfer_task.dart' show humanSize;
@@ -286,25 +285,18 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
             }
             setD(() { checking = true; err = ''; });
             try {
-              final dio = await ApiClient.I.dio();
-              // x-login-flow（P0-1）：密码错误回 401 是本框的业务语义，
-              // 不带头会被拦截器当"Token 失效"清凭据全局登出
-              await dio.post('/api/auth/verify-password',
-                  options: Options(headers: {'x-login-flow': '1'}),
-                  data: {'password': pwCtrl.text});
-              if (dctx.mounted) Navigator.pop(dctx, true);
-            } on DioException catch (e) {
-              final d = e.response?.data;
-              final detail = d is Map && d['detail'] != null
-                  ? d['detail'].toString()
-                  : null;
+              final res = await AccountApi.verifyPassword(pwCtrl.text);
+              if (res.ok) {
+                if (dctx.mounted) Navigator.pop(dctx, true);
+                return;
+              }
               // busy 期间对话框可被点遮罩关闭：setD 前必须验活（review P2-5）
               if (dctx.mounted) {
                 setD(() {
                   checking = false;
-                  err = e.response?.statusCode == 429
-                      ? (detail ?? '尝试过于频繁，请稍后再试')
-                      : (e.response?.statusCode == 401
+                  err = res.status == 429
+                      ? (res.detail ?? '尝试过于频繁，请稍后再试')
+                      : (res.status == 401
                           ? '密码错误'
                           : '服务器不可达，请稍后重试');
                 });

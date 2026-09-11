@@ -4,8 +4,8 @@
 // 下拉刷新，不阻塞。
 import 'package:flutter/material.dart';
 
-import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
+import '../data/api/home_api.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 
 class StorageDetailPage extends StatefulWidget {
@@ -32,11 +32,10 @@ class _StorageDetailPageState extends State<StorageDetailPage> {
       _error = null;
     });
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/disk/detail');
+      final d = await HomeApi.diskDetail();
       if (!mounted) return;
       setState(() {
-        _data = Map<String, dynamic>.from(r.data as Map);
+        _data = d;
         _loading = false;
       });
     } catch (e) {

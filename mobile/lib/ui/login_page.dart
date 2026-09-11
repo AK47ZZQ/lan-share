@@ -4,11 +4,8 @@
 // 服务端契约沿用 APP-DESIGN §3：/api/login →(totp_required)→ /api/login/totp
 // → /api/auth/token 换长效设备 Token；配对码走 /api/pair/claim 直接换 Token。
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -97,10 +94,8 @@ class _LoginPageState extends ConsumerState<LoginPage>
   static String _shortHost(String raw) => shortHost(raw);
 
   /// 连接预检：任何 HTTP 状态码（含 401/404）都证明服务器在线，
-  /// 只有连接超时/失败才算不可达——无需服务端专门健康检查端点。
-  /// 自签证书放行（badCertificateCallback）：预检只回答"在不在线"，
-  /// 证书信不信任由正式登录的 TOFU 信任流（TrustStore）裁决。
-  /// 独立 Dio 实例：不带本机凭据、不影响 ApiClient 的服务器切换状态。
+  /// 只有连接超时/失败才算不可达。探测本体在 data 层 probeAddress
+  /// （登录前置探测发生在 ApiClient 建立之前，独立 Dio + 自签放行）。
   Future<void> _runProbe() async {
     final addr = _server.text.trim();
     if (!addr.startsWith('https://')) {
@@ -109,24 +104,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
       return;
     }
     if (mounted) setState(() => _probe = _Probe.probing);
-    bool ok;
-    final dio = Dio(BaseOptions(
-        receiveTimeout: const Duration(milliseconds: 2500),
-        validateStatus: (_) => true))
-      ..httpClientAdapter = IOHttpClientAdapter(createHttpClient: () {
-        final hc = HttpClient()
-          ..connectionTimeout = const Duration(milliseconds: 2500)
-          ..badCertificateCallback = ((cert, host, port) => true);
-        return hc;
-      });
-    try {
-      await dio.get('$addr/api/auth/me');
-      ok = true;
-    } catch (_) {
-      ok = false;
-    } finally {
-      dio.close(force: true); // 释放 HttpClient/Socket 池，频繁改地址不积压
-    }
+    final ok = await probeAddress(addr);
     if (!mounted || _server.text.trim() != addr) return; // 地址已被改，丢弃过期结果
     if (!ok) {
       // 公网兜底（v0.15）：局域网地址连不上时试缓存的公网入口——

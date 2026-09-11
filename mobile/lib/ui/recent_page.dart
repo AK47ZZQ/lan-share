@@ -7,7 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/home_api.dart';
 import '../data/local/prefs.dart';
 import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
@@ -132,9 +132,8 @@ class _RecentPageState extends ConsumerState<RecentPage> {
   Future<void> _load() async {
     setState(() => _error = null);
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/recent', queryParameters: {'limit': 100});
-      final items = (r.data as List)
+      final raw = await HomeApi.recent(limit: 100);
+      final items = raw
           .map((e) => _RecentItem.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
       if (!mounted) return;
@@ -153,9 +152,8 @@ class _RecentPageState extends ConsumerState<RecentPage> {
     if (q.isEmpty) return _load();
     setState(() => _searching = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/search', queryParameters: {'q': q});
-      final items = (r.data as List)
+      final raw = await HomeApi.search(q);
+      final items = raw
           .map((e) => _RecentItem.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
       if (!mounted) return;

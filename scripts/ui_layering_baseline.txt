@@ -4,18 +4,3 @@
 # 这批数字是「存量债」不是「许可」：收编一批就把对应数字下调，
 # 降到 0 即从本文件删除；新增直发会被守卫拦下（数字只准降不准升）。
 
-mobile/lib/ui/activity_page.dart 1
-mobile/lib/ui/admin_page.dart 12
-mobile/lib/ui/album_detail_page.dart 7
-mobile/lib/ui/backup_settings_page.dart 2
-mobile/lib/ui/dir_picker_page.dart 1
-mobile/lib/ui/files_page.dart 6
-mobile/lib/ui/invite_redeem_page.dart 2
-mobile/lib/ui/login_page.dart 1
-mobile/lib/ui/me_page.dart 1
-mobile/lib/ui/notifications_page.dart 6
-mobile/lib/ui/photos_page.dart 7
-mobile/lib/ui/recent_page.dart 2
-mobile/lib/ui/share_create_sheet.dart 1
-mobile/lib/ui/storage_detail_page.dart 1
-mobile/lib/ui/upload_qr_page.dart 1

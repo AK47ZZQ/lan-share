@@ -17,8 +17,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_dest.dart';
-import '../data/api/api_client.dart';
+import '../data/api/album_api.dart';
 import '../data/api/errors.dart';
+import '../data/api/photos_api.dart';
 import '../data/api/purge.dart';
 import '../data/local/prefs.dart';
 import '../data/media_kinds.dart';
@@ -103,18 +104,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
     if (!mounted || _loading) return;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/photos',
-          queryParameters: {'limit': 1, 'refresh': true});
-      final total = (r.data['total'] as num?)?.toInt() ?? 0;
-      final items = (r.data['items'] as List? ?? const []);
-      final first =
-          items.isEmpty ? '' : ((items.first as Map)['path'] as String? ?? '');
+      final snap = await PhotosApi.probe();
       final prev = _pulseSnap;
-      _pulseSnap = {'total': total, 'first': first};
+      _pulseSnap = {'total': snap.total, 'first': snap.firstPath};
       if (mounted &&
           prev != null &&
-          (prev['total'] != total || prev['first'] != first)) {
+          (prev['total'] != snap.total || prev['first'] != snap.firstPath)) {
         await _refresh();
       }
     } catch (_) {
@@ -148,16 +143,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final limit = _limit;
     setState(() => _loading = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/photos', queryParameters: {
-        'limit': limit,
-        'offset': _offset,
-        if (force) 'refresh': true,
-        if (_mediaFilter != 'all') 'media_type': _mediaFilter,
-        if (_month != null) 'month': _month,
-        if (_byAdded) 'sort': 'added',
-      });
-      final list = (r.data['items'] as List)
+      final list = (await PhotosApi.list(
+              limit: limit,
+              offset: _offset,
+              refresh: force,
+              mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
+              month: _month,
+              byAdded: _byAdded))
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
           .toList();
       if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
@@ -208,13 +200,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     var months = _months;
     if (months != null) return months;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/photos/facets');
-      months = {
-        for (final m in ((r.data['months'] as List?) ?? const []))
-          (m as Map)['month'] as String? ?? '':
-              (m['count'] as num?)?.toInt() ?? 0,
-      }..removeWhere((k, _) => k.isEmpty);
+      months = await PhotosApi.monthFacets();
       _months = months;
       return months;
     } catch (_) {
@@ -262,10 +248,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 精选专辑加载（0.8.0）：失败静默（行不显示），不阻塞照片墙
   Future<void> _loadAlbums() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/albums');
+      final list = await AlbumApi.list();
       if (!mounted) return;
-      setState(() => _albums = (r.data as List)
+      setState(() => _albums = list
           .map((e) => _Album.fromJson(e as Map<String, dynamic>))
           .toList());
     } catch (_) {}
@@ -286,9 +271,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             ));
     if (title == null || title.trim().isEmpty || !mounted) return;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/albums', data: {'title': title.trim()});
-      final id = r.data['id'] as String?;
+      final id = await AlbumApi.create(title.trim());
       if (!mounted) return;
       if (id == null || id.isEmpty) {
         showToast('创建失败');
@@ -384,9 +367,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                 ]));
     if (ok != true || !mounted) return;
     try {
-      final dio = await ApiClient.I.dio();
       // v0.11 端点：admin 或创建者可删（403 由服务端兜底）
-      await dio.delete('/api/albums/${Uri.encodeComponent(a.id)}');
+      await AlbumApi.delete(a.id);
       if (!mounted) return;
       setState(() =>
           _albums = _albums?.where((x) => x.id != a.id).toList());
@@ -508,11 +490,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     setState(() => _deleting = true);
     var ok = 0, failed = 0;
     try {
-      final dio = await ApiClient.I.dio();
       for (final it in paths) {
         try {
-          final r = await dio.delete('/api/files/${encPath(it.path)}');
-          if (r.statusCode == 200) {
+          if (await PhotosApi.deleteToTrash(it.path)) {
             ok++;
           } else {
             failed++;

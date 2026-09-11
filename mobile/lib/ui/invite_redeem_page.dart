@@ -2,17 +2,15 @@
 // 服务端契约：POST /api/invites/redeem {code, username, password} →
 // {ok, username, role}；匿名入口（登录态调用也无妨，Bearer 会被忽略）。
 // 与网页版登录页「使用邀请码加入」同源；管理端建码在管理面板 → 邀请码。
-// 双入口两种底座：登录页进入时无会话且可能刚改过地址——用调用方传入的
-// baseUrl 建一次性 Dio（审查 P1：ApiClient.dio() 懒建缓存，可能把
-// code+password 打到默认/旧地址）；主页（已登录）走 ApiClient 正常底座。
-import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
+// 双入口两种底座收编在 AccountApi.redeemInvite：登录页进入时无会话且可能
+// 刚改过地址——data 层按传入 baseUrl 建一次性 Dio（审查 P1：ApiClient.dio()
+// 懒建缓存，可能把 code+password 打到默认/旧地址）；主页（已登录）走
+// ApiClient 正常底座。
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard;
 
-import '../data/api/api_client.dart';
+import '../data/api/account_api.dart';
 import '../data/api/errors.dart';
-import '../data/api/trust.dart';
 
 class InviteRedeemPage extends StatefulWidget {
   const InviteRedeemPage({super.key, this.baseUrl});
@@ -67,42 +65,21 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
     super.dispose();
   }
 
-  Dio _loginFlowDio() {
-    final d = Dio(BaseOptions(
-        baseUrl: widget.baseUrl!,
-        connectTimeout: const Duration(seconds: 8),
-        receiveTimeout: const Duration(seconds: 30)));
-    d.httpClientAdapter =
-        IOHttpClientAdapter(createHttpClient: TrustStore.createHttpClient);
-    return d;
-  }
-
   Future<void> _submit() async {
     if (_busy) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _busy = true);
-    final loginFlow = widget.baseUrl != null;
-    final own = loginFlow ? _loginFlowDio() : null;
     try {
-      await TrustStore.I.warmup();
-      // x-login-flow：匿名端点不吃 401 踢登逻辑，带上防万一
-      final r = await (own ?? await ApiClient.I.dio()).post(
-          '/api/invites/redeem',
-          data: {
-            'code': _code.text.trim(),
-            'username': _username.text.trim(),
-            'password': _password.text,
-          },
-          options: Options(headers: {'x-login-flow': '1'}));
-      final username = r.data is Map ? '${r.data['username'] ?? ''}' : '';
-      final role = r.data is Map ? '${r.data['role'] ?? 'member'}' : 'member';
+      final r = await AccountApi.redeemInvite(
+          _code.text.trim(), _username.text.trim(), _password.text,
+          baseUrl: widget.baseUrl);
       if (!mounted) return;
       await showDialog<void>(
           context: context,
           builder: (ctx) => AlertDialog(
                   title: const Text('账号已创建'),
                   content: Text(
-                      '$username（${role == 'guest' ? '访客' : '成员'}）\n\n'
+                      '${r.username}（${r.role == 'guest' ? '访客' : '成员'}）\n\n'
                       '退出登录后用新账号密码即可登录。'),
                   actions: [
                     TextButton(
@@ -115,8 +92,6 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(errDetail(e)), duration: const Duration(seconds: 3)));
       setState(() => _busy = false);
-    } finally {
-      own?.close(force: true);
     }
   }
 

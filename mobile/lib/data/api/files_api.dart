@@ -23,15 +23,52 @@ class FilesApi {
     return (r.data['items'] as List? ?? const []);
   }
 
+  /// 目录浏览（files_page / dir_picker 同款拼法）：**空路径请求 /api/files
+  /// 不带尾斜杠**（与 listDir 只差这一点，勿混用——服务端对两种形态都可能
+  /// 有不同路由行为，收编时必须逐字保持原 UI 的 URL）。items 原样透出，
+  /// 缺字段照旧抛（页面显示"目录加载失败"而不是假空目录）。
+  static Future<List<dynamic>> browse(String dir) async {
+    final dio = await _dio();
+    final enc = dir.split('/').map(Uri.encodeComponent).join('/');
+    final r = await dio.get(dir.isEmpty ? '/api/files' : '/api/files/$enc');
+    return r.data['items'] as List;
+  }
+
   static Future<void> rename(String path, String newName) async {
     final dio = await _dio();
     await dio.post('/api/rename', data: {'path': path, 'new_name': newName});
   }
 
-  /// /api/move 一次搬运多路径（9.6-P1-7 方案 B）
-  static Future<void> move(List<String> sources, String destDir) async {
+  /// 新建文件夹（files_page 同款拼法）：父路径不转码、仅名字
+  /// encodeComponent——与原 UI 逐字一致，避免 Uri 归一化行为差异。
+  static Future<void> mkdirIn(String parentDir, String name) async {
     final dio = await _dio();
-    await dio.post('/api/move', data: {'sources': sources, 'dest_dir': destDir});
+    final base = parentDir.isEmpty ? '' : '$parentDir/';
+    await dio.post('/api/mkdir/$base${Uri.encodeComponent(name.trim())}');
+  }
+
+  /// results[].ok 提取（服务端逐项结果；缺字段回空列表=整体成败不明）
+  static List<bool> _perItemResults(Response r) =>
+      (r.data['results'] as List? ?? const [])
+          .whereType<Map>()
+          .map((m) => m['ok'] == true)
+          .toList();
+
+  /// /api/move 一次搬运多路径（9.6-P1-7 方案 B）。返回逐项成败，
+  /// 列表页用它拼「X 项成功，Y 项失败」（旧调用方忽略返回值不受影响）。
+  static Future<List<bool>> move(List<String> sources, String destDir) async {
+    final dio = await _dio();
+    final r =
+        await dio.post('/api/move', data: {'sources': sources, 'dest_dir': destDir});
+    return _perItemResults(r);
+  }
+
+  /// /api/copy 同型复制（0.6.0；与 move 同契约）
+  static Future<List<bool>> copy(List<String> sources, String destDir) async {
+    final dio = await _dio();
+    final r =
+        await dio.post('/api/copy', data: {'sources': sources, 'dest_dir': destDir});
+    return _perItemResults(r);
   }
 
   static Future<void> mkdir(String path) async {
@@ -77,6 +114,24 @@ class FilesApi {
             receiveTimeout: const Duration(minutes: 15)),
         onReceiveProgress: onProgress);
     return r.data ?? const [];
+  }
+
+  /// 打包下载第一步（0.8.0 对齐 Web doZip）：服务端打 zip，返回
+  /// (url, name)；url 为 null 时页面提示「服务端未返回下载地址」。
+  static Future<({String? url, String name})> zip(List<String> paths) async {
+    final dio = await _dio();
+    final r = await dio.post('/api/zip', data: {'paths': paths});
+    return (
+      url: r.data['url'] as String?,
+      name: r.data['name'] as String? ?? 'share.zip',
+    );
+  }
+
+  /// 经同一底座下载文件到本地（zip 产物用；带 Bearer 走 baseUrl，
+  /// 相对地址如 /preview/... 直接可下）
+  static Future<void> downloadTo(String url, String savePath) async {
+    final dio = await _dio();
+    await dio.download(url, savePath);
   }
 
   /// 单请求文本上传（笔记编辑器用；大文件走 upload_client 分片通道）。

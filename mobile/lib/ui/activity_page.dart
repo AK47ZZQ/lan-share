@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'widgets/brand.dart';
 
 import '../data/activity.dart';
-import '../data/api/api_client.dart';
+import '../data/api/home_api.dart';
 
 class ActivityPage extends StatefulWidget {
   const ActivityPage({super.key});
@@ -25,9 +25,7 @@ class _ActivityPageState extends State<ActivityPage> {
 
   Future<void> _load() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/activity', queryParameters: {'limit': 100});
-      final items = ActivityItem.listFrom(r.data);
+      final items = await HomeApi.activity(limit: 100);
       if (!mounted) return;
       setState(() {
         _items = items;

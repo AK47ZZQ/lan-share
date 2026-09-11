@@ -1,8 +1,11 @@
 // 账号与设备域 API（T7 裸 dio 收编第二批：从 me_page 抽出 UI 层手拼请求）。
-// WebDAV 独立密码/设备管理/改密/改用户名/配对码。
+// WebDAV 独立密码/设备管理/改密/改用户名/配对码；两步验证恢复码/口令复核
+// /邀请码兑换（本批收编 me_page/backup_settings_page/invite_redeem_page）。
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 
 import 'api_client.dart';
+import 'trust.dart';
 
 class AccountApi {
   AccountApi._();
@@ -66,5 +69,74 @@ class AccountApi {
       code: r.data['code'] as String?,
       expires: (r.data['expires_in'] as num?)?.toInt() ?? 180,
     );
+  }
+
+  /// 重新生成两步验证恢复码（旧码全部作废，新码仅本次明文展示）
+  static Future<List<String>> regenRecoveryCodes(String oldPassword) async {
+    final dio = await _dio();
+    final r = await dio
+        .post('/api/auth/totp/rc', data: {'old_password': oldPassword});
+    return ((r.data['recovery_codes'] as List?) ?? const [])
+        .whereType<String>()
+        .toList();
+  }
+
+  /// 危险操作前的本人口令复核（/api/auth/verify-password）。
+  /// x-login-flow：密码错误回 401 是本框的业务语义，不带头会被拦截器当
+  /// 「Token 失效」清凭据全局登出（P0-1）。不抛 Dio 异常而是返回结构化
+  /// 结果（status/detail 原样透出），错误文案由 UI 拼装保持不变。
+  static Future<({bool ok, int? status, String? detail})> verifyPassword(
+      String password) async {
+    final dio = await _dio();
+    try {
+      await dio.post('/api/auth/verify-password',
+          options: Options(headers: {'x-login-flow': '1'}),
+          data: {'password': password});
+      return (ok: true, status: null, detail: null);
+    } on DioException catch (e) {
+      final d = e.response?.data;
+      return (
+        ok: false,
+        status: e.response?.statusCode,
+        detail:
+            d is Map && d['detail'] != null ? d['detail'].toString() : null,
+      );
+    }
+  }
+
+  /// 邀请码兑换（v0.15.2 匿名入口；登录态调用也无妨，Bearer 会被忽略）。
+  /// [baseUrl] 传入时建一次性 Dio 用该地址提交——登录页入口无会话且可能
+  /// 刚改过地址，ApiClient.dio() 懒建缓存可能把 code+password 打到默认/
+  /// 旧地址（审查 P1）；主页（已登录）入口传 null 走正常底座。
+  static Future<({String username, String role})> redeemInvite(
+      String code, String username, String password,
+      {String? baseUrl}) async {
+    Dio? own;
+    if (baseUrl != null) {
+      final d = Dio(BaseOptions(
+          baseUrl: baseUrl,
+          connectTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 30)));
+      d.httpClientAdapter =
+          IOHttpClientAdapter(createHttpClient: TrustStore.createHttpClient);
+      own = d;
+    }
+    try {
+      await TrustStore.I.warmup();
+      // x-login-flow：匿名端点不吃 401 踢登逻辑，带上防万一
+      final r = await (own ?? await _dio()).post('/api/invites/redeem',
+          data: {
+            'code': code,
+            'username': username,
+            'password': password,
+          },
+          options: Options(headers: {'x-login-flow': '1'}));
+      return (
+        username: r.data is Map ? '${r.data['username'] ?? ''}' : '',
+        role: r.data is Map ? '${r.data['role'] ?? 'member'}' : 'member',
+      );
+    } finally {
+      own?.close(force: true);
+    }
   }
 }

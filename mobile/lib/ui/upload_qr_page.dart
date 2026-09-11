@@ -9,8 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
+import '../data/api/home_api.dart';
 import '../data/local/gallery_saver.dart';
 import '../data/local/prefs.dart';
 
@@ -33,10 +33,9 @@ Future<void> showUploadQrSheet(BuildContext context) async {
       targets.add(_QrTarget('局域网入口', '$origin/up'));
     }
     // 公网：管理端配置的主/备隧道（家庭外扫码用）
-    final dio = await ApiClient.I.dio();
-    final pub = await dio.get('/api/public-url');
-    final main = (pub.data['public_base_url'] as String?)?.trim() ?? '';
-    final alt = (pub.data['public_base_url_alt'] as String?)?.trim() ?? '';
+    final pub = await HomeApi.publicUrls();
+    final main = pub.main;
+    final alt = pub.alt;
     if (main.isNotEmpty) targets.add(_QrTarget('公网入口（主）', '$main/up'));
     if (alt.isNotEmpty && alt != main) {
       targets.add(_QrTarget('公网入口（备）', '$alt/up'));

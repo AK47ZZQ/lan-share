@@ -548,12 +548,7 @@ class _MePageState extends ConsumerState<MePage> {
     if (ok != true || !mounted) return;
     List codes;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio
-          .post('/api/auth/totp/rc', data: {'old_password': pwdCtrl.text});
-      codes = ((r.data['recovery_codes'] as List?) ?? const [])
-          .whereType<String>()
-          .toList();
+      codes = await AccountApi.regenRecoveryCodes(pwdCtrl.text);
     } catch (e) {
       showToast('生成失败：${_detail(e)}');
       return;

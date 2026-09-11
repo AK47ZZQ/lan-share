@@ -15,9 +15,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../data/api/api_client.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
+import '../data/api/files_api.dart';
 import '../data/local/prefs.dart';
 import '../data/media_kinds.dart';
 import '../data/net.dart';
@@ -201,10 +201,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   }
 
   Future<List<Entry>> _fetchDir(String path) async {
-    final dio = await ApiClient.I.dio();
-    final enc = path.split('/').map(Uri.encodeComponent).join('/');
-    final r = await dio.get(path.isEmpty ? '/api/files' : '/api/files/$enc');
-    return (r.data['items'] as List)
+    final items = await FilesApi.browse(path);
+    return items
         .map((e) => Entry.fromJson(e as Map<String, dynamic>))
         .toList();
   }
@@ -254,9 +252,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     final name = await _promptText('新建文件夹', '文件夹名称', '新建文件夹');
     if (name == null || name.trim().isEmpty || !mounted) return;
     try {
-      final dio = await ApiClient.I.dio();
-      final base = _path.isEmpty ? '' : '$_path/';
-      await dio.post('/api/mkdir/$base${Uri.encodeComponent(name.trim())}');
+      await FilesApi.mkdirIn(_path, name);
       await _refresh();
     } catch (e) {
       showToast('创建失败：${_detail(e)}');
@@ -284,9 +280,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/rename',
-          data: {'path': e.path, 'new_name': name.trim()});
+      await FilesApi.rename(e.path, name.trim());
       await _refresh();
     } catch (e2) {
       showToast('重命名失败：${_detail(e2)}');
@@ -310,11 +304,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     if (ok != true || !mounted) return;
     setState(() => _deleting = true);
     var done = 0, failed = 0;
-    final dio = await ApiClient.I.dio();
     for (final it in items) {
       try {
-        final enc = it.path.split('/').map(Uri.encodeComponent).join('/');
-        await dio.delete('/api/files/$enc');
+        await FilesApi.delete(it.path);
         done++;
       } catch (_) {
         failed++;
@@ -331,28 +323,18 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     final dest = await Navigator.push<String>(context, MaterialPageRoute(
         builder: (_) => DirPickerPage(title: copy ? '复制到…' : '移动到…')));
     if (dest == null || !mounted) return;
-    final dio = await ApiClient.I.dio();
-    dynamic r;
+    final sources = items.map((e) => e.path).toList();
+    List<bool> results;
     try {
-      r = await (copy
-          ? dio.post('/api/copy', data: {
-              'sources': items.map((e) => e.path).toList(),
-              'dest_dir': dest,
-            })
-          : dio.post('/api/move', data: {
-              'sources': items.map((e) => e.path).toList(),
-              'dest_dir': dest,
-            }));
+      results = copy
+          ? await FilesApi.copy(sources, dest)
+          : await FilesApi.move(sources, dest);
     } catch (e) {
       // 断网/服务端 5xx 时静默失败连刷新都不做，用户会以为成功（review 0.12.0 P2）
       showToast('${copy ? "复制" : "移动"}失败：${_detail(e)}');
       return;
     }
     if (!mounted) return;
-    final results = (r.data['results'] as List? ?? const [])
-        .whereType<Map>()
-        .map((m) => m['ok'] == true)
-        .toList();
     final okCount = results.where((v) => v).length;
     showToast(results.isEmpty
         ? (copy ? '复制完成' : '移动完成')
@@ -823,10 +805,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     showToast('正在打包 ${paths.length} 项…');
     File? f;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/zip', data: {'paths': paths});
-      final url = r.data['url'] as String?;
-      final name = r.data['name'] as String? ?? 'share.zip';
+      final z = await FilesApi.zip(paths);
+      final url = z.url;
+      final name = z.name;
       if (url == null || url.isEmpty) {
         showToast('打包失败：服务端未返回下载地址');
         return;
@@ -835,7 +816,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       // 时间戳前缀防同名覆盖；进程被杀的残留由系统随 cache 目录回收
       f = File(
           '${tmp.path}/zip-${DateTime.now().millisecondsSinceEpoch}-$name');
-      await dio.download(url, f.path);
+      await FilesApi.downloadTo(url, f.path);
       showToast('打包完成');
       await Share.shareXFiles([XFile(f.path)], subject: name);
     } catch (e) {

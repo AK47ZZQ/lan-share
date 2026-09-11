@@ -11,8 +11,9 @@ import 'package:flutter/material.dart';
 import 'package:waterfall_flow/waterfall_flow.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/album_api.dart';
 import '../data/api/errors.dart';
+import '../data/api/photos_api.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../state/session.dart';
@@ -78,21 +79,19 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
     if (!mounted) return;   // 从选照片页返回时页面可能已退出（审查 P2）
     setState(() => _loading = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final a = (await dio.get('/api/albums/${Uri.encodeComponent(widget.id)}'))
-          .data as Map<String, dynamic>;
+      final a = await AlbumApi.detail(widget.id);
       final items = (a['items'] as List? ?? const []).cast<String>();
       _monthMode = items.isEmpty && (a['month'] as String? ?? '').isNotEmpty;
-      final r = await dio.get('/api/photos', queryParameters: _monthMode
-          ? {'month': a['month'], 'limit': 500}
-          : {'album': widget.id, 'limit': 500});
+      final list = await (_monthMode
+          ? PhotosApi.list(month: a['month'] as String, limit: 500)
+          : PhotosApi.list(album: widget.id, limit: 500));
       if (!mounted) return;
       setState(() {
         _title = a['title'] as String? ?? _title;
         _createdBy = a['created_by'] as String? ?? _createdBy;
         _items
           ..clear()
-          ..addAll((r.data['items'] as List)
+          ..addAll(list
               .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>)));
         _sel.clear();
         _loading = false;
@@ -145,9 +144,7 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                 ]));
     if (ok != true || !mounted) return;
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.put('/api/albums/${Uri.encodeComponent(widget.id)}/items',
-          data: {'remove': paths});
+      await AlbumApi.removeItems(widget.id, paths);
       _changed = true;
       await _reload();
     } catch (e) {
@@ -171,8 +168,7 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                 ]));
     if (ok != true || !mounted) return;
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.delete('/api/albums/${Uri.encodeComponent(widget.id)}');
+      await AlbumApi.delete(widget.id);
       _deleted = true;
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -464,10 +460,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
     final gen = ++_gen;
     setState(() => _loading = true);
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/photos',
-          queryParameters: {'limit': _limit, 'offset': _offset});
-      final list = (r.data['items'] as List)
+      final list = (await PhotosApi.list(limit: _limit, offset: _offset))
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
           .toList();
       if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
@@ -487,13 +480,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
   Future<void> _pickMonthAll() async {
     Map<String, int> months;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/photos/facets');
-      months = {
-        for (final m in ((r.data['months'] as List?) ?? const []))
-          (m as Map)['month'] as String? ?? '':
-              (m['count'] as num?)?.toInt() ?? 0,
-      }..removeWhere((k, _) => k.isEmpty);
+      months = await PhotosApi.monthFacets();
     } catch (_) {
       showToast('月份列表加载失败');
       return;
@@ -520,11 +507,9 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
     // 分页拉全该月（limit 上限 500，一般一页够；防极端月份死循环封顶 5000）
     var added = 0;
     try {
-      final dio = await ApiClient.I.dio();
       for (var off = 0; off < 5000; off += 500) {
-        final r = await dio.get('/api/photos',
-            queryParameters: {'month': sel, 'limit': 500, 'offset': off});
-        final list = r.data['items'] as List? ?? const [];
+        final list =
+            await PhotosApi.list(month: sel, limit: 500, offset: off);
         if (!mounted) return;
         setState(() {
           for (final e in list) {
@@ -555,11 +540,9 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
     final paths = _sel.toList();
     setState(() => _saving = paths.length);
     try {
-      final dio = await ApiClient.I.dio();
       for (var i = 0; i < paths.length; i += _saveBatch) {
-        await dio.put(
-            '/api/albums/${Uri.encodeComponent(widget.albumId)}/items',
-            data: {'add': paths.sublist(i, (i + _saveBatch).clamp(0, paths.length))});
+        await AlbumApi.addItems(widget.albumId,
+            paths.sublist(i, (i + _saveBatch).clamp(0, paths.length)));
       }
       if (!mounted) return;
       Navigator.pop(context, true);

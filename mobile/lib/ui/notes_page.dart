@@ -5,24 +5,23 @@
 // · 编辑：拉取远端内容 → 全屏 md 源码编辑 → 保存覆盖上传；脏态返回拦确认；
 //   md 可在源码/渲染间切换；每次输入自动存本地草稿，崩溃/误退可恢复
 // · 预览联动：DocViewerPage 看文本时点编辑笔进编辑器
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData;
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../data/api/errors.dart';
 import '../data/api/files_api.dart';
 import '../data/api/notes_api.dart';
 import 'doc_viewer.dart';
 import 'dir_picker_page.dart';
+import 'note_editor_page.dart';
+import 'notes_models.dart';
+import 'notes_shared.dart';
 import 'rich_note_editor.dart';
 
-const _kNotesLastDir = 'notes_last_dir';
-String _draftKey(String remotePath) => 'note_draft_$remotePath';
+// 编辑器已拆往 note_editor_page.dart；此处 export 保 doc_viewer 等既有
+// `import 'notes_page.dart'` 的调用方零改动（backup_settings 拆分同款门面）。
+export 'note_editor_page.dart';
 
 /// 把笔记编辑器 push 出去的便捷入口（doc_viewer/notes_page 共用）。
 /// v0.19：.html 是富文本笔记，路由到富文本编辑器。
@@ -46,7 +45,7 @@ class NotesPage extends StatefulWidget {
 
 class _NotesPageState extends State<NotesPage> {
   String? _dir;
-  List<_Note>? _notes;
+  List<Note>? _notes;
   bool _loading = true;
   String? _error;
   // v0.18：搜索（标题+摘要本地过滤，摘要来自 /api/notes/list）与条目长按管理
@@ -104,7 +103,7 @@ class _NotesPageState extends State<NotesPage> {
   /// 分类路径全集 = 服务端 categories（**含空分类**）∪ 笔记的 category
   Set<String> get _allCatPaths {
     final paths = <String>{};
-    for (final n in _notes ?? const <_Note>[]) {
+    for (final n in _notes ?? const <Note>[]) {
       if (n.category.isNotEmpty) paths.add(n.category);
     }
     paths.addAll(_serverCats.keys);
@@ -112,8 +111,8 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   /// 分类树（从分类路径全集聚合）：嵌套子路径合并成节点
-  List<_CatNode> get _catTree {
-    final root = <_CatNode>{};
+  List<CatNode> get _catTree {
+    final root = <CatNode>{};
     for (final cat in _allCatPaths) {
       var cur = root;
       var acc = '';
@@ -122,7 +121,7 @@ class _NotesPageState extends State<NotesPage> {
         final hit = cur.where((c) => c.name == seg).toList();
         final node = hit.isEmpty
             ? () {
-                final nn = _CatNode(seg, acc);
+                final nn = CatNode(seg, acc);
                 cur.add(nn);
                 return nn;
               }()
@@ -130,7 +129,7 @@ class _NotesPageState extends State<NotesPage> {
         cur = node.children;
       }
     }
-    List<_CatNode> toList(Set<_CatNode> s) {
+    List<CatNode> toList(Set<CatNode> s) {
       final l = s.toList()..sort((a, b) => a.name.compareTo(b.name));
       for (final c in l) {
         c.childList = toList(c.children);
@@ -142,15 +141,15 @@ class _NotesPageState extends State<NotesPage> {
 
   int _countOf(String cat) {
     if (cat.isEmpty) {
-      return (_notes ?? const <_Note>[]).where((n) => n.category.isEmpty).length;
+      return (_notes ?? const <Note>[]).where((n) => n.category.isEmpty).length;
     }
-    return (_notes ?? const <_Note>[])
+    return (_notes ?? const <Note>[])
         .where((n) => n.category == cat || n.category.startsWith('$cat/'))
         .length;
   }
 
-  List<_Note> get _filtered {
-    var all = _notes ?? const <_Note>[];
+  List<Note> get _filtered {
+    var all = _notes ?? const <Note>[];
     final q = _searchCtrl.text.trim().toLowerCase();
     if (q.isNotEmpty) {
       all = all
@@ -167,7 +166,7 @@ class _NotesPageState extends State<NotesPage> {
             n.category.startsWith('$_catFilter/');
       }).toList();
     }
-    List<_Note> sorted;
+    List<Note> sorted;
     switch (_sort) {
       case 'name':
         sorted = all.toList()
@@ -201,7 +200,7 @@ class _NotesPageState extends State<NotesPage> {
   Future<void> _restore() async {
     await _loadMarks();
     final sp = await SharedPreferences.getInstance();
-    final d = sp.getString(_kNotesLastDir);
+    final d = sp.getString(kNotesLastDir);
     if (!mounted) return;
     if (d == null || d.isEmpty) {
       setState(() { _dir = null; _loading = false; });
@@ -212,7 +211,7 @@ class _NotesPageState extends State<NotesPage> {
 
   Future<void> _pickDir(String dir) async {
     setState(() { _dir = dir; _loading = true; _error = null; });
-    (await SharedPreferences.getInstance()).setString(_kNotesLastDir, dir);
+    (await SharedPreferences.getInstance()).setString(kNotesLastDir, dir);
     _load();
   }
 
@@ -228,21 +227,7 @@ class _NotesPageState extends State<NotesPage> {
       // v0.21：聚合列表端点——一次拿到全部笔记（含子分类与前 200 字摘要），
       // 分类/移动/重命名/删除仍走 files 通道
       final (items, cats) = await NotesApi.list(dir: _dir!, sort: _sort);
-      final notes = <_Note>[];
-      for (final e in items) {
-        final m = e as Map;
-        notes.add(_Note(
-            name: (m['name'] as String?) ?? '',
-            path: (m['path'] as String?) ?? '',
-            sizeHuman: (m['size_human'] as String?) ?? '',
-            modified: (m['modified'] as String?) ?? '',
-            category: (m['category'] as String?) ?? '',
-            summary: (m['summary'] as String?) ?? '',
-            ext: (m['ext'] as String?) ?? '',
-            mtime: (m['mtime'] as num?)?.toDouble() ?? 0,
-            ctime: (m['ctime'] as num?)?.toDouble() ?? 0,
-            absPath: m['abs_path'] as String?));
-      }
+      final notes = [for (final e in items) Note.fromJson(e as Map)];
       if (!mounted) return;
       setState(() {
         _notes = notes;
@@ -310,7 +295,7 @@ class _NotesPageState extends State<NotesPage> {
     final d = await Navigator.push<String>(context, MaterialPageRoute(
         builder: (_) => const DirPickerPage(title: '保存到哪个目录？')));
     if (d == null || !mounted) return;
-    (await SharedPreferences.getInstance()).setString(_kNotesLastDir, d);
+    (await SharedPreferences.getInstance()).setString(kNotesLastDir, d);
     if (!mounted) return;
     // 同名预检（review P2-6）：/api/upload 对同名文件是静默覆盖，新建变顶替
     try {
@@ -352,7 +337,7 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   /// 重命名（v0.18）：服务端 /api/rename，成功后刷新列表
-  Future<void> _rename(_Note n) async {
+  Future<void> _rename(Note n) async {
     final ctrl = TextEditingController(text: n.name);
     final newName = await showDialog<String>(
         context: context,
@@ -420,7 +405,7 @@ class _NotesPageState extends State<NotesPage> {
     return showDialog<String>(
         context: context,
         builder: (dctx) {
-          List<Widget> tiles(List<_CatNode> nodes, int depth) => [
+          List<Widget> tiles(List<CatNode> nodes, int depth) => [
                 for (final node in nodes) ...[
                   ListTile(
                       dense: true,
@@ -515,7 +500,7 @@ class _NotesPageState extends State<NotesPage> {
     try {
       if (count > 0) {
         // 只搬该分类直属+子级里的笔记（startsWith 前缀），再删目录
-        final paths = (_notes ?? const <_Note>[])
+        final paths = (_notes ?? const <Note>[])
             .where((n) =>
                 n.category == cat || n.category.startsWith('$cat/'))
             .map((n) => n.path)
@@ -539,14 +524,14 @@ class _NotesPageState extends State<NotesPage> {
     }
   }
 
-  void _togglePin(_Note n) {
+  void _togglePin(Note n) {
     setState(() {
       _pinned.contains(n.path) ? _pinned.remove(n.path) : _pinned.add(n.path);
     });
     _saveMarks();
   }
 
-  void _toggleStar(_Note n) {
+  void _toggleStar(Note n) {
     setState(() {
       _starred.contains(n.path) ? _starred.remove(n.path) : _starred.add(n.path);
     });
@@ -704,7 +689,7 @@ class _NotesPageState extends State<NotesPage> {
                     ])))));
   }
 
-  Widget _catTile(_CatNode node, int depth, ThemeData th,
+  Widget _catTile(CatNode node, int depth, ThemeData th,
       Widget Function(String?, Widget) dropWrap) {
     final cs = th.colorScheme;
     final selected = _catFilter == node.path;
@@ -855,7 +840,7 @@ class _NotesPageState extends State<NotesPage> {
                             : cs.onSurfaceVariant)))));
   }
 
-  Widget _noteCard(_Note n, ColorScheme cs) {
+  Widget _noteCard(Note n, ColorScheme cs) {
     final sel = _selected.contains(n.path);
     final starred = _starred.contains(n.path);
     final pinned = _pinned.contains(n.path);
@@ -976,7 +961,7 @@ class _NotesPageState extends State<NotesPage> {
   }
 
   /// 单条操作菜单：置顶/收藏/移动到分类/重命名/删除
-  Future<void> _noteMenu(_Note n) async {
+  Future<void> _noteMenu(Note n) async {
     final pinned = _pinned.contains(n.path);
     final starred = _starred.contains(n.path);
     final act = await showModalBottomSheet<String>(
@@ -1242,332 +1227,6 @@ class _NotesPageState extends State<NotesPage> {
                                 ]))),
                       ])))
           : null,
-    );
-  }
-}
-
-class _Note {
-  final String name;
-  final String path;
-  final String sizeHuman;
-  final String modified;
-  // v0.21 分类体系字段（/api/notes/list 下发）
-  final String category; // 相对笔记目录的子路径，''=未分类
-  final String summary;  // 前 200 字纯文本摘要
-  final String ext;      // 含点的扩展名（.md/.txt/.html）
-  final double mtime;
-  final double ctime;
-  // v0.25：服务器真实存储路径（/api/notes/list 下发，与 files 列表同语义）
-  // ——"复制路径"用：手机端直接把绝对路径发给台式上的 Agent
-  final String? absPath;
-  const _Note(
-      {required this.name, required this.path,
-      required this.sizeHuman, required this.modified,
-      this.category = '', this.summary = '', this.ext = '',
-      this.mtime = 0, this.ctime = 0, this.absPath});
-}
-
-/// 分类树节点（从笔记 category 聚合而来；可变，树构建期使用）
-class _CatNode {
-  final String name;   // 最后一段（显示名）
-  final String path;   // 完整分类路径
-  final Set<_CatNode> children = {};
-  List<_CatNode> childList = []; // 排序后的子节点（_catTree 里填充）
-  _CatNode(this.name, this.path);
-}
-
-// ── 编辑器 ─────────────────────────────────────────────────
-
-class NoteEditorPage extends StatefulWidget {
-  final String dir;
-  final String name;
-  final bool isNew;
-  const NoteEditorPage(
-      {super.key, required this.dir, required this.name,
-      this.isNew = false});
-
-  @override
-  State<NoteEditorPage> createState() => _NoteEditorPageState();
-}
-
-class _NoteEditorPageState extends State<NoteEditorPage> {
-  final _ctrl = TextEditingController();
-  final _focus = FocusNode();
-  bool _loading = true;
-  bool _saving = false;
-  bool _dirty = false;
-  bool _preview = false; // md 源码/渲染切换（v0.18）
-  String? _error;
-  Timer? _autoTimer; // 自动保存定时器（改进建议 9.6-P0-12）
-
-  bool get _isMd =>
-      widget.name.toLowerCase().endsWith('.md') ||
-      widget.name.toLowerCase().endsWith('.markdown');
-
-  @override
-  void initState() {
-    super.initState();
-    _loadContent();
-    // 自动保存：每 30s 静默覆盖上传一次脏内容，失焦时也存一次；
-    // 失败时内容仍在编辑器+本地草稿，可再次保存
-    _autoTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (mounted && _dirty && !_saving && !_loading && _error == null) {
-        _save(silent: true);
-      }
-    });
-    _focus.addListener(_onFocusChanged);
-  }
-
-  void _onFocusChanged() {
-    if (!_focus.hasFocus && _dirty && !_saving && !_loading && _error == null) {
-      _save(silent: true);
-    }
-  }
-
-  @override
-  void dispose() {
-    _autoTimer?.cancel();
-    _ctrl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  String get _remotePath =>
-      '${widget.dir}/${widget.name}'.replaceAll('//', '/');
-
-  /// AppBar 标题：笔记在子文件夹（分类）里时显示"分类名 / 文件名"，
-  /// 直接在笔记根目录则只显示文件名
-  String get _title {
-    final seg =
-        widget.dir.split('/').where((s) => s.trim().isNotEmpty).toList();
-    if (seg.isEmpty) return widget.name;
-    return '${seg.last} / ${widget.name}';
-  }
-
-  Future<void> _loadContent() async {
-    if (widget.isNew) {
-      if (!mounted) return;
-      // 不预置脏（review P3）：没打字就退出不该弹"放弃修改"；
-      // onChanged 首次输入即置脏
-      setState(() => _loading = false);
-      _focus.requestFocus();
-      await _restoreDraft(remote: null);
-      return;
-    }
-    try {
-      // /preview/ 通道（v0.17.2）：/files/ 被 Caddy forward_auth 拦
-      // （authcheck 只认 Cookie），App Bearer 必 401；/preview 对非图片
-      // 回 FileResponse，与下载引擎同款
-      final bytes = await FilesApi.previewBytes(_remotePath);
-      final text = utf8.decode(bytes, allowMalformed: true);
-      if (!mounted) return;
-      setState(() {
-        _ctrl.text = text;
-        _loading = false;
-      });
-      await _restoreDraft(remote: text);
-    } catch (e) {
-      if (!mounted) return;
-      final s = e.toString();
-      setState(() {
-        _error = s.length > 140 ? s.substring(0, 140) : s;
-        _loading = false;
-      });
-    }
-  }
-
-  /// 草稿恢复（v0.18）：上次编辑没保存就退出/崩溃时，本地草稿优先
-  /// （比远端新才恢复）；给 SnackBar 一键丢弃。isNew 时 remote 传 null
-  Future<void> _restoreDraft({String? remote}) async {
-    final sp = await SharedPreferences.getInstance();
-    final draft = sp.getString(_draftKey(_remotePath));
-    if (draft == null || draft.isEmpty || !mounted) return;
-    if (remote != null && draft == remote) {
-      // 草稿与远端一致（上次其实保存过但清 key 失败）：静默清掉
-      // ignore: discarded_futures
-      sp.remove(_draftKey(_remotePath));
-      return;
-    }
-    setState(() {
-      _ctrl.text = draft;
-      _dirty = true;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('已恢复上次未保存的草稿'),
-        duration: const Duration(seconds: 4),
-        action: SnackBarAction(
-            label: '丢弃',
-            onPressed: () {
-              // ignore: discarded_futures
-              SharedPreferences.getInstance().then((sp) =>
-                  sp.remove(_draftKey(_remotePath)));
-              if (!mounted) return;
-              setState(() {
-                _ctrl.text = remote ?? '';
-                _dirty = false;
-              });
-            })));
-  }
-
-  void _onChanged(String v) {
-    if (!_dirty) setState(() => _dirty = true);
-    // 草稿即写（v0.18）：崩溃/误杀进程也不丢内容；保存成功后清除
-    // ignore: discarded_futures
-    SharedPreferences.getInstance()
-        .then((sp) => sp.setString(_draftKey(_remotePath), v));
-  }
-
-  /// silent=true 为自动保存：成功不弹 SnackBar（避免打扰），失败仍提示
-  Future<bool> _save({bool silent = false}) async {
-    if (_saving) return false;
-    setState(() => _saving = true);
-    try {
-      // on_dup=overwrite（改进建议 9.6-P0-12）：就地编辑直接覆盖源文件，
-      // 不走"旧文件进回收站"，杜绝回收站堆积同一笔记的多个副本
-      await FilesApi.uploadText(widget.dir, widget.name, _ctrl.text,
-          overwrite: true);
-      if (!mounted) return true;
-      // 保存成功清草稿（v0.18）
-      // ignore: discarded_futures
-      SharedPreferences.getInstance().then((sp) =>
-          sp.remove(_draftKey(_remotePath)));
-      setState(() => _dirty = false);
-      if (!silent) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已保存到 $_remotePath'),
-                duration: const Duration(seconds: 2)));
-      }
-      return true;
-    } catch (e) {
-      if (!mounted) return false;
-      // 服务端 detail 优先（errors.dart 统一文案），其余回退通用提示
-      final msg = errDetail(e);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(msg.isEmpty ? '保存失败，请稍后重试' : msg)));
-      return false;
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return PopScope(
-      canPop: !_dirty,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop || !_dirty) return;
-        // 返回即存（9-10 交互优化）：有改动时返回 = 自动保存后退出，
-        // 不再每次弹"放弃修改？"打断；内容为空视为误触，按放弃处理
-        // （本地草稿保留，重开可恢复）；仅保存失败才弹确认
-        if (_ctrl.text.trim().isEmpty) {
-          if (context.mounted) Navigator.pop(context);
-          return;
-        }
-        final ok = await _save(silent: true);
-        if (!mounted) return;
-        if (!ok) {
-          if (!context.mounted) return;
-          final discard = await showDialog<bool>(
-              context: context,
-              builder: (dctx) => AlertDialog(
-                      title: const Text('保存失败，要放弃这次修改吗？'),
-                      actions: [
-                        TextButton(
-                            onPressed: () => Navigator.pop(dctx, false),
-                            child: const Text('继续编辑')),
-                        FilledButton(
-                            onPressed: () => Navigator.pop(dctx, true),
-                            child: const Text('放弃')),
-                      ]));
-          if (discard == true && context.mounted) Navigator.pop(context);
-          return;
-        }
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('已保存到 $_remotePath'),
-            duration: const Duration(seconds: 2)));
-        Navigator.pop(context);
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(_title,
-              style: const TextStyle(fontSize: 14)),
-          actions: [
-            // md 渲染切换（v0.18）：源码/预览一键切（编辑态切走也保留内容）
-            if (_isMd && !_loading && _error == null)
-              IconButton(
-                  tooltip: _preview ? '继续编辑' : '渲染预览',
-                  icon: Icon(_preview ? Icons.edit_outlined : Icons.visibility_outlined),
-                  onPressed: () => setState(() => _preview = !_preview)),
-            if (_dirty && !_saving)
-              Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Center(
-                      child: Text('未保存',
-                          style: TextStyle(
-                              fontSize: 11.5, color: cs.tertiary)))),
-            IconButton(
-                tooltip: '保存',
-                icon: _saving
-                    ? const SizedBox(
-                        width: 18, height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.save_outlined),
-                onPressed: _save),
-          ],
-        ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-                ? ListView(children: [
-                    const SizedBox(height: 100),
-                    Center(
-                        child: Text(_error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.grey))),
-                    const SizedBox(height: 8),
-                    Center(
-                        child: TextButton(
-                            onPressed: _loadContent,
-                            child: const Text('重试'))),
-                  ])
-                : _preview
-                    ? Markdown(
-                        data: _ctrl.text,
-                        selectable: true,
-                        padding: const EdgeInsets.all(16),
-                        styleSheet: MarkdownStyleSheet(
-                          p: const TextStyle(fontSize: 15, height: 1.55),
-                          h1: const TextStyle(
-                              fontSize: 24, fontWeight: FontWeight.bold),
-                          h2: const TextStyle(
-                              fontSize: 20, fontWeight: FontWeight.bold),
-                          h3: const TextStyle(
-                              fontSize: 17, fontWeight: FontWeight.w600),
-                        ))
-                    : Stack(children: [
-                        Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: TextField(
-                                controller: _ctrl,
-                                focusNode: _focus,
-                                maxLines: null,
-                                expands: true,
-                                textAlignVertical: TextAlignVertical.top,
-                                keyboardType: TextInputType.multiline,
-                                onChanged: _onChanged,
-                                style: const TextStyle(
-                                    fontSize: 14.5,
-                                    height: 1.55,
-                                    fontFamily: 'monospace'),
-                                decoration: const InputDecoration(
-                                    border: InputBorder.none,
-                                    hintText:
-                                        '# 标题\n\n用 Markdown 写笔记…'))),
-                      ]),
-      ),
     );
   }
 }

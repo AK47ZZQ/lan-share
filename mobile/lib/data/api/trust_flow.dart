@@ -55,6 +55,32 @@ Future<bool> ensureAddressTrusted(BuildContext context, String url,
   }
 }
 
+/// 连接预检（登录页服务器条）：任何 HTTP 状态码（含 401/404）都证明服务器
+/// 在线，只有连接超时/失败才算不可达——无需服务端专门健康检查端点。
+/// 自签证书放行（badCertificateCallback）：预检只回答「在不在线」，证书
+/// 信不信任由正式登录的 TOFU 信任流（TrustStore）裁决。
+/// 独立 Dio 实例：不带本机凭据、不影响 ApiClient 的服务器切换状态
+/// （此时 ApiClient 尚未建立，属于登录前置探测，故落 data 层而非 UI）。
+Future<bool> probeAddress(String addr) async {
+  final dio = Dio(BaseOptions(
+      receiveTimeout: const Duration(milliseconds: 2500),
+      validateStatus: (_) => true))
+    ..httpClientAdapter = IOHttpClientAdapter(createHttpClient: () {
+      final hc = HttpClient()
+        ..connectionTimeout = const Duration(milliseconds: 2500)
+        ..badCertificateCallback = ((cert, host, port) => true);
+      return hc;
+    });
+  try {
+    await dio.get('$addr/api/auth/me');
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    dio.close(force: true); // 释放 HttpClient/Socket 池，频繁改地址不积压
+  }
+}
+
 /// TOFU 确认框（与登录页「信任此服务器」同语义，抽出来给切换入口复用）
 Future<bool> showTrustConfirmDialog(BuildContext context, String fp) async {
   final ok = await showDialog<bool>(

@@ -1,6 +1,6 @@
 // 创建分享（M-A4 / FR-7）：文件 → 有效期/提取码/下载上限/定向成员 →
 // POST /api/share → 展示取件链接（保存了多个服务器地址时逐个给复制按钮）。
-import 'package:dio/dio.dart';
+// 请求与错误文案解析都在 ShareService（data 层），本页不再 import dio。
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -68,20 +68,11 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
         _doneToken = token;
         _busy = false;
       });
-    } on DioException catch (e) {
-      final d = e.response?.data;
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = d is Map && d['detail'] != null
-            ? d['detail'].toString()
-            : '创建失败（HTTP ${e.response?.statusCode ?? '?'}）';
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = '创建失败：$e';
+        _error = ShareService.createErrorText(e);
       });
     }
   }

@@ -1,5 +1,7 @@
 // 首页总览域 API（T7 裸 dio 收编第三批：从 home_page 抽出 UI 层手拼请求）：
-// 磁盘水位 / 最近上传 / 家庭动态 / 通知未读数。
+// 磁盘水位 / 最近上传 / 家庭动态 / 通知未读数 / 文件名搜索。
+// 搜索与最近上传同源同构（app/api/files.py 相邻端点，同一 file_dict 形态），
+// /api/search 收编时并入本模块（原 recent_page 裸 dio）。
 import 'package:dio/dio.dart';
 
 import '../activity.dart';
@@ -41,5 +43,33 @@ class HomeApi {
     final dio = await _dio();
     final r = await dio.get('/api/notifications');
     return (r.data['unread'] as num?)?.toInt() ?? 0;
+  }
+
+  /// 存储详情（storage_detail_page，v0.15）：磁盘总况 + admin 分目录构成 /
+  /// 成员私人空间与配额。字段随角色变化较多，返回原始 Map 由页面按需取
+  /// （非 Map 响应照旧抛类型错，页面显示加载失败）。
+  static Future<Map<String, dynamic>> diskDetail() async {
+    final dio = await _dio();
+    final r = await dio.get('/api/disk/detail');
+    return Map<String, dynamic>.from(r.data as Map);
+  }
+
+  /// 公网入口（管理端配置的主/备隧道；手机上传二维码展示用）。
+  /// 值可能为空串=未配置；trim 与原 UI 一致。
+  static Future<({String main, String alt})> publicUrls() async {
+    final dio = await _dio();
+    final r = await dio.get('/api/public-url');
+    return (
+      main: (r.data['public_base_url'] as String?)?.trim() ?? '',
+      alt: (r.data['public_base_url_alt'] as String?)?.trim() ?? '',
+    );
+  }
+
+  /// 文件名搜索（服务端 rglob 子串匹配，上限 50 条；recent_page 搜索框用）。
+  /// 返回原始 Map 列表，条目形态与 [recent] 相同。
+  static Future<List<dynamic>> search(String q) async {
+    final dio = await _dio();
+    final r = await dio.get('/api/search', queryParameters: {'q': q});
+    return (r.data as List).whereType<Map>().toList();
   }
 }

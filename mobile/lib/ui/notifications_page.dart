@@ -5,38 +5,8 @@
 // · 全部已读收进 AppBar 按钮手动触发
 import 'package:flutter/material.dart';
 
-import '../data/api/api_client.dart';
 import '../data/api/errors.dart';
-
-class _Notif {
-  final int id;
-  final String type;
-  final String title;
-  final String body;
-  final int createdAt;
-  final bool unread;
-  _Notif.fromJson(Map<String, dynamic> j)
-      : id = (j['id'] as num?)?.toInt() ?? 0,
-        type = j['type'] as String? ?? '',
-        title = j['title'] as String? ?? '',
-        body = j['body'] as String? ?? '',
-        createdAt = (j['created_at'] as num?)?.toInt() ?? 0,
-        // 服务端字段是 read（bool），非 read_at（0.8.1 审查修复）
-        unread = j['read'] != true;
-
-  _Notif asRead() => _Notif.fromJson({
-        'id': id,
-        'type': type,
-        'title': title,
-        'body': body,
-        'created_at': createdAt,
-        'read': true,
-      });
-
-  /// 通知类型 → 偏好组/过滤 tab：share=分享、admin=广播、其余归系统
-  String get group =>
-      type == 'share' ? 'share' : (type == 'admin' ? 'admin' : 'system');
-}
+import '../data/api/notifications_api.dart';
 
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
@@ -45,7 +15,7 @@ class NotificationsPage extends StatefulWidget {
 }
 
 class _NotificationsPageState extends State<NotificationsPage> {
-  List<_Notif>? _items;
+  List<NotificationItem>? _items;
   int _unread = 0;
   String? _error;
   String _tab = 'all'; // all | share | admin | system
@@ -60,22 +30,16 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   Future<void> _loadPrefs() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/notifications/prefs');
+      final prefs = await NotificationsApi.prefs();
       if (!mounted) return;
-      setState(() => _prefs = {
-            'share': r.data['share'] != false,
-            'admin': r.data['admin'] != false,
-            'system': r.data['system'] != false,
-          });
+      setState(() => _prefs = prefs);
     } catch (_) {/* 偏好加载失败不打扰列表 */}
   }
 
   Future<void> _savePref(String key, bool v) async {
     setState(() => _prefs[key] = v);
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.put('/api/notifications/prefs', data: {key: v});
+      await NotificationsApi.savePref(key, v);
     } catch (_) {
       if (!mounted) return;
       setState(() => _prefs[key] = !v); // 回滚 UI，服务端为准
@@ -86,16 +50,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   Future<void> _load() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/notifications');
-      final raw = ((r.data['items'] as List?) ?? const []).toList();
-      final items = raw
-          .map((e) => _Notif.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final res = await NotificationsApi.list();
       if (!mounted) return;
       setState(() {
-        _items = items;
-        _unread = (r.data['unread'] as num?)?.toInt() ?? 0;
+        _items = res.items;
+        _unread = res.unread;
         _error = null;
       });
     } catch (e) {
@@ -104,35 +63,32 @@ class _NotificationsPageState extends State<NotificationsPage> {
     }
   }
 
-  Future<void> _markRead(_Notif n) async {
+  Future<void> _markRead(NotificationItem n) async {
     if (!n.unread) return;
     setState(() {
       _items = _items?.map((x) => x.id == n.id ? x.asRead() : x).toList();
       _unread = (_unread - 1).clamp(0, 1 << 31);
     });
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/notifications/${n.id}/read');
+      await NotificationsApi.markRead(n.id);
     } catch (_) {
       _load(); // 失败以服务端为准回拉
     }
   }
 
-  Future<void> _deleteOne(_Notif n) async {
+  Future<void> _deleteOne(NotificationItem n) async {
     setState(() {
       _items = _items?.where((x) => x.id != n.id).toList();
       if (n.unread) _unread = (_unread - 1).clamp(0, 1 << 31);
     });
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.delete('/api/notifications/${n.id}');
+      await NotificationsApi.delete(n.id);
     } catch (_) {/* 列表已本地移除，失败无碍 */}
   }
 
   Future<void> _markAllRead() async {
     try {
-      final dio = await ApiClient.I.dio();
-      await dio.post('/api/notifications/read');
+      await NotificationsApi.markAllRead();
       if (!mounted) return;
       setState(() {
         _unread = 0;
@@ -174,8 +130,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
                 ]))));
   }
 
-  List<_Notif> get _filtered {
-    final all = _items ?? const <_Notif>[];
+  List<NotificationItem> get _filtered {
+    final all = _items ?? const <NotificationItem>[];
     if (_tab == 'all') return all;
     return all.where((n) => n.group == _tab).toList();
   }
