@@ -155,7 +155,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 史脱节）。APK 经自家分享链接在 `App安装包/lanshare.apk` 分发（30 天有效，同文件
 覆盖 + 新建分享）；新版本通过 App 内「关于与检查更新」升级，无需手动换包。
 R8 已关（WorkManager/Room 在裁剪下启动即崩，见 `docs/DEVELOPMENT.md`）。
-**当前测试基线：pytest 222 项（SQLite）+ PostgreSQL 双引擎 / web 单测 19 项 + vue-tsc + 契约路径对齐守卫 / Dart 191 项 + analyze 0 + UI 分层守卫（基线 0）/ 契约 130 路径 / ruff·mypy 全绿。**
+**当前测试基线：pytest 247 项（SQLite）+ PostgreSQL 双引擎 / web 单测 19 项 + vue-tsc + 契约路径对齐守卫 / Dart 191 项 + analyze 0 + UI 分层守卫（基线 0）/ 契约 132 路径 / ruff·mypy 全绿。**
 完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
 
 **WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。

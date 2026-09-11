@@ -213,6 +213,12 @@ share/admin/system 三组开关，存 settings `notify_prefs_user_<uid>`），�
 | POST | `/api/notifications/{id}/read` | 🔑 | 单条标记已读（v3.31）；返回 `{changed}` |
 | DELETE | `/api/notifications/{id}` | 🔑 | 删除本人单条通知（v3.31） |
 | GET | `/api/notifications/prefs` | 🔑 | 本人通知偏好 `{share, admin, system}`（缺省全 true） |
+
+### SSE 实时通知（v3.52）
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/events` | 🔑 | SSE 长连接（`text/event-stream`）。事件为**信号**而非载荷：`{"kind":"notification"}`（有新站内通知/广播，收到后拉 `/api/notifications`）、`{"kind":"feedback"}`（新反馈，仅 admin 视角提醒）。每用户 ≤3 连接、全局 ≤64（超限 429）；15s 心跳注释行；`retry: 5000` 断线重连；队列满丢最旧。Web NotificationsBell 与 App 前台收件箱均为 SSE 优先 + 轮询兜底 |
 | PUT | `/api/notifications/prefs` | 🔑 | `{share?, admin?, system?}` 部分更新偏好（v3.31） |
 | POST | `/api/admin/notify` | ⚙️ | 手动广播 `{title, body?, user_ids?}`（空=全体在职）；落 `admin_broadcasts` 记录（broadcast_id 贯穿站内行，支持撤回/统计）；逐人写入尊重偏好；`user_ids` 显式定向但全不匹配 → 404；返回 `{sent, webhook, broadcast_id}` |
 | GET | `/api/admin/notifications/sent` | ⚙️ | 发送记录+草稿箱 `{items:[{id, title, body, target_count, status: sent\|draft\|scheduled, scheduled_at, sent_at, withdrawn_at, created_at, created_by, unread, read}]}`（新在前，≤100 条；unread/read 为该广播站内行的统计） |
@@ -291,6 +297,7 @@ Web 站长工作台供数层；全部 ⚙️。状态流转约定：反馈由 Ag
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | GET | `/api/admin/overview` | ⚙️ | 总览聚合：users/photos/shares/trash/blobs/sessions/devices 计数 + 磁盘 + `app_latest` + `traffic`（公网隧道流量：今日/本月字节 + 近 14 天序列，Caddy 隧道入口访问日志聚合，见 app/services/traffic.py）+ server_time |
+| GET | `/api/metrics` | ⚙️ | 运行指标快照（v3.52）：近 1h 请求 `by_status` 计数与 `latency_ms{p50,p95,avg}`（asgi 中间件逐请求采集，环形缓冲 2048）+ `disk_used_pct` + `backup`（进程内每日兜底备份编排最近一轮状态，`services/backup.py`；外部计划任务备份另见 healthreport `backup` 块） |
 | GET | `/api/admin/large-files?limit=` | ⚙️ | 全库大文件 TOP（跳过隐藏目录），`{items:[{path,size,mtime}], total_files, total_size}` |
 | GET | `/api/admin/duplicates?min_size=&limit=` | ⚙️ | 疑似重复（同尺寸聚类，不做全盘哈希）：`{groups:[{size,paths,wasted}], group_count}` |
 | GET | `/api/admin/audit?limit=&action=` | ⚙️ | 审计日志近况（新→旧）；`action` 非空按前缀筛选（如 `login`→login/login_fail）；响应带 `actions`（现存 DISTINCT 动作全集，供下拉） |

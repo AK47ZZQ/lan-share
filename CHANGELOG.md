@@ -2,6 +2,32 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-12 — 值班组：服务端 v3.52（存储层/SSE 实时通知/全文搜索/备份与指标/反馈闭环）
+
+主人离场 7 小时值班，B0~B11 十二连块（八个功能/重构提交 + 本条）。核心四件：
+
+**存储层六表 store 化（B1）**：`app/store/` 新增 notifications/photos/shares/
+trash/devices 五个表主人模块 + schema.py（db.py 701→298 行只留连接/方言适
+配），api/services 层六表裸 SQL grep 归零；settings 表按 11 号复审 A2 决策
+不 store 化（尊重不翻案）。
+
+**SSE 实时通知（B3）**：`GET /api/events`（cookie/Bearer 双鉴权、线程池
+call_soon_threadsafe 桥接、每用户 3 连接/全局 64 上限、15s 心跳、满队丢最
+旧信号语义）；发布点=站内通知唯一出口 + 新反馈 admin 信号；Web 通知铃
+EventSource 优先、App inbox_poll dio 流式分帧零新依赖，均轮询兜底。
+
+**全文搜索 + 备份/指标（B4/B5）**：note_search 小写镜像表（LIKE 双引擎同
+构）+ /api/search kind 字段向后兼容（private 对 admin 不可见铁律钉住）；
+进程内每日兜底备份（外部计划任务第二道防线，失败走 webhook）+ asgi 中间件
+逐请求指标 + 磁盘水位告警（6h 冷却）+ `/api/metrics`；契约 130→**132** 路径。
+
+**反馈看板 4 条闭环（B6）**：bug·97ac 白边（根因 `--bg-2` 令牌全仓未定义）、
+other·0069 上限 12→25MB config 化（深因：feedback multipart 被中间件 1MB
+钳制 413，原上限从未生效——已入大包白名单）、other·e464 白名单加 txt/md、
+idea·3ead 由 B3 承接；bug·27ce 留守待定性、bug·0663 无正文附排查备注。
+测试 222→**247**（SSE 6 + 笔记搜索 4 + 备份指标 6 + webdav 协议 7 + 反馈
+附件 2）。
+
 ## 2026-09-11 — 全项目优化收尾批：App 批次 B + 大扫除 / 服务端 v3.51 / Web 测试护栏
 
 主人拍板"除第二块物理盘外全做"后的多批次执行，四个提交（a5a54c4 / 85fedb4 /
