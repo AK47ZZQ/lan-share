@@ -86,6 +86,12 @@ def _backup_status(dest: Path) -> dict:
     return out
 
 
+def _orchestrator_status() -> dict | None:
+    """进程内每日备份编排（B5 兜底防线）最近一轮状态。"""
+    from app.services import backup as _backup_svc
+    return _backup_svc.last_status()
+
+
 def _probe_public(hostport: str) -> bool:
     try:
         host, port = hostport.rsplit(":", 1)
@@ -116,7 +122,8 @@ def gather_health(probe_public: bool = False) -> dict:
         "db_ok": True,
         "disk_used_pct": used_pct,
         "disk_free_gb": round(du.free / 2**30, 1),
-        "backup": _backup_status(BACKUP_DEST),
+        "backup": {**_backup_status(BACKUP_DEST),
+                   "orchestrator": _orchestrator_status()},
         "cert_days_left": _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem"),
         "public_ok": _probe_public(PUBLIC_PROBE) if probe_public else None,
         "counts": counts,

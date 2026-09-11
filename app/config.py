@@ -14,6 +14,13 @@ CLEANUP_INTERVAL = 3600  # 1 hour
 CHUNK_SIZE = 5 * 1024 * 1024          # 分块上传 5MB/块
 UPLOAD_SESSION_TTL = 3 * 86400        # 上传会话 3 天过期（断点续传窗口）
 TRASH_DAYS = 30                       # 回收站保留天数
+
+# ── 备份编排与水位告警（B5）──────────────────────────────
+BACKUP_DIR = SHARE_ROOT / ".backups"   # 备份落点（数据目录内，随数据一起被网盘级保护）
+BACKUP_KEEP = 7                        # 保留最近 N 份（dump+元数据快照各算一份策略）
+BACKUP_HOUR = 4                        # 每日备份时刻（小时；清理循环每小时醒一次到点补跑）
+DISK_WATERMARK_PCT = 85.0              # 磁盘已用百分比告警阈值
+ALERT_COOLDOWN = 6 * 3600              # 同类告警冷却期（防轰炸）
 ZIP_TTL = 15 * 60                     # zip 打包下载票据有效期（秒）
 
 SESSION_TTL = 30 * 86400          # 30 天

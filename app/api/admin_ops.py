@@ -220,3 +220,22 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
     return {"ok": True, "url": f"/api/zip/{token}",
             "name": f"lan-share-export-{username}-{datetime.now().strftime('%Y%m%d')}.zip",
             "files": file_count, "bytes": file_bytes}
+
+
+# ─── 运行指标（B5：只读快照）─────────────────────────────
+
+
+@router.get("/api/metrics")
+def admin_metrics(_admin=Depends(require_admin)):
+    """进程内指标快照：请求状态码/延迟分布 + 磁盘水位 + 备份编排状态。"""
+    from app.services import metrics as _metrics
+    return {
+        "requests": _metrics.snapshot(),
+        "disk_used_pct": _metrics.disk_used_pct(),
+        "backup": _backup_orchestrator_status(),
+    }
+
+
+def _backup_orchestrator_status() -> dict | None:
+    from app.services import backup as _backup_svc
+    return _backup_svc.last_status()

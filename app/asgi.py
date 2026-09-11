@@ -10,11 +10,13 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from urllib.parse import urlsplit
+import time
 
 from app.config import (API_RATE_LIMIT, API_RATE_LIMIT_PUB, AUTHCHECK_RATE_LIMIT,
                         LOGIN_RATE_LIMIT, LOGIN_RATE_LIMIT_PUB, SHARE_RATE_LIMIT)
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, public_netlocs, set_audit_user)
+from app.services import metrics as _metrics
 
 app = FastAPI(title="LAN Share", version="3.8.0")
 
@@ -126,4 +128,7 @@ async def security_middleware(request: Request, call_next):
     if limit and bucket and not allow_rate(f"{ip}:{bucket}", limit):
         return JSONResponse({"detail": "Too many requests"}, status_code=429,
                             headers={"Retry-After": "30"})
-    return await call_next(request)
+    _t0 = time.monotonic()   # B5：只记真正到达路由的请求（早退的安全拒绝不计）
+    resp = await call_next(request)
+    _metrics.record(resp.status_code, (time.monotonic() - _t0) * 1000)
+    return resp
