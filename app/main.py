@@ -26,6 +26,7 @@ from app.api import console                           # 管理台（v3.39 Web �
 from app.api import feedback                          # 反馈通道（v0.28）
 from app.api import events                             # SSE 实时通知（B3）
 from app.services import backup as backup_svc          # 每日备份编排（B5）
+from app.services import metrics as metrics_svc        # 指标与水位告警（B5）
 from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
 
 for _mod in (admin, appver, auth, totp, profile, account, devices, files,
@@ -34,6 +35,7 @@ for _mod in (admin, appver, auth, totp, profile, account, devices, files,
              console, feedback, events):
     app.include_router(_mod.router)
 backup_svc.ensure_scheduled()   # B5：进程内每日备份兜底（外部计划任务失效时的第二道防线）
+metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发现遗漏，终审未覆盖注册面）
 
 # CSP：脚本全部外部化（script-src 'self'）；样式保留内联（style-src 'unsafe-inline'，
 # 仅 CSS 注入风险，收益/成本比合理）。前端已无任何内联事件处理器。

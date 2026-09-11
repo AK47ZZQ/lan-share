@@ -61,6 +61,17 @@ def snapshot(window_seconds: float = 3600) -> dict:
 # ── 磁盘水位 watchdog（cleanup sweep 每小时一轮）─────────────
 
 
+def ensure_scheduled() -> None:
+    """注册进 cleanup sweep（幂等；由 app/main 组装时调用）。"""
+    from app.services import cleanup
+
+    def _tick() -> None:
+        disk_watchdog()   # 返回值弃用：告警成功与否见 settings 的 alert 时间戳
+
+    cleanup.register_sweep("disk_watermark", _tick)
+
+
+
 def disk_used_pct() -> float:
     import shutil
     du = shutil.disk_usage(str(SHARE_ROOT))
