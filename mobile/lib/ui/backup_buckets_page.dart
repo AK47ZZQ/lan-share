@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../backup/backup_bridge.dart';
 import '../backup/backup_config.dart';
 import '../backup/media_source.dart';
+import 'theme/design_tokens.dart';
 
 /// 备份相册选择页（0.14 白名单化）：勾选要备份的相册。
 /// 白名单只影响扫描阶段，账本不动：取消勾选后同 id 媒体自动重回待备集合。
@@ -100,16 +101,16 @@ class _BackupBucketsPageState extends State<BackupBucketsPage> {
                     ? ListView(children: [
                         const SizedBox(height: 100),
                         const Center(child: Text('无法读取相册列表')),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Gap.xs),
                         Padding(
                             padding:
-                                const EdgeInsets.symmetric(horizontal: 24),
+                                const EdgeInsets.symmetric(horizontal: Gap.xl),
                             child: Center(
                                 child: Text(_error!,
                                     textAlign: TextAlign.center,
                                     style: const TextStyle(
                                         fontSize: 12, color: Colors.grey)))),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Gap.xs),
                         Center(
                             child: TextButton(
                                 onPressed: _load,
@@ -122,16 +123,16 @@ class _BackupBucketsPageState extends State<BackupBucketsPage> {
                         const Center(
                             child: Text('没有读到任何相册',
                                 style: TextStyle(fontWeight: FontWeight.bold))),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Gap.xs),
                         const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 24),
+                            padding: EdgeInsets.symmetric(horizontal: Gap.xl),
                             child: Center(
                                 child: Text(
                                     '手机媒体库为空，或系统未授齐"照片和视频"权限',
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
                                         fontSize: 12, color: Colors.grey)))),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Gap.xs),
                         Center(
                             child: TextButton(
                                 onPressed: _load,
@@ -139,7 +140,7 @@ class _BackupBucketsPageState extends State<BackupBucketsPage> {
                       ])
                     : ListView(children: [
                     Padding(
-                        padding: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(Gap.md),
                         child: Text(
                             '勾选要自动备份的相册；一个都不勾 = 全部不备份。\n'
                             '取消勾选只是不备份新照片，已备份的不受影响。',
@@ -149,7 +150,7 @@ class _BackupBucketsPageState extends State<BackupBucketsPage> {
                     if (legacyExcluded.isNotEmpty && _dirty)
                       Padding(
                           padding:
-                              const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                              const EdgeInsets.fromLTRB(Gap.md, 0, Gap.md, Gap.sm),
                           child: Text(
                               '保存后将清除旧的"排除相册"设置'
                               '（${legacyExcluded.take(3).join("、")}'

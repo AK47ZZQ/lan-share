@@ -11,6 +11,7 @@ import 'package:flutter/services.dart' show Clipboard;
 
 import '../data/api/account_api.dart';
 import '../data/api/errors.dart';
+import 'theme/design_tokens.dart';
 
 class InviteRedeemPage extends StatefulWidget {
   const InviteRedeemPage({super.key, this.baseUrl});
@@ -103,10 +104,10 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
         body: Form(
             key: _formKey,
             autovalidateMode: AutovalidateMode.onUserInteraction,
-            child: ListView(padding: const EdgeInsets.all(20), children: [
+            child: ListView(padding: const EdgeInsets.all(Gap.lg), children: [
               Text('输入管理员发放的邀请码，创建你自己的账号。',
                   style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant)),
-              const SizedBox(height: 16),
+              const SizedBox(height: Gap.md),
               TextFormField(
                   controller: _code,
                   decoration: InputDecoration(
@@ -121,10 +122,10 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
                       : null),
               if (_clipped)
                 Padding(
-                    padding: const EdgeInsets.only(top: 6, left: 4),
+                    padding: const EdgeInsets.only(top: 6, left: Gap.xxs),
                     child: Text('已从剪贴板自动填入',
                         style: TextStyle(fontSize: 11.5, color: cs.primary))),
-              const SizedBox(height: 12),
+              const SizedBox(height: Gap.sm),
               TextFormField(
                   controller: _username,
                   decoration: const InputDecoration(
@@ -136,7 +137,7 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
                   validator: (v) => (v == null || v.trim().length < 2)
                       ? '用户名至少 2 个字符'
                       : null),
-              const SizedBox(height: 12),
+              const SizedBox(height: Gap.sm),
               TextFormField(
                   controller: _password,
                   obscureText: _obscured,
@@ -153,7 +154,7 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
                   validator: (v) => (v == null || v.length < 8)
                       ? '密码至少 8 位'
                       : null),
-              const SizedBox(height: 12),
+              const SizedBox(height: Gap.sm),
               TextFormField(
                   controller: _confirm,
                   obscureText: true,
@@ -163,7 +164,7 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
                       isDense: true),
                   validator: (v) =>
                       v != _password.text ? '两次输入的密码不一致' : null),
-              const SizedBox(height: 20),
+              const SizedBox(height: Gap.lg),
               FilledButton.icon(
                   onPressed: _busy ? null : _submit,
                   icon: _busy
@@ -173,7 +174,7 @@ class _InviteRedeemPageState extends State<InviteRedeemPage> {
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.how_to_reg_outlined, size: 18),
                   label: Text(_busy ? '创建中…' : '创建账号')),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
               Text('没有邀请码？请联系管理员在「管理面板 → 邀请码」生成。',
                   style: TextStyle(
                       fontSize: 11.5, color: cs.onSurfaceVariant),

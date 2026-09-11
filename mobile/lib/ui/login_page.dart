@@ -22,6 +22,7 @@ import '../data/totp.dart';
 import '../state/session.dart';
 import 'invite_redeem_page.dart';
 import 'theme/app_theme.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
 import 'widgets/server_picker.dart' show shortHost, showServerPicker;
 
@@ -248,12 +249,12 @@ class _LoginPageState extends ConsumerState<LoginPage>
                         0),
                     child: child),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: Gap.lg),
                   child: _card(context, session),
                 )),
-            const SizedBox(height: 24),
+            const SizedBox(height: Gap.xl),
             Padding(
-              padding: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.only(bottom: Gap.sm),
               child: Text('登录后本机保存凭据用于指纹快速登录，退出登录时自动清除',
                   style: Theme.of(context)
                       .textTheme
@@ -272,14 +273,14 @@ class _LoginPageState extends ConsumerState<LoginPage>
       topInset: MediaQuery.of(context).padding.top,
       bottomRadius: Brand.headerRadius,
       child: Column(children: [
-        const SizedBox(height: 16),
+        const SizedBox(height: Gap.md),
         const BrandCloud(size: 72),
-        const SizedBox(height: 16),
+        const SizedBox(height: Gap.md),
         const Text('LAN Share',
             style: TextStyle(
                 color: Colors.white, fontSize: 26,
                 fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
+        const SizedBox(height: Gap.xxs),
         Text('家庭照片与文件，始终在手边',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 13)),
       ]),
@@ -290,10 +291,10 @@ class _LoginPageState extends ConsumerState<LoginPage>
   Widget _card(BuildContext context, SessionState session) {
     final cs = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      padding: const EdgeInsets.fromLTRB(Gap.lg, Gap.xs, Gap.lg, Gap.lg),
       decoration: BoxDecoration(
           color: cs.surface,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(Radii.sheet),
           boxShadow: [
             BoxShadow(
                 color: Colors.black.withValues(alpha: 0.08),
@@ -302,10 +303,10 @@ class _LoginPageState extends ConsumerState<LoginPage>
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         // 服务器条
         InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: Radii.bControl,
           onTap: _pickServer,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: Gap.xxs, vertical: 10),
             child: Row(children: [
               _probeDot(context),
               const SizedBox(width: 10),
@@ -326,7 +327,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
           ),
         ),
         const Divider(height: 1),
-        const SizedBox(height: 16),
+        const SizedBox(height: Gap.md),
         // 生物识别一键登录（有存档且设备支持时显示在最顺手的顶部）
         if (_saved != null && _bioAvailable && !_pairMode) ...[
           SizedBox(
@@ -338,7 +339,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
               onPressed: session.checking ? null : _bioLogin,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: Gap.xxs),
           // 开两步验证的账号，生物识别只免密码，动态码仍要输（语义如实）
           Text('开启两步验证的账号仍需输入动态码',
               style: Theme.of(context).textTheme.bodySmall),
@@ -359,7 +360,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
               ? _pairBody(context, session)
               : _passwordBody(context, session),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: Gap.xl),
         FilledButton(
           style: FilledButton.styleFrom(
               minimumSize: const Size.fromHeight(48)),
@@ -420,7 +421,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
           autocorrect: false,
           textInputAction: TextInputAction.next,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: Gap.sm),
         TextField(
           controller: _password,
           decoration: InputDecoration(
@@ -437,10 +438,10 @@ class _LoginPageState extends ConsumerState<LoginPage>
       ] else ...[
         Text(_rcMode ? '输入开通时保存的恢复码' : '输入认证器动态码',
             style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
+        const SizedBox(height: Gap.xxs),
         Text(_username.text.trim(),
             style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 12),
+        const SizedBox(height: Gap.sm),
         // 本机验证器已绑定该账号：直接显示当前动态码，点按自动填入（v0.5.2）
         if (!_rcMode && _verifierMatch != null) ...[
           _VerifierFillCard(
@@ -463,7 +464,7 @@ class _LoginPageState extends ConsumerState<LoginPage>
               onSubmitted: (_) => _submit())
         else
           _CodeField(key: _codeKey, onCompleted: _onCodeDone),
-        const SizedBox(height: 4),
+        const SizedBox(height: Gap.xxs),
         TextButton(
           onPressed: session.checking
               ? null
@@ -484,10 +485,10 @@ class _LoginPageState extends ConsumerState<LoginPage>
     return Column(key: const ValueKey('pair'), children: [
       Text('输入电脑端生成的 6 位配对码',
           style: Theme.of(context).textTheme.titleSmall),
-      const SizedBox(height: 4),
+      const SizedBox(height: Gap.xxs),
       Text('3 分钟内有效 · 在「账号设置 → 手机 App 连接」生成',
           style: Theme.of(context).textTheme.bodySmall),
-      const SizedBox(height: 12),
+      const SizedBox(height: Gap.sm),
       _CodeField(key: _codeKey, onCompleted: _onCodeDone),
     ]);
   }
@@ -672,14 +673,14 @@ class _CodeFieldState extends State<_CodeField> {
               decoration: InputDecoration(
                 counterText: '',
                 contentPadding:
-                    const EdgeInsets.symmetric(vertical: 12),
+                    const EdgeInsets.symmetric(vertical: Gap.sm),
                 filled: _values[i].isNotEmpty,
                 fillColor: cs.primary.withValues(alpha: 0.06),
                 enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: Radii.bSm,
                     borderSide: BorderSide(color: cs.outlineVariant)),
                 focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: Radii.bSm,
                     borderSide: BorderSide(color: cs.primary, width: 1.6)),
               ),
               onChanged: (v) => _onChanged(i, v),
@@ -732,7 +733,7 @@ class _VerifierFillCardState extends State<_VerifierFillCard> {
     return Card(
       margin: EdgeInsets.zero,
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: Radii.bSm,
         onTap: () => widget.onFill(code),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -762,7 +763,7 @@ class _VerifierFillCardState extends State<_VerifierFillCard> {
                         letterSpacing: 5)),
               ]),
             ),
-            Icon(Icons.touch_app_outlined, size: 20, color: cs.onSurfaceVariant),
+            Icon(Icons.touch_app_outlined, size: IconSizes.md, color: cs.onSurfaceVariant),
           ]),
         ),
       ),

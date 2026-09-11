@@ -37,6 +37,7 @@ import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'recent_page.dart';
 import 'share_create_sheet.dart';
+import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
 import 'trash_page.dart';
 import 'upload_qr_page.dart';
@@ -398,7 +399,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         builder: (ctx) => SafeArea(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Padding(
-                  padding: EdgeInsets.all(12),
+                  padding: EdgeInsets.all(Gap.sm),
                   child: Text('排序方式', style: TextStyle(fontWeight: FontWeight.bold))),
               for (final (key, label) in [
                 ('name', '名称'),
@@ -427,7 +428,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       ref.read(settingsProvider.notifier).setFilesSort(key);
                       Navigator.pop(ctx);
                     }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -512,7 +513,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Gap.md),
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -520,7 +521,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: Gap.xxs),
                         Text('${e.sizeHuman} · ${e.modified.split('T').first}',
                             style:
                                 const TextStyle(fontSize: 12, color: Colors.grey)),
@@ -616,7 +617,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     Navigator.pop(ctx);
                     _showDetails(e);
                   }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -628,7 +629,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Gap.md),
                   child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(e.name,
@@ -687,7 +688,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     Navigator.pop(ctx);
                     _showDetails(e);
                   }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -957,7 +958,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                   height: 40,
                   child: ListView(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: Gap.xs),
                     children: [
                       for (var i = 0; i < _stack.length; i++)
                         TextButton(
@@ -1010,7 +1011,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       if (pinned.isNotEmpty) ...[
         SliverToBoxAdapter(
             child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xs, Gap.md, 0),
                 child: Text('常用目录',
                     style: const TextStyle(
                         fontSize: 12, fontWeight: FontWeight.bold)))),
@@ -1022,7 +1023,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       ],
       if (settings.filesGrid)
         SliverPadding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, 0),
             sliver: SliverGrid(
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                 // 宽屏（平板/横屏）加列；手机竖屏 3 列与 Web 网格观感一致
@@ -1050,7 +1051,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   Widget _pinnedRow(String p) => ListTile(
       dense: true,
-      leading: const Icon(Icons.star, size: 20),
+      leading: const Icon(Icons.star, size: IconSizes.md),
       title: Text(p.split('/').last,
           maxLines: 1, overflow: TextOverflow.ellipsis),
       trailing: IconButton(
@@ -1066,7 +1067,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     final thumb = _thumbUrl(e);
     if (thumb != null) {
       return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: Radii.bControl,
           child: SizedBox(
               width: 40,
               height: 40,
@@ -1090,10 +1091,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
             color: isPriv
                 ? cs.primary.withValues(alpha: 0.14)
                 : cs.surfaceContainerHighest.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Radii.bControl,
           ),
           child: Icon(isPriv ? Icons.lock : Icons.folder,
-              size: 20,
+              size: IconSizes.md,
               color: isPriv ? cs.primary : cs.onSurfaceVariant));
     }
     return FileTypeTile(
@@ -1146,7 +1147,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     final selected = _selected.contains(e.path);
     final cs = Theme.of(context).colorScheme;
     final thumb = _thumbUrl(e);
-    final radius = BorderRadius.circular(14);
+    final radius = Radii.bMd;
     return InkWell(
         onTap: () {
           if (_selecting) {
@@ -1177,7 +1178,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       child: Stack(fit: StackFit.expand, children: [
                     ClipRRect(
                         borderRadius: BorderRadius.vertical(
-                            top: Radius.circular(12)),
+                            top: Radius.circular(Radii.control)),
                         child: thumb != null
                             ? AuthImage(
                                 url: thumb,
@@ -1195,7 +1196,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                                   color: Colors.black.withValues(alpha: 0.55),
                                   shape: BoxShape.circle),
                               child: const Icon(Icons.play_arrow_rounded,
-                                  size: 16, color: Colors.white))),
+                                  size: IconSizes.sm, color: Colors.white))),
                     if (selected)
                       Positioned(
                           right: 6,
@@ -1214,7 +1215,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       // iOS 辅助功能特大字号（~3.1x）会把固定高度卡片的
                       // 文本区撑爆（Expanded 归零 RenderFlex overflow），
                       // 文本区字号钳制 1.3x（review 0.12.0 P3）
-                      padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                      padding: const EdgeInsets.fromLTRB(Gap.xs, 6, Gap.xs, Gap.xs),
                       child: MediaQuery.withClampedTextScaling(
                         maxScaleFactor: 1.3,
                         child: Column(
@@ -1311,9 +1312,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: Radii.bSm,
           child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 6),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Icon(icon, size: 22),
                 const SizedBox(height: 2),

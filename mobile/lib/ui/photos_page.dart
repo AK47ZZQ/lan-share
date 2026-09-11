@@ -31,6 +31,7 @@ import 'album_detail_page.dart';
 import 'photo_models.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
+import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/prompt_dialog.dart';
@@ -220,7 +221,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             child: monthEntries.isEmpty
                 ? ListView(shrinkWrap: true, children: const [
                     Padding(
-                        padding: EdgeInsets.all(24),
+                        padding: EdgeInsets.all(Gap.xl),
                         child: Center(child: Text('还没有照片'))),
                   ])
                 : ListView(shrinkWrap: true, children: [
@@ -311,7 +312,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Gap.md),
                   child: Align(
                       alignment: Alignment.centerLeft,
                       child: Column(
@@ -320,7 +321,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             Text(a.title,
                                 style: const TextStyle(
                                     fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: Gap.xxs),
                             Text(
                                 '${a.count > 0 ? "${a.count} 项 · " : ""}'
                                 '${a.createdBy.isEmpty ? "" : "由 ${a.createdBy} 创建"}',
@@ -347,7 +348,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                       // ignore: discarded_futures
                       _deleteAlbum(a);
                     }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -632,7 +633,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                 for (final a in _albums!)
                                   Padding(
                                       padding:
-                                          const EdgeInsets.only(right: 8),
+                                          const EdgeInsets.only(right: Gap.xs),
                                       child: GestureDetector(
                                           onTap: () => _openAlbum(a),
                                           onLongPress: () =>
@@ -640,14 +641,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                           child: Container(
                                               width: 92,
                                               padding: const EdgeInsets
-                                                  .fromLTRB(5, 5, 5, 4),
+                                                  .fromLTRB(5, 5, 5, Gap.xxs),
                                               decoration: BoxDecoration(
                                                   color: Theme.of(context)
                                                       .colorScheme
                                                       .surfaceContainerHighest,
                                                   borderRadius:
-                                                      BorderRadius.circular(
-                                                          10)),
+                                                      Radii.bSm),
                                               child: Column(children: [
                                                 Expanded(
                                                     child: ClipRRect(
@@ -717,7 +717,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                         visualDensity: VisualDensity.compact,
                                         avatar:
                                             const Icon(Icons.calendar_month,
-                                                size: 16),
+                                                size: IconSizes.sm),
                                         label:
                                             Text(_monthLabel(_month!)),
                                         onDeleted: () {
@@ -737,7 +737,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       return ListView(children: [
         const SizedBox(height: 100),
         Center(child: Text(_failed ? '加载失败' : '这里还是空的')),
-        const SizedBox(height: 8),
+        const SizedBox(height: Gap.xs),
         Center(child: FilledButton.tonal(
             onPressed: _refresh, child: const Text('重新加载'))),
       ]);
@@ -783,7 +783,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // 毛玻璃底（v0.13）：此前半透明色块直接叠在第三列照片上，遮挡且发闷；
     // BackdropFilter 实时模糊透出底下内容，贴右缘窄条观感干净
     return ClipRRect(
-        borderRadius: const BorderRadius.horizontal(left: Radius.circular(10)),
+        borderRadius: const BorderRadius.horizontal(left: Radius.circular(Radii.sm)),
         child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
             child: Container(
@@ -831,9 +831,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: Radii.bSm,
           child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: Gap.md, vertical: 6),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Icon(icon, size: 22),
                 const SizedBox(height: 2),
@@ -875,15 +875,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                 child: Align(
                     alignment: Alignment.centerLeft,
                     child: Container(
-                        margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                        margin: const EdgeInsets.fromLTRB(Gap.sm, 10, Gap.sm, 6),
                         padding:
-                            const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 5),
                         decoration: BoxDecoration(
                             color: Theme.of(context)
                                 .colorScheme
                                 .primary
                                 .withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(999)),
+                            borderRadius: BorderRadius.circular(Radii.pill)),
                         child: Text(_dayLabel(day),
                             style: TextStyle(
                                 fontWeight: FontWeight.w700,
@@ -935,7 +935,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                 bottom: 4,
                                 child: Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 4, vertical: 1),
+                                        horizontal: Gap.xxs, vertical: 1),
                                     decoration: BoxDecoration(
                                         color: Colors.black54,
                                         borderRadius:
@@ -975,7 +975,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           ],
           if (!_done)
             const SliverPadding(
-                padding: EdgeInsets.all(16),
+                padding: EdgeInsets.all(Gap.md),
                 sliver: SliverToBoxAdapter(
                     child: Center(
                         child: SizedBox(width: 18, height: 18,

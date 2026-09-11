@@ -21,6 +21,7 @@ import '../transfer/transfer_task.dart' show humanSize;
 import 'backup_buckets_page.dart';
 import 'backup_details_page.dart';
 import 'server_albums_page.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/kit.dart';
 
 // ── 门面导出：调用方仍可从本文件引入这些页面（零改动）─────────
@@ -322,7 +323,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   decoration: const InputDecoration(
                     labelText: '用户名',
                     hintText: '输入与用户名完全一致')),
-                const SizedBox(height: 12),
+                const SizedBox(height: Gap.sm),
                 TextField(
                   controller: pwCtrl,
                   focusNode: pwFocus,
@@ -334,7 +335,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                     labelText: '登录密码',
                     hintText: '校验本人口令后才会执行')),
                 if (err.isNotEmpty) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                   Text(err,
                       style: TextStyle(
                           color: Theme.of(dctx).colorScheme.error,
@@ -484,7 +485,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
       appBar: AppBar(title: const Text('自动备份')),
       body: cfg == null
           ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.only(bottom: 24), children: [
+          : ListView(padding: const EdgeInsets.only(bottom: Gap.xl), children: [
               SwitchListTile(
                 secondary: Icon(cfg.enabled
                     ? Icons.backup
@@ -517,7 +518,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                         },
                 ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: Gap.md),
                 child: Card(
                   elevation: 0,
                   color: cs.surfaceContainerHighest,
@@ -530,7 +531,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                       Text('已备份 照片 ${stats?.donePhotos ?? 0} · 视频 ${stats?.doneVideos ?? 0}'
                           '（${humanSize(stats?.doneBytes ?? 0)}）',
                           style: const TextStyle(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Gap.xxs),
                       Text('待备份 照片 ${stats?.pendingPhotos ?? 0} · 视频 ${stats?.pendingVideos ?? 0}'
                           ' · 失败 ${stats?.error ?? 0} 项',
                           style: const TextStyle(fontSize: 13)),
@@ -542,7 +543,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                                 fontSize: 12,
                                 color: Colors.grey)),
                       ],
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Gap.xxs),
                       // 0.7.0 起按手机相册分子目录：照片/<u>/<相册>/、视频/<u>/<相册>/
                       Text('备份位置：照片、视频/$username/<手机相册名>/',
                           style: const TextStyle(fontSize: 12)),
@@ -561,7 +562,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
               // 本轮进度卡（v0.17 备份详情化）：引擎逐张落盘，2s 轮询刷新
               if (_progTotal > 0 && !_busy)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  padding: const EdgeInsets.fromLTRB(Gap.md, Gap.sm, Gap.md, 0),
                   child: Card(
                     elevation: 0,
                     color: cs.surfaceContainerHighest,
@@ -593,7 +594,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                           ),
                         ),
                         if (_progCurrent.isNotEmpty) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: Gap.xs),
                           Text('正在上传：$_progCurrent',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -609,12 +610,12 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
               // "点了立即备份没反应"不再靠猜——卡在哪一环这里一眼可见
               if (cfg.enabled) ...[
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: Gap.md),
                   child: Card(
                     elevation: 0,
                     color: cs.surfaceContainerHighest,
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(Gap.sm),
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -653,7 +654,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: Gap.xs),
               ],
               // 电池优化白名单引导（0.6.2）：小米/华为等激进省电把 WorkManager
               // 周期任务压到几小时一次甚至不跑，是"备份不自动跑"投诉的常见根因
@@ -716,7 +717,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   onChanged: locked ? null : (v) => _set(cfg.copyWith(allowPublicServer: v))),
               const Divider(height: 24),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                padding: const EdgeInsets.symmetric(horizontal: Gap.md),
                 child: Row(children: [
                   Expanded(
                     child: OutlinedButton.icon(
@@ -741,7 +742,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                             : const Icon(Icons.sync),
                         label: const Text('立即备份')),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: Gap.sm),
                   Expanded(
                     child: FilledButton.tonalIcon(
                         onPressed: () => Navigator.push(context,
@@ -757,7 +758,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
               // 已上传副本可在此逐相册删除（进服务端回收站，30 天可恢复）
               if (ref.watch(sessionProvider).role != 'guest')
                 Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                padding: const EdgeInsets.fromLTRB(Gap.md, 0, Gap.md, 0),
                 child: Card(
                   elevation: 0,
                   margin: EdgeInsets.zero,
@@ -778,17 +779,17 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: Gap.sm),
               // 危险区（v0.16.1）：清空服务端备份（释放空间/重置备份）。
               // guest 只读：me 页宫格挡了本页，这里再挡卡片本身（红队 P2）
               if (ref.watch(sessionProvider).role != 'guest')
                 Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                padding: const EdgeInsets.fromLTRB(Gap.md, 0, Gap.md, 0),
                 child: Card(
                   elevation: 0,
                   margin: EdgeInsets.zero,
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: Radii.bControl,
                       side: BorderSide(
                           color: cs.error.withValues(alpha: 0.45),
                           width: 1)),
@@ -808,7 +809,7 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                 ),
               ),
               const Padding(
-                padding: EdgeInsets.all(16),
+                padding: EdgeInsets.all(Gap.md),
                 child: Text(
                     '· 单向备份：相册里删除的照片不会从网盘删除\n'
                     '· 已备份过的照片自动跳过（换手机重装后重新登录也只传新照片）\n'

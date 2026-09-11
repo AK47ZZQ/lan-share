@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../data/local/verifier_store.dart';
 import '../data/totp.dart';
+import 'theme/design_tokens.dart';
 import 'scan_page.dart';
 
 class VerifierPage extends StatefulWidget {
@@ -150,12 +151,12 @@ class _VerifierPageState extends State<VerifierPage> {
                     children: [
                       Icon(Icons.phonelink_lock_outlined,
                           size: 64, color: cs.onSurfaceVariant),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: Gap.sm),
                       Text('还没绑定两步验证',
                           style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Gap.xxs),
                       const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 32),
+                        padding: EdgeInsets.symmetric(horizontal: Gap.xxl),
                         child: Text(
                             '在电脑端「账号设置 → 两步验证 → 启用」出示二维码，\n用下面的按钮扫码即可绑定，之后登录无需装其他验证器',
                             textAlign: TextAlign.center,
@@ -164,11 +165,11 @@ class _VerifierPageState extends State<VerifierPage> {
                     ],
                   ),
                 )
-              : ListView(padding: const EdgeInsets.all(12), children: [
+              : ListView(padding: const EdgeInsets.all(Gap.sm), children: [
                   for (final e in _entries)
                     _codeCard(context, e),
                   const Padding(
-                    padding: EdgeInsets.all(8),
+                    padding: EdgeInsets.all(Gap.xs),
                     child: Text(
                         '动态码 30 秒更换一次。登录第二步把这里显示的数字填入即可；'
                         '本机 App 登录时会自动帮你填。',
@@ -204,7 +205,7 @@ class _VerifierPageState extends State<VerifierPage> {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: Gap.md, vertical: Gap.sm),
         child: Row(children: [
           SizedBox(
             width: 44,
@@ -218,7 +219,7 @@ class _VerifierPageState extends State<VerifierPage> {
               Text('$remain', style: const TextStyle(fontSize: 13)),
             ]),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: Gap.md),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(e.label.isEmpty ? '手动绑定' : e.label,

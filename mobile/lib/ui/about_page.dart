@@ -7,6 +7,7 @@ import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../data/update_service.dart';
 import '../transfer/transfer_task.dart' show humanSize;
+import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
 
 class AboutPage extends StatefulWidget {
@@ -128,7 +129,7 @@ class _AboutPageState extends State<AboutPage> {
         padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
         decoration: BoxDecoration(
             color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(999)),
+            borderRadius: BorderRadius.circular(Radii.pill)),
         child: Text(text,
             style: TextStyle(
                 fontSize: 10.5,
@@ -145,24 +146,24 @@ class _AboutPageState extends State<AboutPage> {
         remote != null && UpdateService.isNewer(remote, localBuild);
     return Scaffold(
         appBar: AppBar(title: const Text('关于')),
-        body: ListView(padding: const EdgeInsets.all(16), children: [
-          const SizedBox(height: 16),
+        body: ListView(padding: const EdgeInsets.all(Gap.md), children: [
+          const SizedBox(height: Gap.md),
           const Center(child: BrandCloud(size: 72, onGradient: false)),
-          const SizedBox(height: 12),
+          const SizedBox(height: Gap.sm),
           Center(child: Text('LAN Share',
               style: Theme.of(context).textTheme.titleLarge)),
-          const SizedBox(height: 4),
+          const SizedBox(height: Gap.xxs),
           Center(child: Text(
               'v${info?.version ?? '…'} (${info?.buildNumber ?? "…"})',
               style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurfaceVariant))),
-          const SizedBox(height: 4),
+          const SizedBox(height: Gap.xxs),
           Center(child: Text('家庭自包含网盘 · ${_server ?? ''}',
               style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)),
-          const SizedBox(height: 24),
+          const SizedBox(height: Gap.xl),
           Card(elevation: 0,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: Radii.bControl,
                   side: BorderSide(
                       color: Theme.of(context).dividerColor, width: 0.5)),
               child: Padding(
@@ -179,14 +180,14 @@ class _AboutPageState extends State<AboutPage> {
                           style: TextStyle(
                               fontSize: 12,
                               color: Theme.of(context).colorScheme.error)),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: Gap.xs),
                       TextButton(onPressed: _check, child: const Text('重试')),
                     ],
                     if (remote != null && !hasUpdate) ...[
                       const Icon(Icons.check_circle, color: Colors.green),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Gap.xxs),
                       const Text('已是最新版本'),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: Gap.xxs),
                       Text('服务端分发版本：v${remote.version} (${remote.build})'
                           '${remote.available ? "" : " · APK 未上传"}',
                           style: const TextStyle(fontSize: 12)),
@@ -197,13 +198,13 @@ class _AboutPageState extends State<AboutPage> {
                           style: const TextStyle(fontWeight: FontWeight.bold)),
                       if (remote.notes.isNotEmpty)
                         Padding(
-                            padding: const EdgeInsets.only(top: 4),
+                            padding: const EdgeInsets.only(top: Gap.xxs),
                             child: Text(remote.notes,
                                 style: const TextStyle(fontSize: 12))),
                       const SizedBox(height: 10),
                       if (_progress != null) ...[
                         LinearProgressIndicator(value: _progress),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: Gap.xxs),
                         Text('下载中 ${( _progress! * 100).toStringAsFixed(0)}%',
                             style: const TextStyle(fontSize: 12)),
                       ] else
@@ -217,12 +218,12 @@ class _AboutPageState extends State<AboutPage> {
                                 : '服务端 APK 未上传')),
                     ],
                   ]))),
-          const SizedBox(height: 16),
+          const SizedBox(height: Gap.md),
           // 0.9.0 更新历史：每次版本的更新说明（服务端 versions.json 驱动）
           if (_historyLoaded && _history.isNotEmpty)
             Card(elevation: 0,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: Radii.bControl,
                     side: BorderSide(
                         color: Theme.of(context).dividerColor, width: 0.5)),
                 child: Padding(
@@ -257,7 +258,7 @@ class _AboutPageState extends State<AboutPage> {
                                                 color: Theme.of(context)
                                                     .colorScheme
                                                     .primary)),
-                                        const SizedBox(width: 8),
+                                        const SizedBox(width: Gap.xs),
                                         if (h.date.isNotEmpty)
                                           Text(h.date,
                                               style: TextStyle(
@@ -287,7 +288,7 @@ class _AboutPageState extends State<AboutPage> {
                                       ],
                                     ])),
                         ]))),
-          const SizedBox(height: 16),
+          const SizedBox(height: Gap.md),
           TextButton.icon(
               icon: const Icon(Icons.policy_outlined, size: 18),
               label: const Text('开源许可'),

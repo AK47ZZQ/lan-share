@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../backup/backup_ledger.dart';
 import '../data/api/files_api.dart';
 import '../state/session.dart';
+import 'theme/design_tokens.dart';
 
 /// 服务端相册管理页（9.6-P1-10 场景2）：列出 照片|视频/<我的用户名>/ 下的
 /// 相册目录，逐个"删除服务端副本"（DELETE /api/files → 服务端回收站，
@@ -141,9 +142,9 @@ class _ServerAlbumsPageState extends ConsumerState<ServerAlbumsPage> {
                       ])
                     : RefreshIndicator(
                         onRefresh: _load,
-                        child: ListView(padding: const EdgeInsets.all(8), children: [
+                        child: ListView(padding: const EdgeInsets.all(Gap.xs), children: [
                           Padding(
-                              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                              padding: const EdgeInsets.fromLTRB(Gap.xs, 0, Gap.xs, Gap.xs),
                               child: Text('删除进服务端回收站，30 天内可恢复；本机照片不受影响。',
                                   style: TextStyle(
                                       fontSize: 11.5,

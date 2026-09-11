@@ -23,6 +23,7 @@ import 'notes_page.dart';
 import 'me_page.dart';
 import 'photos_page.dart';
 import 'transfers_page.dart';
+import 'theme/design_tokens.dart';
 
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
@@ -138,17 +139,17 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             Icon(Icons.lock_outline,
                 size: 56, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 12),
+            const SizedBox(height: Gap.sm),
             const Text('LAN Share 已锁定'),
-            const SizedBox(height: 4),
+            const SizedBox(height: Gap.xxs),
             const Text('指纹/面部解不开？可退出登录后用密码重新进入',
                 style: TextStyle(fontSize: 12, color: Colors.grey)),
-            const SizedBox(height: 16),
+            const SizedBox(height: Gap.md),
             FilledButton.icon(
                 onPressed: _unlock,
                 icon: const Icon(Icons.fingerprint),
                 label: const Text('解锁')),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             TextButton(
                 onPressed: () {
                   // 逃生口：登出回登录页（凭据清空，密码重登）。

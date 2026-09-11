@@ -11,6 +11,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/feedback_api.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/kit.dart';
 
 class FeedbackPage extends StatefulWidget {
@@ -188,7 +189,7 @@ class _FeedbackPageState extends State<FeedbackPage>
                   ? '一句话说清问题，如：文件页多选后点下载没反应'
                   : '一句话说清你的想法',
               border: const OutlineInputBorder())),
-      const SizedBox(height: 12),
+      const SizedBox(height: Gap.sm),
       TextField(
           controller: _bodyCtrl,
           maxLength: 2000,
@@ -213,12 +214,12 @@ class _FeedbackPageState extends State<FeedbackPage>
             child: ListView(scrollDirection: Axis.horizontal, children: [
               for (final img in _images)
                 Padding(
-                    padding: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.only(right: Gap.xs),
                     child: Stack(children: [
                       ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: Radii.bSm,
                           child: img.bytes != null
-                              ? Image.memory(img.bytes!,
+                              ? Image.memory(img.bytes!, semanticLabel: '待提交截图',
                                   width: 84, height: 84, fit: BoxFit.cover)
                               : const SizedBox(width: 84, height: 84)),
                       Positioned(
@@ -241,7 +242,7 @@ class _FeedbackPageState extends State<FeedbackPage>
                   child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.send_outlined),
           label: Text(_sending ? '提交中…' : '提交反馈')),
-      const SizedBox(height: 8),
+      const SizedBox(height: Gap.xs),
       Text('提交后直达开发端（会附带 App 版本与系统信息）。\n处理状态在「历史记录」里实时更新。',
           style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
     ]);
@@ -267,7 +268,7 @@ class _FeedbackPageState extends State<FeedbackPage>
     return RefreshIndicator(
         onRefresh: _loadHistory,
         child: ListView.builder(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(Gap.sm),
             itemCount: _items.length,
             itemBuilder: (ctx, i) => _historyCard(_items[i], cs)));
   }
@@ -278,7 +279,7 @@ class _FeedbackPageState extends State<FeedbackPage>
     return Card(
         margin: const EdgeInsets.only(bottom: 10),
         child: InkWell(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Radii.bControl,
             onTap: () => _showDetail(it, cs),
             child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
@@ -294,10 +295,10 @@ class _FeedbackPageState extends State<FeedbackPage>
                             style: const TextStyle(
                                 fontSize: 14, fontWeight: FontWeight.w600))),
                     Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: 3),
                         decoration: BoxDecoration(
                             color: st.$1.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(999)),
+                            borderRadius: BorderRadius.circular(Radii.pill)),
                         child: Text(status,
                             style: TextStyle(
                                 fontSize: 11.5, color: st.$1,
@@ -309,13 +310,13 @@ class _FeedbackPageState extends State<FeedbackPage>
                         child: Row(children: [
                           Icon(Icons.sticky_note_2_outlined,
                               size: 13, color: cs.onSurfaceVariant),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: Gap.xxs),
                           Expanded(
                               child: Text(it['note'] as String,
                                   style: TextStyle(
                                       fontSize: 12, color: cs.onSurfaceVariant))),
                         ])),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Gap.xxs),
                   Row(children: [
                     Text((it['created'] as String?) ?? '',
                         style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
@@ -340,7 +341,7 @@ class _FeedbackPageState extends State<FeedbackPage>
             child: Container(
                 constraints: BoxConstraints(
                     maxHeight: MediaQuery.of(bctx).size.height * 0.75),
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xxs, Gap.md, Gap.sm),
                 child: ListView(shrinkWrap: true, children: [
                   Row(children: [
                     Expanded(
@@ -349,7 +350,7 @@ class _FeedbackPageState extends State<FeedbackPage>
                                 fontSize: 16, fontWeight: FontWeight.bold))),
                     _statusChip((it['status'] as String?) ?? '已提交', cs),
                   ]),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Gap.xxs),
                   Text('${it['type']} · ${it['created']} · ${it['app']}',
                       style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
                   if (((it['body'] as String?) ?? '').isNotEmpty)
@@ -365,18 +366,18 @@ class _FeedbackPageState extends State<FeedbackPage>
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
                                 color: cs.primary.withValues(alpha: 0.08),
-                                borderRadius: BorderRadius.circular(10)),
+                                borderRadius: Radii.bSm),
                             child: Text('开发备注：${it['note']}',
                                 style: const TextStyle(fontSize: 12.5)))),
                   for (final url in ((it['images'] as List?) ?? []))
                     Padding(
                         padding: const EdgeInsets.only(top: 10),
                         child: ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: Radii.bSm,
                             child: FutureBuilder<Uint8List?>(
                                 future: _fetchImage(url as String),
                                 builder: (ctx, snap) => snap.hasData
-                                    ? Image.memory(snap.data!,
+                                    ? Image.memory(snap.data!, semanticLabel: '反馈截图',
                                         fit: BoxFit.contain)
                                     : const SizedBox(
                                         height: 120,
@@ -397,10 +398,10 @@ class _FeedbackPageState extends State<FeedbackPage>
   Widget _statusChip(String status, ColorScheme cs) {
     final st = _statusStyle(status, cs);
     return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: Gap.xxs),
         decoration: BoxDecoration(
             color: st.$1.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(999)),
+            borderRadius: BorderRadius.circular(Radii.pill)),
         child: Text(status,
             style: TextStyle(
                 fontSize: 12, color: st.$1, fontWeight: FontWeight.w600)));

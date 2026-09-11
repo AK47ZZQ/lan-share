@@ -1,6 +1,7 @@
 // 家里动态页（0.6.2）：/api/activity 全量列表。首页动态卡的"全部 ›"落点。
 // 只读流，下拉刷新；点击不跳转（手机端目录跳转语义与 Web 不同，暂不做）。
 import 'package:flutter/material.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
 
 import '../data/activity.dart';
@@ -60,7 +61,7 @@ class _ActivityPageState extends State<ActivityPage> {
                             Center(child: Text(_error!)),
                           ])
                         : ListView.separated(
-                            padding: const EdgeInsets.only(bottom: 24),
+                            padding: const EdgeInsets.only(bottom: Gap.xl),
                             itemCount: items!.length,
                             separatorBuilder: (_, _) => Divider(
                                 height: 0.5,

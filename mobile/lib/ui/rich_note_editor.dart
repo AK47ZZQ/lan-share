@@ -16,6 +16,7 @@ import 'package:html_editor_enhanced/html_editor.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/files_api.dart';
+import 'theme/design_tokens.dart';
 
 /// 常用表情快捷面板（系统键盘自带 emoji，这里给"像笔记 App"的快捷入口）
 const _kEmojis = [
@@ -205,12 +206,12 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
         showDragHandle: true,
         builder: (bctx) => SafeArea(
                 child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    padding: const EdgeInsets.fromLTRB(Gap.sm, 0, Gap.sm, Gap.sm),
                     child: Wrap(spacing: 6, runSpacing: 6, children: [
                       for (final em in _kEmojis)
                         InkWell(
                             onTap: () => Navigator.pop(bctx, em),
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: Radii.bXs,
                             child: Padding(
                                 padding: const EdgeInsets.all(6),
                                 child:
@@ -251,7 +252,7 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
           actions: [
             if (_dirty && !_saving)
               Padding(
-                  padding: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.only(right: Gap.xxs),
                   child: Center(
                       child: Text('未保存',
                           style: TextStyle(
@@ -288,7 +289,7 @@ class _RichNoteEditorPageState extends State<RichNoteEditorPage> {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.grey))),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: Gap.xs),
                     Center(
                         child: TextButton(
                             onPressed: _loadContent,

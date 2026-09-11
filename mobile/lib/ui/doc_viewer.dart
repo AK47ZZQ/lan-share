@@ -21,6 +21,7 @@ import '../data/api/files_api.dart';
 import 'doc_extract.dart';
 import 'notes_page.dart';
 import 'rich_note_editor.dart';
+import 'theme/design_tokens.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 
 const _textLimit = 2 * 1024 * 1024;
@@ -290,7 +291,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
   Widget _markdown(String data, {bool images = false}) => Markdown(
         data: data,
         selectable: true,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(Gap.md),
         sizedImageBuilder: images
             ? (config) {
                 final uri = config.uri;
@@ -300,9 +301,12 @@ class _DocViewerPageState extends State<DocViewerPage> {
                     return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 6),
                         child: ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: Radii.bXs,
                             child: Image.file(f,
-                                width: 280, fit: BoxFit.contain)));
+                                width: 280,
+                                fit: BoxFit.contain,
+                                semanticLabel:
+                                    f.uri.pathSegments.last)));
                   }
                 }
                 return const SizedBox.shrink();
@@ -315,13 +319,13 @@ class _DocViewerPageState extends State<DocViewerPage> {
           h3: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
           codeblockDecoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8)),
+              borderRadius: Radii.bXs),
         ),
       );
 
   Widget _plain(String data, {bool mono = true}) => SelectionArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(Gap.md),
           child: Text(data,
               style: mono
                   ? const TextStyle(
@@ -402,7 +406,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
                     size: 46, color: Colors.white38),
                 const SizedBox(height: 10),
                 Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    padding: const EdgeInsets.symmetric(horizontal: Gap.xxl),
                     child: Text(tooLarge
                             ? '文件超过预览上限（${humanSize((snap.error as _TooLarge).limit)}）'
                             : msg.length > 120
@@ -410,7 +414,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
                                 : '预览失败：$msg',
                         textAlign: TextAlign.center,
                         style: const TextStyle(fontSize: 13))),
-                const SizedBox(height: 8),
+                const SizedBox(height: Gap.xs),
                 Row(mainAxisSize: MainAxisSize.min, children: [
                   if (!tooLarge)
                     TextButton.icon(
@@ -426,7 +430,7 @@ class _DocViewerPageState extends State<DocViewerPage> {
                       label: const Text('用其他应用打开')),
                 ]),
                 if (rough) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Gap.xxs),
                   Text('此类旧版格式仅能粗略提取，重要文档建议转换后再预览',
                       style: TextStyle(
                           fontSize: 11, color: Theme.of(context)

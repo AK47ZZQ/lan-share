@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../data/api/errors.dart';
 import '../data/api/home_api.dart';
 import '../transfer/transfer_task.dart' show humanSize;
+import 'theme/design_tokens.dart';
 
 class StorageDetailPage extends StatefulWidget {
   const StorageDetailPage({super.key});
@@ -59,14 +60,14 @@ class _StorageDetailPageState extends State<StorageDetailPage> {
                 ? ListView(children: [
                     const SizedBox(height: 100),
                     Center(child: Text(_error!)),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: Gap.xs),
                     Center(
                         child: TextButton(
                             onPressed: _load, child: const Text('重试'))),
                   ])
                 : RefreshIndicator(
                     onRefresh: _load,
-                    child: ListView(padding: const EdgeInsets.all(12),
+                    child: ListView(padding: const EdgeInsets.all(Gap.sm),
                         children: [
                       if (d?['warning'] == true)
                         Padding(
@@ -96,7 +97,7 @@ class _StorageDetailPageState extends State<StorageDetailPage> {
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Text('磁盘总况',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-        const SizedBox(height: 12),
+        const SizedBox(height: Gap.sm),
         LinearProgressIndicator(
             value: ((d['total'] as num?) ?? 0) > 0
                 ? (((d['used'] as num?) ?? 0) / ((d['total'] as num?) ?? 1))
@@ -104,13 +105,13 @@ class _StorageDetailPageState extends State<StorageDetailPage> {
                 : null,
             minHeight: 8,
             borderRadius: BorderRadius.circular(4)),
-        const SizedBox(height: 12),
+        const SizedBox(height: Gap.sm),
         Row(children: [
           _stat('已用', d['used_human'] as String? ?? '-', cs),
           _stat('剩余', d['free_human'] as String? ?? '-', cs),
           _stat('总容量', d['total_human'] as String? ?? '-', cs),
         ]),
-        const SizedBox(height: 4),
+        const SizedBox(height: Gap.xxs),
         Text('文件库实际占用 ${d['share_size_human'] ?? '-'}（去重物理字节）',
             style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
       ]));
@@ -156,12 +157,12 @@ class _StorageDetailPageState extends State<StorageDetailPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 13))),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: Gap.xs),
                     Text((e.value as Map)['size_human'] as String? ?? '-',
                         style: TextStyle(
                             fontSize: 12, color: cs.onSurfaceVariant)),
                   ]),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Gap.xxs),
                   ClipRRect(
                       borderRadius: BorderRadius.circular(3),
                       child: LinearProgressIndicator(
@@ -187,7 +188,7 @@ class _StorageDetailPageState extends State<StorageDetailPage> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('我的私人空间',
           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-      const SizedBox(height: 12),
+      const SizedBox(height: Gap.sm),
       LinearProgressIndicator(
           value: ratio, minHeight: 8, borderRadius: BorderRadius.circular(4)),
       const SizedBox(height: 10),

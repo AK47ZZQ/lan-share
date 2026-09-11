@@ -18,6 +18,7 @@ import 'note_editor_page.dart';
 import 'notes_models.dart';
 import 'notes_shared.dart';
 import 'rich_note_editor.dart';
+import 'theme/design_tokens.dart';
 
 // 编辑器已拆往 note_editor_page.dart；此处 export 保 doc_viewer 等既有
 // `import 'notes_page.dart'` 的调用方零改动（backup_settings 拆分同款门面）。
@@ -263,7 +264,7 @@ class _NotesPageState extends State<NotesPage> {
                       decoration: const InputDecoration(
                           labelText: '标题',
                           hintText: '保存为 <标题>.md / .txt / .html')),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Gap.xxs),
                   // 类型三选一：md 渲染预览 / txt 纯文本 / html 富文本日记
                   SegmentedButton<int>(
                       segments: const [
@@ -273,7 +274,7 @@ class _NotesPageState extends State<NotesPage> {
                       ],
                       selected: {kind},
                       onSelectionChanged: (s) => setD(() => kind = s.first)),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Gap.xxs),
                   if (kind == 2)
                     Text('富文本支持表格、图片、字体颜色大小，保存为 .html',
                         style: TextStyle(
@@ -410,8 +411,8 @@ class _NotesPageState extends State<NotesPage> {
                   ListTile(
                       dense: true,
                       contentPadding:
-                          EdgeInsets.only(left: 8.0 + depth * 14, right: 4),
-                      leading: const Icon(Icons.folder_outlined, size: 20),
+                          EdgeInsets.only(left: 8.0 + depth * 14, right: Gap.xxs),
+                      leading: const Icon(Icons.folder_outlined, size: IconSizes.md),
                       title: Text(node.name,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       onTap: () => Navigator.pop(dctx, node.path)),
@@ -621,7 +622,7 @@ class _NotesPageState extends State<NotesPage> {
         builder: (ctx, candidates, _) => Container(
             decoration: BoxDecoration(
                 color: candidates.isNotEmpty ? cs.primaryContainer : null,
-                borderRadius: BorderRadius.circular(8)),
+                borderRadius: Radii.bXs),
             child: child),
         onAcceptWithDetails: (d) => _moveTo([d.data], cat ?? ''));
     return AnimatedContainer(
@@ -637,7 +638,7 @@ class _NotesPageState extends State<NotesPage> {
                     color: cs.surfaceContainerHighest,
                     child: Column(children: [
                       Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                          padding: const EdgeInsets.fromLTRB(Gap.xs, Gap.xs, Gap.xs, 0),
                           child: SizedBox(
                               width: double.infinity,
                               child: OutlinedButton.icon(
@@ -647,11 +648,11 @@ class _NotesPageState extends State<NotesPage> {
                                   label: const Text('新建分类',
                                       style: TextStyle(fontSize: 13))))),
                       Expanded(
-                          child: ListView(padding: const EdgeInsets.all(4), children: [
+                          child: ListView(padding: const EdgeInsets.all(Gap.xxs), children: [
                         dropWrap(null, ListTile(
                             dense: true,
                             selected: _catFilter == null && !_favOnly,
-                            leading: Icon(Icons.apps, size: 20,
+                            leading: Icon(Icons.apps, size: IconSizes.md,
                                 color: _catFilter == null && !_favOnly ? cs.primary : null),
                             title: const Text('全部', style: TextStyle(fontSize: 13.5)),
                             onTap: () => setState(() {
@@ -662,7 +663,7 @@ class _NotesPageState extends State<NotesPage> {
                         dropWrap('', ListTile(
                             dense: true,
                             selected: _catFilter == '' && !_favOnly,
-                            leading: Icon(Icons.folder_off_outlined, size: 20,
+                            leading: Icon(Icons.folder_off_outlined, size: IconSizes.md,
                                 color: _catFilter == '' && !_favOnly ? cs.primary : null),
                             title: const Text('未分类', style: TextStyle(fontSize: 13.5)),
                             trailing: Text('${_countOf('')}',
@@ -673,13 +674,13 @@ class _NotesPageState extends State<NotesPage> {
                             dense: true,
                             selected: _favOnly,
                             leading: Icon(_favOnly ? Icons.star : Icons.star_border,
-                                size: 20, color: _favOnly ? cs.tertiary : null),
+                                size: IconSizes.md, color: _favOnly ? cs.tertiary : null),
                             title: const Text('收藏', style: TextStyle(fontSize: 13.5)),
                             onTap: () => setState(
                                 () => _favOnly = !_favOnly)),
                         if (_catTree.isNotEmpty)
                           const Padding(
-                              padding: EdgeInsets.fromLTRB(12, 8, 8, 2),
+                              padding: EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.xs, 2),
                               child: Text('分类',
                                   style: TextStyle(
                                       fontSize: 11, fontWeight: FontWeight.bold))),
@@ -699,7 +700,7 @@ class _NotesPageState extends State<NotesPage> {
       dropWrap(node.path, ListTile(
           dense: true,
           selected: selected,
-          contentPadding: EdgeInsets.only(left: 4.0 + depth * 14, right: 4),
+          contentPadding: EdgeInsets.only(left: 4.0 + depth * 14, right: Gap.xxs),
           leading: InkWell(
               onTap: hasChildren
                   ? () => setState(() => expanded
@@ -710,7 +711,7 @@ class _NotesPageState extends State<NotesPage> {
                   hasChildren
                       ? (expanded ? Icons.expand_more : Icons.chevron_right)
                       : Icons.folder_outlined,
-                  size: 20,
+                  size: IconSizes.md,
                   color: selected ? cs.primary : null)),
           title: Text(node.name,
               maxLines: 1,
@@ -721,7 +722,7 @@ class _NotesPageState extends State<NotesPage> {
               style: const TextStyle(fontSize: 10.5)),
           trailing: IconButton(
               visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.delete_outline, size: 16),
+              icon: const Icon(Icons.delete_outline, size: IconSizes.sm),
               tooltip: '删除分类',
               onPressed: () => _deleteCategory(node.path)),
           onTap: () => setState(() {
@@ -743,7 +744,7 @@ class _NotesPageState extends State<NotesPage> {
             child: Text(_error!,
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 12, color: Colors.grey))),
-        const SizedBox(height: 8),
+        const SizedBox(height: Gap.xs),
         Center(
             child: TextButton(
                 onPressed: () {
@@ -778,7 +779,7 @@ class _NotesPageState extends State<NotesPage> {
           child: RefreshIndicator(
         onRefresh: () async => _load(),
         child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 88),
+            padding: const EdgeInsets.fromLTRB(Gap.xs, Gap.xxs, Gap.xs, 88),
             itemCount: _filtered.length,
             itemBuilder: (_, i) => _noteCard(_filtered[i], cs))),
         ),
@@ -815,13 +816,13 @@ class _NotesPageState extends State<NotesPage> {
     final bg = selected ? cs.primaryContainer : cs.surfaceContainerHighest
         .withValues(alpha: 0.6);
     return Padding(
-        padding: const EdgeInsets.only(right: 8),
+        padding: const EdgeInsets.only(right: Gap.xs),
         child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(18),
             child: Container(
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
+                    horizontal: Gap.sm, vertical: 6),
                 decoration: BoxDecoration(
                     color: bg,
                     borderRadius: BorderRadius.circular(18),
@@ -845,14 +846,14 @@ class _NotesPageState extends State<NotesPage> {
     final starred = _starred.contains(n.path);
     final pinned = _pinned.contains(n.path);
     final card = Container(
-        margin: const EdgeInsets.only(bottom: 8),
+        margin: const EdgeInsets.only(bottom: Gap.xs),
         decoration: BoxDecoration(
             color: sel ? cs.primaryContainer.withValues(alpha: 0.35) : cs.surface,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Radii.bControl,
             border: Border.all(
                 color: sel ? cs.primary : cs.outlineVariant.withValues(alpha: 0.5))),
         child: InkWell(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Radii.bControl,
             onTap: () async {
               if (_selecting) {
                 setState(() =>
@@ -873,24 +874,24 @@ class _NotesPageState extends State<NotesPage> {
               setState(() => _selected.add(n.path));
             },
             child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+                padding: const EdgeInsets.fromLTRB(Gap.sm, 10, 6, 10),
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
                         if (_selecting)
                           Padding(
-                              padding: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.only(right: Gap.xs),
                               child: Icon(
                                   sel ? Icons.check_circle : Icons.circle_outlined,
-                                  size: 20, color: cs.primary)),
+                                  size: IconSizes.md, color: cs.primary)),
                         if (pinned) ...[
                           Icon(Icons.push_pin, size: 14, color: cs.primary),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: Gap.xxs),
                         ],
                         if (starred) ...[
                           Icon(Icons.star, size: 14, color: cs.tertiary),
-                          const SizedBox(width: 4),
+                          const SizedBox(width: Gap.xxs),
                         ],
                         Expanded(
                             child: Text(n.name,
@@ -900,7 +901,7 @@ class _NotesPageState extends State<NotesPage> {
                                     fontWeight: FontWeight.w600, fontSize: 14.5))),
                         if (n.ext == '.html' || n.ext == '.htm')
                           Padding(
-                              padding: const EdgeInsets.only(left: 4),
+                              padding: const EdgeInsets.only(left: Gap.xxs),
                               child: Text('富文本',
                                   style: TextStyle(
                                       fontSize: 10, color: cs.tertiary))),
@@ -948,7 +949,7 @@ class _NotesPageState extends State<NotesPage> {
         maxSimultaneousDrags: (_selecting || !_catsOpen) ? 0 : 1,
         feedback: Material(
             elevation: 4,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Radii.bControl,
             child: SizedBox(
                 width: 220,
                 child: ListTile(
@@ -1092,7 +1093,7 @@ class _NotesPageState extends State<NotesPage> {
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(52),
                 child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    padding: const EdgeInsets.fromLTRB(Gap.sm, 0, Gap.sm, Gap.xs),
                     child: TextField(
                         controller: _searchCtrl,
                         autofocus: true,
@@ -1100,9 +1101,9 @@ class _NotesPageState extends State<NotesPage> {
                         decoration: InputDecoration(
                             isDense: true,
                             hintText: '按文件名过滤…',
-                            prefixIcon: const Icon(Icons.search, size: 20),
+                            prefixIcon: const Icon(Icons.search, size: IconSizes.md),
                             border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(10))))),
+                                borderRadius: Radii.bSm)))),
               )
             : null,
       ),
@@ -1116,11 +1117,11 @@ class _NotesPageState extends State<NotesPage> {
           ? Center(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Icon(Icons.edit_note, size: 56, color: Colors.grey),
-              const SizedBox(height: 12),
+              const SizedBox(height: Gap.sm),
               const Text('还没选过笔记目录', style: TextStyle(fontSize: 15)),
               const SizedBox(height: 6),
               const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 32),
+                  padding: EdgeInsets.symmetric(horizontal: Gap.xxl),
                   child: Text('笔记就是网盘里的 .md / .txt 文件，存哪个文件夹由你定。'
                       '点「新建笔记」选目录，或右上角直接切换目录。',
                       textAlign: TextAlign.center,
@@ -1172,10 +1173,10 @@ class _NotesPageState extends State<NotesPage> {
                                     (n) => n.path == _selected.first);
                                 _rename(n);
                               },
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: Radii.bSm,
                               child: Padding(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 16, vertical: 8),
+                                      horizontal: Gap.md, vertical: Gap.xs),
                                   child: Column(mainAxisSize: MainAxisSize.min,
                                       children: const [
                                         Icon(Icons.drive_file_rename_outline,
@@ -1192,10 +1193,10 @@ class _NotesPageState extends State<NotesPage> {
                                 _moveTo(_selected.toList(), cat);
                               }
                             },
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: Radii.bSm,
                             child: Padding(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 8),
+                                    horizontal: Gap.md, vertical: Gap.xs),
                                 child: Column(mainAxisSize: MainAxisSize.min,
                                     children: const [
                                       Icon(Icons.drive_file_move_outlined,
@@ -1206,10 +1207,10 @@ class _NotesPageState extends State<NotesPage> {
                                     ]))),
                         InkWell(
                             onTap: _deleteSelected,
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: Radii.bSm,
                             child: Padding(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 8),
+                                    horizontal: Gap.md, vertical: Gap.xs),
                                 child: Column(mainAxisSize: MainAxisSize.min,
                                     children: [
                                   Icon(Icons.delete_outline,

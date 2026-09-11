@@ -13,6 +13,7 @@ import '../data/api/errors.dart';
 import '../data/api/home_api.dart';
 import '../data/local/gallery_saver.dart';
 import '../data/local/prefs.dart';
+import 'theme/design_tokens.dart';
 
 class _QrTarget {
   final String label;
@@ -49,13 +50,13 @@ Future<void> showUploadQrSheet(BuildContext context) async {
       isScrollControlled: true,
       builder: (ctx) => SafeArea(
           child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              padding: const EdgeInsets.fromLTRB(Gap.md, Gap.md, Gap.md, Gap.xl),
               child: Column(mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(children: [
                       const Icon(Icons.qr_code_2),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: Gap.xs),
                       const Expanded(
                           child: Text('手机扫码上传',
                               style: TextStyle(
@@ -70,7 +71,7 @@ Future<void> showUploadQrSheet(BuildContext context) async {
                         style: TextStyle(
                             fontSize: 12,
                             color: Theme.of(ctx).colorScheme.onSurfaceVariant)),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: Gap.sm),
                     if (err != null)
                       Text('读取地址失败：$err',
                           style: TextStyle(
@@ -78,7 +79,7 @@ Future<void> showUploadQrSheet(BuildContext context) async {
                               color: Theme.of(ctx).colorScheme.error)),
                     for (final t in targets)
                       Padding(
-                          padding: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.only(top: Gap.xs),
                           child: _QrCard(target: t)),
                   ]))));
 }
@@ -92,22 +93,22 @@ class _QrCard extends StatelessWidget {
     return Card(
         elevation: 0,
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: Radii.bControl,
             side: BorderSide(
                 color: Theme.of(context).dividerColor, width: 0.5)),
         child: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(Gap.sm),
             child: Column(children: [
               Text(target.label,
                   style: const TextStyle(
                       fontWeight: FontWeight.w600, fontSize: 13)),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
               Stack(alignment: Alignment.center, children: [
                 Container(
-                    padding: const EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(Gap.xs),
                     decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(8)),
+                        borderRadius: Radii.bXs),
                     child: QrImageView(
                         data: target.url,
                         version: QrVersions.auto,
@@ -119,7 +120,7 @@ class _QrCard extends StatelessWidget {
                     padding: const EdgeInsets.all(5),
                     decoration: BoxDecoration(
                         color: Colors.white,
-                        borderRadius: BorderRadius.circular(10)),
+                        borderRadius: Radii.bSm),
                     child: const Icon(Icons.cloud,
                         size: 28, color: Color(0xFF5B6CFF))),
               ]),

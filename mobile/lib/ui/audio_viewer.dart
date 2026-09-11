@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../data/api/media_proxy.dart';
+import 'theme/design_tokens.dart';
 
 /// ExoPlayer（video_player 底座）能直接吃的音频后缀。wma 这类它不支持的
 /// 格式不放入（回退操作面板，下载后系统打开）。
@@ -82,7 +83,7 @@ class _AudioViewerPageState extends State<AudioViewerPage> {
               const Icon(Icons.error_outline, size: 46, color: Colors.white38),
               const SizedBox(height: 10),
               const Text('加载失败', style: TextStyle(fontSize: 13)),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
               TextButton.icon(
                   onPressed: () {
                     setState(() => _failed = false);
@@ -95,7 +96,7 @@ class _AudioViewerPageState extends State<AudioViewerPage> {
               ? const Center(child: CircularProgressIndicator())
               : Center(
                   child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 32),
+                      padding: const EdgeInsets.symmetric(horizontal: Gap.xxl),
                       child: Column(mainAxisSize: MainAxisSize.min,
                           children: [
                     // 封面占位（无专辑图场景）：主题色圆形渐变
@@ -113,14 +114,14 @@ class _AudioViewerPageState extends State<AudioViewerPage> {
                                 ])),
                         child: Icon(Icons.music_note,
                             size: 64, color: cs.primary)),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: Gap.lg),
                     Text(widget.name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                             fontSize: 16, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: Gap.xl),
                     // 进度条 + 时间
                     ValueListenableBuilder<VideoPlayerValue>(
                         valueListenable: _ctrl!,
@@ -161,7 +162,7 @@ class _AudioViewerPageState extends State<AudioViewerPage> {
                             ]),
                           ]);
                         }),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: Gap.xs),
                     ValueListenableBuilder<VideoPlayerValue>(
                         valueListenable: _ctrl!,
                         builder: (_, v, _) => Row(
@@ -176,7 +177,7 @@ class _AudioViewerPageState extends State<AudioViewerPage> {
                                         : t);
                                   },
                                   icon: const Icon(Icons.replay_10)),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: Gap.xs),
                               FilledButton(
                                   style: FilledButton.styleFrom(
                                       shape: const CircleBorder(),
@@ -192,7 +193,7 @@ class _AudioViewerPageState extends State<AudioViewerPage> {
                                       ? Icons.pause
                                       : Icons.play_arrow,
                                       size: 30)),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: Gap.xs),
                               IconButton(
                                   onPressed: () {
                                     final dur = _ctrl!.value.duration;

@@ -20,6 +20,7 @@ import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import 'photo_models.dart';
 import 'photo_viewer.dart';
+import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/kit.dart';
@@ -242,12 +243,12 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                           Icon(Icons.auto_awesome_mosaic_outlined,
                               size: 44,
                               color: Theme.of(context).colorScheme.outline),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: Gap.sm),
                           Center(
                               child: Text(_monthMode
                                   ? '这个月还没有照片'
                                   : '专辑还是空的')),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: Gap.xxs),
                           Center(
                               child: Text(
                                   _monthMode
@@ -311,7 +312,9 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                                                       'alb-${widget.id}-${item.path}',
                                                   child: AuthImage(
                                                       url:
-                                                          '$_base/thumb/${encPath(item.path)}')),
+                                                          '$_base/thumb/${encPath(item.path)}',
+                                                      semanticLabel:
+                                                          item.isVideo ? '视频' : '照片')),
                                               if (item.isVideo)
                                                 Positioned(
                                                     left: 4,
@@ -319,7 +322,7 @@ class _AlbumDetailPageState extends ConsumerState<AlbumDetailPage> {
                                                     child: Container(
                                                         padding: const EdgeInsets
                                                             .symmetric(
-                                                            horizontal: 4,
+                                                            horizontal: Gap.xxs,
                                                             vertical: 1),
                                                         decoration: BoxDecoration(
                                                             color:
@@ -623,7 +626,9 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                                           opacity: already ? 0.4 : 1,
                                           child: AuthImage(
                                               url:
-                                                  '$_base/thumb/${encPath(item.path)}')),
+                                                  '$_base/thumb/${encPath(item.path)}',
+                                              semanticLabel:
+                                                  item.isVideo ? '视频' : '照片')),
                                       if (already)
                                         const Positioned(
                                             left: 4,
@@ -633,7 +638,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                                                     VisualDensity.compact,
                                                 padding: EdgeInsets.zero,
                                                 labelPadding: EdgeInsets
-                                                    .symmetric(horizontal: 4),
+                                                    .symmetric(horizontal: Gap.xxs),
                                                 label: Text('已在专辑',
                                                     style: TextStyle(
                                                         fontSize: 9)))),
@@ -664,7 +669,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                       if (_failed)
                         SliverToBoxAdapter(
                             child: Padding(
-                                padding: const EdgeInsets.all(12),
+                                padding: const EdgeInsets.all(Gap.sm),
                                 child: Center(
                                     child: TextButton(
                                         onPressed: () {
@@ -674,7 +679,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                                         child: const Text('加载失败，点此重试'))))),
                       if (!_done && !_failed)
                         const SliverPadding(
-                            padding: EdgeInsets.all(16),
+                            padding: EdgeInsets.all(Gap.md),
                             sliver: SliverToBoxAdapter(
                                 child: Center(
                                     child: SizedBox(
@@ -685,7 +690,7 @@ class _AlbumPickerPageState extends ConsumerState<AlbumPickerPage> {
                     ])),
       bottomNavigationBar: SafeArea(
           child: Container(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xs, Gap.md, Gap.xs),
               decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.surface,
                   border: Border(

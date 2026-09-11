@@ -29,6 +29,7 @@ import 'shares_page.dart';
 import 'storage_detail_page.dart';
 import 'trash_page.dart';
 import 'theme/app_theme.dart';
+import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/brand.dart';
@@ -158,7 +159,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             builder: (bctx, setSheet) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                      padding: const EdgeInsets.fromLTRB(Gap.md, 0, Gap.md, 6),
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -166,7 +167,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                 style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w700)),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: Gap.xxs),
                             Text('关闭的卡片随时可从这里重新打开；'
                                 '长按卡片拖动可排序。',
                                 style: TextStyle(
@@ -190,7 +191,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                           }),
                   ])),
                   Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xxs, Gap.md, Gap.sm),
                       child: Row(children: [
                         TextButton.icon(
                             onPressed: () {
@@ -428,22 +429,22 @@ class _HomePageState extends ConsumerState<HomePage> {
           if (_netDown)
             SliverToBoxAdapter(
                 child: Container(
-                    margin: EdgeInsets.fromLTRB(gutter, 12, gutter, 0),
+                    margin: EdgeInsets.fromLTRB(gutter, Gap.sm, gutter, 0),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
+                        horizontal: Gap.sm, vertical: 10),
                     decoration: BoxDecoration(
                         color: cs.error.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10)),
+                        borderRadius: Radii.bSm),
                     child: Row(children: [
-                      Icon(Icons.wifi_off, size: 16, color: cs.error),
-                      const SizedBox(width: 8),
+                      Icon(Icons.wifi_off, size: IconSizes.sm, color: cs.error),
+                      const SizedBox(width: Gap.xs),
                       Expanded(
                           child: Text('连不上服务器，正在自动重试…',
                               style:
                                   TextStyle(fontSize: 12, color: cs.error))),
                     ]))),
           SliverPadding(
-              padding: EdgeInsets.fromLTRB(gutter, 12, gutter, 8),
+              padding: EdgeInsets.fromLTRB(gutter, Gap.sm, gutter, Gap.xs),
               sliver: SliverReorderableList(
               onReorderStart: (_) => _dragHintOnce(),
               // v3.41+：onReorderItem 的 newIndex 已自适应移除项，无需 -1 修正
@@ -453,7 +454,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   builder: (_, _) => Material(
                       elevation: 6,
                       color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: Radii.bControl,
                       child: child)),
               itemCount: layout.length + 1,
               itemBuilder: (ctx, i) {
@@ -494,7 +495,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                         height: 40,
                         child: AuthImage(
                             url: '$_base/api/auth/avatar/'
-                                '${Uri.encodeComponent(name)}')))
+                                '${Uri.encodeComponent(name)}',
+                            semanticLabel:
+                                name.isEmpty ? '用户头像' : '$name 的头像')))
                 : Text(
                     name.isNotEmpty ? name.characters.first.toUpperCase() : '?',
                     style: const TextStyle(
@@ -518,7 +521,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   trailing: TextButton(
                       style: TextButton.styleFrom(
                           visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(horizontal: 4)),
+                          padding: const EdgeInsets.symmetric(horizontal: Gap.xxs)),
                       onPressed: () => Navigator.push(context,
                           MaterialPageRoute(
                               builder: (_) => const RecentPage())),
@@ -537,7 +540,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   child: Stack(children: [
                                     ClipRRect(
                                         borderRadius:
-                                            BorderRadius.circular(8),
+                                            Radii.bXs,
                                         child: SizedBox(
                                             width: 92,
                                             height: 92,
@@ -546,7 +549,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                                             child: it.isImage || it.isVideo
                                                 ? AuthImage(
                                                     url: '$_base/thumb/'
-                                                        '${it.path.split("/").map(Uri.encodeComponent).join("/")}')
+                                                        '${it.path.split("/").map(Uri.encodeComponent).join("/")}',
+                                                    semanticLabel:
+                                                        it.name.isEmpty ? '最近上传的文件' : it.name)
                                                 : Container(
                                                     color: cs.surfaceContainerHighest,
                                                     child: Column(
@@ -559,7 +564,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                                               icon: it.typeIcon,
                                                               size: 40),
                                                           const SizedBox(
-                                                              height: 4),
+                                                              height: Gap.xxs),
                                                           Text(
                                                               it.ext.isEmpty
                                                                   ? '文件'
@@ -597,7 +602,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       IconButton(
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.notifications_outlined,
-                              size: 20),
+                              size: IconSizes.md),
                           onPressed: () async {
                             await Navigator.push(
                                 context,
@@ -627,7 +632,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                         style: TextButton.styleFrom(
                             visualDensity: VisualDensity.compact,
                             padding:
-                                const EdgeInsets.symmetric(horizontal: 4)),
+                                const EdgeInsets.symmetric(horizontal: Gap.xxs)),
                         onPressed: () => Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -642,7 +647,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     child: Row(children: [
                       Icon(_activityIcon(n.action),
                           size: 15, color: cs.onSurfaceVariant),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: Gap.xs),
                       Expanded(
                           child: Text(activityText(n),
                               maxLines: 1,
@@ -663,7 +668,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     context,
                     MaterialPageRoute(
                         builder: (_) => const BackupSettingsPage())),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: Radii.bControl,
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                   _cardTitle('自动备份',
@@ -675,7 +680,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       style: const TextStyle(fontSize: 13)),
                   // 本轮实时进度（0.6.2）：引擎逐张回写，2s 轮询可见
                   if (_progressTotal > 0) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: Gap.xxs),
                     Text('备份中 $_progressDone/$_progressTotal 项…',
                         style: TextStyle(fontSize: 12, color: cs.primary)),
                   ] else ...[
@@ -686,7 +691,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                           roundView(_lastRound);
                       if (v == null) return const SizedBox.shrink();
                       return Padding(
-                          padding: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.only(top: Gap.xxs),
                           child: Text(v.text,
                               style: TextStyle(
                                   fontSize: 12,
@@ -697,7 +702,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   ],
                   // 失败提示（0.6.2）：此前失败只能进账本页才知道
                   if (_failed > 0) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: Gap.xxs),
                     InkWell(
                         onTap: () => Navigator.push(
                             context,
@@ -730,7 +735,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                             : null,
                         icon: const Icon(Icons.play_arrow, size: 18),
                         label: const Text('立即备份')),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: Gap.xs),
                     TextButton(
                         onPressed: () => Navigator.push(
                             context,
@@ -744,7 +749,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         return _card(
             child: InkWell(
                 onTap: widget.onGoTransfers,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: Radii.bControl,
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _cardTitle('传输',
@@ -761,7 +766,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                   : '队列空闲 · 共 ${tasks.length} 个任务记录',
                           style: const TextStyle(fontSize: 13)),
                       if (recent.isNotEmpty) ...[
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Gap.xs),
                         for (final t in recent)
                           Padding(
                               padding: const EdgeInsets.symmetric(vertical: 2),
@@ -785,7 +790,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             child: InkWell(
                 onTap: () => Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const StorageDetailPage())),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: Radii.bControl,
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                   _cardTitle('服务端存储',
@@ -836,11 +841,11 @@ class _HomePageState extends ConsumerState<HomePage> {
             child: InkWell(
                 onTap: () => Navigator.push(context,
                     MaterialPageRoute(builder: (_) => const InviteRedeemPage())),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: Radii.bControl,
                 child: Row(children: [
                   Icon(Icons.how_to_reg_outlined,
                       size: 22, color: cs.primary),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: Gap.sm),
                   Expanded(
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -923,16 +928,16 @@ class _HomePageState extends ConsumerState<HomePage> {
       bytesPerSec <= 0 ? '几乎静止' : '${humanSize(bytesPerSec)}/s';
 
   Widget _badge(String text, Color color) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: 2),
       decoration: BoxDecoration(
           color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(10)),
+          borderRadius: Radii.bSm),
       child: Text(text, style: TextStyle(fontSize: 11, color: color)));
 
   Widget _cardTitle(String title, {IconData? icon, Widget? trailing}) => Row(
       children: [
         if (icon != null) ...[
-          Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
+          Icon(icon, size: IconSizes.sm, color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 6),
         ],
         Text(title,
@@ -948,7 +953,7 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   Widget _quick(IconData icon, String label, VoidCallback onTap) => InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: Radii.bMd,
       child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -960,7 +965,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                         .colorScheme
                         .primary
                         .withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(14)),
+                    borderRadius: Radii.bMd),
                 child: Icon(icon,
                     size: 22,
                     color: Theme.of(context).colorScheme.primary)),
@@ -1070,7 +1075,7 @@ class _WelcomeHeaderDelegate extends SliverPersistentHeaderDelegate {
           child: Opacity(
               opacity: 1 - t,
               child: Container(
-                  padding: EdgeInsets.fromLTRB(20, 18 + topInset, 20, 16),
+                  padding: EdgeInsets.fromLTRB(Gap.lg, 18 + topInset, Gap.lg, Gap.md),
                   foregroundDecoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.08 * (1 - t))),
                   child: Row(children: [

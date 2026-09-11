@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import '../data/api/files_api.dart';
+import 'theme/design_tokens.dart';
 
 class DirEntry {
   final String name;
@@ -91,7 +92,7 @@ class _DirPickerPageState extends State<DirPickerPage> {
           height: 40,
           child: ListView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.symmetric(horizontal: Gap.xs),
             children: [
               for (var i = 0; i < _crumbs.length; i++)
                 TextButton(

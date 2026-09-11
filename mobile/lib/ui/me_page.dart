@@ -29,6 +29,7 @@ import '../data/net.dart';
 import '../state/session.dart';
 import '../state/settings.dart';
 import 'theme/app_theme.dart';
+import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 import 'shares_page.dart';
@@ -272,7 +273,7 @@ class _MePageState extends ConsumerState<MePage> {
                 title: const Text('主题色'),
                 children: [
                   Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                      padding: const EdgeInsets.fromLTRB(Gap.lg, Gap.xxs, Gap.lg, Gap.sm),
                       child: Wrap(
                           spacing: 10,
                           runSpacing: 14,
@@ -306,7 +307,7 @@ class _MePageState extends ConsumerState<MePage> {
     final cs = Theme.of(ctx).colorScheme;
     final selected = cur == id;
     return InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: Radii.bControl,
         onTap: () => Navigator.pop(ctx, id),
         child: SizedBox(
             width: 78,
@@ -444,7 +445,7 @@ class _MePageState extends ConsumerState<MePage> {
                       ? '已启用：WebDAV 挂载只认独立密码，登录密码对 /dav/ 无效。'
                       : '未设置：WebDAV 挂载目前使用登录密码。',
                       style: const TextStyle(fontSize: 12)),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                   TextField(controller: curCtrl,
                       obscureText: true,
                       decoration:
@@ -510,7 +511,7 @@ class _MePageState extends ConsumerState<MePage> {
                               fontFamily: 'monospace',
                               fontWeight: FontWeight.bold,
                               letterSpacing: 6))),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                   Text('在另一台设备的登录页选择"配对码登录"，输入此码即可免密登录本账号。$expires 秒内有效，一码一用。',
                       style: const TextStyle(fontSize: 12)),
                 ]),
@@ -566,7 +567,7 @@ class _MePageState extends ConsumerState<MePage> {
                     crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('旧恢复码已全部作废。请把新码抄到安全的地方：',
                       style: TextStyle(fontSize: 12)),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                   for (final c in codes)
                     Text(c as String,
                         style: const TextStyle(
@@ -661,10 +662,10 @@ class _MePageState extends ConsumerState<MePage> {
 
   /// 公网入口徽标
   Widget _netBadge(BuildContext context) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: Gap.xs, vertical: 3),
       decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.tertiaryContainer,
-          borderRadius: BorderRadius.circular(999)),
+          borderRadius: BorderRadius.circular(Radii.pill)),
       child: Text('公网',
           style: TextStyle(
               fontSize: 11,
@@ -685,6 +686,7 @@ class _MePageState extends ConsumerState<MePage> {
               child: AuthImage(
                   url: '$_server/api/auth/avatar/'
                       '${Uri.encodeComponent(name)}?t=$_avatarBust',
+                  semanticLabel: '$name 的头像',
                   fit: BoxFit.cover,
                   placeholder: (_) => const ColoredBox(
                       color: Color(0x22000000),
@@ -718,12 +720,12 @@ class _MePageState extends ConsumerState<MePage> {
       builder: (bctx) => StatefulBuilder(
         builder: (bctx, setD) => Padding(
           padding: EdgeInsets.only(
-              left: 20, right: 20, top: 18,
+              left: Gap.lg, right: Gap.lg, top: 18,
               bottom: 18 + MediaQuery.of(bctx).viewInsets.bottom),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             Text('编辑资料',
                 style: Theme.of(bctx).textTheme.titleMedium),
-            const SizedBox(height: 16),
+            const SizedBox(height: Gap.md),
             GestureDetector(
               onTap: busy
                   ? null
@@ -748,7 +750,9 @@ class _MePageState extends ConsumerState<MePage> {
                               url: '$_server/api/auth/avatar/'
                                   '${Uri.encodeComponent(session.username!)}'
                                   '?t=$_avatarBust',
-                              fit: BoxFit.cover)))
+                              fit: BoxFit.cover,
+                              semanticLabel:
+                                  '${session.username!} 的头像')))
                 else
                   CircleAvatar(
                       radius: 36,
@@ -760,7 +764,7 @@ class _MePageState extends ConsumerState<MePage> {
                     radius: 12, child: Icon(Icons.camera_alt, size: 13)),
               ]),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: Gap.xxs),
             Text('点头像更换（jpg/png，8MB 内）',
                 style: TextStyle(fontSize: 11.5, color: Colors.grey)),
             const SizedBox(height: 14),
@@ -775,7 +779,7 @@ class _MePageState extends ConsumerState<MePage> {
               TextButton(
                   onPressed: busy ? null : () => Navigator.pop(bctx, false),
                   child: const Text('取消')),
-              const SizedBox(width: 8),
+              const SizedBox(width: Gap.xs),
               FilledButton(
                   onPressed: busy
                       ? null
@@ -839,10 +843,10 @@ class _MePageState extends ConsumerState<MePage> {
           // 这里再叠一层会变成 24——本组件只负责"宽屏居中限宽"这一件事
           padding: EdgeInsets.zero,
           child: ListView(
-              padding: const EdgeInsets.only(bottom: 24), children: [
+              padding: const EdgeInsets.only(bottom: Gap.xl), children: [
         // ── 身份 + 连接（重点置顶）────────────────────────────
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          padding: const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, 0),
           child: Card(
               margin: EdgeInsets.zero,
               child: Padding(
@@ -890,7 +894,7 @@ class _MePageState extends ConsumerState<MePage> {
         ),
         // ── 功能宫格（高频重点，大图标）──────────────────────
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          padding: const EdgeInsets.fromLTRB(Gap.sm, 10, Gap.sm, 0),
           child: Card(
               margin: EdgeInsets.zero,
               child: Padding(
@@ -924,7 +928,7 @@ class _MePageState extends ConsumerState<MePage> {
         ),
         // ── 反馈通道（v0.28）：想法/Bug 直达开发端，状态可追 ────
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          padding: const EdgeInsets.fromLTRB(Gap.sm, 10, Gap.sm, 0),
           child: Card(
               margin: EdgeInsets.zero,
               child: ListTile(
@@ -972,7 +976,7 @@ class _MePageState extends ConsumerState<MePage> {
                           isAuto ? null : LinearGradient(colors: cur.gradient),
                       color: isAuto ? cs.surfaceContainerHighest : null),
                   child:
-                      isAuto ? const Icon(Icons.wallpaper, size: 16) : null),
+                      isAuto ? const Icon(Icons.wallpaper, size: IconSizes.sm) : null),
               title: const Text('主题色'),
               subtitle: Text(isAuto ? '跟随壁纸' : cur.name),
               onTap: _pickAccent,
@@ -1099,10 +1103,10 @@ class _MePageState extends ConsumerState<MePage> {
             }
           },
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: Gap.sm),
         Center(child: Text('LAN Share App · v$_version',
             style: const TextStyle(fontSize: 11, color: Colors.grey))),
-        const SizedBox(height: 24),
+        const SizedBox(height: Gap.xl),
       ])),
     );
   }
@@ -1110,11 +1114,11 @@ class _MePageState extends ConsumerState<MePage> {
   /// 分组卡：小标题 + 圆角卡包裹的条目列表（v0.15 重组）
   Widget _group(BuildContext context, String title, List<Widget> children) =>
       Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          padding: const EdgeInsets.fromLTRB(Gap.sm, 10, Gap.sm, 0),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start,
               children: [
             Padding(
-                padding: const EdgeInsets.fromLTRB(4, 0, 0, 6),
+                padding: const EdgeInsets.fromLTRB(Gap.xxs, 0, 0, 6),
                 child: Text(title,
                     style: TextStyle(
                         fontSize: 12.5,
@@ -1123,7 +1127,7 @@ class _MePageState extends ConsumerState<MePage> {
             Card(
                 margin: EdgeInsets.zero,
                 child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(vertical: Gap.xxs),
                     child: Column(children: children))),
           ]));
 
@@ -1131,7 +1135,7 @@ class _MePageState extends ConsumerState<MePage> {
   Widget _quickTile(IconData icon, String label, VoidCallback onTap) =>
       InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: Radii.bMd,
           child: Padding(
               padding:
                   const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -1144,7 +1148,7 @@ class _MePageState extends ConsumerState<MePage> {
                             .colorScheme
                             .primary
                             .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(14)),
+                        borderRadius: Radii.bMd),
                     child: Icon(icon,
                         size: 22,
                         color: Theme.of(context).colorScheme.primary)),
@@ -1156,7 +1160,7 @@ class _MePageState extends ConsumerState<MePage> {
   Widget _devicesSection() {
     if (_loadingDevices) {
       return const Padding(
-          padding: EdgeInsets.all(24),
+          padding: EdgeInsets.all(Gap.xl),
           child: Center(child: CircularProgressIndicator()));
     }
     return Column(children: [

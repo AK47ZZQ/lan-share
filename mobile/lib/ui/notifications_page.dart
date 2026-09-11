@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/notifications_api.dart';
+import 'theme/design_tokens.dart';
 
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key});
@@ -105,11 +106,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
             builder: (bctx, setS) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   const Padding(
-                      padding: EdgeInsets.all(12),
+                      padding: EdgeInsets.all(Gap.sm),
                       child: Text('通知偏好',
                           style: TextStyle(fontWeight: FontWeight.bold))),
                   const Padding(
-                      padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+                      padding: EdgeInsets.fromLTRB(Gap.md, 0, Gap.md, Gap.xxs),
                       child: Text('关闭的类型不再出现在站内通知（站外 webhook 不受影响）',
                           style: TextStyle(fontSize: 11.5, color: Colors.grey))),
                   for (final e in const [
@@ -126,7 +127,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                         title: Text(e.$2, style: const TextStyle(fontSize: 14)),
                         subtitle: Text(e.$3,
                             style: const TextStyle(fontSize: 11.5))),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                 ]))));
   }
 
@@ -153,7 +154,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
         body: Column(children: [
           // 分类过滤 tab（9.6-P2-14）
           Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+              padding: const EdgeInsets.fromLTRB(Gap.sm, 6, Gap.sm, 2),
               child: Row(children: [
                 for (final t in const [
                   ('all', '全部'),
@@ -162,7 +163,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   ('system', '系统'),
                 ])
                   Padding(
-                      padding: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.only(right: Gap.xs),
                       child: ChoiceChip(
                           label: Text(t.$2, style: const TextStyle(fontSize: 12.5)),
                           selected: _tab == t.$1,
@@ -193,10 +194,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                   child: Text('暂无通知',
                                       style: TextStyle(color: Colors.grey))),
                             ])
-                          : ListView(padding: const EdgeInsets.only(bottom: 24), children: [
+                          : ListView(padding: const EdgeInsets.only(bottom: Gap.xl), children: [
                               if (_unread > 0)
                                 Padding(
-                                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                                    padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xs, Gap.md, 0),
                                     child: Text('$_unread 条未读 · 点按单条标记已读',
                                         style: TextStyle(
                                             fontSize: 11,
@@ -208,7 +209,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                     direction: DismissDirection.endToStart,
                                     background: Container(
                                         alignment: Alignment.centerRight,
-                                        padding: const EdgeInsets.only(right: 20),
+                                        padding: const EdgeInsets.only(right: Gap.lg),
                                         color: cs.errorContainer,
                                         child: Icon(Icons.delete_outline,
                                             color: cs.onErrorContainer)),

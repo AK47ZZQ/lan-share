@@ -10,6 +10,7 @@ import '../data/api/admin_api.dart';
 import '../ui/widgets/prompt_dialog.dart';
 import '../data/api/errors.dart';
 import '../state/session.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/kit.dart';
 
 class AdminPage extends ConsumerStatefulWidget {
@@ -355,7 +356,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                             fontSize: 24,
                             fontFamily: 'monospace',
                             fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: Gap.xs),
                     const Text('72 小时内有效。新成员在登录页"邀请码建号"使用。',
                         style: TextStyle(fontSize: 12)),
                   ]),
@@ -514,7 +515,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                     Navigator.pop(ctx);
                     _run(() => AdminApi.deleteGrant(g.id), okMsg: '已撤销');
                   }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -588,7 +589,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                               labelText: '正文（可留空）',
                               alignLabelWithHint: true,
                               border: OutlineInputBorder())),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: Gap.xs),
                       Wrap(spacing: 6, runSpacing: 4, children: [
                         FilterChip(
                             label: const Text('全体',
@@ -615,7 +616,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                               onPressed: v.text.trim().isEmpty
                                   ? null
                                   : () => Navigator.pop(dctx, true),
-                              icon: const Icon(Icons.send_outlined, size: 16),
+                              icon: const Icon(Icons.send_outlined, size: IconSizes.sm),
                               label: const Text('推送'))),
                     ])));
     if (ok != true || !mounted) return;
@@ -669,12 +670,12 @@ class _AdminPageState extends ConsumerState<AdminPage>
 
   Widget _card({required Widget child}) => Card(
       elevation: 0,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      margin: const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, Gap.xs),
       shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: Radii.bControl,
           side: BorderSide(
               color: Theme.of(context).dividerColor, width: 0.5)),
-      child: Padding(padding: const EdgeInsets.all(12), child: child));
+      child: Padding(padding: const EdgeInsets.all(Gap.sm), child: child));
 
   // ── 成员 Tab ──
   Widget _usersTab(ColorScheme cs) {
@@ -706,11 +707,11 @@ class _AdminPageState extends ConsumerState<AdminPage>
                 const SizedBox(width: 6),
                 _badge(u.role, u.role == 'admin' ? cs.primary : cs.outline),
                 if (u.totpEnabled) ...[
-                  const SizedBox(width: 4),
+                  const SizedBox(width: Gap.xxs),
                   _badge('2FA', Colors.green),
                 ],
                 if (!u.isActive) ...[
-                  const SizedBox(width: 4),
+                  const SizedBox(width: Gap.xxs),
                   _badge('已停用', cs.error),
                 ],
               ]),
@@ -731,7 +732,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             const SizedBox(height: 2),
             const Text('主/备公网入口（备用隧道同一服务器即可填）；保存后分享卡片和登录页会一并提供。',
                 style: TextStyle(fontSize: 11, color: Colors.grey)),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             Row(children: [
               Expanded(
                   child: TextField(
@@ -741,12 +742,12 @@ class _AdminPageState extends ConsumerState<AdminPage>
                           isDense: true,
                           border: OutlineInputBorder(),
                           hintText: '如 https://your-frp-domain.com:xxxxx'))),
-              const SizedBox(width: 8),
+              const SizedBox(width: Gap.xs),
               FilledButton.tonal(
                   onPressed: _busy ? null : _savePubUrl,
                   child: const Text('保存')),
             ]),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             TextField(
                 controller: _pubAlt,
                 decoration: const InputDecoration(
@@ -764,18 +765,18 @@ class _AdminPageState extends ConsumerState<AdminPage>
             const SizedBox(height: 2),
             const Text('GET 模板 URL，需含 {title}/{body} 占位符（ntfy/Bark/Server酱）。',
                 style: TextStyle(fontSize: 11, color: Colors.grey)),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             TextField(
                 controller: _hookUrl,
                 decoration: const InputDecoration(
                     isDense: true,
                     border: OutlineInputBorder(),
                     hintText: 'https://ntfy.sh/你的主题/{title}')),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             Row(children: [
               FilledButton.tonal(
                   onPressed: _busy ? null : _saveHook, child: const Text('保存')),
-              const SizedBox(width: 8),
+              const SizedBox(width: Gap.xs),
               // controller 输入不触发整页重建：ValueListenableBuilder 跟随
               // 文本实时启用"发送测试"（二次审查修复）
               ValueListenableBuilder<TextEditingValue>(
@@ -799,7 +800,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   label: const Text('发送通知')),
             ]),
           ])),
-      const SizedBox(height: 24),
+      const SizedBox(height: Gap.xl),
     ]);
   }
 
@@ -807,7 +808,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(
           color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(8)),
+          borderRadius: Radii.bXs),
       child: Text(text, style: TextStyle(fontSize: 10, color: color)));
 
   // ── 邀请 Tab ──
@@ -815,14 +816,14 @@ class _AdminPageState extends ConsumerState<AdminPage>
     final invites = _invites!;
     return ListView(children: [
       Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          padding: const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, 0),
           child: Row(children: [
             Expanded(
                 child: FilledButton.icon(
                     onPressed: () => _createInvite('member'),
                     icon: const Icon(Icons.person_add_alt_1, size: 18),
                     label: const Text('邀请成员'))),
-            const SizedBox(width: 8),
+            const SizedBox(width: Gap.xs),
             Expanded(
                 child: OutlinedButton.icon(
                     onPressed: () => _createInvite('guest'),
@@ -851,7 +852,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             ])),
           IconButton(
               tooltip: '复制',
-              icon: const Icon(Icons.copy_outlined, size: 20),
+              icon: const Icon(Icons.copy_outlined, size: IconSizes.md),
               onPressed: () async {
                 await ClipboardSet.setText(i.code);
                 showToast('已复制');
@@ -859,7 +860,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
           IconButton(
               tooltip: '删除记录',
               icon: Icon(Icons.close,
-                  size: 20, color: cs.error),
+                  size: IconSizes.md, color: cs.error),
               onPressed: () =>
                   _run(() => AdminApi.deleteInvite(i.code), okMsg: '已删除')),
         ])),
@@ -869,7 +870,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             child: Center(child: Text('还没有邀请记录',
                 style: TextStyle(color: Colors.grey)))),
       Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.symmetric(horizontal: Gap.md),
           child: Text('成员在登录页使用邀请码自助建号（72 小时有效）。',
               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant))),
     ]);
@@ -888,9 +889,9 @@ class _AdminPageState extends ConsumerState<AdminPage>
               children: [
             const Text('➕ 新建授权（可批量）',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             const Text('成员（可多选）', style: TextStyle(fontSize: 12)),
-            const SizedBox(height: 4),
+            const SizedBox(height: Gap.xxs),
             Wrap(spacing: 6, runSpacing: 6, children: [
               for (final u in members)
                 FilterChip(
@@ -902,18 +903,18 @@ class _AdminPageState extends ConsumerState<AdminPage>
                 const Text('暂无成员',
                     style: TextStyle(fontSize: 12, color: Colors.grey)),
             ]),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             Row(children: [
               const Text('共享一级目录（可多选，子目录自动继承）',
                   style: TextStyle(fontSize: 12)),
               const Spacer(),
               TextButton.icon(
                   onPressed: _loadDirs,
-                  icon: const Icon(Icons.refresh, size: 16),
+                  icon: const Icon(Icons.refresh, size: IconSizes.sm),
                   label: const Text('刷新目录',
                       style: TextStyle(fontSize: 12))),
             ]),
-            const SizedBox(height: 4),
+            const SizedBox(height: Gap.xxs),
             if (_dirOptions.isEmpty)
               const Text('共享空间还没有目录，点"刷新目录"重试',
                   style: TextStyle(fontSize: 12, color: Colors.grey))
@@ -935,7 +936,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   onSelected: (v) => setState(
                       () => v ? _gPaths.add(d) : _gPaths.remove(d))),
                   ]))),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             Row(children: [
               Switch(
                   value: _gWrite,
@@ -952,7 +953,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   ],
                   onChanged: (v) => setState(() => _gExpiry = v ?? 0)),
             ]),
-            const SizedBox(height: 8),
+            const SizedBox(height: Gap.xs),
             SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -962,7 +963,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                         '保存授权（${_gUsers.length} 人 × ${_gPaths.length} 目录）'))),
           ])),
       Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+          padding: const EdgeInsets.fromLTRB(Gap.sm, Gap.xxs, Gap.sm, 0),
           child: Wrap(spacing: 6, children: [
             FilterChip(
                 label: const Text('全部成员', style: TextStyle(fontSize: 12)),
@@ -1000,7 +1001,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                 _badge(g.canWrite ? '读写' : '只读',
                     g.canWrite ? cs.primary : cs.outline),
                 if (g.expiresAt != null) ...[
-                  const SizedBox(width: 4),
+                  const SizedBox(width: Gap.xxs),
                   _badge(_expiryText(g.expiresAt),
                       _grantExpired(g) ? cs.error : Colors.orange),
                 ],
@@ -1012,7 +1013,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   style: const TextStyle(fontSize: 11, color: Colors.grey)),
             ])),
           IconButton(
-              icon: const Icon(Icons.more_vert, size: 20),
+              icon: const Icon(Icons.more_vert, size: IconSizes.md),
               tooltip: '授权操作',
               onPressed: () => _grantSheet(g)),
         ]))),
@@ -1021,7 +1022,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             padding: EdgeInsets.all(40),
             child: Center(
                 child: Text('暂无授权', style: TextStyle(color: Colors.grey)))),
-      const SizedBox(height: 24),
+      const SizedBox(height: Gap.xl),
     ]);
   }
 }

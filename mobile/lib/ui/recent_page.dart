@@ -17,6 +17,7 @@ import 'audio_viewer.dart';
 import 'doc_viewer.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/open_local.dart';
 
@@ -184,7 +185,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Gap.md),
                   child: Align(
                       alignment: Alignment.centerLeft,
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start,
@@ -193,7 +194,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: Gap.xxs),
                         Text('${it.sizeHuman} · ${it.modified.split('T').first}',
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.grey)),
@@ -233,7 +234,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
                   onTap: () {
                     Navigator.pop(ctx);
                   }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -298,7 +299,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
     final b = _base;
     if (it.isMedia && b != null && b.isNotEmpty) {
       return ClipRRect(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: Radii.bXs,
           child: SizedBox(
               width: 52,
               height: 52,
@@ -325,7 +326,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
         height: 52,
         decoration: BoxDecoration(
             color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(8)),
+            borderRadius: Radii.bXs),
         child: Icon(icon, size: 26, color: color));
   }
 
@@ -344,7 +345,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
         appBar: AppBar(title: const Text('最近文件')),
         body: Column(children: [
           Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+              padding: const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, Gap.xxs),
               child: TextField(
                   controller: _search,
                   textInputAction: TextInputAction.search,
@@ -354,7 +355,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
                       prefixIcon: const Icon(Icons.search),
                       hintText: '搜索文件名',
                       border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                          borderRadius: Radii.bSm),
                       suffixIcon: IconButton(
                           icon: const Icon(Icons.arrow_forward),
                           onPressed: _doSearch)))),
@@ -389,7 +390,7 @@ class _RecentPageState extends ConsumerState<RecentPage> {
                         const SizedBox(height: 120),
                         Center(child: Text(_error!,
                             style: TextStyle(color: cs.onSurfaceVariant))),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: Gap.xs),
                         Center(child: TextButton(
                             onPressed: _load, child: const Text('刷新'))),
                       ])

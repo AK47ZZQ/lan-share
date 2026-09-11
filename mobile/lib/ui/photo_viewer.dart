@@ -24,6 +24,7 @@ import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'photo_models.dart';
 import 'share_create_sheet.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/open_local.dart';
 
@@ -454,6 +455,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                               key: ValueKey('viewer-${p.path}-$_imgRetry'),
                               url: _previewUrl(p),
                               fit: BoxFit.contain,
+                              semanticLabel: p.name,
                               // 防黑屏闪烁：先用照片墙已缓存的缩略图垫底
                               // （磁盘秒出），高清在底图上渐进显现
                               placeholder: (ctx) =>
@@ -468,7 +470,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                                         style: TextStyle(
                                             color: Colors.white54,
                                             fontSize: 12)),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: Gap.xxs),
                                     TextButton.icon(
                                         onPressed: () {
                                           // 先放行负缓存再换 key 重试，否则
@@ -501,12 +503,12 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
           child: SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.only(left: 14, right: 4, top: 4, bottom: 4),
+              padding: const EdgeInsets.only(left: 14, right: Gap.xxs, top: Gap.xxs, bottom: Gap.xxs),
               child: Row(children: [
                 // 页码指示（v0.17 预览大改）：主流相册必备
                 if (widget.items.length > 1)
                   Padding(
-                    padding: const EdgeInsets.only(right: 12),
+                    padding: const EdgeInsets.only(right: Gap.sm),
                     child: Text('${_index + 1}/${widget.items.length}',
                         style: const TextStyle(
                             color: Colors.white54, fontSize: 12)),
@@ -522,7 +524,7 @@ class _PhotoViewerPageState extends ConsumerState<PhotoViewerPage>
                 IconButton(
                     tooltip: '信息',
                     icon: const Icon(Icons.info_outline,
-                        color: Colors.white60, size: 20),
+                        color: Colors.white60, size: IconSizes.md),
                     onPressed: _showInfo),
               ]),
             ),
@@ -665,9 +667,9 @@ class _VideoPageState extends State<_VideoPage> with WidgetsBindingObserver {
       return Center(
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         const Icon(Icons.videocam_off, size: 48, color: Colors.white38),
-        const SizedBox(height: 8),
+        const SizedBox(height: Gap.xs),
         Text(_error ?? '加载中…', style: const TextStyle(color: Colors.white60)),
-        const SizedBox(height: 8),
+        const SizedBox(height: Gap.xs),
         TextButton(
             onPressed: () {
               setState(() {
@@ -711,7 +713,7 @@ class _VideoPageState extends State<_VideoPage> with WidgetsBindingObserver {
               listenable: c,
               builder: (context, _) => Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 6),
                   child: Row(children: [
                     IconButton(
                         icon: Icon(
@@ -737,14 +739,14 @@ class _VideoPageState extends State<_VideoPage> with WidgetsBindingObserver {
                             '×${c.value.playbackSpeed == 1.0 ? '1' : c.value.playbackSpeed.toString()}',
                             style: const TextStyle(
                                 color: Colors.white70, fontSize: 12))),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: Gap.xxs),
                     // 静音开关：看视频不想外放声的主流需求
                     IconButton(
                         icon: Icon(
                             c.value.volume == 0
                                 ? Icons.volume_off
                                 : Icons.volume_up,
-                            color: Colors.white70, size: 20),
+                            color: Colors.white70, size: IconSizes.md),
                         onPressed: () {
                           c.setVolume(c.value.volume == 0 ? 1.0 : 0.0);
                           setState(() {});

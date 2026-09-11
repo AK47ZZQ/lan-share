@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../data/local/prefs.dart';
 import '../share/share_service.dart';
+import 'theme/design_tokens.dart';
 
 class ShareCreateSheet extends StatefulWidget {
   final String path; // 网盘内虚拟路径（/api/share 的 Form path）
@@ -84,25 +85,25 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
         builder: (bctx, snap) {
           final addrs = snap.data ?? const [];
           return Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(Gap.lg),
               child: Column(mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Row(children: [
                   Icon(Icons.check_circle, color: Colors.green),
-                  SizedBox(width: 8),
+                  SizedBox(width: Gap.xs),
                   Text('分享已创建',
                       style:
                           TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ]),
-                const SizedBox(height: 12),
+                const SizedBox(height: Gap.sm),
                 Text(widget.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.grey)),
-                const SizedBox(height: 12),
+                const SizedBox(height: Gap.sm),
                 for (final a in addrs)
                   Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.only(bottom: Gap.xs),
                       child: Row(children: [
                         Expanded(
                             child: Text('$a/s/$_doneToken',
@@ -151,7 +152,7 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
             child: _doneToken != null
                 ? _successView()
                 : SingleChildScrollView(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(Gap.lg),
                     child: Column(mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -159,7 +160,7 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
                           maxLines: 2, overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                               fontWeight: FontWeight.bold, fontSize: 16)),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: Gap.md),
                       const Text('有效期'),
                       const SizedBox(height: 6),
                       Wrap(spacing: 8, children: [
@@ -169,7 +170,7 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
                               selected: _expires == h,
                               onSelected: (_) => setState(() => _expires = h)),
                       ]),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: Gap.sm),
                       Row(children: [
                         Expanded(
                             child: TextField(
@@ -179,7 +180,7 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
                                     labelText: '提取码（可空）',
                                     border: OutlineInputBorder(),
                                     isDense: true))),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: Gap.sm),
                         SizedBox(
                             width: 120,
                             child: TextField(
@@ -190,7 +191,7 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
                                     border: OutlineInputBorder(),
                                     isDense: true))),
                       ]),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: Gap.sm),
                       if (_members.isNotEmpty)
                         DropdownButtonFormField<String?>(
                             initialValue: _target,
@@ -211,7 +212,7 @@ class _ShareCreateSheetState extends State<ShareCreateSheet> {
                             child: Text(_error!,
                                 style: const TextStyle(
                                     color: Colors.red, fontSize: 12))),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: Gap.md),
                       SizedBox(
                           width: double.infinity,
                           child: FilledButton.icon(

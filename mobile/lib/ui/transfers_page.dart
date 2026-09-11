@@ -17,6 +17,7 @@ import 'widgets/brand.dart';
 import '../transfer/local_files.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/open_local.dart';
 import 'widgets/kit.dart';
 
@@ -168,7 +169,7 @@ class _SummaryBar extends StatelessWidget {
         ]));
     return Container(
         width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xs, Gap.md, Gap.xs),
         decoration: BoxDecoration(
             color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
             border: Border(
@@ -242,7 +243,7 @@ class _Tile extends ConsumerWidget {
         subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 4),
+              const SizedBox(height: Gap.xxs),
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
@@ -251,7 +252,7 @@ class _Tile extends ConsumerWidget {
                         : (unknown ? null : progress),
                     minHeight: 4),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: Gap.xxs),
               Text(
                 unknown
                     ? '${humanSize(done)} · $statusText'
@@ -310,7 +311,7 @@ class _Tile extends ConsumerWidget {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Gap.md),
                   child: Align(
                       alignment: Alignment.centerLeft,
                       child: Column(
@@ -321,7 +322,7 @@ class _Tile extends ConsumerWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                     fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: Gap.xxs),
                             Text(
                                 '${humanSize(task.size)} · 已下载至 App 下载目录',
                                 style: const TextStyle(
@@ -410,7 +411,7 @@ class _Tile extends ConsumerWidget {
                     Navigator.pop(ctx);
                     await _deleteLocalFile(context);
                   }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -662,7 +663,7 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(Gap.md),
                   child: Align(
                       alignment: Alignment.centerLeft,
                       child: Column(
@@ -673,7 +674,7 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                     fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: Gap.xxs),
                             Text(
                                 '${humanSize(f.size)} · '
                                 '${f.modified.toString().substring(0, 16)}'
@@ -720,7 +721,7 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
                     Navigator.pop(ctx);
                     _deleteOne(f);
                   }),
-              const SizedBox(height: 8),
+              const SizedBox(height: Gap.xs),
             ])));
   }
 
@@ -737,7 +738,7 @@ class _LocalFilesViewState extends State<_LocalFilesView> {
     return Column(children: [
       Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+          padding: const EdgeInsets.fromLTRB(Gap.md, 10, Gap.xs, 10),
           decoration: BoxDecoration(
               color: Theme.of(context)
                   .colorScheme

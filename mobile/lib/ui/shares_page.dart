@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../data/local/prefs.dart';
 import '../share/share_service.dart';
+import 'theme/design_tokens.dart';
 import 'widgets/qr_dialog.dart';
 import 'widgets/kit.dart';
 
@@ -127,7 +128,7 @@ class _SharesPageState extends State<SharesPage> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Padding(
-                  padding: EdgeInsets.all(12),
+                  padding: EdgeInsets.all(Gap.sm),
                   child: Text('选择链接使用的服务器地址')),
               for (final a in addrs)
                 ListTile(
@@ -156,7 +157,7 @@ class _SharesPageState extends State<SharesPage> {
         builder: (ctx) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Padding(
-                  padding: EdgeInsets.all(12),
+                  padding: EdgeInsets.all(Gap.sm),
                   child: Text('选择二维码使用的服务器地址')),
               for (final a in addrs)
                 ListTile(

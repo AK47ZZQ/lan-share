@@ -3,6 +3,7 @@
 // 识别后原样回传（pop 值），不匹配的内容忽略继续扫。
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'theme/design_tokens.dart';
 
 enum ScanMode { server, otpauth }
 
@@ -61,7 +62,7 @@ class _ScanPageState extends State<ScanPage> {
             onDetect: _onDetect,
             errorBuilder: (context, error, _) => Center(
               child: Padding(
-                padding: const EdgeInsets.all(32),
+                padding: const EdgeInsets.all(Gap.xxl),
                 child: Text(
                   '相机不可用：请在系统设置中允许 LAN Share 使用相机\n\n${error.errorCode.name}',
                   textAlign: TextAlign.center,
@@ -74,7 +75,7 @@ class _ScanPageState extends State<ScanPage> {
             child: Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                  color: Colors.black54, borderRadius: BorderRadius.circular(12)),
+                  color: Colors.black54, borderRadius: Radii.bControl),
               child: Text(_hint,
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white, fontSize: 13),

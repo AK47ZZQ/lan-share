@@ -11,6 +11,7 @@ import '../backup/backup_bridge.dart';
 import '../backup/backup_ledger.dart';
 import '../backup/backup_round.dart';
 import '../transfer/transfer_task.dart' show humanSize;
+import 'theme/design_tokens.dart';
 
 /// 备份详情页（v0.17 由"备份账本"重构）：顶部实时进度卡（本轮 X/Y 进度条
 /// + 正在上传的文件；空闲时显示最近一轮状态），下方为账本明细（筛选 + 列表）。
@@ -145,15 +146,15 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
               ? ListView(children: [
                   const SizedBox(height: 100),
                   const Center(child: Text('账本暂时打不开')),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                   Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.symmetric(horizontal: Gap.xl),
                       child: Center(
                           child: Text(_error!,
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                   fontSize: 12, color: Colors.grey)))),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: Gap.xs),
                   Center(
                       child: TextButton(
                           onPressed: () {
@@ -165,7 +166,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
               : Column(children: [
               // ── 实时进度/最近一轮卡 ──────────────────────────
               Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                padding: const EdgeInsets.fromLTRB(Gap.sm, 10, Gap.sm, 0),
                 child: Card(
                   elevation: 0,
                   color: cs.surfaceContainerHighest,
@@ -199,7 +200,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
                               ),
                             ),
                             if (_progCurrent.isNotEmpty) ...[
-                              const SizedBox(height: 8),
+                              const SizedBox(height: Gap.xs),
                               Text('正在上传：$_progCurrent',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -216,7 +217,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
                                   color: r.warn
                                       ? Colors.orange
                                       : Colors.green),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: Gap.xs),
                               Expanded(child: Text(r.text,
                                   style: const TextStyle(fontSize: 13))),
                             ] else
@@ -234,7 +235,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: Gap.xs),
                 child: Wrap(spacing: 8, children: [
                   for (final e in {
                     'all': '全部',
@@ -255,19 +256,19 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
               // 在服务端被手动删除——用户选择"重新备份"或"从备份移除"
               if (_missing.isNotEmpty)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  padding: const EdgeInsets.fromLTRB(Gap.sm, 0, Gap.sm, Gap.xs),
                   child: Card(
                     elevation: 0,
                     color: cs.tertiaryContainer,
                     child: Padding(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(Gap.sm),
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(children: [
                               Icon(Icons.folder_delete_outlined,
                                   size: 18, color: cs.onTertiaryContainer),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: Gap.xs),
                               Expanded(
                                   child: Text(
                                       '发现 ${_missing.length} 个相册已在服务端被删除',
@@ -275,7 +276,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
                                           fontSize: 13,
                                           fontWeight: FontWeight.bold))),
                             ]),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: Gap.xxs),
                             Text('这些相册的照片本机仍在，本轮已暂停重传。可重新备份（重建目录）或从备份记录移除。',
                                 style: TextStyle(
                                     fontSize: 11.5,
@@ -307,7 +308,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
                   ),
                 ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(horizontal: Gap.sm),
                 child: Wrap(spacing: 8, children: [
                   for (final e in {
                     'all': '全部类型',
@@ -357,7 +358,7 @@ class _BackupDetailsPageState extends State<BackupDetailsPage> {
                                   size: 15,
                                   color:
                                       Theme.of(context).colorScheme.outline),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: Gap.xxs),
                               Expanded(
                                   child: Text(r.name,
                                       maxLines: 1,

@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/api/errors.dart';
 import '../data/api/files_api.dart';
 import 'notes_shared.dart';
+import 'theme/design_tokens.dart';
 
 class NoteEditorPage extends StatefulWidget {
   final String dir;
@@ -235,7 +236,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                   onPressed: () => setState(() => _preview = !_preview)),
             if (_dirty && !_saving)
               Padding(
-                  padding: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.only(right: Gap.xxs),
                   child: Center(
                       child: Text('未保存',
                           style: TextStyle(
@@ -260,7 +261,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.grey))),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: Gap.xs),
                     Center(
                         child: TextButton(
                             onPressed: _loadContent,
@@ -270,7 +271,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                     ? Markdown(
                         data: _ctrl.text,
                         selectable: true,
-                        padding: const EdgeInsets.all(16),
+                        padding: const EdgeInsets.all(Gap.md),
                         styleSheet: MarkdownStyleSheet(
                           p: const TextStyle(fontSize: 15, height: 1.55),
                           h1: const TextStyle(
@@ -282,7 +283,7 @@ class _NoteEditorPageState extends State<NoteEditorPage> {
                         ))
                     : Stack(children: [
                         Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            padding: const EdgeInsets.symmetric(horizontal: Gap.sm),
                             child: TextField(
                                 controller: _ctrl,
                                 focusNode: _focus,
