@@ -29,6 +29,7 @@ from fastapi.responses import FileResponse
 from app.config import SHARE_ROOT
 from app.security import (ADMIN, allow_rate, audit, client_ip, require_admin,
                           require_user)
+from app.api import events as events_bus
 from app.store import users as users_store
 
 router = APIRouter()
@@ -192,6 +193,8 @@ async def feedback_create(request: Request,
     )
     (_dir() / "待处理" / f"{fid}.md").write_text(md, encoding="utf-8")
     _regen_kanban()
+    # SSE 实时信号：新反馈提醒全体在用 admin（B3；信号语义，客户端自行拉列表）
+    events_bus.publish_many(users_store.list_active_admin_ids(), {"kind": "feedback"})
     audit("feedback.create", target=title[:40],
           detail=f"type={type} images={len(files)}", ip=client_ip(request))
     return {"ok": True, "id": fid}

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from app.db import _db_lock, transaction
 from app.security import audit, client_ip, require_admin, require_user
+from app.api import events as events_bus
 from app.store import notifications as notif_store
 from app.store import users as users_store
 from app.settings import (NOTIFY_PREFS_PREFIX, get_setting, set_setting)
@@ -50,6 +51,7 @@ def insert_notification(user_id: int, type: str, title: str, body: str = "",
     if not get_prefs(user_id).get(_groups_of(type), True):
         return False
     notif_store.insert(user_id, type, title, body, link, broadcast_id)
+    events_bus.publish(user_id, {"kind": "notification"})   # SSE 实时信号（B3）
     return True
 
 
@@ -133,10 +135,9 @@ def _deliver_broadcast(bid: str, title: str, text: str,
     """把广播逐人落站内（尊重偏好）+ 可选站外推送。返回实际站内送达数。"""
     sent = 0
     for t in targets:
-        if not get_prefs(t["id"]).get("admin", True):
-            continue
-        notif_store.insert(t["id"], "admin", title, text, broadcast_id=bid)
-        sent += 1
+        # insert_notification 内含同一套 admin 组偏好过滤 + SSE 信号，直接复用
+        if insert_notification(t["id"], "admin", title, text, broadcast_id=bid):
+            sent += 1
     if webhook:
         push_webhook(title, text)
     return sent

@@ -14,7 +14,6 @@ const items = ref<NotificationItem[]>([])
 const activity = ref<ActivityItem[]>([])
 const activityLoading = ref(false)
 const loading = ref(false)
-let timer: number | undefined
 const router = useRouter()
 
 // 新动态红点：最新动态时间戳 vs 已读水位（localStorage）
@@ -106,13 +105,48 @@ function goActivityItem(n: ActivityItem) {
   router.push({ path: '/activity', query: { ts: String(n.ts) } })
 }
 
+// 实时通道（B3）：SSE /api/events 优先（服务端通知/反馈到达即信号），断开或
+// 被限流时回退 60s 轮询——轮询逻辑原样保留，只是从"常态"降为"兜底"。
+let timer: number | undefined
+let es: EventSource | undefined
+
+function startPolling() {
+  if (timer) return
+  timer = window.setInterval(() => { void load(); void probeActivity() }, 60_000)
+}
+
+function stopPolling() {
+  if (timer) { clearInterval(timer); timer = undefined }
+}
+
+function startSse() {
+  if (typeof EventSource === 'undefined') { startPolling(); return }
+  try { es = new EventSource('/api/events') } catch { startPolling(); return }
+  es.onopen = () => stopPolling()          // 实时通道就绪：轮询退位
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data) as { kind?: string }
+      if (data.kind === 'notification') void load()
+      else if (data.kind === 'feedback') void probeActivity()   // admin：顺带探新动态
+    } catch { /* 忽略畸形帧 */ }
+  }
+  es.onerror = () => {
+    if (es && es.readyState === EventSource.CLOSED) { es = undefined; startPolling() }
+    // 其余 error：EventSource 自动重连（服务端 retry: 5000）
+  }
+}
+
 onMounted(() => {
   load()
   void probeActivity()
-  timer = window.setInterval(() => { void load(); void probeActivity() }, 60_000)
+  startSse()
   document.addEventListener('click', close)
 })
-onUnmounted(() => { if (timer) clearInterval(timer); document.removeEventListener('click', close) })
+onUnmounted(() => {
+  if (es) { es.close(); es = undefined }
+  stopPolling()
+  document.removeEventListener('click', close)
+})
 function close() { open.value = false }
 </script>
 

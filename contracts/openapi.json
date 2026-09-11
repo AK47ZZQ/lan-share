@@ -3375,6 +3375,22 @@
     "summary": "Disk Detail"
    }
   },
+  "/api/events": {
+   "get": {
+    "operationId": "events_api_events_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Events"
+   }
+  },
   "/api/feedback": {
    "get": {
     "description": "自己的反馈列表；admin 全量（带用户名，前端按需展示）。",
