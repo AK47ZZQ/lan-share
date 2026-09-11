@@ -293,7 +293,7 @@ Web 站长工作台供数层；全部 ⚙️。状态流转约定：反馈由 Ag
 | GET | `/api/admin/overview` | ⚙️ | 总览聚合：users/photos/shares/trash/blobs/sessions/devices 计数 + 磁盘 + `app_latest` + server_time |
 | GET | `/api/admin/large-files?limit=` | ⚙️ | 全库大文件 TOP（跳过隐藏目录），`{items:[{path,size,mtime}], total_files, total_size}` |
 | GET | `/api/admin/duplicates?min_size=&limit=` | ⚙️ | 疑似重复（同尺寸聚类，不做全盘哈希）：`{groups:[{size,paths,wasted}], group_count}` |
-| GET | `/api/admin/audit?limit=` | ⚙️ | 审计日志近况（新→旧） |
+| GET | `/api/admin/audit?limit=&action=` | ⚙️ | 审计日志近况（新→旧）；`action` 非空按前缀筛选（如 `login`→login/login_fail）；响应带 `actions`（现存 DISTINCT 动作全集，供下拉） |
 | GET | `/api/admin/sessions` | ⚙️ | 活跃 Web 会话（`token_hash` 仅作吊销句柄） |
 | DELETE | `/api/admin/sessions/{token_hash}` | ⚙️ | 吊销单个会话（对端下一跳即 401） |
 | DELETE | `/api/admin/sessions` | ⚙️ | **全站会话清空**（v3.40），保留当前请求自身会话；`{revoked}` |

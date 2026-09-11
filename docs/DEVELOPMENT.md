@@ -137,7 +137,11 @@ app/
 ├── api/photos.py      照片时间线（扫描器/ffprobe 补扫/facets/meta + photos_scan_bump）
 ├── api/albums.py      精选专辑（管理端 + 成员端合流；settings JSON 锁内原子读改写）
 ├── api/qr.py          通用 QR SVG（品牌云朵）
-├── api/auth.py        认证 API（setup/login/TOTP/改密/改用户名/设备 Token/配对码/WebDAV 密码）
+├── api/auth.py        认证 API·会话域（v3.43 拆分：setup/login/logout/authcheck/me/verify-password + set_session_cookie/login_gate/uid 公共助手）
+├── api/totp.py        两步验证（登录第二步 /api/login/totp + /api/auth/totp/* 开通/恢复码/关闭；v3.43 拆出）
+├── api/profile.py     用户资料（昵称 PATCH / 头像上传与读取；v3.43 拆出）
+├── api/account.py     账号安全（改密连坐吊销/改用户名/WebDAV 独立密码；v3.43 拆出）
+├── api/devices.py     设备 Token 与配对码（/api/auth/token、/api/auth/devices/*、/api/pair/*；v3.43 拆出）
 ├── api/share.py       分享 API（外链/票据/取件记录；按 owner 隔离；读侧 safe_path 过闸）
 ├── api/webdav.py      WebDAV（Basic 哑哈希等时；与网页同一 resolve 权限源）
 ├── api/admin.py       成员/邀请/授权/动态流/公网地址/导出（zip 票据走 archive 官方 API）
@@ -149,7 +153,8 @@ app/
 ├── api/feedback.py    反馈通道（v0.28）：multipart 提交（截图≤3）/own-only 列表/详情/截图鉴权读取；
 │                       落盘 data/反馈/（待处理|进行中|已完成 三目录即状态）+ 看板.md 自动重生成
 server.py             纯入口（NSSM server:app；uvicorn __main__ 块不可删——漏了服务秒退）
-web/                  Vue3 前端工程（Vite+TS）：src/api.ts 客户端、src/views/ 九个页面；
+web/                  Vue3 前端工程（Vite+TS）：src/api.ts 门面（实现在 src/api/ 按域九模块，
+                      v3.48 拆分）、src/views/ 页面 + src/components/admin/ 三 Pane；
                       构建产物 dist/ 由 main.py 直供（gitignore node_modules + dist）
 mobile/               Flutter App（mobile/lib/ 源码 + android/ ios/；build/ 与 .dart_tool/ 已 gitignore）
 certs/                自签证书配置（san.cnf；*.pem 私钥不入库）
