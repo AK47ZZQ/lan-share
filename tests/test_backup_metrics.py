@@ -66,6 +66,24 @@ def test_backup_failure_alerts_webhook(tmp_path, monkeypatch):
     assert alerts == ["备份失败"]             # 失败必须上门提醒
 
 
+def test_backup_prune_keeps_pairs_balanced(tmp_path, monkeypatch):
+    """终审 P1-1 守卫：淘汰必须按组成对——不允许 dump 全灭而快照独存
+    （原按文件名排序时 meta-* 恒前于 settings-*，切片先删光 dump）。"""
+    _fresh_env(tmp_path, monkeypatch)
+    d = tmp_path / "b"
+    d.mkdir(parents=True)
+    for i in range(1, 11):
+        stamp = f"202609{i:02d}-120000"   # 8 位日期（YYYYMMDD），与正则一致
+        (d / f"meta-{stamp}.db").write_text("db")
+        (d / f"settings-{stamp}.json").write_text("{}")
+    backup_svc._prune_old()
+    left = sorted(f.name for f in d.iterdir())
+    dbs = [f for f in left if f.startswith("meta-")]
+    js = [f for f in left if f.startswith("settings-")]
+    assert len(dbs) == len(js) == backup_svc.BACKUP_KEEP   # 成对且足量
+    assert dbs == sorted(dbs)[-backup_svc.BACKUP_KEEP:]    # 留的是最新组
+
+
 def test_backup_prune_keeps_recent(tmp_path, monkeypatch):
     _fresh_env(tmp_path, monkeypatch)
     st = backup_svc.run_backup_once(push=lambda *a: None)

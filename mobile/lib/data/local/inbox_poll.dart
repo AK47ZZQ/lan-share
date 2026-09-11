@@ -56,6 +56,8 @@ class InboxPoll {
       final stream = (r.data as ResponseBody).stream;
       final buf = StringBuffer();
       await for (final chunk in stream) {
+        // 已知限制：allowMalformed 对跨 chunk 的 UTF-8 多字节字符会产生替换符
+        // ——当前事件仅 ASCII 信号帧无碍；若未来载荷含中文需改增量解码器
         buf.write(utf8.decode(chunk, allowMalformed: true));
         while (true) {
           final idx = buf.toString().indexOf('\n');

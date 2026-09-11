@@ -134,10 +134,13 @@ def _deliver_broadcast(bid: str, title: str, text: str,
                        targets: list[dict], webhook: bool = True) -> int:
     """把广播逐人落站内（尊重偏好）+ 可选站外推送。返回实际站内送达数。"""
     sent = 0
-    for t in targets:
-        # insert_notification 内含同一套 admin 组偏好过滤 + SSE 信号，直接复用
-        if insert_notification(t["id"], "admin", title, text, broadcast_id=bid):
-            sent += 1
+    # 交付原子性（终审 P2-1）：整批一个事务——中途崩溃不会留下"部分人收到"
+    # 的无账可查半交付（store 写方法事务内自动推迟 commit）
+    with _db_lock, transaction():
+        for t in targets:
+            # insert_notification 内含同一套 admin 组偏好过滤 + SSE 信号，直接复用
+            if insert_notification(t["id"], "admin", title, text, broadcast_id=bid):
+                sent += 1
     if webhook:
         push_webhook(title, text)
     return sent

@@ -20,7 +20,6 @@
   不出 store 层。
 """
 import json
-import os
 import sqlite3
 import time
 from pathlib import Path
@@ -90,23 +89,41 @@ def last_status() -> dict | None:
 
 
 def _dump_to(dst: Path):
-    """引擎中立 dump。返回落点 Path；引擎/工具不可用返回 _NO_DUMP（上游告警）。"""
+    """引擎中立 dump。落 .tmp 临时名、成功后原子改名（终审 P1：半途崩溃不留
+    『看似完整』的假备份）。返回落点 Path；引擎/工具不可用返回 _NO_DUMP。"""
+    tmp = dst.with_suffix(dst.suffix + ".tmp")
+    result = _dump_engine(tmp)
+    if result is _NO_DUMP:
+        tmp.unlink(missing_ok=True)
+        return _NO_DUMP
+    tmp.replace(dst)
+    return dst
+
+
+def _dump_engine(tmp: Path):
     if USE_PG:
         from shutil import which
         if which("pg_dump") is None:
             return _NO_DUMP
-        os.system(f'pg_dump "{DATABASE_URL}" -f "{dst}"')
-        return dst if dst.exists() else _NO_DUMP
+        # list 形式传参免 shell 解释（终审 P0：os.system + f-string 拼连接串
+        # 存在命令注入面，DATABASE_URL 虽由管理员环境变量控制也不该依赖它）
+        import subprocess
+        r = subprocess.run(["pg_dump", DATABASE_URL, "-f", str(tmp)],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"pg_dump 失败: {r.stderr[-200:]}")
+        return tmp if tmp.exists() else _NO_DUMP
     src = sqlite3.connect(str(DB_PATH))
     try:
-        out = sqlite3.connect(str(dst))
+        out = sqlite3.connect(str(tmp))
         try:
             src.backup(out)
         finally:
             out.close()
     finally:
         src.close()
-    return dst
+    return tmp
 
 
 def _write_settings_snapshot(p: Path) -> None:
@@ -123,13 +140,25 @@ def _write_settings_snapshot(p: Path) -> None:
 
 
 def _prune_old() -> None:
-    """滚动保留最近 BACKUP_KEEP 组：按文件名时间戳排序，超出的删。"""
-    files = sorted(
-        (f for f in BACKUP_DIR.iterdir()
-         if f.suffix in (".db", ".json") and not f.name.endswith(".tmp")),
-        key=lambda f: f.name)
-    for f in files[:-BACKUP_KEEP * 2]:   # 每组两件（db+json）
-        try:
-            f.unlink()
-        except OSError:
-            pass
+    """滚动保留最近 BACKUP_KEEP **组**（终审 P1 修复：原按文件名排序时
+    meta-* 字典序恒前于 settings-*，切片会先删光全部 dump——改为按
+    时间戳分组，组为单位整组淘汰，dump 与快照保持成对）。"""
+    import re
+    groups: dict[str, list] = {}
+    for f in BACKUP_DIR.iterdir():
+        m = re.match(r"(meta|settings)-(\d{8}-\d{6})\.(db|json)$", f.name)
+        if m:
+            groups.setdefault(m.group(2), []).append(f)
+        else:
+            try:
+                f.unlink()   # 历史半写残留/临时文件：直接清
+            except OSError:
+                pass
+    keep = sorted(groups)[-BACKUP_KEEP:]
+    for stamp, files in groups.items():
+        if stamp not in keep:
+            for f in files:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
