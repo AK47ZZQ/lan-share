@@ -9,8 +9,8 @@ import pytest
 
 from test_extras import _admin, _bare, _member_session, _mk_member
 
-from app.api.notify import (_ValidatingRedirectHandler,
-                            assert_public_webhook_url)
+from app.services.webhook import (_ValidatingRedirectHandler,
+                                  assert_public_webhook_url)
 
 
 def _rand() -> str:

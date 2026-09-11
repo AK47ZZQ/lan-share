@@ -46,6 +46,18 @@ def _clear_trash() -> None:
     trash_store.clear()
 
 
+def _ensure_can_touch(user: dict, row) -> None:
+    """恢复/删除共用的逐条可见性判定（review 2026-09-02 P1-1 收编）：
+    历史入口 vpath 形态（归属不可判定）仅 admin；其余按空间可见性。
+    不通过直接 403。"""
+    parts = _trash_rel_parts(row["orig_path"])
+    if parts is None:
+        if user["role"] != ADMIN:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    elif not visible(user, parts):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
 def _trash_rel_parts(orig_path: str) -> list[str] | None:
     """回收站 orig_path → 物理路径段（供 visible() 判归属）。历史入口存过
     vpath 形态（"private:<名>"，无用户段，归属不可判定）→ 返回 None，
@@ -90,12 +102,7 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
         raise HTTPException(status_code=404, detail="Not found")
     # 与删除入口同款可见性校验（review 2026-09-02 P1-1）：缺了它，成员可枚举
     # trash id 把他人 private/incoming 的回收站条目"恢复"进自己空间
-    parts = _trash_rel_parts(row["orig_path"])
-    if parts is None:
-        if _user["role"] != ADMIN:
-            raise HTTPException(status_code=403, detail="Forbidden")
-    elif not visible(_user, parts):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _ensure_can_touch(_user, row)
     trash_path = SHARE_ROOT / row["trash_path"]
     if not trash_path.exists():
         await run_in_threadpool(_drop_trash_row, trash_id)
@@ -116,12 +123,7 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     row = await run_in_threadpool(_select_trash, trash_id)
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
-    parts = _trash_rel_parts(row["orig_path"])
-    if parts is None:
-        if _user["role"] != ADMIN:
-            raise HTTPException(status_code=403, detail="Forbidden")
-    elif not visible(_user, parts):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _ensure_can_touch(_user, row)
     trash_path = SHARE_ROOT / row["trash_path"]
     # rmtree 大目录（数万文件）可达分钟级，进线程池防冻结事件循环（R1-P2-8）
     if trash_path.is_dir():

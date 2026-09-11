@@ -193,7 +193,7 @@ def test_webhook_config_validation_and_test(auth, monkeypatch):
         captured["url"] = req.full_url
         return _FakeResp(b"OK")
 
-    monkeypatch.setattr("app.api.notify._webhook_open", fake_open)
+    monkeypatch.setattr("app.services.webhook._webhook_open", fake_open)
     assert auth.post("/api/admin/webhook/test").status_code == 200
     # 占位符已被替换为 URL 编码内容
     assert "{title}" not in captured["url"] and "title=" in captured["url"]
@@ -210,7 +210,7 @@ def test_share_and_redeem_trigger_push(client, monkeypatch):
     def fake_open(req, timeout=0):
         events.append(req.full_url)
 
-    monkeypatch.setattr("app.api.notify._webhook_open", fake_open)
+    monkeypatch.setattr("app.services.webhook._webhook_open", fake_open)
     admin = _admin(client)
     assert admin.post("/api/admin/webhook", json={
         "url": "https://push.example.com/hook?title={title}&body={body}"}).status_code == 200
