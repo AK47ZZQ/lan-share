@@ -22,7 +22,8 @@ export async function handle<T>(r: Response): Promise<T> {
   }
   return r.json() as Promise<T>
 }
-export const enc = (p: string) => p.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+// enc 已迁往 ../pure（vue-free 可测），re-export 保持 `from './core'` 的调用方不变
+export { enc } from '../pure'
 export const jpost = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 // 成员视角预览：只读 GET 附带 X-As-User（后端仅 admin 生效，其余请求一律原身份）
