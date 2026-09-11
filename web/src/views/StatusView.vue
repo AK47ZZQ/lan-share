@@ -18,6 +18,12 @@ async function loadAll() {
   // healthz 是免认证探针，这里仅作展示复用
   try { health.value = await fetch('/healthz').then(r => r.json()) } catch { /* */ }
 }
+// 14 天流量迷你柱状图：以窗口内最大值为满高，全零时也是 2px 的底柱
+function barH(b: number): string {
+  const days = ov.value?.traffic.days ?? []
+  const max = Math.max(1, ...days.map(x => x.bytes))
+  return Math.max(2, Math.round(b / max * 40)) + 'px'
+}
 async function loadAudit() {
   auditOpen.value = true; auditBusy.value = true
   try {
@@ -62,6 +68,30 @@ onMounted(loadAll)
       </div>
     </div>
 
+    <div v-if="ov" class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
+      <div style="font-size:13.5px;font-weight:600">🌐 公网流量（隧道）</div>
+      <div class="status-grid">
+        <div class="status-item">今日：<b>{{ human(ov.traffic.today_bytes) }}</b></div>
+        <div class="status-item">
+          本月：<b>{{ human(ov.traffic.month_bytes) }}</b>
+          <span class="badge" :class="ov.traffic.month_bytes > ov.traffic.free_tier_bytes * 0.8 ? 'danger' : ''">
+            免费档 {{ (ov.traffic.month_bytes / ov.traffic.free_tier_bytes * 100).toFixed(1) }}%
+          </span>
+        </div>
+      </div>
+      <div class="traffic-days">
+        <div v-for="d in ov.traffic.days" :key="d.date" class="traffic-day"
+             :title="`${d.date} · ${human(d.bytes)}`">
+          <div class="traffic-bar" :style="{ height: barH(d.bytes) }" />
+          <div class="traffic-label">{{ d.date.slice(5) }}</div>
+        </div>
+      </div>
+      <div style="font-size:11.5px;color:var(--text-3)">
+        口径：Caddy 隧道入口出口字节（浏览/下载为主，公网上传方向以樱花FRP 面板为准）；
+        LAN 直连不消耗隧道配额，不计入。
+      </div>
+    </div>
+
     <div class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:10px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div style="font-size:13.5px;font-weight:600">📜 审计日志</div>
@@ -99,4 +129,8 @@ onMounted(loadAll)
 .act-row:first-of-type { border-top: 0; }
 .act-text { flex: 1; min-width: 0; }
 .act-time { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.traffic-days { display: flex; gap: 4px; align-items: flex-end; height: 56px; padding: 0 2px; }
+.traffic-day { display: flex; flex-direction: column; align-items: center; gap: 3px; flex: 1; min-width: 0; }
+.traffic-bar { width: 100%; max-width: 22px; background: linear-gradient(180deg, var(--accent), var(--accent-2)); border-radius: 3px 3px 0 0; }
+.traffic-label { font-size: 9.5px; color: var(--text-3); white-space: nowrap; }
 </style>

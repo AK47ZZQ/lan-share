@@ -76,9 +76,23 @@
 	request_header -X-LanShare-Entry
 }
 
+# 隧道入口访问日志（F4 流量仪表）：只挂隧道/备用块——"有日志 ≡ 走隧道 ≡
+# 消耗樱花FRP 配额"，判别零歧义；LAN 直连 :8765 不产生日志。
+# 解析方 app/services/traffic.py 只读 glob access.log*；roll 5×10MiB 封顶 50MiB。
+(tunnel_log) {
+	log {
+		output file C:/lan-share/data/logs/access/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format json
+	}
+}
+
 # 隧道/备用入口：注入公网标记（Host 头客户端可伪造，物理端口才是可信信号；
 # 后端 is_public_entry 据此分账：公网失败只锁公网侧 + healthz 不对公网暴露）
 :8767, :443, :8801 {
 	import lan_common
+	import tunnel_log
 }
 

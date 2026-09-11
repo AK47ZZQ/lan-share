@@ -22,7 +22,7 @@ from app.security import preview_user, require_user
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support, to_rel
 from app.spaces import resolve, visible
 from app.store import users as users_store
-from app.api.albums import load_albums as _load_albums
+from app.services.albums import load_albums as _load_albums
 
 ensure_heif_support()   # HEIC/HEIF 解码注册（照片时间线 EXIF/元数据需要）
 

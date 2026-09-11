@@ -290,7 +290,7 @@ Web 站长工作台供数层；全部 ⚙️。状态流转约定：反馈由 Ag
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| GET | `/api/admin/overview` | ⚙️ | 总览聚合：users/photos/shares/trash/blobs/sessions/devices 计数 + 磁盘 + `app_latest` + server_time |
+| GET | `/api/admin/overview` | ⚙️ | 总览聚合：users/photos/shares/trash/blobs/sessions/devices 计数 + 磁盘 + `app_latest` + `traffic`（公网隧道流量：今日/本月字节 + 近 14 天序列，Caddy 隧道入口访问日志聚合，见 app/services/traffic.py）+ server_time |
 | GET | `/api/admin/large-files?limit=` | ⚙️ | 全库大文件 TOP（跳过隐藏目录），`{items:[{path,size,mtime}], total_files, total_size}` |
 | GET | `/api/admin/duplicates?min_size=&limit=` | ⚙️ | 疑似重复（同尺寸聚类，不做全盘哈希）：`{groups:[{size,paths,wasted}], group_count}` |
 | GET | `/api/admin/audit?limit=&action=` | ⚙️ | 审计日志近况（新→旧）；`action` 非空按前缀筛选（如 `login`→login/login_fail）；响应带 `actions`（现存 DISTINCT 动作全集，供下拉） |

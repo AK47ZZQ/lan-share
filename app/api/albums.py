@@ -1,8 +1,8 @@
 """精选专辑（07 审查批次 3B：system.py 管理侧与 social.py 成员侧合流）。
 
-专辑存储层（settings JSON + _mutate_albums 锁内读-改-写）此前住在
-system.py，成员侧增删住在 social.py，两边函数体内互相反向 import——
-"改 A 必须改 B"的教科书案例（07 §3.2）；现在一个域一个家。
+专辑存储层（settings JSON + 锁内读-改-写）已下沉 `app/services/albums.py`
+（A5 收口：services/accounts 改名流程要同步专辑归属，不能再反向 import
+API 层）；本模块留路由 + 权限/可见性判定，存储操作走 services。
 
 模型 {id, title, created_by, created_at, items:[photos.path...]}，
 兼容旧月份书签型（month 有值、items 空）。guest 只读；编辑/删除 =
@@ -14,81 +14,16 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.db import _db, _db_lock
 from app.roles import ADMIN, GUEST
 from app.security import audit, client_ip, preview_user, require_admin, require_user
+from app.services.albums import load_albums, mutate_albums as _mutate_albums
 from app.spaces import visible
-from app.settings import FEATURED_ALBUMS
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
 router = APIRouter()
 
 
 # ─── 精选专辑（月份集合，管理员维护，全员可见）──────────────
-
-def load_albums() -> list[dict]:
-    row = _db().execute("SELECT value FROM settings WHERE key=?", (FEATURED_ALBUMS,)).fetchone()
-    if not row or not row["value"]:
-        return []
-    import json
-    try:
-        data = json.loads(row["value"])
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-
-def _save_albums(albums: list[dict]):
-    import json
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (FEATURED_ALBUMS, json.dumps(albums, ensure_ascii=False)))
-        _db().commit()
-
-
-def rename_album_owner(old: str, new: str):
-    """用户名变更后同步精选专辑归属（R2-P2-3）：否则改名者丢失自己专辑的
-    编辑/删除权（created_by 比对落空）。走 _mutate_albums 的锁内读-改-写，
-    消灭与并发编辑专辑的丢更新竞态（R2-P2-5）。"""
-    changed = []
-
-    def _do(albums: list[dict]) -> bool:
-        for a in albums:
-            if a.get("created_by") == old:
-                a["created_by"] = new
-                changed.append(True)
-        return bool(changed)
-
-    _mutate_albums(_do)
-
-
-def _mutate_albums(mutator) -> bool:
-    """精选专辑整表"读-改-写"原子化（v0.14 审查 P2）。
-
-    load_albums()→改→_save_albums() 三步之间不持锁时，两个设备并发
-    勾选/删除会整份互相覆盖丢更新；专辑条目现在是用户策展数据，必须
-    全程持 _db_lock。_save_albums 自己也拿这把锁（Lock 不可重入），
-    所以这里绕开它直接写库。mutator(albums) 就地修改，返回 False 表示
-    未命中（不落库）。"""
-    import json
-    with _db_lock:
-        row = _db().execute(
-            "SELECT value FROM settings WHERE key=?", (FEATURED_ALBUMS,)).fetchone()
-        try:
-            albums = json.loads(row["value"]) if row and row["value"] else []
-            if not isinstance(albums, list):
-                albums = []
-        except Exception:
-            albums = []
-        if not mutator(albums):
-            return False
-        _db().execute(
-            "INSERT INTO settings(key, value) VALUES(?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (FEATURED_ALBUMS, json.dumps(albums, ensure_ascii=False)))
-        _db().commit()
-        return True
 
 
 def _visible_album_items(user, items: list) -> list[str]:

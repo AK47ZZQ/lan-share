@@ -11,6 +11,7 @@ import re
 from fastapi import HTTPException
 
 from app.config import SHARE_ROOT
+from app.services import albums as albums_svc
 from app.db import _db_lock
 from app.security import audit
 from app.store import users as users_store
@@ -58,8 +59,7 @@ def rename_user_everywhere(uid: int, old_name: str, new_name: str,
             raise HTTPException(status_code=409, detail="该用户名已被占用")
         users_store.set_username(uid, new_name)
 
-    from app.api.albums import rename_album_owner
-    rename_album_owner(old_name, new_name)   # 精选专辑归属跟随（R2-P2-3）
+    albums_svc.rename_album_owner(old_name, new_name)  # 精选专辑归属跟随（R2-P2-3）
 
     old_dir = SHARE_ROOT / "private" / old_name
     new_dir = SHARE_ROOT / "private" / new_name
@@ -73,7 +73,7 @@ def rename_user_everywhere(uid: int, old_name: str, new_name: str,
             # rename 尝试前翻成新名，不回滚则创建者失去编辑权）
             with _db_lock:
                 users_store.set_username(uid, old_name)
-            rename_album_owner(new_name, old_name)
+            albums_svc.rename_album_owner(new_name, old_name)
             audit(dir_fail_action, f"{old_name} → {new_name}", ip=ip)
             raise HTTPException(status_code=500,
                                 detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")

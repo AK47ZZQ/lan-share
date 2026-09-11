@@ -19,6 +19,7 @@ from app.config import SHARE_ROOT
 from app.api.appver import DIST_DIR
 from app.db import _db, _db_lock
 from app.security import COOKIE_NAME, _sha, audit, client_ip, require_admin
+from app.services import traffic
 from app.store import users as users_store
 
 router = APIRouter()
@@ -108,6 +109,7 @@ def admin_overview(_admin=Depends(require_admin)):
                  "total_gb": round(du.total / 2**30, 1),
                  "free_bytes": du.free, "total_bytes": du.total, "used_bytes": du.used},
         "app_latest": _app_latest(),
+        "traffic": traffic.summarize(),
         "server_time": now,
     }
 

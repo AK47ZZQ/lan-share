@@ -31,6 +31,11 @@ export interface PhotoItem { path: string; name: string; taken: string; month: s
 export interface PhotoFacets { months: { month: string; count: number }[]; uploaders: { name: string; count: number }[] }
 export interface Album { id: string; title: string; month?: string; created_by?: string; count?: number; cover?: string }
 
+export interface TrafficDay { date: string; bytes: number }
+export interface TrafficInfo {
+  today_bytes: number; month_bytes: number; free_tier_bytes: number
+  days: TrafficDay[]
+}
 export interface ConsoleOverview {
   users: { total: number; active: number; admins: number; guests: number }
   photos: { count: number; size: number }
@@ -41,6 +46,7 @@ export interface ConsoleOverview {
   devices: { active: number }
   disk: { used_pct: number; free_gb: number; total_gb: number; free_bytes: number; total_bytes: number; used_bytes: number }
   app_latest: { version: string; build: number } | null
+  traffic: TrafficInfo
   server_time: number
 }
 export interface LargeFileItem { path: string; size: number; mtime: number }

@@ -75,3 +75,6 @@ mobile/android/keys/
 # ---- 生产凭据（只留本机，仓库内严禁落盘；参考副本在 <仓库外的私有位置>\） ----
 /LAN Share 数据库密码.txt
 /mysql.txt
+
+# ZCode 会话本地产物（计划草稿等），不入库
+.zcode/
