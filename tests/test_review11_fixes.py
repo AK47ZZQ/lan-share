@@ -114,8 +114,8 @@ def test_users_table_sql_is_owned_by_store_only():
     """回归守卫：`users` 表的 SQL 只允许出现在两个文件里。
 
     - `app/store/users.py` —— 该表唯一的**数据访问**出口（11 号复审批次 2，A1）；
-    - `app/db.py` —— **schema 定义与增量迁移**（建表/列变更/一次性引导），它是
-      SQLite/PG 双引擎的 DDL 归属地，且位于 store 的下层（反向 import 会成环）。
+    - `app/store/schema.py` —— **schema 定义与增量迁移**（建表/列变更/一次性引导），
+      它是 SQLite/PG 双引擎的 DDL 归属地（B1 存储层拆分自 db.py 迁入）。
 
     此前该表被 11 个模块直接读写、80 条 SQL 散落各处：加一列要改 11 个地方。
     这条守卫让"某个业务模块图省事又写了一句裸 SQL"在 CI 立刻变红。
@@ -129,7 +129,7 @@ def test_users_table_sql_is_owned_by_store_only():
 
     root = Path(__file__).resolve().parent.parent / "app"
     pattern = _re.compile(r"\b(FROM|INTO|UPDATE|DELETE\s+FROM|JOIN)\s+users\b", _re.I)
-    allowed = {"store/users.py", "db.py"}
+    allowed = {"store/users.py", "store/schema.py"}
 
     def sql_strings(tree) -> list[str]:
         """模块内所有非 docstring 的字符串常量。"""
