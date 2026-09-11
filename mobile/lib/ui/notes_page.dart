@@ -647,7 +647,9 @@ class _NotesPageState extends State<NotesPage> {
             child: SizedBox(
                 width: _catsOpen ? panelW : 0,
                 child: Container(
-                    color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+                    // v0.28.2 修复反馈 7063：面板必须不透明——覆盖式抽屉底下
+                    // 就是笔记列表，半透明会让列表文字透出来叠影
+                    color: cs.surfaceContainerHighest,
                     child: Column(children: [
                       Padding(
                           padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
