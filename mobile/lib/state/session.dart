@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/session_api.dart';
 import '../data/auto_switch.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/cookies.dart';
@@ -48,9 +49,7 @@ class SessionController extends StateNotifier<SessionState> {
       return;
     }
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/auth/me',
-          options: Options(headers: {'x-login-flow': '1'}));
+      final r = await SessionApi.me(loginFlow: true);
       final name = r.data['username'] as String?;
       await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
       state = SessionState(
@@ -85,15 +84,13 @@ class SessionController extends StateNotifier<SessionState> {
     try {
       await ApiClient.I.switchServer(server);
       AutoSwitch.I.noteManualPick(); // 登录时选的入口粘性 10 分钟（防自动切回）
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/login',
-          options: Options(headers: {'x-login-flow': '1'}),
-          data: {'username': username, 'password': password});
+      final r = await SessionApi.loginWithPassword(
+          username: username, password: password);
       if (r.data['totp_required'] == true) {
         state = const SessionState(needTotp: true);
         return;
       }
-      await _exchangeToken(dio, r);
+      await _exchangeToken(r);
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
     } catch (e) {
@@ -112,11 +109,9 @@ class SessionController extends StateNotifier<SessionState> {
     try {
       await ApiClient.I.switchServer(server);
       AutoSwitch.I.noteManualPick();
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/login/totp',
-          options: Options(headers: {'x-login-flow': '1'}),
-          data: {'username': _username, 'password': _password, 'code': code});
-      await _exchangeToken(dio, r);
+      final r = await SessionApi.loginTotp(
+          username: _username, password: _password, code: code);
+      await _exchangeToken(r);
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), needTotp: true, trustIssue: _trustOf(e));
     } catch (e) {
@@ -139,13 +134,10 @@ class SessionController extends StateNotifier<SessionState> {
     state = const SessionState(checking: true);
     try {
       await ApiClient.I.switchServer(server);
-      final dio = await ApiClient.I.dio();
-      final r = await dio.post('/api/pair/claim',
-          options: Options(headers: {'x-login-flow': '1'}),
-          data: {'code': code.trim(), 'name': await Prefs.deviceName()});
+      final r = await SessionApi.pairClaim(
+          code: code, deviceName: await Prefs.deviceName());
       await SecureStore.saveToken(r.data['token'] as String);
-      final me = await dio.get('/api/auth/me',
-          options: Options(headers: {'x-login-flow': '1'}));
+      final me = await SessionApi.me(loginFlow: true);
       final name = me.data['username'] as String?;
       await Prefs.setUsername(name ?? '');
       state = SessionState(
@@ -164,17 +156,15 @@ class SessionController extends StateNotifier<SessionState> {
   }
 
   /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）
-  Future<void> _exchangeToken(Dio dio, Response r) async {
+  Future<void> _exchangeToken(Response r) async {
     try {
       final cookie = cookieHeaderFrom(r.headers['set-cookie']);
       final deviceName = await Prefs.deviceName();
-      final tr = await dio.post('/api/auth/token',
-          options: Options(headers: {'Cookie': cookie, 'x-login-flow': '1'}),
-          data: {'name': deviceName});
+      final tr = await SessionApi.exchangeDeviceToken(
+          cookieHeader: cookie, deviceName: deviceName);
       await SecureStore.saveToken(tr.data['token'] as String);
 
-      final me = await dio.get('/api/auth/me',
-          options: Options(headers: {'x-login-flow': '1'}));
+      final me = await SessionApi.me(loginFlow: true);
       final name = me.data['username'] as String?;
       await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
       state = SessionState(
@@ -193,9 +183,7 @@ class SessionController extends StateNotifier<SessionState> {
 
   /// 资料更新（v0.17）：改昵称后原地刷新状态，免重新拉 /me
   Future<void> updateProfile(String nickname) async {
-    final dio = await ApiClient.I.dio();
-    final r = await dio.patch('/api/auth/profile',
-        data: {'nickname': nickname});
+    final r = await SessionApi.updateProfile(nickname: nickname);
     final nick = (r.data['nickname'] as String?) ?? '';
     state = SessionState(
         loggedIn: state.loggedIn,
@@ -207,10 +195,9 @@ class SessionController extends StateNotifier<SessionState> {
 
   /// 头像上传后重取 /me：同步 avatarPath（昵称/角色一起以服务端为准）
   Future<void> refreshFromMe() async {
-    final dio = await ApiClient.I.dio();
     // 不带 x-login-flow（review P3）：token 失效就该走正常 401 登出，
     // 别让陈旧 Token 的 /me 静默失败
-    final me = await dio.get('/api/auth/me');
+    final me = await SessionApi.me();
     state = SessionState(
         loggedIn: state.loggedIn,
         username: me.data['username'] as String?,

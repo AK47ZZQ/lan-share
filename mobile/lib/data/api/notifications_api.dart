@@ -56,6 +56,13 @@ class NotificationsApi {
 
   static Future<Dio> _dio() => ApiClient.I.dio();
 
+  /// 仅未读数（home 铃铛徽标/inbox_poll 用；list 的轻量形态）
+  static Future<int> unreadCount() async {
+    final dio = await ApiClient.I.dio();
+    final r = await dio.get('/api/notifications');
+    return (r.data['unread'] as num?)?.toInt() ?? 0;
+  }
+
   /// 通知列表 + 未读数（items/unread 同包返回）
   static Future<({List<NotificationItem> items, int unread})> list() async {
     final dio = await _dio();

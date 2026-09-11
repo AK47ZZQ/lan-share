@@ -14,6 +14,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
+import '../data/api/files_api.dart';
+import '../data/api/home_api.dart';
 import '../data/api/upload_client.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
@@ -35,10 +37,6 @@ class _TrustAbort implements Exception {
 
 bool _isTrustError(DioException e) =>
     e.error is TrustRequiredError || e.error is HandshakeException;
-
-/// 路径逐段 URL 编码（/api/files/{path} 的中文/空格段）
-String _encSegs(String p) =>
-    p.split('/').map(Uri.encodeComponent).join('/');
 
 class _DigestSink implements Sink<Digest> {
   Digest? value;
@@ -194,8 +192,8 @@ class BackupEngine {
       // 场景5：空间预检——待备总量超过服务端剩余空间时整轮跳过（比传到
       // 一半失败友好），round JSON reason=insufficient_space，设置页可见
       try {
-        final disk = await dio.get('/api/disk');
-        final free = (disk.data['free_bytes'] as num?)?.toInt() ?? 0;
+        final disk = await HomeApi.disk();
+        final free = disk.free;
         if (free > 0 && pendingBytes > free) {
           return await finish({
             'status': 'skip',
@@ -224,8 +222,7 @@ class BackupEngine {
             final fromDir = backupDestDir(
                 username: username, kind: kind, bucket: from);
             final newName = safeBucketName(to);
-            await dio.post('/api/rename',
-                data: {'path': fromDir, 'new_name': newName});
+            await FilesApi.rename(fromDir, newName);
             final newDir = backupDestDir(username: username, kind: kind, bucket: to);
             await ledger.applyBucketRename(kind, from, to, '$fromDir/', '$newDir/');
             pending = pending
@@ -246,9 +243,7 @@ class BackupEngine {
           final top = kindEntry.key == 'video' ? '视频' : '照片';
           List items = const [];
           try {
-            final r = await dio.get(
-                '/api/files/${_encSegs('$top/$username')}');
-            items = (r.data['items'] as List? ?? const [])
+            items = (await FilesApi.listDir('$top/$username'))
                 .where((e) => (e as Map)['is_dir'] == true)
                 .toList();
           } catch (_) {

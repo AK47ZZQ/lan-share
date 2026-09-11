@@ -10,6 +10,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api/api_client.dart';
+import 'api/appver_api.dart';
 
 class UpdateInfo {
   final String version;
@@ -53,8 +54,7 @@ class UpdateService {
   /// 服务端最新版本；服务端未配置时返回 null
   static Future<UpdateInfo?> check() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/app/latest');
+      final r = await AppverApi.latest();
       return UpdateInfo.fromJson(Map<String, dynamic>.from(r.data as Map));
     } on DioException catch (e) {
       if (e.response?.statusCode == 404) return null;
@@ -65,8 +65,7 @@ class UpdateService {
   /// 更新历史（新版本在前）；未配置/请求失败返回空列表（UI 隐藏栏目）
   static Future<List<UpdateHistoryItem>> history() async {
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/app/history');
+      final r = await AppverApi.history();
       final items = (r.data['items'] as List? ?? const [])
           .map((e) =>
               UpdateHistoryItem.fromJson(Map<String, dynamic>.from(e as Map)))

@@ -5,6 +5,7 @@
 import 'package:dio/dio.dart';
 
 import '../activity.dart';
+import 'notifications_api.dart';
 import 'api_client.dart';
 
 class HomeApi {
@@ -38,12 +39,8 @@ class HomeApi {
     return ActivityItem.listFrom(r.data);
   }
 
-  /// 站内通知未读数（铃铛徽标用，0.8.0）
-  static Future<int> notifUnread() async {
-    final dio = await _dio();
-    final r = await dio.get('/api/notifications');
-    return (r.data['unread'] as num?)?.toInt() ?? 0;
-  }
+  /// 站内通知未读数（铃铛徽标用，0.8.0；B8 收敛为 notifications 单出口委托）
+  static Future<int> notifUnread() => NotificationsApi.unreadCount();
 
   /// 存储详情（storage_detail_page，v0.15）：磁盘总况 + admin 分目录构成 /
   /// 成员私人空间与配额。字段随角色变化较多，返回原始 Map 由页面按需取

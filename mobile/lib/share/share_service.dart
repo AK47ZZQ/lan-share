@@ -2,7 +2,7 @@
 // （创建/撤销/复制链接），端点全部复用现有服务端契约，无后端改动。
 import 'package:dio/dio.dart';
 
-import '../data/api/api_client.dart';
+import '../data/api/share_api.dart';
 import '../data/local/prefs.dart';
 
 class ShareItem {
@@ -54,8 +54,7 @@ class ShareItem {
 class ShareService {
   /// 我的分享列表（GET /api/shares 返回 {token: {...}}）
   static Future<List<ShareItem>> list() async {
-    final dio = await ApiClient.I.dio();
-    final r = await dio.get('/api/shares');
+    final r = await ShareApi.list();
     final m = r.data as Map;
     return m.entries
         .map((e) => ShareItem.fromJson(
@@ -72,37 +71,24 @@ class ShareService {
     int? maxDownloads,
     String? target,
   }) async {
-    final dio = await ApiClient.I.dio();
-    final r = await dio.post('/api/share', data: FormData.fromMap({
-      'path': path,
-      'expires_hours': expiresHours,
-      if (password != null && password.isNotEmpty) 'password': password,
-      'max_downloads': ?maxDownloads,
-      if (target != null && target.isNotEmpty) 'target': target,
-    }));
+    final r = await ShareApi.create(
+        path: path, expiresHours: expiresHours, password: password,
+        maxDownloads: maxDownloads, target: target);
     return r.data['token'] as String;
   }
 
-  static Future<void> revoke(String token) async {
-    final dio = await ApiClient.I.dio();
-    await dio.delete('/api/shares/$token');
-  }
+  static Future<void> revoke(String token) => ShareApi.revoke(token);
 
   /// 编辑分享（0.6.0 / PATCH /api/shares/{token}）：有效期从现在重计，
   /// 下载上限可改。传 null 的字段不动。
   static Future<void> edit(String token,
-      {int? expiresHours, int? maxDownloads}) async {
-    final dio = await ApiClient.I.dio();
-    await dio.patch('/api/shares/$token', data: {
-      'expires_hours': ?expiresHours,
-      'max_downloads': ?maxDownloads,
-    });
-  }
+          {int? expiresHours, int? maxDownloads}) =>
+      ShareApi.edit(token, expiresHours: expiresHours,
+          maxDownloads: maxDownloads);
 
   /// 在用成员名单（定向分享收件人候选，GET /api/members）
   static Future<List<String>> members() async {
-    final dio = await ApiClient.I.dio();
-    final r = await dio.get('/api/members');
+    final r = await ShareApi.members();
     return (r.data as List)
         .map((e) => (e as Map)['username'] as String)
         .toList();

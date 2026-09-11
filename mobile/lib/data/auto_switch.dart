@@ -310,6 +310,8 @@ class AutoSwitch {
       return null;
     }
     try {
+      // B8 白名单：探测候选地址必须自建 Dio 实例直打（此时还没选定主地址，
+      // 不经 ApiClient——那是当前可用通道的封装）。有意保留裸调用。
       final r = await dio.get('$url/api/app/entries');
       if (r.statusCode != 200 || r.data is! Map) return null;
       final j = Map<String, dynamic>.from(r.data as Map);

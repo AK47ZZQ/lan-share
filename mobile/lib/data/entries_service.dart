@@ -61,6 +61,7 @@ class EntriesService {
         return hc;
       });
     try {
+      // B8 白名单：同 auto_switch——候选入口探测自建实例直打，有意保留。
       final r = await dio.get('$base/api/app/entries');
       if (r.statusCode != 200 || r.data is! Map) return null;
       return AppEntries.fromJson(Map<String, dynamic>.from(r.data as Map));

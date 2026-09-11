@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../api/api_client.dart';
+import '../api/notifications_api.dart';
 import 'notify.dart';
 
 class InboxPoll {
@@ -81,19 +82,12 @@ class InboxPoll {
     if (_busy) return;
     _busy = true;
     try {
-      final dio = await ApiClient.I.dio();
-      final r = await dio.get('/api/notifications');
-      final unread = (r.data['unread'] as num?)?.toInt() ?? 0;
-      if (_lastUnread >= 0 && unread > _lastUnread) {
-        final items = (r.data['items'] as List?) ?? const [];
-        if (items.isNotEmpty) {
-          final n = items.first as Map<String, dynamic>;
-          await TransferNotifier.I.inbox(
-              title: (n['title'] as String?) ?? 'LAN Share',
-              body: (n['body'] as String?) ?? '');
-        }
+      final box = await NotificationsApi.list();
+      if (_lastUnread >= 0 && box.unread > _lastUnread && box.items.isNotEmpty) {
+        final n = box.items.first;
+        await TransferNotifier.I.inbox(title: n.title, body: n.body);
       }
-      _lastUnread = unread;
+      _lastUnread = box.unread;
     } catch (_) {
       // 未登录/网络差：保持上次基线，下轮再试
     } finally {
