@@ -165,6 +165,12 @@ _PG_SCHEMA = """
         created_by TEXT NOT NULL DEFAULT '',
         created_at DOUBLE PRECISION NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS note_search(
+        path TEXT PRIMARY KEY,
+        content_lower TEXT NOT NULL,
+        mtime_ns BIGINT NOT NULL,
+        size BIGINT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
 """
@@ -423,6 +429,12 @@ def _migrate_v3():
                 body TEXT,
                 created_by TEXT NOT NULL DEFAULT '',
                 created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS note_search(
+                path TEXT PRIMARY KEY,
+                content_lower TEXT NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                size INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
             CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);

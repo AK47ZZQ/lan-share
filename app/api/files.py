@@ -26,6 +26,7 @@ from app.filetools import (clean_filename, dir_tree, file_dict, human_size,
 from app.spaces import (cross_space_guard, enforce_quota, is_own_private_root,
                         resolve, sync_grants_on_move, visible)
 from app.services import archive
+from app.services import note_index
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
 router = APIRouter()
@@ -351,15 +352,23 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
 
 @router.get("/api/search")
 def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user)):
+    # kind 字段（B4）：向后兼容扩展——存量消费方（App home_api.search / Web
+    # HomeView）不读它，零改动；"file"=文件名命中，"note"=笔记正文全文命中
+    # （附 snippet 片段）。文件名命中语义原样保留。
     results = []
     for f in SHARE_ROOT.rglob("*"):
         rel_parts = f.relative_to(SHARE_ROOT).parts
         if not visible(_user, rel_parts):
             continue
         if f.is_file() and q.lower() in f.name.lower():
-            results.append(file_dict(f))
+            d = file_dict(f)
+            d["kind"] = "file"
+            results.append(d)
             if len(results) >= 50:
                 break
+    if len(results) < 50:
+        for d in note_index.search_notes(_user, q, limit=50 - len(results)):
+            results.append(d)
     return results
 
 
