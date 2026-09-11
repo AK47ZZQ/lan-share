@@ -119,3 +119,56 @@ async def _scenario(port: int):
         async with c.stream("GET", "/api/events") as r:
             assert r.status_code == 200
             assert "text/event-stream" in r.headers["content-type"]
+
+
+def test_sse_heartbeat_frames_arrive(client):
+    """心跳注释行在真实服务器下按 15s 周期到达（B3 边界：代理存活保活）。
+
+    代价：单测拉长 ~32s（等两帧）。只在显式跑本文件/全量时付出；
+    失败形态=代理/中间层缓冲吞掉注释行，恰是需要抓的回归。
+    """
+    import asyncio
+    base_port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=base_port,
+                                           log_level="warning"))
+    th = threading.Thread(target=server.run, daemon=True)
+    th.start()
+    deadline = time.time() + 15
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    assert server.started
+    try:
+        asyncio.run(_heartbeat_scenario(base_port))
+    finally:
+        server.should_exit = True
+        th.join(timeout=10)
+
+
+async def _heartbeat_scenario(port: int):
+    base = f"http://127.0.0.1:{port}"
+    cookies = httpx.Cookies()
+    async with httpx.AsyncClient(base_url=base) as login:
+        r = await login.post("/api/login",
+                             json={"username": ADMIN_USER, "password": ADMIN_PASS})
+        assert r.status_code == 200
+        cookies.update(login.cookies)
+
+    timeout = httpx.Timeout(connect=10, read=40, write=10, pool=10)
+    client = httpx.AsyncClient(base_url=base, cookies=cookies, timeout=timeout)
+    req = client.build_request("GET", "/api/events")
+    resp = await client.send(req, stream=True)
+    try:
+        assert resp.status_code == 200
+        t0 = time.monotonic()
+        pings = []
+        async for line in resp.aiter_lines():
+            if line.startswith(": ping"):
+                pings.append(time.monotonic() - t0)
+                if len(pings) >= 2:
+                    break
+        assert len(pings) == 2
+        gap = pings[1] - pings[0]
+        assert 13 <= gap <= 20, f"心跳间隔异常 {gap:.1f}s（期望 ~15s）"
+    finally:
+        await resp.aclose()
+        await client.aclose()

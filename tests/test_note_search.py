@@ -152,3 +152,28 @@ def test_refresh_index_caps_at_max_notes(client, monkeypatch):
         _write_note(f"private/{ADMIN_USER}/bulk/n{i}.md", f"bulk {i}")
     ni.refresh_index()
     assert seen_counts and seen_counts[0] <= ni.MAX_NOTES
+
+
+def test_refresh_index_scales_to_max_notes(client):
+    """规模压测：MAX_NOTES 篇笔记的增量索引一轮完成（家庭规模性能基线）。
+
+    在隔离的 pytest tmp 环境构造满额文件（SHARE_ROOT 由 conftest 钉到临时
+    目录，不触碰生产数据目录），断言耗时上限——超限说明 LIKE 全表扫策略
+    在目标规模失效，该换引擎而非默默变慢。
+    """
+    import time as _t
+    from app.services import note_index as ni
+    for i in range(ni.MAX_NOTES):
+        d = SHARE_ROOT / f"private/{ADMIN_USER}/bulk"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"n{i}.md").write_text(f"# 批量 {i}\n正文 {i} 的内容。", encoding="utf-8")
+    t0 = _t.perf_counter()
+    st = ni.refresh_index()
+    elapsed = _t.perf_counter() - t0
+    assert st["indexed"] == ni.MAX_NOTES
+    assert elapsed < 30, f"2000 篇索引耗时 {elapsed:.1f}s 超预算"
+    # 二轮全命中（已同步）：应远快于首轮（无写入，仅比对）
+    t1 = _t.perf_counter()
+    ni.refresh_index()
+    steady = _t.perf_counter() - t1
+    assert steady < elapsed, "稳态轮次应不慢于首轮"
