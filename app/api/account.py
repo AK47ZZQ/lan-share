@@ -13,6 +13,7 @@ from app.security import (audit, client_ip, hash_password, is_public_entry,
                           login_locked_remaining, record_login_fail,
                           require_user, verify_password)
 from app.services.accounts import clean_username, rename_user_everywhere
+from app.store import devices as devices_store
 from app.store import users as users_store
 from app.api.auth import set_session_cookie
 
@@ -52,7 +53,7 @@ async def change_password(request: Request, response: Response, body: PasswordBo
             users_store.set_password_hash(row["id"], new_hash)
             # 改密后吊销全部旧会话与设备 Token（与 admin 重置同语义）
             _db().execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
-            _db().execute("DELETE FROM device_tokens WHERE user_id=?", (row["id"],))
+            devices_store.delete_for_user(row["id"])
 
     await run_in_threadpool(_persist_password)
     audit("password_change", row["username"], ip=client_ip(request))

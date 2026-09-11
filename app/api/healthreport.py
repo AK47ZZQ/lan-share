@@ -20,8 +20,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from app.config import PROJECT_ROOT, SHARE_ROOT
-from app.db import _db
 from app.security import audit, client_ip, require_admin
+from app.store import devices as devices_store
+from app.store import photos as photos_store
+from app.store import shares as shares_store
 from app.store import users as users_store
 from app.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
                                 NOTIFY_WEBHOOK_URL, get_setting, set_setting)
@@ -96,12 +98,12 @@ def _probe_public(hostport: str) -> bool:
 def gather_health(probe_public: bool = False) -> dict:
     du = shutil.disk_usage(str(SHARE_ROOT))
     used_pct = round(du.used / du.total * 100, 1)
-    counts = {}
+    counts: dict = {}
     try:
         _counters = (("users", users_store.count),
-                     ("photos", lambda: _db().execute("SELECT COUNT(*) c FROM photos").fetchone()["c"]),
-                     ("shares", lambda: _db().execute("SELECT COUNT(*) c FROM shares").fetchone()["c"]),
-                     ("devices", lambda: _db().execute("SELECT COUNT(*) c FROM device_tokens").fetchone()["c"]))
+                     ("photos", photos_store.count),
+                     ("shares", shares_store.count),
+                     ("devices", devices_store.count))
         for name, fn in _counters:
             try:
                 counts[name] = fn()

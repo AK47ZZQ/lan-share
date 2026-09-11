@@ -18,6 +18,7 @@ from app.db import _db, _db_lock
 from app.roles import ADMIN
 from app import settings
 from app.settings import get_setting
+from app.store import devices as devices_store
 from app.store import users
 
 # 当前请求的登录用户名：中间件注入，audit() 自动带上（公开入口为空串）
@@ -114,14 +115,10 @@ def get_bearer_user(request: Request) -> Optional[sqlite3.Row]:
     now = time.time()
     if now > row["expires_at"]:
         return None
-    with _db_lock:
-        if row["expires_at"] < now + DEVICE_TOKEN_TTL - SESSION_RENEW_AFTER:
-            _db().execute("UPDATE device_tokens SET expires_at=? WHERE id=?",
-                          (now + DEVICE_TOKEN_TTL, row["device_id"]))
-        if not row["last_seen"] or now - row["last_seen"] > 3600:
-            _db().execute("UPDATE device_tokens SET last_seen=? WHERE id=?",
-                          (now, row["device_id"]))
-        _db().commit()
+    if row["expires_at"] < now + DEVICE_TOKEN_TTL - SESSION_RENEW_AFTER:
+        devices_store.renew(row["device_id"], now + DEVICE_TOKEN_TTL)
+    if not row["last_seen"] or now - row["last_seen"] > 3600:
+        devices_store.touch_last_seen(row["device_id"], now)
     return row
 
 

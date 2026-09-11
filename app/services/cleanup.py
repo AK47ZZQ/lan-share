@@ -16,7 +16,10 @@ from typing import Callable
 
 from app.config import CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS
 from app.db import _db, _db_lock
+from app.store import devices as devices_store
 from app.store import notifications as notifications_store
+from app.store import shares as shares_store
+from app.store import trash as trash_store
 
 # (名称, 清理函数) 注册表：各域模块在自身被导入时注册
 _sweeps: list[tuple[str, Callable[[], None]]] = []
@@ -119,16 +122,14 @@ def _cleanup_trash():
             shutil.rmtree(f, ignore_errors=True)
         else:
             f.unlink(missing_ok=True)
-    with _db_lock:
-        _db().execute("DELETE FROM trash WHERE deleted_at < ?", (cutoff,))
-        _db().commit()
+    trash_store.delete_before(cutoff)
 
 
 def _cleanup_db():
     now = time.time()
     with _db_lock:
         _db().execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
-        _db().execute("DELETE FROM device_tokens WHERE expires_at < ?", (now,))
-        _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
         _db().commit()
+    devices_store.delete_expired(now)
+    shares_store.purge_expired(now)
     notifications_store.delete_read_before(now - 30 * 86400)

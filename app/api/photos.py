@@ -16,11 +16,11 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.config import SHARE_ROOT
-from app.db import _db, _db_lock
 from app.roles import ADMIN, MEMBER
 from app.security import preview_user, require_user
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support, to_rel
 from app.spaces import resolve, visible
+from app.store import photos as photos_store
 from app.store import users as users_store
 from app.services.albums import load_albums as _load_albums
 
@@ -97,8 +97,7 @@ def _probe_video_durations(cap: int = 20):
     codec 或尺寸缺失的行同样纳入补扫（探到啥刷啥，互不阻塞）；尺寸用 PIL 只
     读文件头，约 1-5ms/张，视频行不探尺寸。两段式更新，PG 友好：CASE 里悬空
     NULL 参数会让 psycopg 报 IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
-    rows = _db().execute("SELECT path, duration, codec, width FROM photos "
-                         "WHERE duration IS NULL OR codec IS NULL OR width IS NULL").fetchall()
+    rows = photos_store.list_probe_missing()
     if not rows:
         return
     todo, others = [], []
@@ -107,37 +106,26 @@ def _probe_video_durations(cap: int = 20):
             todo.append(r["path"])
         elif r["duration"] is None:
             others.append(r["path"])   # codec/尺寸 IS NULL 的图片行不占视频补扫配额
-    updates = []
+    probed = []
     for rel in todo[:cap]:
         f = SHARE_ROOT / rel
         if not f.is_file():
             continue   # 留 NULL：下次全量扫描的 gone 清理会删行
         dur, taken, codec = _ffprobe_meta(f)
         if dur is not None or codec:
-            updates.append((dur, taken, codec, None, None, rel))
-    if not others and not updates:
+            probed.append((dur, taken, codec, rel))
+    if not others and not probed:
         return
-    with _db_lock:
-        if others:
-            _db().executemany("UPDATE photos SET duration=0 WHERE path=?",
-                              [(p,) for p in others])
-        if updates:
-            _db().executemany("UPDATE photos SET duration=?, codec=?, width=?, height=? WHERE path=?",
-                              [(d, c, w, h, p) for (d, t, c, w, h, p) in updates])
-            taken_updates = [(t, p) for (d, t, c, w, h, p) in updates if t]
-            if taken_updates:
-                _db().executemany("UPDATE photos SET taken_at=? WHERE path=?",
-                                  taken_updates)
-        _db().commit()
+    photos_store.apply_probe_updates(
+        others, [(d, c, None, None, p) for (d, t, c, p) in probed])
+    photos_store.apply_probe_taken_at([(t, p) for (d, t, c, p) in probed if t])
 
 
 def _probe_image_sizes(cap: int = 200):
     """补扫图片尺寸（瀑布流需要真实宽高比；未知的格子 App 回退方格）。
     PIL 只读文件头不解码像素，单张约 1-5ms；每轮 200 张，几千张存量图
     十几分钟内自然收敛，不与视频补扫抢配额。"""
-    rows = _db().execute(
-        "SELECT path FROM photos WHERE width IS NULL AND duration=0 LIMIT ?",
-        (cap,)).fetchall()
+    rows = photos_store.list_missing_sizes(cap)
     if not rows:
         return
     from PIL import Image
@@ -154,15 +142,7 @@ def _probe_image_sizes(cap: int = 200):
         except Exception:
             # 打不开的图：写 0x0 占位，避免每轮重扫
             updates.append((0, 0, r["path"]))
-    if not updates and not gone:
-        return
-    with _db_lock:
-        if updates:
-            _db().executemany("UPDATE photos SET width=?, height=? WHERE path=?",
-                              updates)
-        if gone:
-            _db().executemany("DELETE FROM photos WHERE path=?", gone)
-        _db().commit()
+    photos_store.apply_size_scan(updates, gone)
 
 
 def _photo_taken_at(f: Path) -> str:
@@ -209,7 +189,7 @@ def _scan_photos(force: bool = False):
         # 一次性载入现有 photos 索引做内存比对（循环里逐条 SELECT 是 N+1，
         # 几万文件的库每轮扫描就是几万次往返）；gone 的差集也直接由它推导
         known = {r["path"]: (r["mtime_ns"], r["size"])
-                 for r in _db().execute("SELECT path, mtime_ns, size FROM photos").fetchall()}
+                 for r in photos_store.load_index()}
         for f in SHARE_ROOT.rglob("*"):
             rel_parts = f.relative_to(SHARE_ROOT).parts
             if any(p.startswith(".") for p in rel_parts):
@@ -229,17 +209,7 @@ def _scan_photos(force: bool = False):
             updates.append((rel, _photo_taken_at(f), stat.st_mtime_ns, stat.st_size,
                             None if f.suffix.lower() in VID_EXTS else 0,
                             time.time()))
-        with _db_lock:
-            if updates:
-                _db().executemany(
-                    "INSERT INTO photos(path, taken_at, mtime_ns, size, duration, added_at) VALUES(?,?,?,?,?,?) "
-                    "ON CONFLICT(path) DO UPDATE SET taken_at=excluded.taken_at, "
-                    "mtime_ns=excluded.mtime_ns, size=excluded.size, duration=excluded.duration", updates)
-                _db().execute("DELETE FROM photos WHERE mtime_ns=0")
-            gone = [p for p in known if p not in seen]
-            if gone:
-                _db().executemany("DELETE FROM photos WHERE path=?", [(g,) for g in gone])
-            _db().commit()
+        photos_store.apply_scan(updates, [p for p in known if p not in seen])
         _last_photo_scan = time.time()
         _last_force_scan = time.time()
     # 补扫放扫描锁外：ffprobe 批量最坏 20×15s，不占住扫描锁拖慢时间线刷新
@@ -320,13 +290,8 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     # added_at 为空的存量行沉底
     order = ("COALESCE(added_at, 0) DESC, path"
              if sort == "added" else "taken_at DESC, path")
-    if pushdown:
-        all_rows = _db().execute(
-            f"SELECT path, taken_at, duration, codec, width, height FROM photos "
-            f"WHERE {cond} ORDER BY {order}", args).fetchall()
-    else:
-        all_rows = _db().execute(
-            f"SELECT path, taken_at, duration, codec, width, height FROM photos ORDER BY {order}").fetchall()
+    all_rows = photos_store.list_for_gallery(
+        cond if pushdown else "", args, order)
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))] \
         if not pushdown else list(all_rows)
     if month:
@@ -380,7 +345,7 @@ def photo_facets(request: Request, _user=Depends(require_user)):
     user = preview_user(request, _user)   # admin 成员视角预览
     _scan_photos()
     users = _known_users()
-    rows = _db().execute("SELECT path, taken_at FROM photos ORDER BY taken_at DESC").fetchall()
+    rows = photos_store.list_paths_by_taken()
     months: dict[str, int] = {}
     uploaders: dict[str, int] = {}
     for r in rows:

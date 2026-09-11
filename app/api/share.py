@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.config import LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILS, TICKET_TTL
-from app.db import _db, _db_lock
+from app.db import _db
 from app.roles import ADMIN
 from app.security import (audit, client_ip, get_bearer_user, get_session_user,
                           preview_user, require_user)
@@ -27,6 +27,7 @@ from app.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
 from app.services import cleanup
 from app.spaces import resolve
+from app.store import shares as shares_store
 from app.store import users as users_store
 from app.api.notify import insert_notification, push_webhook
 
@@ -119,14 +120,9 @@ class _ShareRow:
 
 def _insert_share(r: _ShareRow) -> None:
     """落一条分享（同步；经 run_in_threadpool 调用，见 P2-2）。"""
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO shares(token, path, name, size, created_at, expires_at, "
-            "password_hash, max_downloads, owner_id, password_plain, target_user_id) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (r.token, r.rel, r.name, r.size, r.created_at, r.expires_at,
-             r.pwd_hash, r.max_downloads, r.owner_id, None, r.target_id))
-        _db().commit()
+    shares_store.create(r.token, r.rel, r.name, r.size, r.created_at,
+                        r.expires_at, r.pwd_hash, r.max_downloads,
+                        r.owner_id, r.target_id)
 
 
 def _target_guard(s: sqlite3.Row, request: Request) -> bool:
@@ -143,7 +139,7 @@ def _target_guard(s: sqlite3.Row, request: Request) -> bool:
 
 
 def _get_active_share(token: str) -> sqlite3.Row:
-    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    s = shares_store.get_by_token(token)
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
     if time.time() > s["expires_at"]:
@@ -241,15 +237,11 @@ def share_prepare(request: Request, token: str, body: SharePrepareBody):
     tkt = secrets.token_urlsafe(24)
     # 下载计数移到发票时原子递增（R1-P2-4）：此前计数在 dl 完成后才发生，
     # 并发 prepare N 张票（此刻 downloads=0）即可把"限 1 次下载"变 N 次完整下载
-    with _db_lock:
-        cur = _db().execute(
-            "UPDATE shares SET downloads=downloads+1 WHERE token=? "
-            "AND (max_downloads IS NULL OR downloads < max_downloads)", (token,))
-        # commit 必须在 raise 之前：UPDATE 命中 0 行也已开启事务，锁内 raise
-        # 会把连接留在持有 RESERVED 锁的未决事务里，锁死后续所有写操作
-        _db().commit()
-        if not cur.rowcount:
-            raise HTTPException(status_code=410, detail="下载次数已达上限")
+    # consume_download 内部：UPDATE 命中即提交（commit 必须在 raise 之前：
+    # UPDATE 命中 0 行也已开启事务，锁内 raise 会把连接留在持有 RESERVED 锁
+    # 的未决事务里，锁死后续所有写操作）
+    if not shares_store.consume_download(token):
+        raise HTTPException(status_code=410, detail="下载次数已达上限")
     with _tickets_lock:
         # 顺带清理过期票据
         now = time.time()
@@ -300,7 +292,7 @@ async def share_download(request: Request, token: str, tkt: str):
 
 @router.get("/api/share/{token}/qr")
 def share_qr(token: str, request: Request, _user=Depends(require_user)):
-    if not _db().execute("SELECT 1 FROM shares WHERE token=?", (token,)).fetchone():
+    if not shares_store.exists(token):
         raise HTTPException(status_code=404, detail="Share not found")
     # host 优先取管理员配置的公网地址（R1-P3-5）：LAN 可注入 X-Forwarded-Proto
     # /Host 影响二维码指向；配置缺失时才回退请求头
@@ -317,12 +309,10 @@ def share_qr(token: str, request: Request, _user=Depends(require_user)):
 @router.get("/api/shares")
 def list_shares(request: Request, _user=Depends(require_user)):
     now = time.time()
-    with _db_lock:
-        _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
-        _db().commit()
+    shares_store.purge_expired(now)
     viewer = preview_user(request, _user)   # admin 成员视角预览
     is_admin = viewer["role"] == ADMIN
-    rows = _db().execute("SELECT * FROM shares ORDER BY created_at DESC").fetchall()
+    rows = shares_store.list_all()
     uid_map = users_store.id_to_username_map()
     active = {}
     for s in rows:
@@ -355,7 +345,7 @@ def list_shares(request: Request, _user=Depends(require_user)):
 @router.get("/api/shares/{token}/history")
 def share_history(token: str, _user=Depends(require_user)):
     """某分享的取件记录（下载成功 + 密码错误尝试）。仅创建者与 admin。"""
-    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    s = shares_store.get_by_token(token)
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
     # 无主（v2 遗留）分享归 admin 管；owner_id None 不再等同"人人可管"
@@ -371,15 +361,12 @@ def share_history(token: str, _user=Depends(require_user)):
 
 @router.delete("/api/shares/{token}")
 def revoke_share(request: Request, token: str, _user=Depends(require_user)):
-    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    s = shares_store.get_by_token(token)
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
     if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
         raise HTTPException(status_code=403, detail="Forbidden")
-    with _db_lock:
-        cur = _db().execute("DELETE FROM shares WHERE token=?", (token,))
-        _db().commit()
-    if cur.rowcount:
+    if shares_store.delete_by_token(token):
         audit("share_revoke", token, ip=client_ip(request))
         return {"ok": True}
     raise HTTPException(status_code=404, detail="Share not found")
@@ -394,7 +381,7 @@ class ShareEditBody(BaseModel):
 @router.patch("/api/shares/{token}")
 def edit_share(request: Request, token: str, body: ShareEditBody,
                _user=Depends(require_user)):
-    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    s = shares_store.get_by_token(token)
     if not s:
         raise HTTPException(status_code=404, detail="Share not found")
     if _user["role"] != ADMIN and (s["owner_id"] is None or s["owner_id"] != _user["user_id"]):
@@ -407,17 +394,13 @@ def edit_share(request: Request, token: str, body: ShareEditBody,
         raise HTTPException(status_code=400, detail="expires_hours must be 1-8760")
     if body.max_downloads is not None and body.max_downloads < 1:
         raise HTTPException(status_code=400, detail="max_downloads must be >= 1")
-    with _db_lock:
-        if body.expires_hours is not None:
-            _db().execute("UPDATE shares SET expires_at=? WHERE token=?",
-                          (time.time() + body.expires_hours * 3600, token))
-        if body.max_downloads is not None:
-            _db().execute("UPDATE shares SET max_downloads=? WHERE token=?",
-                          (body.max_downloads, token))
-        _db().commit()
+    if body.expires_hours is not None:
+        shares_store.renew(token, time.time() + body.expires_hours * 3600)
+    if body.max_downloads is not None:
+        shares_store.set_max_downloads(token, body.max_downloads)
     audit("share_edit", token,
           f"exp={body.expires_hours}h max={body.max_downloads}", client_ip(request))
-    s = _db().execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+    s = shares_store.get_by_token(token)
     return {"ok": True,
             "expires_in": f"{max(0, int((s['expires_at'] - time.time()) / 3600))}h",
             "max_downloads": s["max_downloads"]}

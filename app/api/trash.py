@@ -12,9 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from app.config import SHARE_ROOT, TRASH_DAYS
-from app.db import _db, _db_lock
 from app.roles import ADMIN
 from app.security import audit, client_ip, require_admin, require_user
+from app.store import trash as trash_store
 from app.filetools import human_size, to_rel
 from app.spaces import resolve, visible
 
@@ -27,27 +27,23 @@ _VPATH_RE = re.compile(r"^(shared|private):(.*)$", re.I)
 
 # ── 同步 DB 助手（11 号复审批次 3，P2-2）──────────────────────
 # 本模块路由都是 async（要 await 文件系统操作），而元数据库访问是同步的：
-# 直接在 async 里调 _db() 会在事件循环内做 PG 往返，单进程 uvicorn 下阻塞全体
+# 直接在 async 里调 DB 会在事件循环内做 PG 往返，单进程 uvicorn 下阻塞全体
 # 请求。统一抽成同步函数、由 run_in_threadpool 执行——与项目既有规范一致
 #（中间件与其它路由都这么做，此前这几处是漏网的）。
 def _select_all_trash():
-    return _db().execute("SELECT * FROM trash ORDER BY deleted_at DESC").fetchall()
+    return trash_store.list_all()
 
 
 def _select_trash(trash_id: int):
-    return _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
+    return trash_store.get(trash_id)
 
 
 def _drop_trash_row(trash_id: int) -> None:
-    with _db_lock:
-        _db().execute("DELETE FROM trash WHERE id=?", (trash_id,))
-        _db().commit()
+    trash_store.drop(trash_id)
 
 
 def _clear_trash() -> None:
-    with _db_lock:
-        _db().execute("DELETE FROM trash")
-        _db().commit()
+    trash_store.clear()
 
 
 def _trash_rel_parts(orig_path: str) -> list[str] | None:

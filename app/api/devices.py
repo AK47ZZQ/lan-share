@@ -14,9 +14,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import DEVICE_TOKEN_MAX, DEVICE_TOKEN_TTL
-from app.db import _db, _db_lock
+from app.db import _db_lock
 from app.security import (_sha, allow_rate, audit, client_ip, is_public_entry,
                           require_user)
+from app.store import devices as devices_store
 from app.store import users as users_store
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
@@ -50,41 +51,29 @@ def _issue_device_token(user_id: int, name: str) -> tuple[str, int]:
     """签发设备 Token 内核：同名轮换（重装/重复登录不产生僵尸设备）+ 上限
     校验 + 入库。/api/auth/token 与 /api/pair/claim 共用；明文仅在调用方
     响应中出现一次，库内只存 SHA256。"""
-    n = _db().execute("SELECT COUNT(*) AS c FROM device_tokens WHERE user_id=?",
-                      (user_id,)).fetchone()["c"]
-    if n >= DEVICE_TOKEN_MAX:
+    if devices_store.count_for_user(user_id) >= DEVICE_TOKEN_MAX:
         raise HTTPException(status_code=400,
                             detail=f"设备数已达上限（{DEVICE_TOKEN_MAX}），请先吊销不用的设备")
     token = secrets.token_urlsafe(32)
     now = time.time()
     # 轮换判定 + UPDATE/INSERT 必须整体在 _db_lock 内（SELECT-then-write 竞态面）
     with _db_lock:
-        existing = _db().execute(
-            "SELECT id FROM device_tokens WHERE user_id=? AND name=?",
-            (user_id, name)).fetchone()
-        if existing:
-            _db().execute(
-                "UPDATE device_tokens SET token_hash=?, created_at=?, last_seen=?, expires_at=? WHERE id=?",
-                (_sha(token), now, now, now + DEVICE_TOKEN_TTL, existing["id"]))
-            device_id = existing["id"]
+        existing = devices_store.find_id_by_name(user_id, name)
+        if existing is not None:
+            devices_store.rotate(existing, _sha(token), now, DEVICE_TOKEN_TTL)
+            device_id = existing
         else:
             try:
-                cur = _db().execute(
-                    "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
-                    "VALUES(?,?,?,?,?,?) RETURNING id",
-                    (user_id, name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
-                device_id = cur.fetchone()["id"]
+                device_id = devices_store.insert(user_id, name, _sha(token),
+                                                 now, DEVICE_TOKEN_TTL)
             except Exception:
                 # token_hash UNIQUE 极端碰撞：换一枚重试一次
                 # （裸 Exception：PG 生产库抛的是 psycopg 的唯一约束异常，
                 #   只捕 sqlite3.IntegrityError 在 PG 下会 500）
                 token = secrets.token_urlsafe(32)
-                cur = _db().execute(
-                    "INSERT INTO device_tokens(user_id, name, token_hash, created_at, last_seen, expires_at) "
-                    "VALUES(?,?,?,?,?,?) RETURNING id",
-                    (user_id, name, _sha(token), now, now, now + DEVICE_TOKEN_TTL))
-                device_id = cur.fetchone()["id"]
-        _db().commit()
+                device_id = devices_store.insert(user_id, name, _sha(token),
+                                                 now, DEVICE_TOKEN_TTL)
+        devices_store.commit_if_standalone()
     return token, device_id
 
 
@@ -93,9 +82,7 @@ def list_devices(request: Request, user=Depends(require_user)):
     """本账号的设备列表（他人不可见）。current 标记本次请求所用的 Bearer 设备。"""
     auth = request.headers.get("authorization", "")
     cur_hash = _sha(auth[7:].strip()) if auth.startswith("Bearer ") else None
-    rows = _db().execute(
-        "SELECT id, name, created_at, last_seen, token_hash FROM device_tokens "
-        "WHERE user_id=? ORDER BY id", (user["user_id"],)).fetchall()
+    rows = devices_store.list_for_user(user["user_id"])
     return {"devices": [{
         "id": r["id"], "name": r["name"],
         "created_at": r["created_at"], "last_seen": r["last_seen"],
@@ -106,13 +93,10 @@ def list_devices(request: Request, user=Depends(require_user)):
 @router.delete("/api/auth/devices/{device_id}")
 def revoke_device(device_id: int, request: Request, user=Depends(require_user)):
     """吊销本人设备（被吊销端下次请求即 401）。"""
-    row = _db().execute("SELECT * FROM device_tokens WHERE id=? AND user_id=?",
-                        (device_id, user["user_id"])).fetchone()
+    row = devices_store.get_for_user(device_id, user["user_id"])
     if not row:
         raise HTTPException(status_code=404, detail="设备不存在")
-    with _db_lock:
-        _db().execute("DELETE FROM device_tokens WHERE id=?", (device_id,))
-        _db().commit()
+    devices_store.delete(device_id)
     audit("device_revoke", row["name"], ip=client_ip(request))
     return {"ok": True}
 

@@ -17,9 +17,13 @@ from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
 from app.api.appver import DIST_DIR
-from app.db import _db, _db_lock
+from app.db import _db, _db_lock, transaction
 from app.security import COOKIE_NAME, _sha, audit, client_ip, require_admin
 from app.services import traffic
+from app.store import devices as devices_store
+from app.store import photos as photos_store
+from app.store import shares as shares_store
+from app.store import trash as trash_store
 from app.store import users as users_store
 
 router = APIRouter()
@@ -80,17 +84,16 @@ def admin_overview(_admin=Depends(require_admin)):
         users_active = sum(1 for r in _urows if r["is_active"])
         users_admin = sum(1 for r in _urows if r["role"] == "admin")
         users_guest = sum(1 for r in _urows if r["role"] == "guest")
-        photos_count = one("SELECT COUNT(*) AS v FROM photos")
-        photos_size = one("SELECT COALESCE(SUM(size), 0) AS v FROM photos")
-        shares_total = one("SELECT COUNT(*) AS v FROM shares")
-        shares_active = one("SELECT COUNT(*) AS v FROM shares WHERE expires_at > ?", (now,))
-        trash_count = one("SELECT COUNT(*) AS v FROM trash")
-        trash_size = one("SELECT COALESCE(SUM(size), 0) AS v FROM trash")
+        # 六表统计归各 store（AST 守卫同款纪律）；blobs/sessions 不在 store 化范围，保留 one()
+        photos_count, photos_size = photos_store.count_and_size()
+        _sh = shares_store.overview_stats(now)
+        shares_total, shares_active, downloads_total = (
+            _sh["total"], _sh["active"], _sh["downloads"])
+        trash_count, trash_size = trash_store.overview_stats()
         blobs_count = one("SELECT COUNT(*) AS v FROM blobs")
         blobs_size = one("SELECT COALESCE(SUM(size), 0) AS v FROM blobs")
         sessions_active = one("SELECT COUNT(*) AS v FROM sessions WHERE expires_at > ?", (now,))
-        devices_active = one("SELECT COUNT(*) AS v FROM device_tokens WHERE expires_at > ?", (now,))
-        downloads_total = one("SELECT COALESCE(SUM(downloads), 0) AS v FROM shares")
+        devices_active = devices_store.count_active(now)
 
     import shutil
     du = shutil.disk_usage(str(SHARE_ROOT))
@@ -193,9 +196,7 @@ def admin_revoke_session(token_hash: str, request: Request,
 @router.get("/api/admin/devices")
 def admin_devices(_admin=Depends(require_admin)):
     """活跃 App 设备（device_tokens）。"""
-    rows = _db().execute(
-        "SELECT id, user_id, name, created_at, last_seen, expires_at FROM device_tokens "
-        "WHERE expires_at > ? ORDER BY created_at DESC", (time.time(),)).fetchall()
+    rows = devices_store.list_active(time.time())
     items = []
     for r in rows:
         d = dict(r)
@@ -207,10 +208,7 @@ def admin_devices(_admin=Depends(require_admin)):
 @router.delete("/api/admin/devices/{device_id}")
 def admin_revoke_device(device_id: int, request: Request,
                         _admin=Depends(require_admin)):
-    with _db_lock:
-        cur = _db().execute("DELETE FROM device_tokens WHERE id = ?", (device_id,))
-        _db().commit()
-    if cur.rowcount == 0:
+    if devices_store.delete(device_id) == 0:
         raise HTTPException(status_code=404, detail="设备不存在或已过期")
     audit("admin.device.revoke", target=str(device_id), ip=client_ip(request))
     return {"ok": True}
@@ -235,14 +233,13 @@ def admin_kick_user(uid: int, request: Request, body: KickBody | None = None,
     username = users_store.get_username(uid)
     if username is None:
         raise HTTPException(status_code=404, detail="成员不存在")
-    with _db_lock:
+    with _db_lock, transaction():
         cs = (_db().execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
               if scope in ("all", "web") else None)
-        cd = (_db().execute("DELETE FROM device_tokens WHERE user_id = ?", (uid,))
+        cd = (devices_store.delete_for_user(uid)
               if scope in ("all", "app") else None)
-        _db().commit()
     counts = {"sessions": cs.rowcount if cs is not None else 0,
-              "devices": cd.rowcount if cd is not None else 0}
+              "devices": cd if cd is not None else 0}
     audit("admin.kick", target=username,
           detail=f"scope={scope} web={counts['sessions']} app={counts['devices']}",
           ip=client_ip(request))

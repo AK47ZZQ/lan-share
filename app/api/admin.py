@@ -23,6 +23,8 @@ from app.api.notify import (assert_public_webhook_url, get_webhook_url, push_web
 from app.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
                           PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT,
                           get_setting, set_setting)
+from app.store import devices as devices_store
+from app.store import shares as shares_store
 from app.store import users as users_store
 from app.services.accounts import (clean_username as _clean_username,
                                    rename_user_everywhere)
@@ -107,7 +109,7 @@ def admin_patch_user(uid: int, body: UserPatchBody, request: Request,
                 # 停用即吊销全部登录态：Cookie 会话 + App 设备 Token
                 #（否则重新启用后旧设备 Token 全部复活）
                 _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
-                _db().execute("DELETE FROM device_tokens WHERE user_id=?", (uid,))
+                devices_store.delete_for_user(uid)
             users_store.set_active(uid, body.is_active)
         if body.quota_bytes is not None:
             users_store.set_quota(uid, body.quota_bytes or None)
@@ -154,7 +156,7 @@ def admin_set_password(uid: int, body: AdminCredBody, request: Request,
     with _db_lock, transaction():
         users_store.reset_password_full(uid, new_hash)
         _db().execute("DELETE FROM sessions WHERE user_id=?", (uid,))
-        _db().execute("DELETE FROM device_tokens WHERE user_id=?", (uid,))
+        devices_store.delete_for_user(uid)
     audit("admin_reset_password", row["username"], ip=client_ip(request))
     return {"ok": True}
 
@@ -590,12 +592,8 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
                 z.write(f, to_rel(f))
                 file_count += 1
                 file_bytes += f.stat().st_size
-        shares = _db().execute(
-            "SELECT token, path, name, created_at, expires_at FROM shares "
-            "WHERE owner_id=?", (row["id"],)).fetchall()
-        devices = _db().execute(
-            "SELECT name, created_at, last_seen FROM device_tokens WHERE user_id=?",
-            (row["id"],)).fetchall()
+        shares = shares_store.list_brief_by_owner(row["id"])
+        devices = devices_store.list_brief_by_user(row["id"])
         manifest = {
             "kind": "lan-share-member-export",
             "generated_at": datetime.now().isoformat(),
