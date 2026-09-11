@@ -16,6 +16,7 @@ from typing import Callable
 
 from app.config import CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS
 from app.db import _db, _db_lock
+from app.store import notifications as notifications_store
 
 # (名称, 清理函数) 注册表：各域模块在自身被导入时注册
 _sweeps: list[tuple[str, Callable[[], None]]] = []
@@ -129,6 +130,5 @@ def _cleanup_db():
         _db().execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
         _db().execute("DELETE FROM device_tokens WHERE expires_at < ?", (now,))
         _db().execute("DELETE FROM shares WHERE expires_at < ?", (now,))
-        _db().execute("DELETE FROM notifications WHERE read_at IS NOT NULL AND read_at < ?",
-                      (now - 30 * 86400,))
         _db().commit()
+    notifications_store.delete_read_before(now - 30 * 86400)

@@ -19,8 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.db import _db, _db_lock
+from app.db import _db_lock, transaction
 from app.security import audit, client_ip, require_admin, require_user
+from app.store import notifications as notif_store
 from app.store import users as users_store
 from app.settings import (NOTIFY_PREFS_PREFIX, NOTIFY_WEBHOOK_URL,
                                 get_setting, set_setting)
@@ -54,12 +55,7 @@ def insert_notification(user_id: int, type: str, title: str, body: str = "",
     """站内通知统一出口：尊重接收方偏好后落库。返回是否真的写入。"""
     if not get_prefs(user_id).get(_groups_of(type), True):
         return False
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO notifications(user_id, type, title, body, link, "
-            "created_at, broadcast_id) VALUES(?,?,?,?,?,?,?)",
-            (user_id, type, title, body, link, time.time(), broadcast_id))
-        _db().commit()
+    notif_store.insert(user_id, type, title, body, link, broadcast_id)
     return True
 
 
@@ -70,12 +66,8 @@ router = APIRouter()
 @router.get("/api/notifications")
 def list_notifications(user=Depends(require_user)):
     uid = user["user_id"]
-    unread = _db().execute(
-        "SELECT COUNT(*) AS c FROM notifications WHERE user_id=? AND read_at IS NULL",
-        (uid,)).fetchone()["c"]
-    rows = _db().execute(
-        "SELECT id, type, title, body, link, created_at, read_at FROM notifications "
-        "WHERE user_id=? ORDER BY id DESC LIMIT 50", (uid,)).fetchall()
+    unread = notif_store.count_unread(uid)
+    rows = notif_store.list_for_user(uid)
     return {"unread": unread, "items": [{
         "id": r["id"], "type": r["type"], "title": r["title"], "body": r["body"],
         "link": r["link"], "created_at": r["created_at"],
@@ -85,30 +77,19 @@ def list_notifications(user=Depends(require_user)):
 
 @router.post("/api/notifications/read")
 def mark_notifications_read(user=Depends(require_user)):
-    with _db_lock:
-        _db().execute(
-            "UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL",
-            (time.time(), user["user_id"]))
-        _db().commit()
+    notif_store.mark_all_read(user["user_id"])
     return {"ok": True}
 
 
 @router.post("/api/notifications/{nid}/read")
 def mark_one_read(nid: int, user=Depends(require_user)):
-    with _db_lock:
-        cur = _db().execute(
-            "UPDATE notifications SET read_at=? WHERE id=? AND user_id=? AND read_at IS NULL",
-            (time.time(), nid, user["user_id"]))
-        _db().commit()
-    return {"ok": True, "changed": cur.rowcount}
+    changed = notif_store.mark_one_read(nid, user["user_id"])
+    return {"ok": True, "changed": changed}
 
 
 @router.delete("/api/notifications/{nid}")
 def delete_notification(nid: int, user=Depends(require_user)):
-    with _db_lock:
-        _db().execute("DELETE FROM notifications WHERE id=? AND user_id=?",
-                      (nid, user["user_id"]))
-        _db().commit()
+    notif_store.delete_for_user(nid, user["user_id"])
     return {"ok": True}
 
 
@@ -156,18 +137,12 @@ def _resolve_targets(user_ids: list[int] | None) -> list[dict]:
 def _deliver_broadcast(bid: str, title: str, text: str,
                        targets: list[dict], webhook: bool = True) -> int:
     """把广播逐人落站内（尊重偏好）+ 可选站外推送。返回实际站内送达数。"""
-    now = time.time()
     sent = 0
-    with _db_lock:
-        for t in targets:
-            if not get_prefs(t["id"]).get("admin", True):
-                continue
-            _db().execute(
-                "INSERT INTO notifications(user_id, type, title, body, created_at, "
-                "broadcast_id) VALUES(?,?,?,?,?,?)",
-                (t["id"], "admin", title, text, now, bid))
-            sent += 1
-        _db().commit()
+    for t in targets:
+        if not get_prefs(t["id"]).get("admin", True):
+            continue
+        notif_store.insert(t["id"], "admin", title, text, broadcast_id=bid)
+        sent += 1
     if webhook:
         push_webhook(title, text)
     return sent
@@ -184,13 +159,10 @@ def admin_broadcast_notify(body: NotifyBody, _admin=Depends(require_admin)):
         # 显式定向却一个都匹配不上：报错比静默发 0 人友好（管理员能发现 ID 打错）
         raise HTTPException(status_code=404, detail="目标用户不存在或已停用")
     bid = f"bc-{time.time_ns()}"
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO admin_broadcasts(id, title, body, targets, created_by, "
-            "status, sent_at, created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (bid, title, text, json.dumps([t["id"] for t in targets]),
-             _admin["username"], "sent", time.time(), time.time()))
-        _db().commit()
+    notif_store.create_broadcast(bid, title, text,
+                                 json.dumps([t["id"] for t in targets]),
+                                 _admin["username"], "sent", time.time(),
+                                 sent_at=time.time())
     sent = _deliver_broadcast(bid, title, text, targets)
     return {"ok": True, "sent": sent, "webhook": bool(get_webhook_url()),
             "broadcast_id": bid}
@@ -199,8 +171,7 @@ def admin_broadcast_notify(body: NotifyBody, _admin=Depends(require_admin)):
 @router.get("/api/admin/notifications/sent")
 def admin_list_broadcasts(_admin=Depends(require_admin)):
     """发送记录 + 草稿/定时箱：含每条的未读/已读统计与撤回状态。"""
-    rows = _db().execute(
-        "SELECT * FROM admin_broadcasts ORDER BY created_at DESC LIMIT 100").fetchall()
+    rows = notif_store.list_broadcasts()
     items = []
     for r in rows:
         try:
@@ -209,13 +180,7 @@ def admin_list_broadcasts(_admin=Depends(require_admin)):
             tids = []
         stat = {"unread": 0, "read": 0}
         if tids:
-            marks = ",".join("?" * len(tids))
-            row = _db().execute(
-                f"SELECT SUM(CASE WHEN read_at IS NULL THEN 1 ELSE 0 END) AS unread, "
-                f"SUM(CASE WHEN read_at IS NOT NULL THEN 1 ELSE 0 END) AS read "
-                f"FROM notifications WHERE broadcast_id=? AND user_id IN ({marks})",
-                [r["id"], *tids]).fetchone()
-            stat = {"unread": row["unread"] or 0, "read": row["read"] or 0}
+            stat = notif_store.stats_by_broadcast(r["id"], tids)
         items.append({
             "id": r["id"], "title": r["title"], "body": r["body"],
             "target_count": len(tids),
@@ -230,31 +195,24 @@ def admin_list_broadcasts(_admin=Depends(require_admin)):
 @router.post("/api/admin/notifications/broadcast/{bid}/withdraw")
 def admin_withdraw_broadcast(bid: str, _admin=Depends(require_admin)):
     """撤回：删该广播全部未读站内行（已读的保留为历史），记录标记撤回。"""
-    with _db_lock:
-        cur = _db().execute(
-            "DELETE FROM notifications WHERE broadcast_id=? AND read_at IS NULL", (bid,))
-        _db().execute(
-            "UPDATE admin_broadcasts SET withdrawn_at=? WHERE id=? AND withdrawn_at IS NULL",
-            (time.time(), bid))
-        _db().commit()
-    audit("broadcast_withdraw", bid, f"removed={cur.rowcount}")
-    return {"ok": True, "removed": cur.rowcount}
+    with _db_lock, transaction():
+        removed = notif_store.delete_unread_by_broadcast(bid)
+        notif_store.mark_broadcast_withdrawn(bid, time.time())
+    audit("broadcast_withdraw", bid, f"removed={removed}")
+    return {"ok": True, "removed": removed}
 
 
 @router.post("/api/admin/notifications/broadcast/{bid}/remind")
 def admin_remind_broadcast(bid: str, _admin=Depends(require_admin)):
     """提醒未读：对仍处未读的成员再推一次站外 webhook（站内不重复落）。"""
-    row = _db().execute("SELECT * FROM admin_broadcasts WHERE id=?", (bid,)).fetchone()
+    row = notif_store.get_broadcast(bid)
     if not row:
         raise HTTPException(status_code=404, detail="广播不存在")
     try:
         tids = json.loads(row["targets"] or "[]")
     except (ValueError, TypeError):
         tids = []
-    marks = ",".join("?" * len(tids)) if tids else "NULL"
-    unread = _db().execute(
-        f"SELECT user_id FROM notifications WHERE broadcast_id=? AND read_at IS NULL "
-        f"AND user_id IN ({marks})", [bid, *tids]).fetchall() if tids else []
+    unread = notif_store.list_unread_users(bid, tids) if tids else []
     if unread:
         push_webhook(row["title"], f"提醒：{len(unread)} 位成员尚未读 —— {(row['body'] or '')[:120]}")
     audit("broadcast_remind", bid, f"unread={len(unread)}")
@@ -275,32 +233,22 @@ def admin_save_draft(body: DraftBody, _admin=Depends(require_admin)):
         raise HTTPException(status_code=400, detail="标题不能为空")
     bid = f"bd-{time.time_ns()}"
     status = "scheduled" if body.scheduled_at else "draft"
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO admin_broadcasts(id, title, body, targets, created_by, "
-            "status, scheduled_at, created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (bid, title, (body.body or "").strip()[:500],
-             json.dumps(body.user_ids or []), _admin["username"],
-             status, body.scheduled_at, time.time()))
-        _db().commit()
+    notif_store.create_broadcast(bid, title, (body.body or "").strip()[:500],
+                                 json.dumps(body.user_ids or []), _admin["username"],
+                                 status, time.time(), scheduled_at=body.scheduled_at)
     return {"ok": True, "id": bid}
 
 
 @router.post("/api/admin/notifications/draft/{bid}/send")
 def admin_send_draft(bid: str, _admin=Depends(require_admin)):
-    row = _db().execute(
-        "SELECT * FROM admin_broadcasts WHERE id=? AND withdrawn_at IS NULL",
-        (bid,)).fetchone()
+    row = notif_store.get_live_broadcast(bid)
     if not row:
         raise HTTPException(status_code=404, detail="草稿不存在")
     if row["status"] == "sent":
         raise HTTPException(status_code=409, detail="该广播已发送")
     targets = _resolve_targets(json.loads(row["targets"] or "[]") or None)
-    with _db_lock:
-        _db().execute(
-            "UPDATE admin_broadcasts SET status='sent', sent_at=?, targets=? WHERE id=?",
-            (time.time(), json.dumps([t["id"] for t in targets]), bid))
-        _db().commit()
+    notif_store.mark_broadcast_sent(bid, time.time(),
+                                    json.dumps([t["id"] for t in targets]))
     sent = _deliver_broadcast(bid, row["title"], row["body"] or "", targets)
     audit("broadcast_send", bid, f"sent={sent}")
     return {"ok": True, "sent": sent}
@@ -308,11 +256,7 @@ def admin_send_draft(bid: str, _admin=Depends(require_admin)):
 
 @router.delete("/api/admin/notifications/draft/{bid}")
 def admin_delete_draft(bid: str, _admin=Depends(require_admin)):
-    with _db_lock:
-        _db().execute(
-            "DELETE FROM admin_broadcasts WHERE id=? AND status IN ('draft','scheduled')",
-            (bid,))
-        _db().commit()
+    notif_store.delete_draft(bid)
     return {"ok": True}
 
 
@@ -339,17 +283,10 @@ async def _fire_due_once():
     from fastapi.concurrency import run_in_threadpool
 
     def _run():
-        rows = _db().execute(
-            "SELECT id, title, body, targets FROM admin_broadcasts "
-            "WHERE status='scheduled' AND scheduled_at IS NOT NULL AND scheduled_at<=?",
-            (time.time(),)).fetchall()
+        rows = notif_store.list_due_broadcasts(time.time())
         for r in rows:
             targets = _resolve_targets(json.loads(r["targets"] or "[]") or None)
-            with _db_lock:
-                _db().execute(
-                    "UPDATE admin_broadcasts SET status='sent', sent_at=? WHERE id=?",
-                    (time.time(), r["id"]))
-                _db().commit()
+            notif_store.mark_broadcast_sent(r["id"], time.time())
             _deliver_broadcast(r["id"], r["title"], r["body"] or "", targets)
             audit("broadcast_scheduled_send", r["id"], f"sent={len(targets)}")
         return len(rows)
@@ -471,9 +408,7 @@ def push_webhook(title: str, body: str = "") -> None:
 
 @router.get("/api/announcements")
 def announcements_list(_user: dict = Depends(require_user)):
-    rows = _db().execute(
-        "SELECT id, title, body, created_by, created_at FROM announcements "
-        "ORDER BY id DESC LIMIT 10").fetchall()
+    rows = notif_store.list_recent_announcements()
     return {"items": [dict(r) for r in rows]}
 
 
@@ -488,13 +423,8 @@ def announcement_create(body: AnnouncementBody, request: Request,
     title = body.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="标题不能为空")
-    with _db_lock:
-        _db().execute(
-            "INSERT INTO announcements(title, body, created_by, created_at) "
-            "VALUES(?,?,?,?)",
-            (title[:80], body.body.strip()[:500],
-             _admin["username"], time.time()))
-        _db().commit()
+    notif_store.create_announcement(title[:80], body.body.strip()[:500],
+                                    _admin["username"])
     audit("announcement.create", target=title[:40], ip=client_ip(request))
     return {"ok": True}
 
@@ -502,10 +432,7 @@ def announcement_create(body: AnnouncementBody, request: Request,
 @router.delete("/api/admin/announcements/{aid}")
 def announcement_delete(aid: int, request: Request,
                         _admin=Depends(require_admin)):
-    with _db_lock:
-        cur = _db().execute("DELETE FROM announcements WHERE id = ?", (aid,))
-        _db().commit()
-    if cur.rowcount == 0:
+    if notif_store.delete_announcement(aid) == 0:
         raise HTTPException(status_code=404, detail="公告不存在")
     audit("announcement.delete", target=str(aid), ip=client_ip(request))
     return {"ok": True}
@@ -522,13 +449,7 @@ def admin_notifications_list(request: Request, _admin=Depends(require_admin),
     uid = users_store.id_by_username(username) if username.strip() else None
     if username.strip() and uid is None:
         return {"items": []}
-    rows = (_db().execute(
-        "SELECT id, user_id, type, title, body, link, created_at, read_at, "
-        "broadcast_id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-        (uid, limit)).fetchall() if uid is not None else _db().execute(
-        "SELECT id, user_id, type, title, body, link, created_at, read_at, "
-        "broadcast_id FROM notifications ORDER BY id DESC LIMIT ?",
-        (limit,)).fetchall())
+    rows = notif_store.list_for_admin(uid, limit)
     items = []
     for r in rows:
         d = dict(r)
@@ -542,10 +463,7 @@ def admin_notifications_list(request: Request, _admin=Depends(require_admin),
 @router.delete("/api/admin/notifications/{nid}")
 def admin_notification_delete(nid: int, request: Request,
                               _admin=Depends(require_admin)):
-    with _db_lock:
-        cur = _db().execute("DELETE FROM notifications WHERE id = ?", (nid,))
-        _db().commit()
-    if cur.rowcount == 0:
+    if notif_store.delete(nid) == 0:
         raise HTTPException(status_code=404, detail="通知不存在")
     audit("admin.notification.delete", target=str(nid), ip=client_ip(request))
     return {"ok": True}
@@ -555,13 +473,11 @@ def admin_notification_delete(nid: int, request: Request,
 def admin_broadcast_purge(bid: str, request: Request,
                           _admin=Depends(require_admin)):
     """彻底删除广播：记录 + 已送达的站内通知一并清除（撤回只删未读，这个删干净）。"""
-    with _db_lock:
-        cur = _db().execute("DELETE FROM admin_broadcasts WHERE id = ?", (bid,))
-        n = _db().execute(
-            "DELETE FROM notifications WHERE broadcast_id = ?", (bid,))
-        _db().commit()
-    if cur.rowcount == 0:
+    with _db_lock, transaction():
+        removed = notif_store.delete_by_broadcast(bid)
+        n = notif_store.delete_broadcast(bid)
+    if n == 0:
         raise HTTPException(status_code=404, detail="广播不存在")
     audit("admin.broadcast.purge", target=bid[:12] + "…",
-          detail=f"notifications={n.rowcount}", ip=client_ip(request))
-    return {"ok": True, "notifications_removed": n.rowcount}
+          detail=f"notifications={removed}", ip=client_ip(request))
+    return {"ok": True, "notifications_removed": removed}
