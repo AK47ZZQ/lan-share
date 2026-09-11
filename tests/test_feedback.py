@@ -122,3 +122,45 @@ def test_feedback_validation(auth):
     assert _post_feedback(auth, "   ").status_code == 422          # 空标题
     assert _post_feedback(auth, "超图", images=4).status_code == 422  # 超 3 张
     assert auth.get("/api/feedback/20990101000000-ff").status_code == 404
+
+
+# ── B6 附件扩展（other·e464 白名单加 txt/md + other·0069 上限 config 化）──
+
+
+def test_feedback_accepts_txt_md_attachments(client):
+    """txt/md 进白名单：保留原扩展名落盘（不再强制回落 .jpg）。"""
+    m, _ = _member(client)
+    parts = [("title", (None, "文档附件-" + _rand())), ("type", (None, "other")),
+             ("body", (None, "")), ("app_ver", (None, "0.28.3+77")),
+             ("device", (None, "TestDroid")),
+             ("files", ("notes.txt", b"hello txt", "text/plain")),
+             ("files", ("readme.md", b"# hello md", "text/markdown"))]
+    r = m.post("/api/feedback", files=parts)
+    assert r.status_code == 200, r.text
+    fid = r.json()["id"]
+    img_dir = SHARE_ROOT / "反馈" / "img"
+    assert (img_dir / f"{fid}-1.txt").is_file()
+    assert (img_dir / f"{fid}-2.md").is_file()
+
+
+def test_feedback_rejects_oversize_and_unknown_falls_back(client, monkeypatch):
+    """超上限 422 且文案带 config 值；未知后缀回落 .jpg（原行为保留）。"""
+    from app.config import FEEDBACK_MAX_ATTACHMENT_MB
+    m, _ = _member(client)
+    parts = [("title", (None, "超大附件")), ("type", (None, "other")),
+             ("body", (None, "")), ("app_ver", (None, "")),
+             ("device", (None, "")),
+             ("files", ("big.png", b"0" * (FEEDBACK_MAX_ATTACHMENT_MB * 1024 * 1024 + 1),
+                        "image/png"))]
+    r = m.post("/api/feedback", files=parts)
+    assert r.status_code == 422
+    assert str(FEEDBACK_MAX_ATTACHMENT_MB) in r.json()["detail"]
+
+    parts2 = [("title", (None, "未知后缀回落")), ("type", (None, "other")),
+              ("body", (None, "")), ("app_ver", (None, "")),
+              ("device", (None, "")),
+              ("files", ("blob.xyz", b"data", "application/octet-stream"))]
+    r2 = m.post("/api/feedback", files=parts2)
+    assert r2.status_code == 200
+    fid = r2.json()["id"]
+    assert (SHARE_ROOT / "反馈" / "img" / f"{fid}-1.jpg").is_file()

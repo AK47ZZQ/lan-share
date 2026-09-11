@@ -21,6 +21,7 @@ BACKUP_KEEP = 7                        # 保留最近 N 份（dump+元数据快�
 BACKUP_HOUR = 4                        # 每日备份时刻（小时；清理循环每小时醒一次到点补跑）
 DISK_WATERMARK_PCT = 85.0              # 磁盘已用百分比告警阈值
 ALERT_COOLDOWN = 6 * 3600              # 同类告警冷却期（防轰炸）
+FEEDBACK_MAX_ATTACHMENT_MB = 25        # 反馈附件单件上限（other·0069：12→25，config 化）
 ZIP_TTL = 15 * 60                     # zip 打包下载票据有效期（秒）
 
 SESSION_TTL = 30 * 86400          # 30 天

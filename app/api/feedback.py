@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
 
-from app.config import SHARE_ROOT
+from app.config import FEEDBACK_MAX_ATTACHMENT_MB, SHARE_ROOT
 from app.security import (ADMIN, allow_rate, audit, client_ip, require_admin,
                           require_user)
 from app.api import events as events_bus
@@ -41,7 +41,9 @@ KANBAN = "看板.md"
 STATUS_DIRS = {"待处理": "已提交", "进行中": "处理中"}
 DONE_DIR = "已完成"
 TYPES = ("idea", "bug", "other")
-_MAX_IMAGES = 3
+ATTACH_EXTS = (".jpg", ".jpeg", ".png", ".webp",   # 截图四格式（原行为）
+               ".txt", ".md")                      # other·e464：文档白名单
+_MAX_ATTACHMENTS = 3        # 件数上限（原 _MAX_IMAGES 更名：附件不再只限截图）
 _MAX_PER_DAY = 20
 
 
@@ -162,18 +164,19 @@ async def feedback_create(request: Request,
         raise HTTPException(status_code=422, detail="标题必填且不超过 80 字")
     if type not in TYPES:
         type = "other"
-    if len(files) > _MAX_IMAGES:
-        raise HTTPException(status_code=422, detail=f"截图最多 {_MAX_IMAGES} 张")
+    if len(files) > _MAX_ATTACHMENTS:
+        raise HTTPException(status_code=422, detail=f"附件最多 {_MAX_ATTACHMENTS} 个")
 
     fid = time.strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
     now = _now_str()
     for i, up in enumerate(files, 1):
         ext = Path(up.filename or "s.jpg").suffix.lower()
-        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
-            ext = ".jpg"
+        if ext not in ATTACH_EXTS:
+            ext = ".jpg"   # 白名单外回落按截图存（原行为）；txt/md 保留原后缀
         data = await up.read()
-        if len(data) > 12 * 1024 * 1024:
-            raise HTTPException(status_code=422, detail="单张截图不能超过 12MB")
+        if len(data) > FEEDBACK_MAX_ATTACHMENT_MB * 1024 * 1024:
+            raise HTTPException(status_code=422,
+                                detail=f"单个附件不能超过 {FEEDBACK_MAX_ATTACHMENT_MB}MB")
         (_img_dir() / f"{fid}-{i}{ext}").write_bytes(data)
 
     md = (

@@ -20,6 +20,7 @@
   --radius-sm: 10px;
   --hover: rgba(91, 108, 255, 0.09);
   --line: rgba(35, 38, 61, 0.08);
+  --bg-2: rgba(35, 38, 61, 0.04);   /* 卡内嵌套面（bug·97ac：此前未定义，fallback 浅灰在深色主题成白边） */
 }
 /* 深色令牌：跟随系统（auto）或手动 data-theme='dark'；data-theme='light' 强制浅色 */
 :root[data-theme='dark'] {
@@ -34,6 +35,7 @@
   --text-3: #6f7494;
   --hover: rgba(122, 134, 255, 0.16);
   --line: rgba(230, 232, 247, 0.09);
+  --bg-2: rgba(255, 255, 255, 0.06);   /* 深色嵌套面：半透明玻璃（bug·97ac 白边修复） */
   --sb-thumb: rgba(158, 164, 228, 0.62);
   --sb-track: rgba(8, 10, 20, 0.55);
 }

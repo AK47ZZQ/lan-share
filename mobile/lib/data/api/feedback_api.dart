@@ -29,7 +29,7 @@ class FeedbackApi {
         .toList();
   }
 
-  /// 提交反馈（类型 idea|bug|other；截图 ≤3 张，服务端每张 ≤12MB）
+  /// 提交反馈（类型 idea|bug|other；附件 ≤3 个，服务端单件 ≤25MB）
   static Future<void> submit({
     required String title,
     required String type,

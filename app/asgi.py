@@ -72,7 +72,11 @@ async def security_middleware(request: Request, call_next):
     #（此前按 /api/upload 前缀整条豁免，init 被未认证灌 20GB body 在鉴权前
     # 全量缓冲——FastAPI 先读 body 后做依赖鉴权，单请求即 OOM）
     if request.method in ("POST", "PUT", "PATCH") and not path.startswith("/dav"):
-        big_body = path == "/api/upload" or path.startswith("/api/upload/chunk/")
+        big_body = (path == "/api/upload"
+                    or path.startswith("/api/upload/chunk/")
+                    or path == "/api/feedback")   # B6：反馈附件 multipart（端点内
+        # 有 FEEDBACK_MAX_ATTACHMENT_MB 单件校验 + 登录态 + 每日 20 条限速防刷；
+        # 不豁免则 >1MB 真实截图被 413，原 12MB 上限从未真正生效——other·0069 深因）
         # 头像端点专用限额（review P1-1）：不能整条豁免——FastAPI 先收 body 后
         # 鉴权，未认证整条豁免 = 灌包洞在新端点复活。multipart 正常客户端都带
         # CL：≤10MB 放行（端点内还有 8MB 第二道闸），chunked 一律拒
