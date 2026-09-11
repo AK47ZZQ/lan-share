@@ -57,7 +57,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | DELETE | `/api/files/{path}` | 🔑 | 移入回收站（非物理删除） |
 | GET | `/preview/{path}` | 🔑 | 内联预览，支持 Range（音视频拖动） |
 | GET | `/thumb/{path}` | 🔑 | 图片/视频缩略图 JPEG（缓存于 `.thumbs/`） |
-| GET | `/api/search?q=` | 🔑 | 文件名搜索，最多 50 条 |
+| GET | `/api/search?q=` | 🔑 | 搜索，最多 50 条。响应含 `kind` 字段（v3.52 向后兼容扩展）：`file`=文件名子串命中，`note`=笔记正文全文命中（附 `snippet` 命中片段；可见性同文件规则） |
 | GET | `/api/recent?limit=` | 🔑 | 最近修改（≤100） |
 | GET | `/api/disk` · `/api/disk/detail` | 🔑 | C 盘用量 + 网盘统计（`share_size` 按文件索引去重，硬链接只计一次；detail 附各一级目录逻辑大小 `categories`） |
 | GET | `/api/photos?limit=&offset=&month=&uploader=&refresh=` | 🔑 | 照片时间线 `{total, items:[{path,name,taken,month,uploader,thumb,abs_path}]}`（EXIF 日期倒序；jpg/jpeg/png/webp/bmp/heic/heif）；`month=YYYY-MM`/`uploader` 过滤；`refresh=1` 放宽扫描节流（App 备份完成后拉最新，地板 5s 防滥用）；`abs_path` 为服务器真实存储路径（v3.31） |

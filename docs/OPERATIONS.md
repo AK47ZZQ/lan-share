@@ -38,6 +38,12 @@ powershell Restart-Service lan-share-api
 `powershell Get-Service SakuraFrpService` + 查看 `C:\ProgramData\SakuraFrpService\Logs\`
 最新日志尾部；恢复后按 settings 表 `notify_webhook_url` 的 {title}/{body} 模板发告警。
 
+**运行指标**（v3.52）：`/api/metrics`（admin）给近 1h 请求状态码分布与
+p50/p95/avg 延迟（asgi 中间件逐请求采集，环形缓冲 2048）、磁盘已用百分比、
+兜底备份最近一轮状态。磁盘已用 ≥85%（`DISK_WATERMARK_PCT`）自动 webhook
+告警，6 小时冷却（`ALERT_COOLDOWN`）防轰炸；恢复不复位、冷却过后再次越线
+才二次告警。
+
 **入口分账速查**：Caddy 反代使所有请求 client_ip=127.0.0.1——防爆破、登录限速、
 API 限速（api:lan 120 / api:pub 240）全部按 Host 分账；改公网地址走管理面板
 「公网访问地址」主/备两栏，`reset_netloc_cache()` 即时生效。
@@ -92,6 +98,16 @@ curl -k https://192.168.1.100:8765/healthz
   `BACKUP_DEST`（默认 `C:\lan-share-backup`，可用环境变量覆盖）。
 - **产物清单**：`db\lanshare-YYYYMMDD.dump`（+ `.sha256` sidecar）、`files\`
   （数据目录增量副本）、`files-manifest.txt`（文件数 + 总字节，v3.35 新增）。
+
+### 4.0 进程内每日兜底备份（v3.52，`app/services/backup.py`）
+
+外部计划任务（上节）是**主备份**；v3.52 起服务进程内另有每日兜底：清理循环
+每小时醒一次，过 `BACKUP_HOUR`（默认 4 点）后的首轮把元数据库 dump（SQLite
+在线 backup API / PG 走 pg_dump）+ settings 全量 JSON 快照写到
+`SHARE_ROOT/.backups/`，滚动保留 `BACKUP_KEEP=7` 组；状态存 settings
+`backup_last_status`（healthreport `backup.orchestrator` 与 `/api/metrics`
+可见）。失败走 webhook 告警（与水位告警同通道）。两道备份互相独立：
+外部任务失效时兜底仍每日产出，恢复演练仍以上节产物为准。
 
 ### 4.1 恢复演练（restore-drill.bat）
 
