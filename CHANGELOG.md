@@ -2,6 +2,41 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-11 — 全项目优化收尾批：App 批次 B + 大扫除 / 服务端 v3.51 / Web 测试护栏
+
+主人拍板"除第二块物理盘外全做"后的多批次执行，四个提交（a5a54c4 / 85fedb4 /
+bc67c5b / 191ec9f），每批独立门禁与终审。
+
+**App 批次 B（a5a54c4）**：UI 层 51 处裸 dio 全部收编 data 层（新建
+admin/notifications/photos/album 四个 api 模块 + 扩展既有五模块），分层守卫
+基线 51→**0**——此后 UI 新增直发直接红灯；`notes_page` 1573 行拆四文件
+（1231+306+35+6），`Note.fromJson` 收口契约解析。终审 0 P0/P1/P2。
+
+**Web 测试护栏（85fedb4）**：web 测试 6→**19** 项（字节/时间/速度/编码/动态
+文案纯函数钉进 `src/pure.ts`——vue 的 ESM bundler 构建进不了 node，纯函数
+留在 ui.ts 等于测试不可达）+ **契约路径对齐守卫**（提取 web 全部 /api/ 字面量
+比对 openapi 130 路径，替代重量级 codegen 的本仓方案）。
+
+**服务端 v3.51 + Web 流量卡（bc67c5b）**：
+- **F4 公网流量仪表**：Caddyfile 只给隧道块（:8767/:443/:8801）挂 access log
+  （roll 5×10MiB）——"有日志≡走隧道≡消耗樱花FRP 配额"判别零歧义；
+  `app/services/traffic.py` 聚合今日/本月/14 天序列并入 `/api/admin/overview`，
+  运行状态页新增流量卡（免费档占比 80% 预警色）。零新端点零契约变更。
+- **A5 收口**：精选专辑存储核心下沉 `app/services/albums.py`，services 层
+  import app.api.* 归零；A6 复评关闭（kb 下线后前提消失），结论入 10 号文档 §七。
+- **F5 依赖**：httpx2→2.12/httpcore2→2.10（mcp 依赖树 PYSEC×6，服务端自身
+  304 包本就零漏洞），pip-audit 清零。
+- 服务重启 + 线上核验通过。**门禁：pytest 222（+2 流量）/ ruff / mypy 43 文件
+  全绿。**
+
+**App 大扫除（191ec9f）**：33 个 UI 文件约 **400 处**视觉字面量等值替换为
+Gap/Radii/IconSizes 令牌（仅数值恰等，不匹配值保留；评价报告 P2 的 ~199 处
+存量就此清账）+ semanticLabel 逐页补齐 10 处。终审 0 P0（唯一 P1 经结构核实
+为误报：placeholder 垫底层非独立焦点节点）。
+
+**SOP 联动**：服务端已重启生效；App 随 v0.28.4+78 发版（令牌化零观感变化 +
+读屏标签，用户可升可不升）。
+
 ## 2026-09-11 — App v0.28.3+77：结构整改批次 A + 视觉规范 v1.0 发版（纯加固，无新功能）
 
 把 09-11 三个「未发版」批次（视觉规范 v1.0 / 批次 A 整改 / 批次 A 复查）一并

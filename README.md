@@ -1,4 +1,4 @@
-# LAN Share — 家庭团队网盘（服务端/Web v3.49 · App v0.28.3+77）
+# LAN Share — 家庭团队网盘（服务端/Web v3.51 · App v0.28.4+78）
 
 家用小团队（2–20 人）的多用户网盘。**产品定位（2026-09-10）**：**App 是家的
 内容入口**（照片备份/浏览、文件、笔记、分享、传输），**Web 是站长管理工作台**
@@ -15,7 +15,7 @@ EXIF 方向矫正；docx/xlsx/csv/pptx/rtf/doc 兼容提取）、照片时间线
 （App「我的」直达开发端，状态：已提交/处理中/已修复/已实装…实时可追）、
 **家庭动态流**、**事件推送
 Webhook**、可选 **TOTP 两步验证**、手机直传和**上传二维码**、**WebDAV 挂载
-（含独立密码）**、**PWA 离线应用**、**Flutter 原生 App（v0.28.3+77：浏览/传输/
+（含独立密码）**、**PWA 离线应用**、**Flutter 原生 App（v0.28.4+78：浏览/传输/
 相册自动备份（智能对账）/系统分享/管理面板/笔记分类/通知中心，M-A0~A5 全上线）**。
 生产库 PostgreSQL 16（SQLite 仅测试）。
 
@@ -155,7 +155,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 史脱节）。APK 经自家分享链接在 `App安装包/lanshare.apk` 分发（30 天有效，同文件
 覆盖 + 新建分享）；新版本通过 App 内「关于与检查更新」升级，无需手动换包。
 R8 已关（WorkManager/Room 在裁剪下启动即崩，见 `docs/DEVELOPMENT.md`）。
-**当前测试基线：pytest 238 项（SQLite）+ PostgreSQL 双引擎 / web 单测 6 项 + vue-tsc / Dart 191 项 + analyze 0 + UI 分层守卫 / 契约 117 路径 / ruff·mypy 全绿。**
+**当前测试基线：pytest 222 项（SQLite）+ PostgreSQL 双引擎 / web 单测 19 项 + vue-tsc + 契约路径对齐守卫 / Dart 191 项 + analyze 0 + UI 分层守卫（基线 0）/ 契约 130 路径 / ruff·mypy 全绿。**
 完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
 
 **WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
