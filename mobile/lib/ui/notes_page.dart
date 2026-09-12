@@ -8,8 +8,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData;
+import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/api/errors.dart';
 import '../data/api/files_api.dart';
 import '../data/api/notes_api.dart';
 import 'doc_viewer.dart';
@@ -19,6 +21,7 @@ import 'notes_models.dart';
 import 'notes_shared.dart';
 import 'rich_note_editor.dart';
 import 'theme/design_tokens.dart';
+import 'widgets/kit.dart';
 
 // 编辑器已拆往 note_editor_page.dart；此处 export 保 doc_viewer 等既有
 // `import 'notes_page.dart'` 的调用方零改动（backup_settings 拆分同款门面）。
@@ -239,9 +242,20 @@ class _NotesPageState extends State<NotesPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      final s = e.toString();
+      // 404 = 记忆的上次目录已被删除（电脑端删/改名是常态，bug·0663 实锤）：
+      // 回退到"选择目录"起始态并清记忆，不再把 DioException 原文甩用户脸上
+      if (e is DioException &&
+          e.response?.statusCode == 404 &&
+          (_dir?.isNotEmpty ?? false)) {
+        (await SharedPreferences.getInstance()).remove(kNotesLastDir);
+        if (!mounted) return;
+        setState(() { _dir = null; _error = null; _loading = false; });
+        showToast('该分类不存在（可能已被删除），已返回笔记首页');
+        return;
+      }
+      final s = errDetail(e, max: 140);
       setState(() {
-        _error = s.length > 140 ? s.substring(0, 140) : s;
+        _error = s.isEmpty ? e.toString().substring(0, 140.clamp(0, e.toString().length)) : s;
         _loading = false;
       });
     }
