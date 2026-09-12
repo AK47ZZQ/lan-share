@@ -36,6 +36,17 @@ LAST_DATE_KEY = "backup_last_date"
 _NO_DUMP = object()   # dump 阶段"引擎不支持/工具缺失"哨兵
 
 
+def _today() -> str:
+    """当日幂等位的日期出口（测试注入点）。
+
+    _tick 与 run_backup_once 若直呼 time.strftime，"写幂等位"与测试的
+    "断言读取"可能分踞午夜两侧（真实日期在两者之间翻转）——幂等位与
+    断言基准错位，偶发 1 failed 且连跑无法复现。编排统一经本函数取日期，
+    测试钉死后时钟无关。
+    """
+    return time.strftime("%Y-%m-%d")
+
+
 def ensure_scheduled() -> None:
     """注册进 cleanup sweep（幂等：模块级一次；由 app/main 组装时调用）。"""
     cleanup.register_sweep("daily_backup", _tick)
@@ -43,7 +54,7 @@ def ensure_scheduled() -> None:
 
 def _tick() -> None:
     """每小时被 sweep 唤醒：到点且今天未备 → 备份。"""
-    today = time.strftime("%Y-%m-%d")
+    today = _today()
     if get_setting(LAST_DATE_KEY) == today:
         return
     if time.localtime().tm_hour < BACKUP_HOUR:
@@ -70,7 +81,7 @@ def run_backup_once(push=None) -> dict:
         _prune_old()
         status["ok"] = True
         status["detail"] = f"{len(status['files'])} 份"
-        set_setting(LAST_DATE_KEY, time.strftime("%Y-%m-%d"))
+        set_setting(LAST_DATE_KEY, _today())
     except Exception as e:   # 告警路径：任何失败都要"上门提醒"，不只记档
         status["detail"] = str(e)[:200]
         push("备份失败", status["detail"])

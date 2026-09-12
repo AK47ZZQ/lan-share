@@ -18,6 +18,9 @@ from app.settings import get_setting, set_setting
 
 def _fresh_env(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_svc, "BACKUP_DIR", tmp_path / "b")
+    # 日期钉死：backup 编排经 backup_svc._today() 取日期（值守批 C3 收口）——
+    # 直呼 strftime 时"写幂等位"与断言读取可能分踞午夜两侧，偶发错位失败
+    monkeypatch.setattr(backup_svc, "_today", lambda: "2026-09-12")
     # PG 引擎下 dump 依赖 pg_dump 在 PATH（CI/本机不一定有）——本组测试的
     # 被测对象是**编排逻辑**（状态/幂等/保留/告警），引擎桩化解耦；
     # 引擎不可用的告警路径另有专项用例（_NO_DUMP 桩）
@@ -38,7 +41,7 @@ def test_backup_run_once_writes_dump_and_status(tmp_path, monkeypatch):
     # 状态入 settings（healthreport / /api/metrics 的呈现源）
     last = backup_svc.last_status()
     assert last and last["ok"] is True
-    assert get_setting(backup_svc.LAST_DATE_KEY) == time.strftime("%Y-%m-%d")
+    assert get_setting(backup_svc.LAST_DATE_KEY) == "2026-09-12"
     assert alerts == []                       # 成功不告警
 
 
@@ -48,7 +51,6 @@ def test_backup_scheduled_tick_runs_once_per_day(tmp_path, monkeypatch):
     set_setting(backup_svc.STATUS_KEY, "")      # 清前一测试留下的状态（用例隔离）
     # 未到 BACKUP_HOUR：不触发
     import app.services.backup as b
-    real_localtime = time.localtime
     monkeypatch.setattr(time, "localtime",
                         lambda: time.struct_time((2026, 9, 12, b.BACKUP_HOUR - 1, 0, 0, 5, 255, 0)))
     backup_svc._tick()
@@ -58,7 +60,7 @@ def test_backup_scheduled_tick_runs_once_per_day(tmp_path, monkeypatch):
                         lambda: time.struct_time((2026, 9, 12, b.BACKUP_HOUR + 1, 0, 0, 5, 255, 0)))
     backup_svc._tick()
     assert backup_svc.last_status() and backup_svc.last_status()["ok"] is True
-    assert get_setting(backup_svc.LAST_DATE_KEY) == time.strftime("%Y-%m-%d", real_localtime())
+    assert get_setting(backup_svc.LAST_DATE_KEY) == "2026-09-12"
     # 当日再 tick：不重复备份（状态 ts 不变）
     ts1 = backup_svc.last_status()["ts"]
     backup_svc._tick()
