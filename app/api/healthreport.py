@@ -163,6 +163,8 @@ def format_report(d: dict) -> tuple[str, bool]:
             lines.append(f"🗄️ 兜底备份：今日成功，未校验"
                          f"（{o.get('verify_detail', '工具缺失')}）")
         else:
+            # 防御性覆盖：编排保证 ok=True 时 verified 不为 False（False 会在
+            # run_backup_once 里 raise 走失败路径），此分支正常不可达
             lines.append("🗄️ 兜底备份：验证失败 ⚠️")
             warn = True
     else:

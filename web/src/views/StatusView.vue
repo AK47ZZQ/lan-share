@@ -68,9 +68,9 @@ onMounted(loadAll)
           <template v-if="metrics.backup">
             <span class="badge" :class="metrics.backup.ok ? '' : 'danger'">{{ metrics.backup.ok ? '✓ 成功' : '⚠ 失败' }}</span>
             <span v-if="metrics.backup.ok && metrics.backup.verified === true" class="badge">验证通过</span>
-            <span v-else-if="metrics.backup.ok && metrics.backup.verified === null" class="badge">未校验</span>
-            <span v-else-if="metrics.backup.ok" class="badge danger">验证失败</span>
-            <span style="color:var(--text-3);font-size:12px">{{ fmtTs(metrics.backup.ts) }} · {{ metrics.backup.detail }}</span>
+            <span v-else-if="metrics.backup.ok && metrics.backup.verified === false" class="badge danger">验证失败</span>
+            <span v-else-if="metrics.backup.ok" class="badge">未校验</span>
+            <span style="color:var(--text-3);font-size:12px">{{ fmtTs(metrics.backup.ts) }} · {{ metrics.backup.detail }}{{ metrics.backup.verify_detail ? ' · ' + metrics.backup.verify_detail : '' }}</span>
           </template>
           <template v-else><span class="badge danger">暂无记录</span></template>
         </div>
