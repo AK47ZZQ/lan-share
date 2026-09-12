@@ -11,9 +11,12 @@
   pg_dump 不在 PATH 时记失败并走 webhook 告警（不静默假装成功）；
 - **验证（restore drill 内联）**：dump 落盘后立即做引擎恰当的完整性校验
   （SQLite `PRAGMA integrity_check` + settings 表可读；PG `pg_restore -l`
-  只读归档目录）——"生成成功"不等于"产物有效"，验证失败按备份失败处理
-  （告警上门、不写当日幂等位，次日自然重试）；校验工具缺失呈现
+  读归档目录并核对 settings 表在档）——"生成成功"不等于"产物有效"，验证
+  失败按备份失败处理（告警上门、不写当日幂等位，次日自然重试）**并删除
+  坏产物**（不留占盘的"看似备份"）；校验工具缺失呈现
   `verified=None`（诚实呈现，不假装通过也不误报失败）；
+- dump 子进程连接参数由 DATABASE_URL 拆解，**口令只进子进程环境
+  （PGPASSWORD），不出现在命令行**（与 backup.bat 的 PGPASSFILE 纪律对齐）；
 - 元数据快照：settings 表全量 + 版本信息导 JSON（丢库后重建配置的最小集）；
 - 保留策略：BACKUP_KEEP 份滚动删除；状态写 settings（healthreport 与
   /api/metrics 只读呈现），失败走 services/webhook（SSRF 防护通道）。
@@ -26,9 +29,12 @@
   不出 store 层。
 """
 import json
+import os
+import re
 import sqlite3
 import time
 from pathlib import Path
+from urllib.parse import quote, unquote, urlsplit
 
 from app.config import BACKUP_DIR, BACKUP_HOUR, BACKUP_KEEP, DB_PATH, PG_BIN_FALLBACK
 from app.db import DATABASE_URL, USE_PG, _db
@@ -98,6 +104,7 @@ def run_backup_once(push=None) -> dict:
         status["files"].append(str(dump))
         verified, verify_detail = _verify_dump(dump)
         if verified is False:
+            dump.unlink(missing_ok=True)   # 坏产物不留"备份"之名：占 keep 组、占盘，且可能被人当真
             status["detail"] = f"备份验证失败: {verify_detail}"
             raise RuntimeError(status["detail"])
         status["verified"] = verified
@@ -128,9 +135,15 @@ def last_status() -> dict | None:
 
 def _dump_to(dst: Path):
     """引擎中立 dump。落 .tmp 临时名、成功后原子改名（终审 P1：半途崩溃不留
-    『看似完整』的假备份）。返回落点 Path；引擎/工具不可用返回 _NO_DUMP。"""
+    『看似完整』的假备份）。返回落点 Path；引擎/工具不可用返回 _NO_DUMP。
+    引擎中途抛错（pg_dump 超时/崩溃）同样清掉 .tmp——残留物要等下一轮成功
+    才会被 prune 收走，磁盘吃紧时等于慢性泄漏。"""
     tmp = dst.with_suffix(dst.suffix + ".tmp")
-    result = _dump_engine(tmp)
+    try:
+        result = _dump_engine(tmp)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     if result is _NO_DUMP:
         tmp.unlink(missing_ok=True)
         return _NO_DUMP
@@ -138,17 +151,45 @@ def _dump_to(dst: Path):
     return dst
 
 
+def _pg_dump_cmd(url: str) -> tuple[list[str], dict[str, str]]:
+    """DATABASE_URL → pg_dump 连接参数 argv + 口令环境变量。
+
+    口令**绝不进命令行**——Windows 上任何进程都能读到别家进程的命令行
+    （任务管理器/WMI），与外部主备份 backup.bat 的 PGPASSFILE 纪律对齐：
+    argv 只放非敏感连接参数，口令走 PGPASSWORD 环境变量（子进程独享副本）。
+    URL 缺某字段就不传对应参数（libpq 按标准默认值解析），解析不出即
+    响亮失败，不做静默回退。
+    """
+    parts = urlsplit(url)
+    argv: list[str] = []
+    if parts.hostname:
+        argv += ["-h", parts.hostname]
+    if parts.username:
+        argv += ["-U", unquote(parts.username)]
+    if parts.port:
+        argv += ["-p", str(parts.port)]
+    dbname = unquote(parts.path.lstrip("/"))
+    if dbname:
+        argv += ["-d", dbname]
+    env: dict[str, str] = {}
+    if parts.password is not None:
+        env["PGPASSWORD"] = unquote(parts.password)
+    return argv, env
+
+
 def _dump_engine(tmp: Path):
     if USE_PG:
         dump_tool = _resolve_tool("pg_dump")
         if dump_tool is None:
             return _NO_DUMP
-        # list 形式传参免 shell 解释（终审 P0：os.system + f-string 拼连接串
-        # 存在命令注入面，DATABASE_URL 虽由管理员环境变量控制也不该依赖它）；
-        # -Fc custom 格式：pg_restore -l 可校验，且与外部主备份格式一致
+        # list 形式传参免 shell 解释（终审 P0）；连接参数由 _pg_dump_cmd 拆解，
+        # 口令只进子进程环境不进 argv；-Fc custom 格式：pg_restore -l 可校验，
+        # 且与外部主备份格式一致
         import subprocess
-        r = subprocess.run([dump_tool, DATABASE_URL, "-Fc", "-f", str(tmp)],
-                           capture_output=True, text=True, timeout=600)
+        argv, pw_env = _pg_dump_cmd(DATABASE_URL)
+        r = subprocess.run([dump_tool, *argv, "-Fc", "-f", str(tmp)],
+                           capture_output=True, text=True, timeout=600,
+                           env={**os.environ, **pw_env})
         if r.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"pg_dump 失败: {r.stderr[-200:]}")
@@ -181,8 +222,14 @@ def _verify_dump(dst: Path) -> tuple[bool | None, str]:
                                capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
                 return False, f"pg_restore -l 失败: {r.stderr[-150:]}"
-            return True, "归档目录可读"
-        con = sqlite3.connect(f"file:{dst.as_posix()}?mode=ro", uri=True)
+            # TOC 可读之外还要 settings 表在档（与 SQLite 侧"settings 可读"对称）：
+            # 空档期/半截归档可能目录能读却缺核心表
+            if not re.search(r"TABLE DATA\b[^\n]*\bsettings\b", r.stdout or ""):
+                return False, "归档目录缺 settings 表（TOC 无 TABLE DATA settings）"
+            return True, "归档目录可读（settings 表在档）"
+        # URI 百分号编码：SHARE_ROOT 含 %/#/? 等字符时裸拼会被 URI 语法吃掉，
+        # 校验误报失败（误告警）；Windows 盘符冒号保留（safe 里的 ':'）
+        con = sqlite3.connect(f"file:{quote(dst.as_posix(), safe='/:')}?mode=ro", uri=True)
         try:
             row = con.execute("PRAGMA integrity_check").fetchone()
             # settings 表可读：settings 快照恢复依赖的核心表确实在 dump 里

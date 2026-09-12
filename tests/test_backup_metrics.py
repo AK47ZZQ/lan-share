@@ -123,6 +123,9 @@ def test_backup_verify_catches_corrupt_dump(tmp_path, monkeypatch):
     assert "备份验证失败" in st["detail"]
     assert alerts == ["备份失败"]
     assert get_setting(backup_svc.LAST_DATE_KEY) != "2026-09-12"   # 明天会重试
+    # 坏产物不留"备份"之名（2026-09-13 审查修复）：验证失败即删，
+    # 不占 keep 组、不占盘、不被误当真
+    assert list(backup_svc.BACKUP_DIR.glob("meta-*.db")) == []
 
 
 def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
@@ -136,6 +139,7 @@ def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
     st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
     assert st["ok"] is False
     assert alerts == ["备份失败"]
+    assert list(backup_svc.BACKUP_DIR.glob("meta-*.db")) == []   # 同上：坏产物即删
 
 
 # _fresh_env 会把 _verify_dump 桩化（PG 跑法下）——工具缺失用例需要还原真实
@@ -264,3 +268,134 @@ def test_metrics_endpoint_requires_admin(client):
     assert m.get("/api/metrics").status_code == 403
     # 匿名 401
     assert client.get("/api/metrics").status_code == 401
+
+
+# ── 2026-09-13 夜间审查批：备份链加固四项 ──────────────────────
+#
+# 1) 引擎中途抛错（pg_dump 超时/崩溃）不留 .tmp 残留；
+# 2) pg_dump 口令只进子进程环境（PGPASSWORD），不出现在命令行
+#    （Windows 任意进程可读别家命令行；与 backup.bat PGPASSFILE 纪律对齐）；
+# 3) SQLite 验证 URI 百分号编码（SHARE_ROOT 含 %/#/? 不再误报）；
+# 4) PG 验证核对 settings 表在档（与 SQLite 侧对称，空档期归档不再蒙混过关）。
+
+
+def test_dump_engine_error_cleans_tmp(tmp_path, monkeypatch):
+    def _boom(tmp):
+        raise RuntimeError("pg_dump timed out")
+    monkeypatch.setattr(backup_svc, "_dump_engine", _boom)
+    dst = tmp_path / "b" / "meta-x.db"
+    dst.parent.mkdir(parents=True)
+    try:
+        backup_svc._dump_to(dst)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised
+    assert list(dst.parent.iterdir()) == []     # .tmp 已随异常清掉
+
+
+def test_pg_dump_cmd_splits_url_and_hides_password():
+    url = ("postgresql://lanshare:p%40ss%2Fw0rd@127.0.0.1:5433/lanshare"
+           "?options=-csearch_path%3Dpublic")
+    argv, env = backup_svc._pg_dump_cmd(url)
+    assert argv == ["-h", "127.0.0.1", "-U", "lanshare", "-p", "5433",
+                    "-d", "lanshare"]
+    assert env == {"PGPASSWORD": "p@ss/w0rd"}   # URL 编码口令被还原
+    assert "p@ss" not in " ".join(argv)         # 口令绝不上命令行
+
+
+def test_pg_dump_cmd_tolerates_partial_url():
+    argv, env = backup_svc._pg_dump_cmd("postgresql://u@dbhost/mydb")
+    assert argv == ["-h", "dbhost", "-U", "u", "-d", "mydb"]
+    assert env == {}                            # 无口令就不设 PGPASSWORD
+
+
+def test_dump_engine_pg_hides_password_from_argv(tmp_path, monkeypatch):
+    import pathlib
+    import subprocess as _sp
+    captured: dict = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        for i, a in enumerate(cmd):
+            if a == "-f":
+                captured["dst"] = cmd[i + 1]
+                break
+        dst_tmp = pathlib.Path(captured["dst"])
+        dst_tmp.parent.mkdir(parents=True, exist_ok=True)
+        dst_tmp.write_bytes(b"PGDMP-fake")
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(backup_svc, "USE_PG", True)
+    monkeypatch.setattr(backup_svc, "DATABASE_URL",
+                        "postgresql://lanshare:SECRET@127.0.0.1:5433/lanshare")
+    monkeypatch.setattr(backup_svc, "_resolve_tool", lambda name: "/fake/pg_dump")
+    monkeypatch.setattr(_sp, "run", _fake_run)
+    dst = backup_svc._dump_to(tmp_path / "b" / "meta-y.db")
+    assert dst is not None and dst.is_file()
+    assert "SECRET" not in " ".join(captured["cmd"])          # 口令不上 argv
+    assert captured["kwargs"]["env"]["PGPASSWORD"] == "SECRET"  # 只进子进程环境
+    assert "-Fc" in captured["cmd"] and captured["dst"].endswith(".tmp")
+
+
+def test_verify_sqlite_uri_survives_url_special_chars(tmp_path, monkeypatch):
+    """SHARE_ROOT 含 %/# 时验证不该被 URI 语法截断而误报失败。"""
+    import sqlite3 as _sq
+    d = tmp_path / "b#dir%2F"
+    d.mkdir(parents=True)
+    good = d / "meta-ok.db"
+    con = _sq.connect(str(good))
+    con.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+    con.execute("INSERT INTO settings VALUES ('k', 'v')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(backup_svc, "USE_PG", False)
+    ok, detail = backup_svc._verify_dump(good)
+    assert ok is True, detail
+
+
+_TOC_WITH_SETTINGS = (
+    ";\n; Archive created at ...:\n;     dbname: lanshare\n;\n"
+    "2147483647; 1255 16386 TABLE - public settings postgres\n"
+    "2147483649; 1259 16390 TABLE DATA - public settings postgres\n"
+)
+_TOC_WITHOUT_SETTINGS = (
+    ";\n; Archive created at ...:\n;\n"
+    "2147483649; 1259 16390 TABLE DATA - public users postgres\n"
+)
+
+
+def test_verify_pg_rejects_toc_without_settings(tmp_path, monkeypatch):
+    """PG 验证对称性：TOC 可读但缺 settings 表 → 判坏（空档期/半截归档兜底）。"""
+    import subprocess as _sp
+    monkeypatch.setattr(backup_svc, "USE_PG", True)
+    monkeypatch.setattr(backup_svc, "_resolve_tool",
+                        lambda name: "/fake/pg_restore" if name == "pg_restore" else None)
+    dump = tmp_path / "meta-z.db"
+    dump.write_bytes(b"PGDMP")
+
+    def _run(cmd, **kwargs):
+        return _sp.CompletedProcess(cmd, 0, stdout=_TOC_WITHOUT_SETTINGS, stderr="")
+
+    monkeypatch.setattr(_sp, "run", _run)
+    ok, detail = backup_svc._verify_dump(dump)
+    assert ok is False
+    assert "settings" in detail
+
+
+def test_verify_pg_accepts_toc_with_settings(tmp_path, monkeypatch):
+    import subprocess as _sp
+    monkeypatch.setattr(backup_svc, "USE_PG", True)
+    monkeypatch.setattr(backup_svc, "_resolve_tool",
+                        lambda name: "/fake/pg_restore" if name == "pg_restore" else None)
+    dump = tmp_path / "meta-z.db"
+    dump.write_bytes(b"PGDMP")
+
+    def _run(cmd, **kwargs):
+        return _sp.CompletedProcess(cmd, 0, stdout=_TOC_WITH_SETTINGS, stderr="")
+
+    monkeypatch.setattr(_sp, "run", _run)
+    ok, detail = backup_svc._verify_dump(dump)
+    assert ok is True, detail
+    assert "settings" in detail
