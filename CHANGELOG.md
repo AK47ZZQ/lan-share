@@ -2,6 +2,15 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-12 — App v0.28.6+80：bug·0663 修复分发
+
+值班反馈清零批（27ce CI 三连修 + 0663 笔记页 404 特化回退）之后补出包：
+aapt 核验 versionCode=80（104619348 B，sha256 3c94cb78…），三件套 70 条，
+线上分发即时生效（服务端 versions.json 动态读取）。同批提交含 CI 修复
+（GitHub Actions a349e5f 全绿，27 连红终结）与 PG 双引擎门禁补课
+（本机全量 254 passed/2 skipped）。清理维护批：STATUS 旧段归档
+（docs/STATUS-archive.md）、PLAN×2 与 PROJECT-OVERVIEW 移 docs/archive/。
+
 ## 2026-09-12 — 值班组：服务端 v3.52（存储层/SSE 实时通知/全文搜索/备份与指标/反馈闭环）
 
 主人离场 7 小时值班，B0~B11 十二连块（八个功能/重构提交 + 本条）。核心四件：
