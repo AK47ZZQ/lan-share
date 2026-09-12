@@ -313,3 +313,40 @@ def test_private_root_protected(auth):
     root = auth.get("/api/files").json()["items"]
     entry = next(e for e in root if e.get("is_private_root"))
     assert "私人空间" in entry["name"]
+
+
+def test_move_with_conflict_no_overwrite_on_linux_semantics(auth, workdir, monkeypatch):
+    """bug·27ce 守卫：Linux 的 rename(2) 目标已存在时静默替换（Windows 必抛
+    FileExistsError）——把 os.rename patch 成 Linux 语义，钉住"预检必须存在"，
+    否则 Linux 部署下 move 会无声覆盖目标同名文件。"""
+    import os as _os
+    import app.api.files as files_mod
+
+    real_rename = _os.rename
+
+    def linux_rename(src, dst, *a, **kw):
+        # 模拟 Linux：存在即替换（不抛）
+        if _os.path.exists(dst):
+            real_rename(dst, dst + ".__replaced__")   # 标记被覆盖
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(files_mod.os, "rename", linux_rename)
+
+    auth.post(f"/api/mkdir/{workdir}/src")
+    auth.post(f"/api/mkdir/{workdir}/dst")
+    auth.post(f"/api/upload/{workdir}/src",
+              files={"file": ("f.txt", b"one", "text/plain")})
+    auth.post(f"/api/upload/{workdir}/dst",
+              files={"file": ("f.txt", b"two", "text/plain")})
+
+    r = auth.post("/api/move", json={
+        "sources": [f"{workdir}/src/f.txt"], "dest_dir": f"{workdir}/dst"})
+    assert r.status_code == 200, r.text
+    results = r.json()["results"]
+    assert results[0]["ok"] is True
+    assert results[0]["dest"].endswith("f (1).txt")   # 预检生效：跳过冲突名
+    dst = os.path.join(os.environ["SHARE_ROOT"], workdir, "dst")
+    with open(os.path.join(dst, "f.txt"), "rb") as f:
+        assert f.read() == b"two"   # 原文件未被 Linux 语义覆盖
+    with open(os.path.join(dst, "f (1).txt"), "rb") as f:
+        assert f.read() == b"one"

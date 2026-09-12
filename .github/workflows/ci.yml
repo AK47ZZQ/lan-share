@@ -38,6 +38,10 @@ jobs:
       - name: mypy
         run: python -m mypy app
 
+      # 仓库 certs/ 是 gitignore 的（私钥不入库）：CI 现场自签一张，
+      # healthreport 的证书天数与 entries 的指纹测试才能贴近生产路径
+      - name: 生成测试用自签证书（certs/）
+        run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 3650 -nodes -config certs/san.cnf
       - name: pytest（SQLite · 默认引擎）
         run: python -m pytest tests/ -q
 
@@ -72,6 +76,10 @@ jobs:
 
       # 同一套测试、同一个夹具；只换 DATABASE_URL —— 覆盖 _PgConn/_pg_sql/
       # _PG_SCHEMA 这条**生产真正在跑**的代码路（此前零自动化覆盖）。
+      # 仓库 certs/ 是 gitignore 的（私钥不入库）：CI 现场自签一张，
+      # healthreport 的证书天数与 entries 的指纹测试才能贴近生产路径
+      - name: 生成测试用自签证书（certs/）
+        run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 3650 -nodes -config certs/san.cnf
       - name: pytest（PostgreSQL · 临时 schema 隔离）
         env:
           LANSHARE_TEST_PG_URL: postgresql://lanshare:lanshare@127.0.0.1:5432/lanshare

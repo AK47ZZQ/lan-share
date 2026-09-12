@@ -127,6 +127,13 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             for cand in [final] + [
                     final.with_name(f"{final.stem} ({i}){final.suffix}")
                     for i in range(1, 999)]:
+                # Linux 的 rename(2) 目标已存在时**静默替换**（Windows 必抛
+                # FileExistsError）——不预检会把目标同名文件无声覆盖掉
+                #（bug·27ce：CI Linux 上测试抓到真实覆盖）。预检 + 异常双路径：
+                # Linux 靠预检（TOCTOU 窗口家庭场景可接受，远好于静默覆盖），
+                # Windows 保持原子防覆盖。
+                if cand.exists() or cand.is_symlink():
+                    continue
                 try:
                     os.rename(target, cand)
                     placed = cand
