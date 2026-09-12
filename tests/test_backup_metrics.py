@@ -89,8 +89,15 @@ def test_backup_failure_alerts_webhook(tmp_path, monkeypatch):
 
 
 def test_backup_verify_passes_on_real_sqlite_dump(tmp_path, monkeypatch):
+    if backup_svc.USE_PG:
+        # PG 跑法的测试环境没有 SQLite 实体库（真引擎 dump 无从谈起）；
+        # _verify_dump 真实逻辑由下方 corrupt/empty 用例在该跑法下照样覆盖
+        import pytest
+        pytest.skip("PG 跑法无 SQLite 实体库")
     _fresh_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_svc, "USE_PG", False)
+    monkeypatch.setattr(backup_svc, "_verify_dump", _REAL_VERIFY)   # 脱桩（PG 跑法下 _fresh_env 会桩化）
+    monkeypatch.setattr(backup_svc, "_dump_engine", _REAL_DUMP_ENGINE)  # 真 SQLite 引擎产真 dump
     st = backup_svc.run_backup_once(push=lambda *a: None)
     assert st["ok"] is True
     assert st["verified"] is True
@@ -102,6 +109,7 @@ def test_backup_verify_catches_corrupt_dump(tmp_path, monkeypatch):
     """截断/非库文件 → 验证失败：ok=False、webhook 上门、幂等位不写（次日重试）。"""
     _fresh_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_svc, "USE_PG", False)
+    monkeypatch.setattr(backup_svc, "_verify_dump", _REAL_VERIFY)   # 脱桩（同上）
 
     def _corrupt_engine(tmp):
         tmp.write_bytes(b"SQLite format 3\x00truncated garbage")
@@ -122,6 +130,7 @@ def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
     integrity_check 会说 ok，settings 表缺失兜住它。"""
     _fresh_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_svc, "USE_PG", False)
+    monkeypatch.setattr(backup_svc, "_verify_dump", _REAL_VERIFY)   # 脱桩（同上）
     monkeypatch.setattr(backup_svc, "_dump_engine", lambda tmp: (tmp.write_bytes(b""), tmp)[1])
     alerts: list[str] = []
     st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
@@ -132,6 +141,7 @@ def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
 # _fresh_env 会把 _verify_dump 桩化（PG 跑法下）——工具缺失用例需要还原真实
 # 实现才能覆盖真实代码路径，模块导入时存一份原件
 _REAL_VERIFY = backup_svc._verify_dump
+_REAL_DUMP_ENGINE = backup_svc._dump_engine
 
 
 def test_backup_verify_skipped_when_tool_missing(tmp_path, monkeypatch):
