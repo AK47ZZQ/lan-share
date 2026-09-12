@@ -135,14 +135,15 @@ _REAL_VERIFY = backup_svc._verify_dump
 
 
 def test_backup_verify_skipped_when_tool_missing(tmp_path, monkeypatch):
-    """PG 引擎下 pg_restore 缺失：诚实呈现 verified=None，不假装通过也不误报。"""
+    """PG 引擎下 pg_restore 不可达（PATH 与回退目录均无）：
+    诚实呈现 verified=None，不假装通过也不误报。"""
     _fresh_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_svc, "_verify_dump", _REAL_VERIFY)
+    monkeypatch.setattr(backup_svc, "PG_BIN_FALLBACK", str(tmp_path / "no-such-bin"))
 
     def _no_restore(name):
         return None if name == "pg_restore" else "/fake/bin/pg_dump"
     monkeypatch.setattr(backup_svc, "USE_PG", True)
-    import shutil as _shutil
     monkeypatch.setattr("shutil.which", _no_restore)
     monkeypatch.setattr(backup_svc, "_dump_engine", lambda tmp: (tmp.write_bytes(b"PGDMP-fake"), tmp)[1])
 
@@ -153,6 +154,31 @@ def test_backup_verify_skipped_when_tool_missing(tmp_path, monkeypatch):
     assert "pg_restore" in st["verify_detail"]
     assert alerts == []
     assert get_setting(backup_svc.LAST_DATE_KEY) == "2026-09-12"
+
+
+# ── PG 工具解析回退（2026-09-12：服务 PATH 无 pgsql bin 实录后的根修）──
+
+
+def test_resolve_tool_falls_back_to_deploy_dir(tmp_path, monkeypatch):
+    """PATH 找不到 → 回退 PG_BIN_FALLBACK 目录里的 <name>.exe。"""
+    bin_dir = tmp_path / "pgbin"
+    bin_dir.mkdir()
+    (bin_dir / "pg_dump.exe").write_bytes(b"fake")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr(backup_svc, "PG_BIN_FALLBACK", str(bin_dir))
+    got = backup_svc._resolve_tool("pg_dump")
+    assert got is not None and got.endswith("pg_dump.exe")
+
+
+def test_resolve_tool_none_when_neither_available(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr(backup_svc, "PG_BIN_FALLBACK", str(tmp_path / "no-such-bin"))
+    assert backup_svc._resolve_tool("pg_dump") is None
+
+
+def test_resolve_tool_prefers_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/pg_dump")
+    assert backup_svc._resolve_tool("pg_dump") == "/usr/bin/pg_dump"
 
 
 def test_backup_prune_keeps_pairs_balanced(tmp_path, monkeypatch):

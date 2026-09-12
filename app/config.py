@@ -20,6 +20,10 @@ LOG_ARCHIVE_MAX_AGE_DAYS = 14         # NSSM 轮转出的日志归档保留天�
 BACKUP_DIR = SHARE_ROOT / ".backups"   # 备份落点（数据目录内，随数据一起被网盘级保护）
 BACKUP_KEEP = 7                        # 保留最近 N 份（dump+元数据快照各算一份策略）
 BACKUP_HOUR = 4                        # 每日备份时刻（小时；清理循环每小时醒一次到点补跑）
+# PG 客户端工具回退目录：pg_dump/pg_restore 不保证在服务 PATH 上（NSSM 服务
+# 环境随重启刷新，PATH 漂移是本项目实录过的坑）——which() 找不到时按此目录
+# 兜底（Windows 部署默认安装位，env.bat LANSHARE_PGDUMP 同源；可用环境变量覆盖）
+PG_BIN_FALLBACK = os.environ.get("LANSHARE_PG_BIN", "C:/env/pgsql/bin")
 DISK_WATERMARK_PCT = 85.0              # 磁盘已用百分比告警阈值
 ALERT_COOLDOWN = 6 * 3600              # 同类告警冷却期（防轰炸）
 FEEDBACK_MAX_ATTACHMENT_MB = 25        # 反馈附件单件上限（other·0069：12→25，config 化）

@@ -30,7 +30,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from app.config import BACKUP_DIR, BACKUP_HOUR, BACKUP_KEEP, DB_PATH
+from app.config import BACKUP_DIR, BACKUP_HOUR, BACKUP_KEEP, DB_PATH, PG_BIN_FALLBACK
 from app.db import DATABASE_URL, USE_PG, _db
 from app.settings import get_setting, set_setting
 from app.services import cleanup
@@ -40,6 +40,21 @@ STATUS_KEY = "backup_last_status"
 LAST_DATE_KEY = "backup_last_date"
 
 _NO_DUMP = object()   # dump 阶段"引擎不支持/工具缺失"哨兵
+
+
+def _resolve_tool(name: str) -> str | None:
+    """PG 客户端工具解析：PATH → 部署回退目录（config.PG_BIN_FALLBACK）。
+
+    服务进程 PATH 不可依赖——NSSM 环境随重启刷新（2026-09-12 实录：旧实例
+    靠残留环境跑成 dump，重启后系统 PATH 已无 pgsql bin，当晚备份险些断链）。
+    返回可执行文件路径；两处都找不到返回 None（调用方按"工具缺失"语义处理）。
+    """
+    from shutil import which
+    p = which(name)
+    if p:
+        return p
+    cand = Path(PG_BIN_FALLBACK) / f"{name}.exe"
+    return str(cand) if cand.is_file() else None
 
 
 def _today() -> str:
@@ -125,14 +140,14 @@ def _dump_to(dst: Path):
 
 def _dump_engine(tmp: Path):
     if USE_PG:
-        from shutil import which
-        if which("pg_dump") is None:
+        dump_tool = _resolve_tool("pg_dump")
+        if dump_tool is None:
             return _NO_DUMP
         # list 形式传参免 shell 解释（终审 P0：os.system + f-string 拼连接串
         # 存在命令注入面，DATABASE_URL 虽由管理员环境变量控制也不该依赖它）；
         # -Fc custom 格式：pg_restore -l 可校验，且与外部主备份格式一致
         import subprocess
-        r = subprocess.run(["pg_dump", DATABASE_URL, "-Fc", "-f", str(tmp)],
+        r = subprocess.run([dump_tool, DATABASE_URL, "-Fc", "-f", str(tmp)],
                            capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
             tmp.unlink(missing_ok=True)
@@ -158,11 +173,11 @@ def _verify_dump(dst: Path) -> tuple[bool | None, str]:
     """
     try:
         if USE_PG:
-            from shutil import which
-            if which("pg_restore") is None:
-                return None, "pg_restore 不在 PATH，无法校验归档"
+            restore_tool = _resolve_tool("pg_restore")
+            if restore_tool is None:
+                return None, "pg_restore 不可达（PATH 与回退目录均无），无法校验归档"
             import subprocess
-            r = subprocess.run(["pg_restore", "-l", str(dst)],
+            r = subprocess.run([restore_tool, "-l", str(dst)],
                                capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
                 return False, f"pg_restore -l 失败: {r.stderr[-150:]}"
