@@ -14,6 +14,7 @@ CLEANUP_INTERVAL = 3600  # 1 hour
 CHUNK_SIZE = 5 * 1024 * 1024          # 分块上传 5MB/块
 UPLOAD_SESSION_TTL = 3 * 86400        # 上传会话 3 天过期（断点续传窗口）
 TRASH_DAYS = 30                       # 回收站保留天数
+LOG_ARCHIVE_MAX_AGE_DAYS = 14         # NSSM 轮转出的日志归档保留天数（app/services/log_sweep.py）
 
 # ── 备份编排与水位告警（B5）──────────────────────────────
 BACKUP_DIR = SHARE_ROOT / ".backups"   # 备份落点（数据目录内，随数据一起被网盘级保护）

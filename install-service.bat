@@ -20,6 +20,7 @@ echo [1/2] Registering lan-share-api ...
 "%NSSM%" set lan-share-api AppStdout "%PROJECT%\logs\api-stdout.log"
 "%NSSM%" set lan-share-api AppStderr "%PROJECT%\logs\api-stderr.log"
 "%NSSM%" set lan-share-api AppRotateFiles 1
+"%NSSM%" set lan-share-api AppRotateOnline 1
 "%NSSM%" set lan-share-api AppRotateBytes 10485760
 
 REM --- Caddy 服务 ---
@@ -32,6 +33,7 @@ echo [2/2] Registering lan-share-caddy ...
 "%NSSM%" set lan-share-caddy AppStdout "%PROJECT%\logs\caddy-stdout.log"
 "%NSSM%" set lan-share-caddy AppStderr "%PROJECT%\logs\caddy-stderr.log"
 "%NSSM%" set lan-share-caddy AppRotateFiles 1
+"%NSSM%" set lan-share-caddy AppRotateOnline 1
 "%NSSM%" set lan-share-caddy AppRotateBytes 10485760
 
 echo.

@@ -172,8 +172,15 @@ def test_refresh_index_scales_to_max_notes(client):
     elapsed = _t.perf_counter() - t0
     assert st["indexed"] == ni.MAX_NOTES
     assert elapsed < 30, f"2000 篇索引耗时 {elapsed:.1f}s 超预算"
-    # 二轮全命中（已同步）：应远快于首轮（无写入，仅比对）
+    # 二轮全命中（已同步）：断言零写入（updated/gone 均为 0）。原断言
+    # `steady < elapsed` 对比两次墙钟测量，但 refresh_index 每轮都要对全部
+    # 文件 stat+read head（比对在读取之后），两轮 IO 量几乎相同、只差 DB
+    # 写入——机器抖动就会倒挂（2026-09-12 全量跑偶发 1 failed，单跑无法
+    # 复现）。改用返回的确定性计数：既不抖，又能精确捕获"二轮退化为全量
+    # 重写"（届时 updated=满额）。墙钟只对首轮做量级预算。
     t1 = _t.perf_counter()
-    ni.refresh_index()
-    steady = _t.perf_counter() - t1
-    assert steady < elapsed, "稳态轮次应不慢于首轮"
+    steady = ni.refresh_index()
+    steady_elapsed = _t.perf_counter() - t1
+    assert steady["updated"] == 0, f"稳态轮次不应有写入，实测 updated={steady['updated']}"
+    assert steady["gone"] == 0, f"稳态轮次不应有删除，实测 gone={steady['gone']}"
+    assert steady_elapsed < 30, f"稳态轮次耗时 {steady_elapsed:.1f}s 超预算"

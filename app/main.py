@@ -27,6 +27,7 @@ from app.api import feedback                          # 反馈通道（v0.28）
 from app.api import events                             # SSE 实时通知（B3）
 from app.services import backup as backup_svc          # 每日备份编排（B5）
 from app.services import metrics as metrics_svc        # 指标与水位告警（B5）
+from app.services import log_sweep          # noqa: F401 —— NSSM 日志归档裁剪（import 即注册 sweep）
 from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
 
 for _mod in (admin, appver, auth, totp, profile, account, devices, files,
