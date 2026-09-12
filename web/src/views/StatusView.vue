@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // 运行状态（v3.39 新增）：服务健康探针 / 磁盘 / 版本对账 / 审计日志。
 import { onMounted, ref } from 'vue'
-import { api, type AuditItem, type ConsoleOverview } from '../api'
+import { api, type AuditItem, type ConsoleOverview, type MetricsSnapshot } from '../api'
 import { fmtTs, human } from '../ui'
 
 const err = ref('')
 const health = ref<{ status: string; db: boolean; data_dir: boolean; disk_free_gb: number; disk_total_gb: number; disk_used_pct: number } | null>(null)
 const ov = ref<ConsoleOverview | null>(null)
+const metrics = ref<MetricsSnapshot | null>(null)
 const audits = ref<AuditItem[]>([])
 const auditOpen = ref(false)
 const auditBusy = ref(false)
@@ -17,6 +18,8 @@ async function loadAll() {
   try { ov.value = await api.adminOverview() } catch (e) { err.value = (e as Error).message }
   // healthz 是免认证探针，这里仅作展示复用
   try { health.value = await fetch('/healthz').then(r => r.json()) } catch { /* */ }
+  // 备份卡读取失败不挡其他卡（admin 专属端点，越权场景静默）
+  try { metrics.value = await api.getMetrics() } catch { /* */ }
 }
 // 14 天流量迷你柱状图：以窗口内最大值为满高，全零时也是 2px 的底柱
 function barH(b: number): string {
@@ -54,6 +57,26 @@ onMounted(loadAll)
         <div class="status-item">数据库：<span class="badge" :class="health.db ? '' : 'danger'">{{ health.db ? '连通' : '失败' }}</span></div>
         <div class="status-item">数据目录：<span class="badge" :class="health.data_dir ? '' : 'danger'">{{ health.data_dir ? '可写' : '不可写' }}</span></div>
         <div class="status-item">磁盘：{{ health.disk_used_pct }}% · 剩 {{ health.disk_free_gb }} GB / {{ health.disk_total_gb }} GB</div>
+      </div>
+      <div v-else class="empty">读取中…</div>
+    </div>
+
+    <div class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
+      <div style="font-size:13.5px;font-weight:600">💾 备份</div>
+      <div v-if="metrics" class="status-grid">
+        <div class="status-item">兜底备份（服务端每日自动）：
+          <template v-if="metrics.backup">
+            <span class="badge" :class="metrics.backup.ok ? '' : 'danger'">{{ metrics.backup.ok ? '✓ 成功' : '⚠ 失败' }}</span>
+            <span v-if="metrics.backup.ok && metrics.backup.verified === true" class="badge">验证通过</span>
+            <span v-else-if="metrics.backup.ok && metrics.backup.verified === null" class="badge">未校验</span>
+            <span v-else-if="metrics.backup.ok" class="badge danger">验证失败</span>
+            <span style="color:var(--text-3);font-size:12px">{{ fmtTs(metrics.backup.ts) }} · {{ metrics.backup.detail }}</span>
+          </template>
+          <template v-else><span class="badge danger">暂无记录</span></template>
+        </div>
+        <div class="status-item" style="font-size:11.5px;color:var(--text-3)">
+          验证 = dump 落盘后立即校验完整性（integrity_check / pg_restore -l）；失败会自动 webhook 告警。
+        </div>
       </div>
       <div v-else class="empty">读取中…</div>
     </div>

@@ -4,6 +4,7 @@ import { handle, jpost } from './core'
 import type {
   AdminDevice, AdminNotificationItem, AdminSession, AdminUser, Announcement,
   AuditItem, BroadcastItem, ConsoleOverview, DupGroup, Grant, LargeFileItem,
+  MetricsSnapshot,
 } from './types'
 
 export const consoleApi = {
@@ -57,6 +58,8 @@ export const consoleApi = {
   getHealthReport: () => fetch('/api/admin/healthreport').then(r => handle<{ enabled: boolean; time: string; backup_dest: string; webhook_set: boolean }>(r)),
   setHealthReport: (enabled: boolean, time: string) => jpost('/api/admin/healthreport', { enabled, time }).then(r => handle<{ ok: boolean; enabled: boolean; time: string }>(r)),
   testHealthReport: () => jpost('/api/admin/healthreport/test', {}).then(r => handle<{ ok: boolean; sent: boolean | null; warn: boolean; report: string; webhook_set: boolean }>(r)),
+  // 运行指标（v3.52 B5；backup.verified = 兜底 dump 内联验证状态）
+  getMetrics: () => fetch('/api/metrics').then(r => handle<MetricsSnapshot>(r)),
   getPublicUrl: () => fetch('/api/public-url').then(r => handle<{ public_base_url: string; public_base_url_alt: string }>(r)),
   setPublicUrl: (url: string, urlAlt = '') => jpost('/api/admin/public-url', { url, url_alt: urlAlt }).then(r => handle<{ ok: boolean }>(r)),
 

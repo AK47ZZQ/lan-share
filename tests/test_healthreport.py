@@ -61,6 +61,11 @@ def test_format_fresh_vs_stale(fake_backup, monkeypatch):
     monkeypatch.setattr(hr.shutil, "disk_usage", lambda _: _Du())
     d = hr.gather_health()
     assert d["disk_used_pct"] < 50
+    # 兜底状态显式钉为"成功且验证通过"：本用例测的是外部备份新鲜度的格式化，
+    # 不该隐式依赖 settings 里其他测试文件残留的 backup_last_status
+    d["backup"]["orchestrator"] = {"ok": True, "verified": True,
+                                   "verify_detail": "integrity ok", "detail": "2 份",
+                                   "ts": time.time(), "files": []}
     body, warn = hr.format_report(d)
     assert "备份" in body and "成员" in body
     assert warn is False
@@ -74,6 +79,49 @@ def test_format_missing_backup_warns(monkeypatch, tmp_path):
     monkeypatch.setattr(hr, "BACKUP_DEST", tmp_path / "nothing")
     body, warn = hr.format_report(hr.gather_health())
     assert "未发现备份产物" in body and warn is True
+
+
+def test_format_orchestrator_branches(fake_backup, monkeypatch):
+    """兜底备份（B5）验证状态的日报四分支：无记录/验证通过/未校验/失败。
+    磁盘钉住同 test_format_fresh_vs_stale（宿主机 C 盘可能已在水位线上）。"""
+    import shutil as _sh
+    du = _sh.disk_usage(str(hr.SHARE_ROOT))
+
+    class _Du(tuple):
+        def __new__(cls):
+            return super().__new__(cls, (du.used // 4, du.total))
+        @property
+        def used(self):
+            return du.used // 4
+        @property
+        def total(self):
+            return du.total
+        @property
+        def free(self):
+            return du.total - du.used // 4
+
+    monkeypatch.setattr(hr.shutil, "disk_usage", lambda _: _Du())
+    d = hr.gather_health()
+
+    d["backup"]["orchestrator"] = None
+    body, warn = hr.format_report(d)
+    assert "暂无运行记录" in body and warn is True
+
+    ok_st = {"ok": True, "verified": True, "verify_detail": "integrity ok（settings 8 条）",
+             "detail": "2 份", "ts": time.time(), "files": []}
+    d["backup"]["orchestrator"] = dict(ok_st)
+    body, warn = hr.format_report(d)
+    assert "验证通过" in body and warn is False
+
+    d["backup"]["orchestrator"] = {**ok_st, "verified": None,
+                                   "verify_detail": "pg_restore 不在 PATH，无法校验归档"}
+    body, warn = hr.format_report(d)
+    assert "未校验" in body and warn is False   # 缺工具≠数据有险：呈现不告警
+
+    d["backup"]["orchestrator"] = {"ok": False, "detail": "pg_dump 失败",
+                                   "ts": time.time(), "files": []}
+    body, warn = hr.format_report(d)
+    assert "最近一轮失败" in body and warn is True
 
 
 def test_config_roundtrip(auth, monkeypatch):

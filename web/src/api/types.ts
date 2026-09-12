@@ -51,6 +51,11 @@ export interface ConsoleOverview {
 }
 export interface LargeFileItem { path: string; size: number; mtime: number }
 export interface DupGroup { size: number; paths: string[]; wasted: number }
+export interface MetricsSnapshot {
+  requests: { window_seconds: number; total: number; by_status: Record<string, number>; latency_ms: { p50: number; p95: number; avg: number } }
+  disk_used_pct: number
+  backup: { ts: number; ok: boolean; detail: string; files: string[]; verified?: boolean | null; verify_detail?: string } | null
+}
 export interface AuditItem { ts: number; ip: string; action: string; target: string; detail: string; username: string }
 export interface AdminSession { token_hash: string; username: string; created_at: number; expires_at: number; ip: string; ua: string }
 export interface AdminDevice { id: number; username: string; name: string; created_at: number; last_seen: number | null; expires_at: number }
