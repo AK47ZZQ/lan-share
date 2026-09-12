@@ -149,6 +149,26 @@ def format_report(d: dict) -> tuple[str, bool]:
                      + (" ⚠️ 超过 26h 未更新" if stale else ""))
         warn = warn or stale
 
+    # 进程内兜底备份（B5）验证状态：ok=False 已含验证失败（编排按失败处理）；
+    # verified=None 是校验工具缺失——呈现但不置 warn（缺工具≠数据有险）
+    o = b.get("orchestrator")
+    if o is None:
+        lines.append("🗄️ 兜底备份：暂无运行记录（服务端每日自动备份）⚠️")
+        warn = True
+    elif o.get("ok"):
+        v = o.get("verified")
+        if v is True:
+            lines.append(f"🗄️ 兜底备份：今日成功，验证通过（{o.get('verify_detail', '')}）")
+        elif v is None:
+            lines.append(f"🗄️ 兜底备份：今日成功，未校验"
+                         f"（{o.get('verify_detail', '工具缺失')}）")
+        else:
+            lines.append("🗄️ 兜底备份：验证失败 ⚠️")
+            warn = True
+    else:
+        lines.append(f"🗄️ 兜底备份：最近一轮失败（{o.get('detail', '')}）⚠️")
+        warn = True
+
     cert = d["cert_days_left"]
     if cert is None:
         lines.append("🔐 证书：读取失败（无 cert.pem？）⚠️")

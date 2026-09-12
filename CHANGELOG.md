@@ -2,6 +2,16 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-12 — 服务端 v3.53：兜底备份内联验证（restore drill）
+
+下午自主批（主人离场，功能发现记录见 docs/feature-proposal-2026-09-12.md）。
+B5 兜底 dump 落盘后立即验证：SQLite `integrity_check`+settings 表可读 / PG
+改 `-Fc` custom 格式（与外部主备份统一）+ `pg_restore -l` 只读校验；验证
+失败按备份失败处理（webhook 上门、幂等位不写次日重试），工具缺失诚实呈现
+`verified=None`。healthreport 日报与 `/api/metrics` 透传验证状态。全量
+pytest 267（基线 263+4）+ 消融实验（禁用验证→损坏 dump 用例转红）+ 生产库
+只读 E2E 冒烟（-Fc dump 454KB / pg_restore -l 63 表可读）三重验证。
+
 ## 2026-09-12 — App v0.28.6+80：bug·0663 修复分发
 
 值班反馈清零批（27ce CI 三连修 + 0663 笔记页 404 特化回退）之后补出包：

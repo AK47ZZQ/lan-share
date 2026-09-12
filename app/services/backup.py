@@ -6,8 +6,14 @@
   `_tick` 检查"今天是否已备份"（settings 存日期），到 BACKUP_HOUR 后的
   首个本轮补跑——服务凌晨重启也不会漏当天备份；
 - dump：SQLite 走 `sqlite3.Connection.backup`（在线一致性快照，不影响
-  服务中的连接）；PG 走 `pg_dump` 子进程（DATABASE_URL 直传）——
+  服务中的连接）；PG 走 `pg_dump` 子进程（DATABASE_URL 直传，`-Fc` custom
+  格式，与外部主备份 backup.bat 的产物格式一致）——
   pg_dump 不在 PATH 时记失败并走 webhook 告警（不静默假装成功）；
+- **验证（restore drill 内联）**：dump 落盘后立即做引擎恰当的完整性校验
+  （SQLite `PRAGMA integrity_check` + settings 表可读；PG `pg_restore -l`
+  只读归档目录）——"生成成功"不等于"产物有效"，验证失败按备份失败处理
+  （告警上门、不写当日幂等位，次日自然重试）；校验工具缺失呈现
+  `verified=None`（诚实呈现，不假装通过也不误报失败）；
 - 元数据快照：settings 表全量 + 版本信息导 JSON（丢库后重建配置的最小集）；
 - 保留策略：BACKUP_KEEP 份滚动删除；状态写 settings（healthreport 与
   /api/metrics 只读呈现），失败走 services/webhook（SSRF 防护通道）。
@@ -75,6 +81,12 @@ def run_backup_once(push=None) -> dict:
             status["detail"] = "当前引擎无可用 dump 工具（PG 需 pg_dump 在 PATH）"
             raise RuntimeError(status["detail"])
         status["files"].append(str(dump))
+        verified, verify_detail = _verify_dump(dump)
+        if verified is False:
+            status["detail"] = f"备份验证失败: {verify_detail}"
+            raise RuntimeError(status["detail"])
+        status["verified"] = verified
+        status["verify_detail"] = verify_detail
         meta = BACKUP_DIR / f"settings-{stamp}.json"
         _write_settings_snapshot(meta)
         status["files"].append(str(meta))
@@ -117,9 +129,10 @@ def _dump_engine(tmp: Path):
         if which("pg_dump") is None:
             return _NO_DUMP
         # list 形式传参免 shell 解释（终审 P0：os.system + f-string 拼连接串
-        # 存在命令注入面，DATABASE_URL 虽由管理员环境变量控制也不该依赖它）
+        # 存在命令注入面，DATABASE_URL 虽由管理员环境变量控制也不该依赖它）；
+        # -Fc custom 格式：pg_restore -l 可校验，且与外部主备份格式一致
         import subprocess
-        r = subprocess.run(["pg_dump", DATABASE_URL, "-f", str(tmp)],
+        r = subprocess.run(["pg_dump", DATABASE_URL, "-Fc", "-f", str(tmp)],
                            capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
             tmp.unlink(missing_ok=True)
@@ -135,6 +148,38 @@ def _dump_engine(tmp: Path):
     finally:
         src.close()
     return tmp
+
+
+def _verify_dump(dst: Path) -> tuple[bool | None, str]:
+    """dump 完整性校验（restore drill 内联）。返回 (结果, 说明)：
+
+    - True：校验通过；False：产物损坏（编排按备份失败处理——告警 + 幂等位不写）；
+    - None：校验工具缺失（诚实呈现，不假装通过也不误报）。
+    """
+    try:
+        if USE_PG:
+            from shutil import which
+            if which("pg_restore") is None:
+                return None, "pg_restore 不在 PATH，无法校验归档"
+            import subprocess
+            r = subprocess.run(["pg_restore", "-l", str(dst)],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                return False, f"pg_restore -l 失败: {r.stderr[-150:]}"
+            return True, "归档目录可读"
+        con = sqlite3.connect(f"file:{dst.as_posix()}?mode=ro", uri=True)
+        try:
+            row = con.execute("PRAGMA integrity_check").fetchone()
+            # settings 表可读：settings 快照恢复依赖的核心表确实在 dump 里
+            # （backup 模块已持有该口径，见 _write_settings_snapshot）
+            n = con.execute("SELECT count(*) FROM settings").fetchone()[0]
+        finally:
+            con.close()
+        if row[0] != "ok":
+            return False, f"integrity_check: {row[0]}"
+        return True, f"integrity ok（settings {n} 条）"
+    except Exception as e:
+        return False, str(e)[:200]
 
 
 def _write_settings_snapshot(p: Path) -> None:

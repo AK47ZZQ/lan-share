@@ -112,6 +112,24 @@ curl -k https://192.168.1.100:8765/healthz
 可见）。失败走 webhook 告警（与水位告警同通道）。两道备份互相独立：
 外部任务失效时兜底仍每日产出，恢复演练仍以上节产物为准。
 
+**dump 内联验证（2026-09-12 功能批）**：兜底 dump 落盘后立即做引擎恰当的
+完整性校验——SQLite `PRAGMA integrity_check` + settings 表可读；PG 走
+`-Fc` custom 格式（与外部主备份格式一致）+ `pg_restore -l` 只读归档目录。
+验证失败按备份失败处理（webhook 告警上门、当日幂等位不写，次日自然重试）；
+校验工具缺失呈现 `verified=None`（不假装通过也不误报），healthreport 日报
+与 `/api/metrics` 均可见。动机：9-11 晚外部任务被杀留 0 字节 dump 无告警的
+同构风险——"生成成功"不等于"产物有效"，最后防线自身必须有验证。注意
+`integrity_check`/`pg_restore -l` 只证明结构完整，不证明业务数据正确，
+每月 Tier 2 全量恢复演练仍不可替代。
+
+- 兜底 dump 的应急恢复（PG custom 格式；`--clean` 恢复前先停 api 服务）：
+  ```bat
+  C:\env\pgsql\bin\pg_restore.exe -h 127.0.0.1 -p 5433 -U lanshare -d lanshare --clean ^
+    C:\lan-share\.backups\meta-YYYYMMDD-HHMMSS.db
+  ```
+  SQLite 引擎部署（无 DATABASE_URL）时 `.backups\meta-*.db` 即库文件本体，
+  停服后直接改名替换 `SHARE_ROOT\.meta.db`。
+
 ### 4.1 恢复演练（restore-drill.bat）
 
 **Tier 1 — 只读，安全，可定期自动跑**（`scripts\restore-drill.bat`）：

@@ -29,6 +29,10 @@ def _fresh_env(tmp_path, monkeypatch):
             tmp.write_bytes(b"PGDMP")
             return tmp
         monkeypatch.setattr(backup_svc, "_dump_engine", _fake_engine)
+        # 桩 dump（b"PGDMP"）过不了真 pg_restore -l——本组测试的被测对象是
+        # 编排逻辑，验证一并用桩钉死；验证逻辑本身的真实用例见下方
+        # test_backup_verify_*（统一强制 SQLite 引擎，双引擎跑法下行为一致）
+        monkeypatch.setattr(backup_svc, "_verify_dump", lambda p: (True, "stub"))
 
 
 def test_backup_run_once_writes_dump_and_status(tmp_path, monkeypatch):
@@ -74,6 +78,81 @@ def test_backup_failure_alerts_webhook(tmp_path, monkeypatch):
     st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
     assert st["ok"] is False
     assert alerts == ["备份失败"]             # 失败必须上门提醒
+
+
+# ── restore drill 内联验证（2026-09-12 功能批：B5 dump 从未验证的缺口）──
+#
+# 统一强制 SQLite 引擎（monkeypatch backup_svc.USE_PG）：验证语义与引擎
+# 无关的部分（编排串接/失败告警/幂等位）在这里钉死，SQLite 路径可真实
+# 走 integrity_check，双引擎跑法下行为一致。消融证据：删掉 run_backup_once
+# 里的验证调用，test_backup_corrupt_dump_* 立即转红（坏 dump 会记 ok=True）。
+
+
+def test_backup_verify_passes_on_real_sqlite_dump(tmp_path, monkeypatch):
+    _fresh_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(backup_svc, "USE_PG", False)
+    st = backup_svc.run_backup_once(push=lambda *a: None)
+    assert st["ok"] is True
+    assert st["verified"] is True
+    assert "integrity ok" in st["verify_detail"]
+    assert st["verify_detail"].endswith("）")  # settings 条数也在 detail 里
+
+
+def test_backup_verify_catches_corrupt_dump(tmp_path, monkeypatch):
+    """截断/非库文件 → 验证失败：ok=False、webhook 上门、幂等位不写（次日重试）。"""
+    _fresh_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(backup_svc, "USE_PG", False)
+
+    def _corrupt_engine(tmp):
+        tmp.write_bytes(b"SQLite format 3\x00truncated garbage")
+        return tmp
+    monkeypatch.setattr(backup_svc, "_dump_engine", _corrupt_engine)
+
+    set_setting(backup_svc.LAST_DATE_KEY, "")
+    alerts: list[str] = []
+    st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
+    assert st["ok"] is False
+    assert "备份验证失败" in st["detail"]
+    assert alerts == ["备份失败"]
+    assert get_setting(backup_svc.LAST_DATE_KEY) != "2026-09-12"   # 明天会重试
+
+
+def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
+    """0 字节文件是 SQLite 眼里的合法空库（9-11 外部任务被杀的同构事故）——
+    integrity_check 会说 ok，settings 表缺失兜住它。"""
+    _fresh_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(backup_svc, "USE_PG", False)
+    monkeypatch.setattr(backup_svc, "_dump_engine", lambda tmp: (tmp.write_bytes(b""), tmp)[1])
+    alerts: list[str] = []
+    st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
+    assert st["ok"] is False
+    assert alerts == ["备份失败"]
+
+
+# _fresh_env 会把 _verify_dump 桩化（PG 跑法下）——工具缺失用例需要还原真实
+# 实现才能覆盖真实代码路径，模块导入时存一份原件
+_REAL_VERIFY = backup_svc._verify_dump
+
+
+def test_backup_verify_skipped_when_tool_missing(tmp_path, monkeypatch):
+    """PG 引擎下 pg_restore 缺失：诚实呈现 verified=None，不假装通过也不误报。"""
+    _fresh_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(backup_svc, "_verify_dump", _REAL_VERIFY)
+
+    def _no_restore(name):
+        return None if name == "pg_restore" else "/fake/bin/pg_dump"
+    monkeypatch.setattr(backup_svc, "USE_PG", True)
+    import shutil as _shutil
+    monkeypatch.setattr("shutil.which", _no_restore)
+    monkeypatch.setattr(backup_svc, "_dump_engine", lambda tmp: (tmp.write_bytes(b"PGDMP-fake"), tmp)[1])
+
+    alerts: list[str] = []
+    st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
+    assert st["ok"] is True                   # 备份本身成功
+    assert st["verified"] is None             # 但验证状态诚实标注
+    assert "pg_restore" in st["verify_detail"]
+    assert alerts == []
+    assert get_setting(backup_svc.LAST_DATE_KEY) == "2026-09-12"
 
 
 def test_backup_prune_keeps_pairs_balanced(tmp_path, monkeypatch):
