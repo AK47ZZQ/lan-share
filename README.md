@@ -33,7 +33,7 @@ Webhook**、可选 **TOTP 两步验证**、手机直传和**上传二维码**、
 ├── 运维手册 .......... docs/OPERATIONS.md（服务/备份/证书/故障）
 ├── 项目记忆 .......... 项目记忆/（架构现状/里程碑/踩坑/发版SOP/验收红线）
 ├── Git 工作流 ........ docs/GIT.md
-└── 演进规划 .......... PLAN-v3.md（§7 远景：CF Tunnel/移动 App；v2 存档：PLAN.md）
+└── 演进规划（已交付归档） .. docs/archive/PLAN-v3.md（§7 远景）· PLAN-v2.md
 ```
 
 ## 快速开始
@@ -155,7 +155,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 史脱节）。APK 经自家分享链接在 `App安装包/lanshare.apk` 分发（30 天有效，同文件
 覆盖 + 新建分享）；新版本通过 App 内「关于与检查更新」升级，无需手动换包。
 R8 已关（WorkManager/Room 在裁剪下启动即崩，见 `docs/DEVELOPMENT.md`）。
-**当前测试基线：pytest 247 项（SQLite）+ PostgreSQL 双引擎 / web 单测 19 项 + vue-tsc + 契约路径对齐守卫 / Dart 191 项 + analyze 0 + UI 分层守卫（基线 0）/ 契约 132 路径 / ruff·mypy 全绿。**
+**当前测试基线：pytest 256 项（SQLite）+ PostgreSQL 双引擎 254 项 / web 单测 19 项 + vue-tsc + 契约路径对齐守卫 / Dart 201 项 + analyze 0 + UI 分层守卫（基线 0）/ 契约 132 路径 / ruff·mypy·pip-audit 全绿。**
 完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
 
 **WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
@@ -215,7 +215,7 @@ lan-share/
 ├── scripts/                工具（build-apk.bat 镜像构建；migrate_sqlite_to_pg.py 迁库）
 ├── docs/                   API / SECURITY / DEVELOPMENT / STATUS-v3 / DESIGN-v3 / DEBUG-ACCOUNT / GIT
 ├── data/                   运行时数据根（不入库：用户文件/.meta.db/.trash/...）
-├── PLAN-v3.md              v3 规划；PLAN.md 为 v2 存档
+├── docs/archive/            规划与快照归档（PLAN-v2/v3·PROJECT-OVERVIEW·STATUS 旧段）
 ├── CHANGELOG.md            版本历史
 ├── backup.bat              每日 23:30 自动跑（pg_dump -Fc + 文件增量）
 ├── check.bat               本地质量门禁（pytest 基线）
@@ -333,4 +333,4 @@ docx 兼容预览 → v0.20 九项体验批次 → **v0.21.2+63 改进建议 9.6
 相册被删识别/改名不重传/管理服务端相册；复制服务器路径；照片查看器
 平移手势+长按菜单；照片点赞评论下线）。
 规格与设计见 `docs/DESIGN-v3/APP-*.md`。
-详见 `docs/STATUS-v3.md`；规划见 `PLAN-v3.md`（§7 远景：CF Tunnel/域名试点）。
+详见 `docs/STATUS-v3.md`；规划（已交付）归档于 `docs/archive/PLAN-v3.md`。
