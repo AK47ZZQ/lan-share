@@ -215,8 +215,8 @@ async def admin_test_healthreport(request: Request, _admin=Depends(require_admin
 
 # ─── 每日调度（startup 起线程，模式同 system.cleanup_loop）────────
 
-@router.on_event("startup")
-async def start_healthreport():
+async def startup():
+    """由 app.main 的 lifespan 统一调度（router.on_event 已弃用）。"""
     import asyncio
     import logging
 

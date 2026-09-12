@@ -258,10 +258,11 @@ def admin_delete_draft(bid: str, _admin=Depends(require_admin)):
     return {"ok": True}
 
 
-@router.on_event("startup")
-async def start_scheduled_broadcasts():
+async def startup():
     """定时广播：周期扫描到期的 scheduled 记录并发送（与清理循环同款
-    线程池模式——同步 DB IO 不进事件循环）。"""
+    线程池模式——同步 DB IO 不进事件循环）。
+
+    由 app.main 的 lifespan 统一调度（router.on_event 已弃用）。"""
     async def loop():
         import logging
         while True:

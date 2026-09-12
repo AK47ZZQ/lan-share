@@ -35,7 +35,7 @@ def run_registered() -> None:
 
 
 async def startup() -> None:
-    """FastAPI startup 钩子：先跑一轮再起周期循环（由 system.router 注册）。"""
+    """先跑一轮再起周期循环（由 app.main lifespan 统一调度）。"""
 
     def _run_all():
         _cleanup_tmp()

@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from urllib.parse import quote
+from contextlib import asynccontextmanager
 
 from app.config import PROJECT_ROOT
 from app.db import init_db
@@ -37,6 +38,20 @@ for _mod in (admin, appver, auth, totp, profile, account, devices, files,
     app.include_router(_mod.router)
 backup_svc.ensure_scheduled()   # B5：进程内每日备份兜底（外部计划任务失效时的第二道防线）
 metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发现遗漏，终审未覆盖注册面）
+
+# ─── lifespan：startup 四件套统一调度（on_event 弃用迁移）─────────────
+# 原四个 router.on_event("startup")（FastAPI 已弃用）改为各域模块暴露
+# startup() 协程，在此按原注册顺序串接（system→notify→healthreport→events）。
+# main 是唯一同时持有全部路由模块的地方，故在组装根收口而非散回各模块。
+@asynccontextmanager
+async def _lifespan(_app):
+    await system.startup()          # 清理五件套 + 注册式 sweep 周期循环
+    await notify.startup()          # 定时广播扫描循环
+    await healthreport.startup()    # 健康日报每日调度
+    await events.startup()          # 记录主事件循环（SSE publish 线程桥）
+    yield
+
+app.router.lifespan_context = _lifespan
 
 # CSP：脚本全部外部化（script-src 'self'）；样式保留内联（style-src 'unsafe-inline'，
 # 仅 CSS 注入风险，收益/成本比合理）。前端已无任何内联事件处理器。

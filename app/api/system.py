@@ -14,9 +14,10 @@ from app.services import cleanup
 router = APIRouter()
 
 
-@router.on_event("startup")
-async def start_cleanup():
-    """首轮清理 + 周期循环（通用五件套 + 各域注册的 sweep）。"""
+async def startup():
+    """首轮清理 + 周期循环（通用五件套 + 各域注册的 sweep）。
+
+    由 app.main 的 lifespan 统一调度（router.on_event 已弃用）。"""
     await cleanup.startup()
 
 

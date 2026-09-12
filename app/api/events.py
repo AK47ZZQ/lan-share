@@ -37,9 +37,10 @@ _subs: dict[int, set] = {}
 _subs_mu = threading.Lock()
 
 
-@router.on_event("startup")
-async def _capture_loop():
-    """记录主事件循环（publish 从线程池线程 call_soon_threadsafe 用）。"""
+async def startup():
+    """记录主事件循环（publish 从线程池线程 call_soon_threadsafe 用）。
+
+    由 app.main 的 lifespan 统一调度（router.on_event 已弃用）。"""
     global _loop
     _loop = asyncio.get_running_loop()
 
