@@ -10,8 +10,11 @@
 | `lan-share-api` | `server.py`（uvicorn，FastAPI） | `127.0.0.1:8766`（仅本机，Caddy 反代） |
 
 > **端口/python 解释器改一处生效**：仓库根 `env.bat` 是部署单一事实源
-> （07 批次5），start.bat/stop.bat 已接线；改端口或 venv 路径只动它。
-> install-service.bat/backup.bat/Caddyfile 的同值归位待下次运维窗口。
+> （07 批次5），start.bat/stop.bat/install-service.bat（2026-09-12 C1 批补
+> AppRotateOnline 并对齐活服务 NSSM 配置）/backup.bat（2026-09-12 C4 批收敛
+> 到 env.bat + %~dp0，E2E 实跑通过）已全部接线；改端口或 venv 路径只动它。
+> 仅剩 Caddyfile 的同值归位——Caddyfile 不吃 bat 变量、需 {$env} 占位符改造
+> 且动 TLS/反代配置须窗口验证，评估风险>收益暂缓。
 | `lan-share-caddy` | `caddy.exe`（仓库根 Caddyfile） | `:8765/:8767/:443`（TLS）+ `:80/:8080`（308 跳转） |
 | `lan-share-postgresql` | PostgreSQL 16 | `127.0.0.1:5433` |
 

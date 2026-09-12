@@ -53,8 +53,9 @@
   （social.py 合流）/ qr；files.py 1030→460 行
 - `app/contract.py` + `contracts/openapi.json` + `tests/test_contract.py` +
   `scripts/export-openapi.py`：API 契约快照（111 路径入库，变更即测试红灯）
-- `env.bat`：部署端口/python 路径单一事实源（start.bat/stop.bat 已接线；
-  install-service/backup.bat/Caddyfile 待运维窗口归位）
+- `env.bat`：部署端口/python 路径单一事实源（start.bat/stop.bat/install-service.bat/
+  backup.bat 已接线（2026-09-12 C1/C4 批）；仅 Caddyfile 暂缓——需 {$env} 占位符
+  改造且动 TLS/反代配置须运维窗口）
 - mobile：`data/api/protocol.dart`（分片上限常量）+ `data/api/upload_client.dart`
   （上传协议单实现，两引擎共用）+ `data/media_kinds.dart`（扩展名事实源）+
   `backup/backup_keys.dart`（备份 prefs 键常量）+ `test/upload_client_test.dart`

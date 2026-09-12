@@ -7,11 +7,15 @@ REM   docs are now aligned to 23:30. Confirm the registered task time with
 REM   `schtasks /Query /TN "lan-share-backup" /V /FO LIST` and fix all four places together.
 REM DB dumps are date-stamped and only the last 2 days are kept (older deleted here).
 REM Requires PGPASSFILE (C:\pginstall\pgpass.conf) - password never lives in this file.
+REM Single source of truth: all paths come from env.bat (07 review batch 5
+REM deployment convergence, finished 2026-09-12). %~dp0 keeps the script
+REM location-relative so the junction path and any future move both work.
+call "%~dp0env.bat"
 setlocal
-set PYTHON=C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
-set PGDUMP=C:\env\pgsql\bin\pg_dump.exe
-set PGPASSFILE=C:\pginstall\pgpass.conf
-if "%BACKUP_DEST%"=="" set BACKUP_DEST=C:\lan-share-backup
+set "PGDUMP=%LANSHARE_PGDUMP%"
+set "PGPASSFILE=%LANSHARE_PGPASSFILE%"
+REM (old PYTHON= line removed: never used by this script)
+if "%BACKUP_DEST%"=="" set "BACKUP_DEST=%LANSHARE_BACKUP_DEST%"
 
 echo === LAN Share backup to %BACKUP_DEST% ===
 if not exist "%BACKUP_DEST%" mkdir "%BACKUP_DEST%"
@@ -49,7 +53,7 @@ forfiles -p "%BACKUP_DEST%\db" -m lanshare-*.sha256 -d -2 -c "cmd /c del @path" 
 REM -- file data: incremental (copy newer, never mirror-delete) --
 REM /MT:2（改进建议 9.6-P2-4）：默认 /MT:8 全速复制会把磁盘 IO 吃满，
 REM 备份窗口内 Web/App 的列表与缩略图请求明显变慢；压到 2 线程换平顺
-robocopy "C:\lan-share\data" "%BACKUP_DEST%\files" /E /XO /R:2 /W:5 /MT:2 ^
+robocopy "%LANSHARE_ROOT%data" "%BACKUP_DEST%\files" /E /XO /R:2 /W:5 /MT:2 ^
   /XD ".chunks" ".zips" "tmp" /XF ".meta.db" ".meta.db-wal" ".meta.db-shm" /NFL /NDL /NP
 if %ERRORLEVEL% GEQ 8 (
   echo BACKUP FAILED robocopy exit %ERRORLEVEL%
