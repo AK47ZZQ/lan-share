@@ -8,7 +8,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData;
-import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/errors.dart';
@@ -244,9 +243,7 @@ class _NotesPageState extends State<NotesPage> {
       if (!mounted) return;
       // 404 = 记忆的上次目录已被删除（电脑端删/改名是常态，bug·0663 实锤）：
       // 回退到"选择目录"起始态并清记忆，不再把 DioException 原文甩用户脸上
-      if (e is DioException &&
-          e.response?.statusCode == 404 &&
-          (_dir?.isNotEmpty ?? false)) {
+      if (isNotFound(e) && (_dir?.isNotEmpty ?? false)) {
         (await SharedPreferences.getInstance()).remove(kNotesLastDir);
         if (!mounted) return;
         setState(() { _dir = null; _error = null; _loading = false; });

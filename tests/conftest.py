@@ -94,6 +94,18 @@ def auth(client):
     return c
 
 
+@pytest.fixture(autouse=True)
+def _pg_conn_recycle():
+    """PG 模式下每个测试结束回收进程内全部 PG 连接（bug·27ce 续）：
+    连接只在 threading.local 缓存、进程退出才关——B3~B5 之后带 lifespan 的
+    TestClient 测试暴涨，CI 容器 max_connections=100 被峰值打爆
+    （too many clients already）。各线程的悬挂引用由 _db() 的 ping 自愈重建。"""
+    yield
+    if _PG_URL:
+        from app.db import close_all_pg_connections
+        close_all_pg_connections()
+
+
 @pytest.fixture()
 def workdir():
     """每个测试独立的根下子目录，测试结束清理。"""

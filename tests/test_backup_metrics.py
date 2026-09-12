@@ -18,6 +18,14 @@ from app.settings import get_setting, set_setting
 
 def _fresh_env(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_svc, "BACKUP_DIR", tmp_path / "b")
+    # PG 引擎下 dump 依赖 pg_dump 在 PATH（CI/本机不一定有）——本组测试的
+    # 被测对象是**编排逻辑**（状态/幂等/保留/告警），引擎桩化解耦；
+    # 引擎不可用的告警路径另有专项用例（_NO_DUMP 桩）
+    if backup_svc.USE_PG:
+        def _fake_engine(tmp):
+            tmp.write_bytes(b"PGDMP")
+            return tmp
+        monkeypatch.setattr(backup_svc, "_dump_engine", _fake_engine)
 
 
 def test_backup_run_once_writes_dump_and_status(tmp_path, monkeypatch):

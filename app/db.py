@@ -250,21 +250,29 @@ atexit.register(close_all_pg_connections)
 
 def _db():
     """每线程独立连接。PG 断线自愈：连接池里的缓存连接在 PG 重启/网络闪断后
-    会变死连接，超过 30s 未用时先廉价 ping 一次，失败则重建，避免全站持续 500。"""
+    会变死连接——已关闭/损坏的连接**立即**重建（不做 30s 节流：conftest 每测试
+    回收连接后，测试间隔可能远小于 30s，bug·27ce CI 实测踩到）；超过 30s 未用
+    才廉价 ping 一次，失败也重建，避免全站持续 500。"""
     conn = getattr(_db_local, "conn", None)
     if conn is not None and USE_PG:
+        inner = getattr(conn, "_conn", None)
+        closed = inner is not None and (inner.closed or inner.broken)
         now = time.monotonic()
-        if now - getattr(_db_local, "last_ok", 0.0) > 30:
-            try:
-                conn.execute("SELECT 1")
-                _db_local.last_ok = now
-            except Exception:
+        if closed or now - getattr(_db_local, "last_ok", 0.0) > 30:
+            if not closed:
                 try:
-                    conn.close()
+                    conn.execute("SELECT 1")
+                    _db_local.last_ok = now
+                    return conn
                 except Exception:
                     pass
-                conn = None
-                _db_local.conn = None
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
+            _db_local.conn = None
+            now = time.monotonic()
     if conn is None:
         if USE_PG:
             _reap_pg_conns()
