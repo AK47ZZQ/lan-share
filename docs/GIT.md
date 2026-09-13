@@ -1,6 +1,8 @@
 # Git 工作流约定
 
 > 本仓库为单管理员个人项目，本地 Git 管理。原则：**简单、可回滚**。
+> AI 代理的提交纪律（禁 `add -A`、中文提交信息用 `-F` 文件、多会话避撞）
+> 见根目录 [AGENTS.md](../AGENTS.md) §4.3/§4.4。
 
 ## 什么在库里、什么不在
 
@@ -47,6 +49,6 @@ git push origin main --tags
 git status                                   # 看到 "ahead N" 即本地未推送
 ```
 
-恢复：从远端 clone 后按 `HANDOVER.md` §入口文件走；`data/` 与 `certs/*.pem`
+恢复：从远端 clone 后按 `HANDOFF.md` §入口文件走；`data/` 与 `certs/*.pem`
 不入库，需从本机 `C:\lan-share-backup`（数据备份）与 `C:\lan-share\certs`
 （TLS 私钥）另行恢复——远端只保代码，不保运行数据。

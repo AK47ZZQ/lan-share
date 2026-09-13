@@ -1,7 +1,8 @@
 # LAN Share 运维手册（OPERATIONS）
 
 > 面向日常维护：服务管理、数据库、备份恢复、证书、网络、常见故障。
-> 架构背景见 `项目记忆/01-架构与现状.md`；交接视角见根目录 `HANDOVER.md`。
+> 架构背景见 [项目记忆/01-架构与现状.md](项目记忆/01-架构与现状.md)；
+> 命令速查与红线见根目录 [AGENTS.md](../AGENTS.md)；交接视角见 [HANDOFF.md](../HANDOFF.md)。
 
 ## 1. 服务管理（NSSM 三服务）
 
@@ -113,10 +114,10 @@ curl -k https://192.168.1.100:8765/healthz
 
 - 计划任务（备份）：`schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 23:30
   /TR "C:\lan-share\backup.bat"`（已注册；**2026-09-13 起 Disabled**）。
-  > 时间口径核对（2026-09-10）：README/HANDOVER 写 23:30，而 `backup.bat` 注释与本
+  > 时间口径核对（2026-09-10）：README/HANDOFF 写 23:30，而 `backup.bat` 注释与本
   > 手册原写 03:30——**已按实测统一为 23:30**（备份产物 mtime 为 23:30 / 00:33，
   > 与 23:30 吻合）。如需确认，`schtasks /Query /TN "lan-share-backup" /V /FO LIST`，
-  > 四处（README / HANDOVER / 本手册 / backup.bat 注释）一并改。
+  > 四处（README / HANDOFF / 本手册 / backup.bat 注释）一并改。
 - 行为：PG custom-format dump（按日期，保留最近 2 天）+ 数据目录拷贝到
   `BACKUP_DEST`（默认 `C:\lan-share-backup`，可用环境变量覆盖）。
 - **产物清单**：`db\lanshare-YYYYMMDD.dump`（+ `.sha256` sidecar）、`files\`
@@ -256,6 +257,6 @@ ALTER ROLE lanshare CREATEDB;            -- 一次性
 
 ## 9. 升级发布节奏（引用）
 
-- App / Web / 服务端发版细节：`项目记忆/04-发版SOP.md`。
-- 每次发版后：`CHANGELOG.md` + `docs/STATUS-v3.md` 基线数字 + `项目记忆/`
+- App / Web / 服务端发版细节：`docs/项目记忆/04-发版SOP.md`。
+- 每次发版后：`CHANGELOG.md` + `docs/STATUS-v3.md` 基线数字 + `docs/项目记忆/`
   同步（三件套之外的第 4 件：文档）。

@@ -1,15 +1,22 @@
 # 开发指南
 
+> **入口级文档**：[README.md](../README.md)（产品）· [AGENTS.md](../AGENTS.md)
+> （AI 操作手册：命令速查/红线/工作流）· [HANDOFF.md](../HANDOFF.md)（接手路径）。
+> 经验与教训（踩坑/架构/里程碑）在 [项目记忆/](项目记忆/README.md)。
+
 ## 测试
+
+**当前基线：pytest 288 项**（`check.bat` 五段：pytest + ruff + mypy + pip-audit + UI 分层守卫）。
 
 ```bash
 check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑绿才算改完）
 # 或手动：venv python -m pytest tests/ -q
+# 碰 DB 的改动加跑 PG 引擎：LANSHARE_TEST_PG_URL=... python -m pytest tests/ -q
 ```
 
 - `tests/conftest.py` 在导入 `server` 前把 `SHARE_ROOT` 指向临时目录，
   全套测试不碰真实数据；`client` 夹具恒为匿名态，`auth` 夹具是独立实例的登录态。
-- `tests/test_baseline.py`（28 项）是**行为回归网**；`tests/test_multiuser.py`（22 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
+- `tests/test_baseline.py`（25 项）是**行为回归网**；`tests/test_multiuser.py`（24 项）覆盖角色/空间/授权边界（拆包/PG/Vue 升级期间不许掉）：
   认证/防爆破、文件增删改移、分块上传与秒传、回收站、分享全链路、
   safe_path 穿越（`%2e%2e` 编码变体——httpx 会归一化裸 `..`，测试必须编码绕过）。
 - 改 server.py 后新增行为 → 先补测试再改实现；发现 bug → 先写失败用例再修。
@@ -86,7 +93,7 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
   缺 `LOCALAPPDATA` 报 pub cache 找不到直接失败）。`flutter analyze` 在沙箱下
   分析服务器 **exit 255 崩溃**，改跑
   `C:\tools\flutter\bin\cache\dart-sdk\bin\dart.exe analyze lib`（原生可执行
-  文件，稳定且秒回）。完整记录见 `项目记忆/03-踩坑清单.md` 09-11 v1.0 批。
+  文件，稳定且秒回）。完整记录见 `docs/项目记忆/03-踩坑清单.md` 09-11 v1.0 批。
 - **交付前必过**：`dart analyze` 零问题 + `flutter test` + 安卓模拟器全流程
   （登录→信任框→照片/文件/我的/分享接收/分享管理）；模拟器经 NAT 可直连宿主机
   LAN 地址。⚠️ **改了 Kotlin 必须再跑一次真构建**——`dart analyze`/`flutter test`
@@ -230,4 +237,4 @@ docs/            API.md / SECURITY.md / DEVELOPMENT.md / STATUS-v3.md / GIT.md /
 改了 API、安全行为、前端交互约定或部署方式，**同一次提交里**更新
 `docs/API.md`、`docs/SECURITY.md`、`README.md` 与 `CHANGELOG.md`；改了
 **App 视觉/布局/响应式**则同步 `docs/DESIGN-v3/APP-VISUAL-SPEC.md` 与
-`项目记忆/01-架构与现状.md` 的测试基线数字。文档过期比没有文档更糟。
+`docs/项目记忆/01-架构与现状.md` 的测试基线数字。文档过期比没有文档更糟。

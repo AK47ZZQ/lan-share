@@ -1,6 +1,6 @@
 > 更早版本（v0.4.1 ~ v0.20.0+60，2026-08-20 ~ 09-09，共 103 条）的完整变更史
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](docs/archive/CHANGELOG-archive-v0.4-v0.20.md)；
-> 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
+> 里程碑视角浓缩史见 README「演进」与 docs/项目记忆/02-里程碑。
 
 ## 2026-09-13 — App v0.28.10+84：反馈三连修复（浅色 SnackBar / 更新历史排序 / 分类抽屉点空白）
 
@@ -192,7 +192,7 @@ Gap/Radii/IconSizes 令牌（仅数值恰等，不匹配值保留；评价报告
 7. `trash_page` 里 `Colors.red` 硬编码 + `fontSize: 12` 字面量（恰好就在我刚
    立下的"不许写字面量"规矩旁边）→ 改 `cs.error` 与 `textTheme.bodySmall`。
 
-**同时修正 10 处文档引用**（已删 API 仍被 CHANGELOG / STATUS / HANDOVER /
+**同时修正 10 处文档引用**（已删 API 仍被 CHANGELOG / STATUS / HANDOFF /
 PROJECT-LAYOUT / 01-架构 / mobile README / APP-VISUAL-SPEC / 评价报告提及）。
 
 门禁：`dart analyze lib` 0 问题 / `flutter test` **191 全绿** / 分层守卫通过
@@ -275,7 +275,7 @@ UI 测试；真正的缺口是**响应式完全缺失**（平板/横屏下卡片
 - ⚠️ 环境插曲：`flutter analyze` 在沙箱下分析服务器 exit 255 崩溃，改跑 dart SDK
   原生分析器（`bin/cache/dart-sdk/bin/dart.exe analyze lib`）稳定秒回；flutter
   命令除原有四件套外**还需 `LOCALAPPDATA`**（否则报 pub cache 找不到直接退出）。
-  两条均已进 `项目记忆/03-踩坑清单.md`。
+  两条均已进 `docs/项目记忆/03-踩坑清单.md`。
 
 ## 2026-09-11 — App v0.28.2+76：修分类侧边栏透明叠影（反馈 7063）
 
@@ -621,7 +621,7 @@ sha256 2229f55f…，线上 /api/app/latest·history 核验通过）**
 
 ## 2026-09-10 — 服务端 v3.36：独立复审修复批（工程流程 + 生产等价性 + 架构收口）
 
-依据《项目记忆/archive/11-独立工程复审》执行（该报告 P0/P1/P2/A 全部逐条落地，见其 §九
+依据《docs/项目记忆/archive/11-独立工程复审》执行（该报告 P0/P1/P2/A 全部逐条落地，见其 §九
 执行记录）。**门禁终态：pytest 231 passed（SQLite）/ PG 全量另核 / ruff · mypy 全绿 /
 web npm test 6 passed。**
 
@@ -677,7 +677,7 @@ web npm test 6 passed。**
 
 ## 2026-09-10 — 服务端 v3.35：安全加固与"约定收口"第一批
 
-依据《项目记忆/archive/09-项目建议报告》与《项目记忆/archive/10-改进计划-v3.35.md》执行，**行为等价 + 纯增强**，
+依据《docs/项目记忆/archive/09-项目建议报告》与《docs/项目记忆/archive/10-改进计划-v3.35.md》执行，**行为等价 + 纯增强**，
 不含功能变更、不改 API 形状（契约仍 117 路径）。
 
 **安全小项（B）**

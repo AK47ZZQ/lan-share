@@ -13,14 +13,19 @@ EXIF 方向矫正；docx/xlsx/csv/pptx/rtf/doc 兼容提取）、照片时间线
 外链分享与**定向分享（站内通知）**、**笔记分类体系（摘要聚合端点）**、
 **通知管理（发送记录/撤回/草稿定时/按类型偏好）**、**公告栏 + 反馈通道**
 （App「我的」直达开发端，状态：已提交/处理中/已修复/已实装…实时可追）、
-**家庭动态流**、**事件推送
-Webhook**、可选 **TOTP 两步验证**、手机直传和**上传二维码**、**WebDAV 挂载
+**家庭动态流**、**事件推送 Webhook**、**SSE 实时通知**（`/api/events`）、
+可选 **TOTP 两步验证**、手机直传和**上传二维码**、**WebDAV 挂载
 （含独立密码）**、**PWA 离线应用**、**Flutter 原生 App（v0.28.10+84：浏览/传输/
 相册自动备份（智能对账）/系统分享/管理面板/笔记分类/通知中心，M-A0~A5 全上线）**。
 生产库 PostgreSQL 16（SQLite 仅测试）。
 
+> **文档导航**：改代码看 [AGENTS.md](AGENTS.md)（命令与红线）· 接手看
+> [HANDOFF.md](HANDOFF.md)（半天上手路径 + 凭据 + 风险）· 经验与教训看
+> [docs/项目记忆/](docs/项目记忆/README.md)（踩坑/架构/里程碑/路线图/协作偏好）。
+
+## 快速入口
+
 ```
-快速入口
 ├── 快速开始 .......... 本文 §快速开始
 ├── 完整 API .......... docs/API.md
 ├── 安全模型 .......... docs/SECURITY.md
@@ -29,11 +34,12 @@ Webhook**、可选 **TOTP 两步验证**、手机直传和**上传二维码**、
 ├── 移动 App 规划 ..... docs/DESIGN-v3/APP-REQUIREMENTS.md + APP-DESIGN.md
 ├── App 视觉规范 ...... docs/DESIGN-v3/APP-VISUAL-SPEC.md（配色/排版/令牌/响应式）
 ├── 版本历史 .......... CHANGELOG.md
-├── 交接手册 .......... HANDOVER.md（新维护者从这里开始）
+├── 交接手册 .......... HANDOFF.md（新维护者从这里开始）
+├── AI 操作手册 ....... AGENTS.md（命令速查 / 红线 / 工作流纪律）
 ├── 运维手册 .......... docs/OPERATIONS.md（服务/备份/证书/故障）
-├── 项目记忆 .......... 项目记忆/（架构/里程碑/踩坑/发版SOP/验收红线/路线图/协作偏好）
+├── 项目记忆 .......... docs/项目记忆/（架构/里程碑/踩坑/发版SOP/验收红线/路线图）
 ├── Git 工作流 ........ docs/GIT.md
-└── 📦 历史归档 ........ 项目记忆/archive/ · docs/archive/ · docs/DESIGN-v3/archive/
+└── 📦 历史归档 ........ docs/archive/ · docs/DESIGN-v3/archive/ · docs/项目记忆/archive/
                          （各目录内 README 说明"为什么归档、活文档在哪"）
 ```
 
@@ -86,14 +92,15 @@ pptx/rtf 渲染、音频连播（App 内播放器）、视频倍速/画中画、
 **通知与动态**：定向分享自动发**站内通知**；顶栏 🔔 面板双 Tab（动态/通知，
 红点提示新内容）；**家庭动态流**全员可见（谁上传/分享/删除了什么，同人同类
 10 分钟聚合、相对时间、新内容红点、点击直达对应目录），独立页 `/activity`。
+**SSE 实时通道**（v3.52）：公告/通知发布即推 Web 铃与 App 前台，60s 轮询兜底。
 
-**通知管理（v3.31）**：全员端——通知中心分类过滤（分享/广播/系统）、单条
+**通知管理**：全员端——通知中心分类过滤（分享/广播/系统）、单条
 已读/删除、**按类型组的通知偏好**（share/admin/system 三组开关，关闭的类型
 不再落站内信箱）；管理端——**发送记录**（每条广播的未读/已读统计）、**撤回**
 （删除全部未读行，已读留历史）、**提醒未读**（未读成员再推站外 webhook）、
 **草稿/定时发送**（到点由服务端周期任务自动发出）。站内写入统一出口尊重偏好；
 广播以 `broadcast_id` 贯穿便于组级操作。照片评论/表情回应已下线（照片墙回归
-干净浏览，存量数据保留）。
+干净浏览，存量数据保留）。**公告栏**（v3.40）：主页长期布告，总览卡 + 文件页可关横幅。
 
 **事件推送（通知 bot）**：管理面板配置 GET 模板 Webhook（`{title}/{body}`
 占位符 URL 编码替换），**定向分享 + 新成员加入**自动推送到 ntfy / Bark /
@@ -136,7 +143,7 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 目录选择、子目录随父级继承；授权卡可续期/读写↔只读切换/过期红牌；带有效期与
 到期显示，按成员筛选）、成员账号弹窗（改用户名/重置密码/WebDAV 独立密码、随机
 密码生成）、**📣 发送通知**（标题+正文直达全员/指定成员站内通知，已配 webhook
-同步推）、**🗂️ 通知管理**（v3.31：发送记录/撤回未读/提醒未读/草稿定时）；
+同步推）、**🗂️ 通知管理**（发送记录/撤回未读/提醒未读/草稿定时）、
 **成员视角预览**：以某成员身份登录式只读浏览（标蓝色"👁 视角"，顶栏横幅常驻
 + 一键退出）——核对授权矩阵的"能看到什么"无需真借账号；admin 端点完全隔离
 不受波及。
@@ -147,20 +154,23 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 照片墙浏览 / 手动传输 / 相册自动备份 / 系统分享与分享管理 / 登录页 v2 全家桶
 + 内置验证器）**全部完成**，此后进入**版本功能批次**阶段（v0.6.0 → 最新
 **v0.28.10+84**：笔记分类体系 / 沉浸欢迎头 / 通知中心 / 备份智能对账 /
-视觉规范令牌化 / 结构整改 + 反馈三连修复（浅色 SnackBar 随主题 / 分类抽屉
-点空白收回 / 更新历史排序）；照片点赞评论已下线）。
-完整演进与验收口径见 `CHANGELOG.md`、根目录「路线图状态」、
-`项目记忆/02-版本里程碑.md`；App 工程结构/协议见 `mobile/README.md`。
+视觉规范令牌化 / 结构整改 / SSE 实时通知 / 反馈三连修复；照片点赞评论已下线）。
+完整演进与验收口径见 `CHANGELOG.md` 与
+[docs/项目记忆/02-版本里程碑.md](docs/项目记忆/02-版本里程碑.md)；
+App 工程结构/协议见 `mobile/README.md`。
 
-**发布与分发**：App 自 **v0.9.0+37 起正式签名**，此后版本演进（0.9→0.28）详见
-`CHANGELOG.md` 与 `项目记忆/02-版本里程碑.md`（不在本文重复罗列，避免与演进
-史脱节）。APK 经自家分享链接在 `App安装包/lanshare.apk` 分发（30 天有效，同文件
-覆盖 + 新建分享）；新版本通过 App 内「关于与检查更新」升级，无需手动换包。
-R8 已关（WorkManager/Room 在裁剪下启动即崩，见 `docs/DEVELOPMENT.md`）。
-**当前测试基线（2026-09-13 实测）：pytest 288 项（SQLite）+ PostgreSQL 双引擎 284+3skip / web 单测 19 项 + vue-tsc + 契约路径对齐守卫 / Dart 206 项 + `dart analyze` 0 + UI 分层守卫（基线 0）/ 契约 132 路径（154 操作）/ ruff·mypy·pip-audit 全绿。**
-完整规划见 `docs/DESIGN-v3/APP-*.md`，构建与 SDK 选型见 `docs/DEVELOPMENT.md §手机 App`。
+**发布与分发**：App 自 **v0.9.0+37 起正式签名**，APK 经自家分享链接在
+`App安装包/lanshare.apk` 分发（同文件覆盖 + 新建分享）；新版本通过 App 内
+「关于与检查更新」升级，无需手动换包。发版纪律见
+[docs/项目记忆/04-发版SOP.md](docs/项目记忆/04-发版SOP.md)（**三件套**：
+APK + version.json + versions.json）。R8 已关（WorkManager/Room 在裁剪下启动即崩，
+见 `docs/DEVELOPMENT.md`）。
 
-**WebDAV**：`/dav/` 挂载为网络磁盘，走与网页相同的空间与权限解析。
+> **当前测试基线（2026-09-13 实测）**：pytest **288** 项（SQLite）+ PostgreSQL
+> 双引擎 **284+3skip** / Web 单测 **19** 项 + vue-tsc + 契约路径对齐守卫 /
+> Dart **206** 项 + `dart analyze` 0 + UI 分层守卫（基线 0）/
+> 契约 **132 路径（154 操作）** / ruff·mypy·pip-audit 全绿。
+
 **WebDAV 独立密码**（v3.7 起）：与登录密码隔离的挂载凭据，设置后 DAV 入口
 只认独立密码，登录密码对 `/dav/` 失效——凭据泄露面分离，可单独轮换，
 泄露后不动主密码、不解锁 TOTP 账号。自助设置/清除需当前密码确认（计防爆破）；
@@ -175,9 +185,8 @@ admin 可重置/清除成员的独立密码。
 内网设备 ──局域网──▶ Caddy :8765/:443 (HTTPS; :80 跳转 HTTPS)
                         │
                         ├─ /files/*  → forward_auth(/authcheck) 后反代到
-                        │               后端判权下载（review 2026-09-02：
-                        │               不得 file_server 直挂，会越权读
-                        │               他人 private/；大文件走 FileResponse）
+                        │               后端判权下载（不得 file_server 直挂，
+                        │               会越权读他人 private/；大文件走 FileResponse）
                         ├─ /api/* /dav/* /s/* /up /preview/* /thumb/*
                         │             → FastAPI :8766 (127.0.0.1)
                         │                ├─ PostgreSQL 16（127.0.0.1:5433，
@@ -191,6 +200,7 @@ admin 可重置/清除成员的独立密码。
                         │                │  .chunks .zips）
                         │                ├─ 应用层限速 / CSRF / 防爆破（按入口
                         │                │  分账）/ 审计 / X-As-User 成员视角预览
+                        │                ├─ SSE /api/events（实时通知，轮询兜底）
                         │                └─ Bearer 设备 Token（90d 滑动/吊销审计）
                         └─ /assets/* / → FastAPI 挂载 web/dist（Vue3 SPA + 深链回退）
 ```
@@ -204,39 +214,46 @@ Pillow + pillow-heif、qrcode、pyotp、ffmpeg（可选）。
 ## 目录结构
 
 ```
-lan-share/
-├── server.py               兼容 shim（NSSM 入口 server:app 不变）
-├── app/                    后端包：config/settings/db/security/filetools/spaces/main
-│                           api/{auth,files,share,webdav,system,admin,notify,social,notes}/
-│                           store/{users}（表仓储：users 表唯一 SQL 出口）
-├── web/                    Vue3 前端工程（构建产物 web/dist 由 FastAPI 挂载，
-│                           node_modules + dist 已 gitignore）
-├── mobile/                 Flutter 原生 App（v0.21.0+61；技术文档见 mobile/README.md）
-├── Caddyfile               反代/TLS/forward_auth/:80跳转
-├── certs/                  自签证书配置（san.cnf；*.pem 私钥不入库）
-├── scripts/                工具（build-apk.bat 镜像构建；migrate_sqlite_to_pg.py 迁库）
-├── docs/                   API / SECURITY / DEVELOPMENT / STATUS-v3 / DESIGN-v3 / DEBUG-ACCOUNT / GIT
-├── data/                   运行时数据根（不入库：用户文件/.meta.db/.trash/...）
-├── docs/archive/            规划与快照归档（PLAN-v2/v3·PROJECT-OVERVIEW·STATUS 旧段）
-├── CHANGELOG.md            版本历史
-├── backup.bat              每日 23:30 自动跑（pg_dump -Fc + 文件增量）
-├── check.bat               本地质量门禁（pytest 基线）
-├── tests/                  231 项测试（基线 + 多用户 + v3.5 + 大文件 + 公网防护
-│                           + 四小项 + 设备 Token + 兼容性回归 + 配对码 + 两步验证恢复码
-│                           + App 批次 + 安全修复回归 + v0.17/v0.20 批次 + PG 方言/
-│                           schema 漂移守卫 + AST 回潮守卫；照片互动测试已随功能下线移除。
-│                           设 LANSHARE_TEST_PG_URL 即同一套用例改跑 PostgreSQL——
-│                           在目标库的临时 schema 建表，不碰生产 public 表）
-└── logs/                   服务日志（NSSM 轮转）
+lan-share/                     C:\lan-share 是指向本仓库根的 junction（改这里=改线上）
+├── server.py                  兼容 shim（NSSM 入口 server:app 不变）
+├── app/                       后端包（≈10.3K 行）
+│   ├── asgi.py                持 app + 中间件（大包体积守卫等）
+│   ├── api/                   28 个按域 APIRouter 模块
+│   ├── services/              11 个业务模块（archive/cleanup/backup/metrics/…）
+│   ├── store/                 9 个表主人模块（users/photos/shares/…）+ schema.py
+│   ├── spaces.py              ⭐ resolve() = 安全核心，所有文件入口必经
+│   └── db.py                  双引擎连接（PG 生产 / SQLite 测试）
+├── web/                       Vue3 前端工程（构建产物 web/dist 由 FastAPI 挂载）
+├── mobile/                    Flutter 原生 App（Dart ≈25.8K 行；见 mobile/README.md）
+├── Caddyfile                  反代/TLS/forward_auth/:80跳转
+├── certs/                     自签证书配置（san.cnf；*.pem 私钥不入库）
+├── scripts/                   构建/运维/契约导出工具（build-apk.bat、export-openapi.py…）
+├── tests/                     37 个测试文件（pytest 288 项；设 LANSHARE_TEST_PG_URL
+│                              即同一套用例改跑 PostgreSQL——临时 schema 隔离）
+├── contracts/openapi.json     OpenAPI 契约快照（132 路径/154 操作）
+├── docs/                      API·SECURITY·OPERATIONS·DEVELOPMENT·STATUS-v3·GIT…
+│   ├── 项目记忆/               ⭐ 经验与教训（架构/里程碑/踩坑/发版SOP/路线图）
+│   │   └── archive/           09-10 审查批 + 09-11 运行日志
+│   ├── archive/               旧规划/快照/过程记录
+│   └── DESIGN-v3/             App 设计与视觉规范（archive/ 为立项期设计稿）
+├── data/                      运行时数据根（不入库：用户文件/.trash/.chunks/…）
+│   └── 反馈/                  反馈看板（目录即状态：待处理/进行中/已完成）
+├── AGENTS.md                  🔴 AI 代理操作手册（命令/红线/工作流纪律）
+├── HANDOFF.md                 交接手册（半天上手路径/凭据/风险/决策记录）
+├── CHANGELOG.md               版本历史（v0.20 及以前见 docs/archive/）
+├── env.bat                    部署单源（路径/端口/解释器全在这里）
+├── backup.bat                 每日备份（**当前暂停**，见 HANDOFF.md §4）
+├── check.bat                  本地质量门禁（pytest+ruff+mypy+pip-audit+UI分层）
+└── logs/                      服务日志（NSSM 轮转）
 ```
 
 ## 常用运维
 
 ```bash
-# 改了后端（app/ 或 server.py）
-net stop lan-share-api && net start lan-share-api
+# 改了后端（app/ 或 server.py）——Git Bash 下 sc 静默失败，用 PowerShell
+powershell Restart-Service lan-share-api
 # 改了 Caddyfile
-net stop lan-share-caddy && net start lan-share-caddy
+powershell Restart-Service lan-share-caddy
 # 前端改动无需重启：cd web && npm run build
 
 # 质量门禁（改后端必跑）
@@ -258,81 +275,22 @@ tail -f logs/api-stderr.log logs/caddy-stderr.log
 | Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive/WinSCP |
 | 改了前端没生效 | Ctrl+F5 强刷一次；之后资产文件名哈希自动更新 |
 
-## 路线图状态
+## 演进与文档
 
-**产品定位更新 + Web 后台化 ✅**（v3.39–v3.42，2026-09-10~11：App=内容入口、
-Web=站长工作台；后台壳+总览 8 卡+AdminView 拆三页（成员与权限/通知运营/
-系统设置）+治理工具（大文件 TOP/疑似重复同尺寸聚类/会话与设备按账号一键下线
-+全部下线保留我）+运行状态（healthz+审计日志）+**公告栏与反馈通道**
-（App→data/反馈/ md 落盘→Agent 改文件翻状态：已提交/处理中/已修复/已实装/
-已拒绝/已暂缓+备注；看板.md 自动生成）；契约 111→130 路径）。
+**已完成（按阶段）**：v2 个人网盘（P0–P3）→ **v3 家庭团队版 M0–M6 全部交付**
+（拆包 / PostgreSQL 生产库 / Vue 全站 / 多用户与授权 / 团队体验 / 可靠性 /
+HEIC·WebDAV 独立密码·Webhook·成员视角预览）；**App M-A0~A5 全上线**后进入
+版本功能批次（v0.6 → v0.28.10）；**09-10 起转入平台期**——产品定位更新
+（App 内容入口 / Web 站长工作台）、反馈通道与看板、通知与会话治理、
+**知识库/图谱上线后又按主人决策整体下线**（v0.26）、结构整改与视觉规范 v1.0、
+重构小尾巴清零、SSE 实时通知、备份验证与加固。
 
-**重构小尾巴清零 + Web 工作台补全 ✅**（v3.43–v3.49，2026-09-11：auth.py 按域
-拆五路由模块、dav_handler 按方法拆私有函数、web api.ts 拆 api/ 目录九文件
-（门面保兼容）、AdminView 拆三 Pane；**/share-ops admin 全量分享一览**（创建者/
-状态筛选+撤销+取件记录）、总览页 45s 自动轮询（页签不可见暂停）、审计日志按
-类型筛选；App 裸 dio 收编四批 26 处进 data/api 五模块，UI 不再 import dio）。
+逐版本"做了什么/为什么/踩了什么"的完整叙事在
+**[docs/项目记忆/02-版本里程碑.md](docs/项目记忆/02-版本里程碑.md)**；
+用户视角的版本说明在 **[CHANGELOG.md](CHANGELOG.md)**；
+交付台账与测试基线在 **[docs/STATUS-v3.md](docs/STATUS-v3.md)**（更早批次在
+`docs/archive/STATUS-archive.md`）。
 
-**知识库与图谱下线 ⛔**（v3.38 + App v0.26.0+71：按主人反馈整体移除——
-服务端 kb 引擎+六端点、App 图谱页与编辑器双链、web `/kb` 图谱页与双链渲染、
-KB-CONVENTIONS 约定文档、PyYAML 依赖一并删除；笔记功能回到分类/编辑/预览
-本体。v0.24 历史条目保留作存档，git 历史可随时找回）。
-
-**笔记主功能化 ✅**（服务端 v3.37 + App v0.25-dev→v0.26.0 发版：底栏换位
-笔记↔传输；`/api/notes/list` 下发 **categories 含空分类** + abs_path——修复"新建
-分类成功但侧栏看不到"；App 笔记点按改**预览优先** / 分类横滑栏 / 复制路径；
-已实测抓到并修复两处历史 bug：App 分类过滤 `'$_cat!/'` 字面量 `!`、Web 同款）。
-v3.37 时的 KB 完善（图谱枢纽节点等）随上条下线。
-
-**服务端 v3.36 ✅**（独立复审修复批：`app/roles.py` 与整批历史改动入库 + 回滚点；
-**双引擎测试**（同一套用例跑 SQLite 与 PostgreSQL，PG 侧此前零覆盖）；新增 CI
-（ruff/mypy/pytest×2 引擎/web 测试）；Webhook 重定向逐跳复校验；WebDAV 真锁
-（RFC 4918，原 LOCK 为假锁）；`db.transaction()` 真事务（redeem/改密/删号等）；
-PG 连接有界化；**users 表单一主人**（`app/store/users.py`，11 模块 80 条 SQL 迁出）；
-settings 降 L0；27 处 async 内裸 `_db()` 清零；3 条 AST 回潮守卫；Web 端补测。
-已重启上线并核验。门禁 SQLite 231 / PG 229+2skipped / ruff·mypy 全绿 / web 6 项。
-详见 `项目记忆/archive/11-独立工程复审-2026-09-10.md` §九执行记录）。
-
-**服务端 v3.35 ✅**（安全加固与"约定收口"第一批：Webhook SSRF 防护 / 管理端不再
-拉取密码哈希 / APK SHA 缓存加锁 + `filetools.to_rel()` 收编 38 处路径转换 /
-`app/roles.py` 角色常量化 / 私有符号公共化。计划见 `项目记忆/archive/10-改进计划-v3.35.md`）。
-
-v2 个人网盘（P0–P3）✅ → v3 家庭团队版：M0 拆包 ✅ · M1 数据层 ✅（v3.5 起
-**PostgreSQL 16 生产库**，SQLite 仅测试）· M2 Vue 全站 ✅ · M3 多用户核心 ✅
-（TOTP 可选启用）· M4 团队体验 ✅（定向分享/通知/动态流/共享相册双维度/
-大文件上传/暂停续传/移动 PWA）· M5 可靠性 ✅（每日 pg_dump 备份保留 2 天；
-公网入口隔离加固——防爆破分账/healthz 公网 404/限速分桶；第二块备份盘与
-恢复演练挂账）· M6 增量 ✅（HEIC/WebDAV 独立密码/事件推送 Webhook/成员
-视角预览）。
-**移动方向**：PWA 阶段 0 ✅（添加到主屏幕）；原生 App（Flutter 跨端）
-M-A0 契约 ✅ · M-A1 浏览 ✅ · M-A2 手动传输 ✅ · M-A3 相册自动备份 ✅
-（WorkManager+账本+前台服务，杀进程续传/重启恢复验收通过）· M-A4 分享与
-发布 ✅（系统分享接收/分享管理；经七轮审查加固）· 发布收尾 ✅（release
-签名 + 品牌图标）· 真机反馈批次 ✅（备份约束收口/照片统一落
-`照片/手机相册/`/首页面板/Sliver 虚拟化时间线）· 全功能实测修复批 ✅ ·
-M-A5 登录页 v2 全家桶 ✅（方向 A 布局/连接预检/生物识别一键登录/扫码填
-地址/配对码免密登录/两步验证恢复码/App 内置验证器，v0.5.2+13）·
-**全板块功能补齐 ✅**（v0.6.0+14：照片墙视频播放/文件页基本功/传输批量/
-分享二维码外发编辑/深色模式/应用锁/检查更新闭环/备份排除相册/回收站页）·
-**应用锁热修 ✅**（v0.6.1+15：开启即锁/解锁被弹回/登出逃不掉三连环根修，
-LockGate 单测 + 录指纹 E2E 七项全过）· **动态与备份完善 ✅**（v0.6.2+16：
-排除相册"无法读取"根修——主引擎漏注册媒体通道，排除/回补 E2E 闭环；
-首页家里动态栏目；备份失败红字/实时进度/电池豁免引导）·
-**动态更名与清空回收站 ✅**（v0.6.3+17：首页「动态」；回收站清空仅
-admin+二次确认；排除相册页加固）· **备份落位重构 ✅**（v0.7.0+18：
-自动备份进 `照片|视频/<用户名>/<相册名>/` 三级目录，账本加相册维度、
-升级秒传迁移，改名用户自动落新目录；手动上传落 `照片/<用户名>/手机
-上传/`；服务端照片归属兼容新旧落点）· **功能持续批次 ✅**（v0.8.1
-六轮审查加固 → v0.11 照片墙瀑布流/推送轮询/相册共创 → v0.14 专辑
-文件夹式重构 → v0.15 自动切换（探测三道门+抖动四件套）/存储详情 →
-v0.16 传输页重做/彻底删除/清理缓存/安全审查加固 → v0.17 备份暂停/
-资料体系/预览大改/笔记 → v0.18 首页卡片/音频预览 → v0.19 富文本笔记/
-docx 兼容预览 → v0.20 九项体验批次 → **v0.21.2+63 改进建议 9.6 批次+欢迎头两轮热修**
-（五项 P0 修复：笔记覆盖保存+自动保存/首页"我的分享"与备份卡片跳转/
-笔记标题重复/通知按钮发白；笔记分类体系 B 方案：/api/notes/list 摘要
-聚合+分类栏+置顶收藏+拖拽移动；首页沉浸渐变欢迎头；通知管理全做：
-发送记录/撤回/草稿定时/按类型偏好/单条操作；备份智能对账：空间预检/
-相册被删识别/改名不重传/管理服务端相册；复制服务器路径；照片查看器
-平移手势+长按菜单；照片点赞评论下线）。
-规格与设计见 `docs/DESIGN-v3/APP-*.md`。
-详见 `docs/STATUS-v3.md`；规划（已交付）归档于 `docs/archive/PLAN-v3.md`。
+**接下来做什么**：见 **[docs/项目记忆/15-路线图与挂账.md](docs/项目记忆/15-路线图与挂账.md)**
+（待主人拍板项 / 反馈看板当前态 / 候选方向 / 明确"不做"清单）。
+当前唯一挂账重项是**第二块物理盘 + 异地备份**（主人明确搁浅，生产数据仍单拷贝）。

@@ -207,4 +207,4 @@ scripts\build-apk.bat debug|release
 - **sqflite 账本连接进程级共享**（v0.7.1 根因）：引擎 isolate 的 close()
   会杀死主 isolate 的连接——账本永不主动 close，连接在进程内全局复用
 - 更完整的版本化踩坑（含 MediaStore 发布复查、edge-to-edge、Reorderable
-  header 等 v0.20 项）见 `项目记忆/03-踩坑清单.md`
+  header 等 v0.20 项）见 `docs/项目记忆/03-踩坑清单.md`

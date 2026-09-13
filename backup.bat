@@ -2,7 +2,7 @@
 REM LAN Share backup (v3.5): PostgreSQL dump + data dir -> backup dest. Daily via Task Scheduler:
 REM   schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 23:30 /TR "C:\lan-share\backup.bat"
 REM   NOTE (2026-09-10): this comment and docs/OPERATIONS.md previously said 03:30 while
-REM   README/HANDOVER said 23:30. Observed dump mtimes (23:30, 00:33) match 23:30, so the
+REM   README/HANDOFF said 23:30. Observed dump mtimes (23:30, 00:33) match 23:30, so the
 REM   docs are now aligned to 23:30. Confirm the registered task time with
 REM   `schtasks /Query /TN "lan-share-backup" /V /FO LIST` and fix all four places together.
 REM DB dumps are date-stamped and only the last 2 days are kept (older deleted here).
