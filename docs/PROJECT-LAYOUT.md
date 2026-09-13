@@ -1,4 +1,4 @@
-# 项目目录布局与关键路径（2026-09-11 更新）
+# 项目目录布局与关键路径（2026-09-13 更新）
 
 > 结论先行：**唯一真源是本仓库**。生产路径、构建镜像全部是指向/镜像本仓库的辅助目录，改代码只改这里。
 
@@ -80,3 +80,33 @@
   与 `album_detail_page`（瀑布流列数 3→3/4/6 自适应）、`files_page`（网格
   列数从自定义 440/640 阈值统一到全局断点）、`ui/theme/app_theme.dart`
   （Brand 圆角指向 Radii 单源 + 排版 8 级 + FAB/IconButton/Tooltip 主题）。
+
+## v3.52 / v3.53 新增的落点（2026-09-12 ~ 09-13）
+
+- `app/store/`：**六表 store 化**（v3.52 B1）——sessions / devices / share_links /
+  notifications / admin_broadcasts / audit 各一 store 模块，`db.py` 701→298、
+  schema 定义迁 `app/store/schema.py`；**api 层对这六表的裸 SQL 归零**；
+  `app/store/users.py` 仍是 users 表唯一 SQL 出口（AST 守卫）。
+- `app/api/admin/`、`app/api/notify/`：admin.py / notify.py 按域拆子模块
+  （门面聚合，URL 零改动）；`app/services/webhook.py` 推送独立成模块。
+- `app/deps.py`：**路由依赖收编**（preview_viewer×6 / share 守卫×3 / previews 404×2）
+  ——新路由复用依赖从此单点。
+- `app/api/events.py`：**SSE 实时通知 `GET /api/events`**（双鉴权 Web/App /
+  线程桥接 / 每用户 3 连接 + 全局 64 上限 / 15s 心跳）；Web 铃与 App inbox_poll
+  实时优先、轮询兜底（**开新流前必须 cancel 旧流**，见 09-13 SSE 429 修复）。
+- `app/api/search.py` + note_search 小写镜像表：**笔记全文搜索**，`/api/search`
+  的 `kind` 字段向后兼容。
+- `app/api/metrics.py` + `app/services/backup*.py`：**备份编排与 `/api/metrics`**
+  ——进程内每日兜底 dump（B5）+ **内联验证 restore drill**（v3.53：SQLite
+  `integrity_check`+settings 可读 / PG `-Fc`+`pg_restore -l` 钉 public.settings）
+  + 磁盘水位 webhook 告警（含 6h 冷却）；`/api/metrics` 首个 Web 消费者是
+  StatusView 备份卡。
+- `tests/test_dir_browse_contract.py`：目录浏览契约 6 例（is_dir 恒有 / 文件路径
+  400 语义 / 尾斜杠双形态 / 特殊字符文件名端到端 / 缺目录 404 / **HEAD 200**）。
+- `tests/test_share_concurrency.py`：/s/ 分享**发票并发对抗**（8 真实线程 vs 限 3 次）。
+- `contracts/openapi.json`：README 与各处引用改以 **132 路径 / 154 操作** 为准
+  （09-13 全量实测）；`/preview` 的 HEAD 用**叠装饰器单方法路由**注册
+  （不用 `api_route` 多方法——operationId 依赖 methods 集合哈希序、快照不可复现）。
+- `mobile/lib/ui/dir_picker_page.dart`：`dirEntriesFromItems()` 纯函数只留目录
+  （a6df 根修）；`mobile/lib/ui/server_albums_page.dart` 删用户名预编码
+  （双重编码 %2540 修复）。
