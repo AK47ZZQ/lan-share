@@ -1,5 +1,5 @@
 > 更早版本（v0.4.1 ~ v0.20.0+60，2026-08-20 ~ 09-09，共 103 条）的完整变更史
-> 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
+> 见 [CHANGELOG-archive-v0.4-v0.20.md](docs/archive/CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
 ## 2026-09-13 — App v0.28.10+84：反馈三连修复（浅色 SnackBar / 更新历史排序 / 分类抽屉点空白）
@@ -54,7 +54,7 @@ CancelToken——快速前后台切换时旧 SSE 连接要等服务端下一个�
 
 ## 2026-09-13 — App v0.28.7+81：bug·a6df 新建笔记卡死根修 + 服务端相册双重编码修复
 
-自主值守班（功能发现记录见 docs/feature-proposal-2026-09-13.md；同班完成
+自主值守班（功能发现记录见 docs/archive/feature-proposal-2026-09-13.md；同班完成
 夜间挂账收尾：cff7e10 已推、CI 全绿）。①**目录选择器只留目录**（a6df 根
 因）：DirPickerPage 此前不过滤 is_dir，.md 笔记等文件被当文件夹展示，点进
 去 browse(文件路径) 服务端必 400「目录加载失败」，新建笔记卡死在选目录一
@@ -66,7 +66,7 @@ ServerAlbumsPage 对用户名预编码后再进 listDir 按段编码，邮箱用
 
 ## 2026-09-12 — 服务端 v3.53：兜底备份内联验证（restore drill）
 
-下午自主批（主人离场，功能发现记录见 docs/feature-proposal-2026-09-12.md）。
+下午自主批（主人离场，功能发现记录见 docs/archive/feature-proposal-2026-09-12.md）。
 B5 兜底 dump 落盘后立即验证：SQLite `integrity_check`+settings 表可读 / PG
 改 `-Fc` custom 格式（与外部主备份统一）+ `pg_restore -l` 只读校验；验证
 失败按备份失败处理（webhook 上门、幂等位不写次日重试），工具缺失诚实呈现
@@ -621,7 +621,7 @@ sha256 2229f55f…，线上 /api/app/latest·history 核验通过）**
 
 ## 2026-09-10 — 服务端 v3.36：独立复审修复批（工程流程 + 生产等价性 + 架构收口）
 
-依据《项目记忆/11-独立工程复审》执行（该报告 P0/P1/P2/A 全部逐条落地，见其 §九
+依据《项目记忆/archive/11-独立工程复审》执行（该报告 P0/P1/P2/A 全部逐条落地，见其 §九
 执行记录）。**门禁终态：pytest 231 passed（SQLite）/ PG 全量另核 / ruff · mypy 全绿 /
 web npm test 6 passed。**
 
@@ -677,7 +677,7 @@ web npm test 6 passed。**
 
 ## 2026-09-10 — 服务端 v3.35：安全加固与"约定收口"第一批
 
-依据《项目记忆/09-项目建议报告》与《10-改进计划-v3.35》执行，**行为等价 + 纯增强**，
+依据《项目记忆/archive/09-项目建议报告》与《项目记忆/archive/10-改进计划-v3.35.md》执行，**行为等价 + 纯增强**，
 不含功能变更、不改 API 形状（契约仍 117 路径）。
 
 **安全小项（B）**
@@ -853,7 +853,7 @@ v0.23.0 重构批经 3 轮审查（自查 → 双路对抗审查代理 → 对�
   按语言小 chunk）；扩展名列表抽 filekinds.ts 唯一事实源（FileViewer/ui.ts
   双份漂移收口，heif 图标补齐）
 - **CHANGELOG 拆分**：主文件只留 v0.21 系列（3.6KB），103 条历史归档至
-  CHANGELOG-archive-v0.4-v0.20.md
+  docs/archive/CHANGELOG-archive-v0.4-v0.20.md
 - 实测坑补录：bat 里裸 `find` 经 Git Bash PATH 解析成 GNU find（把 /c 当
   C 盘根递归扫描挂死）、%TEMP% 被 bash 导出成 /tmp——手动调试 bat 必踩，
   计划任务环境免疫
