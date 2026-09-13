@@ -180,15 +180,24 @@ void main() {
       expect(br.bottomLeft.x, 0);
     });
 
-    test('SnackBar：floating + 恒白字（暗色下不能沿用 M3 的深字）', () {
+    test('SnackBar：floating + 文字亮度随模式（bug·959d：浅色下不再恒黑底）', () {
       for (final t in [light, dark]) {
         expect(t.snackBarTheme.behavior, SnackBarBehavior.floating);
-        expect(t.snackBarTheme.contentTextStyle!.color, Colors.white);
       }
+      // 暗色：深底必须显式白字（不能沿用 M3 默认深字）
+      expect(dark.snackBarTheme.contentTextStyle!.color, Colors.white);
+      // 浅色：浅灰浮层 + 墨色文字——背景亮度必须显著高于暗色（959d 修复）
+      expect(light.snackBarTheme.contentTextStyle!.color,
+          light.colorScheme.onSurface);
+      expect(
+          light.snackBarTheme.backgroundColor!.computeLuminance(),
+          greaterThan(
+              dark.snackBarTheme.backgroundColor!.computeLuminance()));
     });
 
-    test('Tooltip：品牌圆角 8 + 白字', () {
-      expect(light.tooltipTheme.textStyle!.color, Colors.white);
+    test('Tooltip：圆角 8 + 文字亮度随模式（bug·959d 配套）', () {
+      expect(light.tooltipTheme.textStyle!.color, light.colorScheme.onSurface);
+      expect(dark.tooltipTheme.textStyle!.color, Colors.white);
     });
 
     test('AppBar：不抬起、标题左对齐、18 号 w700', () {

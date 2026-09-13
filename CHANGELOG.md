@@ -2,6 +2,21 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-13 — App v0.28.10+84：反馈三连修复（浅色 SnackBar / 更新历史排序 / 分类抽屉点空白）
+
+用户升级 0.28.9+83 后连报三条，当班全清：
+①**浅色主题 SnackBar 恒黑**（959d）：浅色分支 snackBg 硬编码深海军 #23253A，
+「欢迎，debug」等所有浮层提示在浅色下不随主题变——改为 surfaceContainerHighest
+浅灰浮层，文字/action 颜色亮度随模式（Tooltip 同语言配套）。②**更新历史缺
+v0.28.7-9**（0fce）：服务端数据修复（无需发版）——条目已登记但被追加到列表
+末尾（0.4.1 之后），App 按服务端顺序渲染且约定新版本在前；已按 build 降序重排。
+③**分类抽屉点空白不收**（cdfc）：Flutter 经典陷阱——遮罩 GestureDetector 子级
+是裸 SizedBox.expand（不可命中），默认 deferToChild 下点击被父级遮罩色装饰吞掉，
+v0.27.0 的「点空白收回」从未真正生效——显式 `HitTestBehavior.opaque` 修复；
+全仓扫描仅此一处同型。
+测试：Snackbar/Tooltip 两例规格测试同步改为亮度感知断言；flutter 206 /
+dart analyze 0。
+
 ## 2026-09-13 — 服务端：备份验证钉死 public.settings（测试 schema 残留假阳性，P1）
 
 值守班续。PG 双引擎测试指向生产库、异常中断时 conftest 的 DROP SCHEMA 未

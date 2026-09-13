@@ -1160,6 +1160,11 @@ class _NotesPageState extends State<NotesPage> {
                             _catPanel(Theme.of(context)),
                             Expanded(
                                 child: GestureDetector(
+                                    // behavior 必须显式 opaque（bug·cdfc）：
+                                    // 子级 SizedBox.expand 无装饰不可命中，
+                                    // 默认 deferToChild 下遮罩点击永不触发——
+                                    // 命中被父级遮罩色装饰吞掉，点空白无效果
+                                    behavior: HitTestBehavior.opaque,
                                     onTap: () =>
                                         setState(() => _catsOpen = false),
                                     child: const SizedBox.expand())),

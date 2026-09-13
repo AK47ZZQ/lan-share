@@ -186,7 +186,9 @@ abstract final class AppTheme {
       dialogBg = scheme.surfaceContainerHigh;
       sheetBg = scheme.surfaceContainerLow;
       chipBg = scheme.surfaceContainerLow;
-      snackBg = const Color(0xFF23253A);
+      // 浅色模式 SnackBar 用浅灰浮层（bug·959d：此前硬编码深海军，浅色下
+      // 「欢迎，debug」等所有 SnackBar 恒黑色不随主题变）；深色分支保持深底
+      snackBg = cHighest;
     } else if (amoled) {
       const black = Colors.black;
       baseSurface = black;
@@ -356,10 +358,12 @@ abstract final class AppTheme {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Brand.controlRadius)),
         backgroundColor: snackBg,
-        // 两种模式下 snackBg 都是深海军底：文字必须显式压浅色，否则
-        // 深色模式沿用 M3 默认 onInverseSurface（深色）= 深字深底看不清
-        contentTextStyle: const TextStyle(color: Colors.white, fontSize: 14),
-        actionTextColor: const Color(0xFF8F9BFF),
+        // 文字亮度随模式：暗色深底压白字（否则 M3 默认 onInverseSurface 深
+        // 字深底看不清）；浅色浅底用 onSurface 墨色（bug·959d 配套）
+        contentTextStyle: TextStyle(
+            color: isDark ? Colors.white : scheme.onSurface, fontSize: 14),
+        actionTextColor:
+            isDark ? const Color(0xFF8F9BFF) : scheme.primary,
       ),
       listTileTheme: ListTileThemeData(
         shape: RoundedRectangleBorder(
@@ -378,11 +382,14 @@ abstract final class AppTheme {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Brand.controlRadius)),
       ),
-      // 长按提示（桌面端 hover 也走它）：深底白字，与 SnackBar 同语言
+      // 长按提示（桌面端 hover 也走它）：与 SnackBar 同语言（底色随模式，
+      // bug·959d 配套——浅色下 tooltip 也换浅底墨字）
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
             color: snackBg, borderRadius: Radii.bXs),
-        textStyle: const TextStyle(color: Colors.white, fontSize: 12.5),
+        textStyle: TextStyle(
+            color: isDark ? Colors.white : scheme.onSurface,
+            fontSize: 12.5),
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: scheme.primary,
