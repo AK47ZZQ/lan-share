@@ -425,3 +425,75 @@ def test_instant_dedup_no_cross_user_leak(auth, make_user):
         "dest_dir": "incoming", "filename": "again.bin",
         "size": len(payload), "sha256": sha})
     assert r.json()["instant"] is True
+
+
+# ── finish 重组配额预检 + 校验失败清 tmp（2026-09-13 夜间审查 U1/U1b）──
+
+
+def test_upload_finish_quota_precheck_skips_reassembly(auth, make_user, monkeypatch):
+    """init 后配额缩水 → finish 必然超限：重组前预检直接 409，
+    不写重组 tmp（水位期不烧双倍磁盘与几十分钟 IO）。
+    消融：移除重组前 enforce_quota → 重组 tmp 被打开 → 断言转红。"""
+    import app.api.uploads as uploads_mod
+
+    member = make_user("member")
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
+                        (member.username,)).fetchone()["id"]
+
+    body = b"z" * 2048
+    r = member.post("/api/upload/init", json={
+        "dest_dir": "private", "filename": "over.bin", "size": len(body)})
+    assert r.status_code == 200, r.text
+    sid = r.json()["session"]
+    r = member.post(f"/api/upload/chunk/{sid}?index=0", content=body)
+    assert r.status_code == 200, r.text
+
+    r = auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": 1000})
+    assert r.status_code == 200, r.text
+
+    opened: list[str] = []
+    real_open = uploads_mod.aiofiles.open
+
+    def _spy_open(file, *a, **k):
+        opened.append(str(file))
+        return real_open(file, *a, **k)
+    monkeypatch.setattr(uploads_mod.aiofiles, "open", _spy_open)
+
+    r = member.post(f"/api/upload/finish/{sid}")
+    assert r.status_code == 409, r.text
+    assert not any(".uploading-" in n for n in opened), opened
+
+
+def test_upload_finish_postcheck_failure_cleans_tmp(make_user, monkeypatch):
+    """重组后配额校验失败（模拟并发写满）也必须清 tmp——此前 409 直接上抛，
+    .uploading-* 残留私人目录最长 1 天（U1b）。
+    消融：拆掉 try/except unlink → 磁盘上留下 uploading 残件 → 断言转红。"""
+    import app.api.uploads as uploads_mod
+    from app.config import SHARE_ROOT
+    from fastapi import HTTPException
+
+    member = make_user("member")
+    real_eq = uploads_mod.enforce_quota
+    calls = {"n": 0}
+
+    def _flaky(user, dest, incoming):
+        calls["n"] += 1
+        # 第1次=init 配额闸，第2次=finish 重组前预检，第3次=重组后落位前校验
+        if calls["n"] >= 3:   # 前两道通过（模拟并发写满发生在重组期间），第三道失败
+            raise HTTPException(status_code=409, detail="配额不足（私人空间已满）")
+        return real_eq(user, dest, incoming)
+    monkeypatch.setattr(uploads_mod, "enforce_quota", _flaky)
+
+    body = b"w" * 512
+    r = member.post("/api/upload/init", json={
+        "dest_dir": "private", "filename": "raced.bin", "size": len(body)})
+    assert r.status_code == 200, r.text
+    sid = r.json()["session"]
+    r = member.post(f"/api/upload/chunk/{sid}?index=0", content=body)
+    assert r.status_code == 200, r.text
+
+    r = member.post(f"/api/upload/finish/{sid}")
+    assert r.status_code == 409, r.text
+    assert calls["n"] >= 2
+    left = list((SHARE_ROOT / "private" / member.username).glob("*.uploading-*"))
+    assert left == [], left

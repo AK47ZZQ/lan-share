@@ -278,6 +278,11 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
     if dest.is_dir():
         # 与直传同款守卫：同名目录存在时不能拿文件去顶替（否则整个目录被静默移进回收站）
         raise HTTPException(status_code=409, detail="同名目录已存在")
+    # 重组前配额预检（2026-09-13 审查 U1）：重组要写出满额 tmp——配额缩水/
+    # 并发写满后注定超限的 finish 不该白烧最长几十分钟重组 IO 与双倍磁盘
+    # （超水位期这是现实约束）；落位前的正式校验仍保留（配额 used 可在此
+    # 间隙被并发改变，双保险）
+    enforce_quota(owner, dest, row["total_size"])
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.uploading-{os.getpid()}-{time.time_ns()}")
 
@@ -307,7 +312,14 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         _destroy_upload_session(sid, d)
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
-    enforce_quota(owner, dest, size)
+    try:
+        enforce_quota(owner, dest, size)
+    except BaseException:
+        # 重组后的校验失败同样要清 tmp（U1b）：此前 409 直接上抛，
+        # .uploading-* 残留私人目录最长 1 天才被孤儿回收——配额超限者
+        # 磁盘占用翻倍（水位期不可接受）
+        tmp.unlink(missing_ok=True)
+        raise
     # 落位前重查（TOCTOU 收窄，红队 P2）：分片重组可达数十分钟，期间同名
     # 目录可能被并发建出——目录绝不能被静默移进回收站
     if dest.is_dir():
