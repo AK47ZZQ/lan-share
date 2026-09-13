@@ -2,6 +2,14 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-13 — App v0.28.9+83：文件页缩略图请求噪声治理
+
+自主值守班续。files_page `_thumbUrl` 守卫从 previewable 收紧为图/视频——
+服务端 /thumb 仅支持 IMG_EXTS|VID_EXTS，doc/audio 每个文件在列表里都白打
+一次请求吃 404（生产日志 /thumb/笔记/*.md 404 实锤）并污染缩略图负缓存；
+刷新放行负缓存处同步对齐口径（原 null 断言隐患一并消除）。recent_page 本
+就按 isMedia 守卫不动。dart analyze 0 / flutter 206。
+
 ## 2026-09-13 — 服务端：/preview 显式支持 HEAD（App 大小预检首次生效）
 
 自主值守班续。FastAPI 不像 Starlette 自动补 HEAD，`/preview` 的 HEAD 一直

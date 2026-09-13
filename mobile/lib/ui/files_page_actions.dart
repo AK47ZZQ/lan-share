@@ -517,8 +517,11 @@ extension _FilesPageActions on _FilesPageState {
   /// 与照片墙同一条 /thumb/ 通道）。null=显示类型图标，不发请求。
   /// ?v=modified：同名覆盖后 URL 变化，绕开客户端 180 天磁盘缓存陈旧
   /// （服务端 FastAPI 忽略未知 query 参数，零服务端改动；对抗审查 P2）
+  /// 2026-09-13：守卫从 previewable 收紧为图/视频——服务端 /thumb 仅支持
+  /// IMG_EXTS|VID_EXTS，doc/audio 每个文件在列表里都白打一次请求吃 404
+  /// （生产日志 /thumb/笔记/*.md 404 实锤），还污染缩略图负缓存。
   String? _thumbUrl(Entry e) {
-    if (!e.previewable || _base == null) return null;
+    if ((!e.isImage && !e.isVideo) || _base == null) return null;
     return '${_base!}/thumb/${encPath(e.path)}?v='
         '${Uri.encodeComponent(e.modified)}';
   }

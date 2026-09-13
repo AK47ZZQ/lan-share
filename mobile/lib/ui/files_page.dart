@@ -237,7 +237,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       // 即自愈，不必干等 10 分钟 TTL（对抗审查 P3）
       if (_base != null) {
         for (final e in items) {
-          if (e.previewable) AuthCacheManager.I.clearFailed(_thumbUrl(e)!);
+          // 与 _thumbUrl 同口径（图/视频才请求缩略图），否则 null 断言崩
+          if ((e.isImage || e.isVideo) && _thumbUrl(e) != null) {
+            AuthCacheManager.I.clearFailed(_thumbUrl(e)!);
+          }
         }
       }
     } catch (_) {
