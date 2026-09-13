@@ -2,6 +2,16 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-13 — 服务端：备份验证钉死 public.settings（测试 schema 残留假阳性，P1）
+
+值守班续。PG 双引擎测试指向生产库、异常中断时 conftest 的 DROP SCHEMA 未
+执行 → `ls_test_*` 残留 schema（3 个×15 表）混进生产库；备份验证的宽松
+`\bsettings\b` 正则匹配到测试 schema 的 settings——**public.settings 缺失
+也能"验证通过"**。`_pg_toc_has_public_settings()` 按 pg_restore -l 行末三
+段精确取 schema/table 只认 public；+1 回归测试（消融还原宽松正则即红）；
+残留 schema 已 DROP CASCADE 清零（前核实无活动测试连接）。
+门禁 pytest **287**；服务已重启。
+
 ## 2026-09-13 — App v0.28.9+83：文件页缩略图请求噪声治理
 
 自主值守班续。files_page `_thumbUrl` 守卫从 previewable 收紧为图/视频——
