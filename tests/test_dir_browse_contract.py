@@ -87,3 +87,13 @@ def test_special_char_filename_end_to_end(auth, workdir):
 def test_missing_dir_is_404(auth):
     r = auth.get("/api/files/definitely-not-here-xyz")
     assert r.status_code == 404
+
+
+def test_preview_supports_head(auth, workdir):
+    # HEAD 显式放行（FastAPI 不自动补 HEAD）：App previewChecked 用 HEAD
+    # 读 content-length 做大小预检；405 = 预检永远失效
+    _mkdir(auth, workdir)
+    _put(auth, f"{workdir}/doc.md", b"0123456789")
+    r = auth.head(f"/preview/{workdir}/doc.md")
+    assert r.status_code == 200
+    assert r.headers.get("content-length") == "10"

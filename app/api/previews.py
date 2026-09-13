@@ -46,11 +46,22 @@ def _snap_w(w: int) -> int:
     return PREVIEW_W_LADDER[-1]
 
 
+# HEAD 单独成路由（叠装饰器共享实现）：api_route 多方法会让 operationId
+# 依赖 methods 集合的哈希序、跨进程不稳定且互相重复；单方法路由各自确定。
+# HEAD 显式放行（FastAPI 不像 Starlette 自动补 HEAD）：App 文档查看器
+# previewChecked 用 HEAD 读 content-length 做大小预检，405 会让预检
+# 永远失效、超大文档整文件下载后才被前端丢弃（2026-09-13 修）。
+# 注意：路由函数禁用 docstring（会进 OpenAPI description 致契约漂移）。
 @router.get("/preview/{path:path}")
+@router.head("/preview/{path:path}")
 async def preview_file(path: str, w: int | None = Query(default=None),
                        _user=Depends(require_user)):
-    """文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/，
-    w 量化到固定阶梯），公网/移动端省流量；缩放超过中档位后前端自行改拉原图。"""
+    # 文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/，
+    # w 量化到固定阶梯），公网/移动端省流量；缩放超过中档位后前端自行改拉原图。
+    # HEAD 显式放行（FastAPI 不像 Starlette 自动补 HEAD）：App 文档查看器
+    # previewChecked 用 HEAD 读 content-length 做大小预检，405 会让预检
+    # 永远失效、超大文档整文件下载后才被前端丢弃（2026-09-13 修）。
+    # 注意：路由函数禁用 docstring（会进 OpenAPI description 致契约漂移）。
     target = resolve(_user, path, "read")
     ensure_exists(target)
     mime, _ = mimetypes.guess_type(str(target))

@@ -6314,8 +6314,58 @@
   },
   "/preview/{path}": {
    "get": {
-    "description": "文件预览。图片可带 ?w=<宽> 取按宽缩放的中档位（缓存于 .thumbs/，\nw 量化到固定阶梯），公网/移动端省流量；缩放超过中档位后前端自行改拉原图。",
     "operationId": "preview_file_preview__path__get",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "path",
+      "required": true,
+      "schema": {
+       "title": "Path",
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "w",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "W"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Preview File"
+   },
+   "head": {
+    "operationId": "preview_file_preview__path__head",
     "parameters": [
      {
       "in": "path",
