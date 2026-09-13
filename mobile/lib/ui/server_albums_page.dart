@@ -45,7 +45,10 @@ class _ServerAlbumsPageState extends ConsumerState<ServerAlbumsPage> {
       final out = <_ServerAlbum>[];
       for (final e in const [('image', '照片'), ('video', '视频')]) {
         try {
-          final seg = '${e.$2}/${Uri.encodeComponent(username)}';
+          // username 不预编码（bug 2026-09-13 旁支）：listDir 内部按段
+          // Uri.encodeComponent；预编码过的 %40 再编码会变 %2540 → 服务端
+          // 404 被吞 → 邮箱用户名的服务端相册列表恒为空。'/' 已在上面挡掉。
+          final seg = '${e.$2}/$username';
           final items = await FilesApi.listDir(seg);
           for (final it in items) {
             final m = it as Map;

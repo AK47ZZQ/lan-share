@@ -12,6 +12,20 @@ class DirEntry {
   DirEntry(this.name, this.path, this.isPrivateRoot);
 }
 
+/// 从 /api/files 的 items 里只留目录并排序。
+/// bug·a6df 根修（2026-09-13）：此前不过滤，.md 笔记等文件被当文件夹
+/// 展示，点进去 browse(文件路径) 服务端必 400「目录加载失败」，新建笔记
+/// 被卡死在选目录一步（用户重试两次后放弃并报障）。
+List<DirEntry> dirEntriesFromItems(List<dynamic> items) {
+  final dirs = [
+    for (final e in items)
+      if ((e as Map)['is_dir'] == true)
+        DirEntry(e['name'] as String, e['path'] as String,
+            e['is_private_root'] as bool? ?? false),
+  ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  return dirs;
+}
+
 class DirPickerPage extends StatefulWidget {
   final String title;
   const DirPickerPage({super.key, required this.title});
@@ -42,11 +56,7 @@ class _DirPickerPageState extends State<DirPickerPage> {
     });
     try {
       final items = await FilesApi.browse(path);
-      final dirs = items
-          .map((e) => DirEntry(e['name'] as String, e['path'] as String,
-              e['is_private_root'] as bool? ?? false))
-          .toList()
-        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      final dirs = dirEntriesFromItems(items);
       if (!mounted) return;
       setState(() {
         if (_crumbs.last != path) {

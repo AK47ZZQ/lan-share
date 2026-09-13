@@ -2,6 +2,18 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-13 — App v0.28.7+81：bug·a6df 新建笔记卡死根修 + 服务端相册双重编码修复
+
+自主值守班（功能发现记录见 docs/feature-proposal-2026-09-13.md；同班完成
+夜间挂账收尾：cff7e10 已推、CI 全绿）。①**目录选择器只留目录**（a6df 根
+因）：DirPickerPage 此前不过滤 is_dir，.md 笔记等文件被当文件夹展示，点进
+去 browse(文件路径) 服务端必 400「目录加载失败」，新建笔记卡死在选目录一
+步（09-12 生产日志两次 400 实锤）——抽 `dirEntriesFromItems()` 纯函数过滤
++排序，batch076 5 例 + 消融（去过滤必红）。②**服务端相册页双重编码**：
+ServerAlbumsPage 对用户名预编码后再进 listDir 按段编码，邮箱用户名 `%40`
+变 `%2540` 必 404 且被静默吞，相册列表恒空——删预编码一行归一给统一编码
+层。flutter 201→**206** / dart analyze 0。
+
 ## 2026-09-12 — 服务端 v3.53：兜底备份内联验证（restore drill）
 
 下午自主批（主人离场，功能发现记录见 docs/feature-proposal-2026-09-12.md）。
