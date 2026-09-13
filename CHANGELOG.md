@@ -2,6 +2,14 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-13 — App v0.28.8+82：SSE 连接累积修复（429 风暴根因）
+
+自主值守班续（同日第二小版）。`inbox_poll._openSse` 开新流前先 cancel 旧
+CancelToken——快速前后台切换时旧 SSE 连接要等服务端下一个心跳（≤15s）才被
+回收，累积可撞每用户 3 连接乃至全局 64 上限，挤占所有成员的实时通知通道
+（09-13 生产日志 4 连 429 实锤）。cancel 对已完成的流是无害 no-op；旧流被
+断最坏损失一次信号（信号语义本就重拉全量）。dart analyze 0 / flutter 206。
+
 ## 2026-09-13 — App v0.28.7+81：bug·a6df 新建笔记卡死根修 + 服务端相册双重编码修复
 
 自主值守班（功能发现记录见 docs/feature-proposal-2026-09-13.md；同班完成

@@ -42,6 +42,11 @@ class InboxPoll {
   Future<void> _openSse() async {
     if (_sseTried) return;
     _sseTried = true;
+    // 开新流前先断旧流（2026-09-13 生产日志 4 连 429）：快速前后台切换时
+    // 旧连接要等服务端下一个心跳（≤15s）才被回收，期间累积可撞每用户
+    // 3 连接甚至全局 64 上限——挤占所有人的实时通道。cancel 对已完成的
+    // 流是无害 no-op。
+    _sseCancel?.cancel();
     final cancel = CancelToken();
     _sseCancel = cancel;
     try {
