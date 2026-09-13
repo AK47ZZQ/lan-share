@@ -2,6 +2,15 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 项目记忆/02-里程碑。
 
+## 2026-09-13 — 服务端：/preview 显式支持 HEAD（App 大小预检首次生效）
+
+自主值守班续。FastAPI 不像 Starlette 自动补 HEAD，`/preview` 的 HEAD 一直
+405（生产日志+curl 实锤）——App 文档查看器 previewChecked 的 content-length
+大小预检从未生效，超大文档整文件下载后才被前端丢弃。HEAD 单独成路由（叠
+装饰器共享实现；api_route 多方法的 operationId 依赖 methods 集合哈希序、
+跨进程不稳定，快照不可复现）。+1 契约测试，openapi 快照重导出。
+门禁 pytest **286**；nssm restart 后线上 HEAD 实测 200+content-length。
+
 ## 2026-09-13 — App v0.28.8+82：SSE 连接累积修复（429 风暴根因）
 
 自主值守班续（同日第二小版）。`inbox_poll._openSse` 开新流前先 cancel 旧
