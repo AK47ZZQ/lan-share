@@ -83,6 +83,26 @@ curl -k https://192.168.1.100:8765/healthz
 
 ## 4. 文件备份与恢复演练（backup.bat + restore-drill.bat）
 
+> ⛔ **2026-09-13 起：外部主备份已暂停（主人决策）。**
+> 计划任务 `lan-share-backup` **已禁用**（定义保留未删），等**第二块 SSD 到位后**
+> 再恢复——届时先补一次全量备份，再启用任务，并跑一次 restore-drill 验证。
+> `C:\lan-share-backup\files\`（7499 文件 / 20.1GB 旧快照）**已按主人确认删除**；
+> 保留 `db\`（PG dump）、`files-manifest.txt`、`pre-v35-20260829`。
+> 磁盘已用 **88% → 80%**（+21G，含回收站清空；主人手动完成终清）。
+>
+> **恢复备份（第二块盘到位后）**：
+> ```bat
+> rem 本机 schtasks.exe 被安全策略屏蔽，用仓库脚本（走 COM）
+> C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe ^
+>   C:\lan-share\scripts\_ops_toggle_backup_task.py enable
+> ```
+> 任务定义备份在仓库 `.backup-audit/lan-share-backup.task.xml.bak`；
+> 删除前完整文件清单（可追溯）在 `.backup-audit/files-inventory-before-delete.json`。
+>
+> ⚠️ **停机期间无异地备份**（知情决策）。另注意 `db\lanshare-20260911.dump` 是
+> **0 字节空档**，最新有效 dump 为 `lanshare-20260912.dump`。
+> ℹ️ 本手册 §4.0 的**进程内兜底备份（B5）未停**——它是独立第二条链。
+
 > v3.31 调整（改进建议 9.6-P2-4）：`robocopy` 加 `/MT:2`（默认 8 线程会把
 > 磁盘 IO 吃满，备份窗口内 Web/App 列表与缩略图明显变慢）；`pg_dump` 加
 > `--lock-wait-timeout=5000`（拿不到锁 5 秒放弃而非挂死；ACCESS SHARE 不阻塞
@@ -92,7 +112,7 @@ curl -k https://192.168.1.100:8765/healthz
 > 跑残了看不出来"的盲区）。
 
 - 计划任务（备份）：`schtasks /Create /TN "lan-share-backup" /SC DAILY /ST 23:30
-  /TR "C:\lan-share\backup.bat"`（已注册）。
+  /TR "C:\lan-share\backup.bat"`（已注册；**2026-09-13 起 Disabled**）。
   > 时间口径核对（2026-09-10）：README/HANDOVER 写 23:30，而 `backup.bat` 注释与本
   > 手册原写 03:30——**已按实测统一为 23:30**（备份产物 mtime 为 23:30 / 00:33，
   > 与 23:30 吻合）。如需确认，`schtasks /Query /TN "lan-share-backup" /V /FO LIST`，
@@ -101,6 +121,10 @@ curl -k https://192.168.1.100:8765/healthz
   `BACKUP_DEST`（默认 `C:\lan-share-backup`，可用环境变量覆盖）。
 - **产物清单**：`db\lanshare-YYYYMMDD.dump`（+ `.sha256` sidecar）、`files\`
   （数据目录增量副本）、`files-manifest.txt`（文件数 + 总字节，v3.35 新增）。
+- ⚠️ **删除"备份"前必须先验证它是否含独有内容**：2026-09-13 实测发现
+  `files\` 里有 5 个目录（Hermes快传/apk/简历/logo图片/手机上传）在项目
+  `data\` 中**并不存在**，且 `照片\` 远大于项目侧——备份**不是**纯副本。
+  一律先 `ls` 对比两侧、确认无误再删。
 
 ### 4.0 进程内每日兜底备份（v3.52，`app/services/backup.py`）
 
