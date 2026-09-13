@@ -14,7 +14,7 @@ APK_SRC = REPO / "mobile" / "build" / "apk" / "lanshare-release.apk"
 DIST = REPO / "data" / "App安装包"
 VERSION_JSON = DIST / "version.json"
 VERSIONS_JSON = DIST / "versions.json"
-DATE = "2026-09-12"
+DATE = __import__("datetime").date.today().isoformat()
 
 
 def sha256_of(p: Path) -> str:

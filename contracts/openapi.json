@@ -6200,45 +6200,6 @@
     "summary": "Dav Handler"
    }
   },
-  "/files": {
-   "get": {
-    "description": "静态直连下载（Caddy /files/* 反代至此）：与 /preview 同样走 resolve() 判权。\nCaddyfile 不再直接 file_server 挂 SHARE_ROOT（越权旁路，review 2026-09-02 P0-1）；\nFileResponse 的 filename 参数自带 Content-Disposition: attachment。",
-    "operationId": "download_file_files_get",
-    "parameters": [
-     {
-      "in": "query",
-      "name": "path",
-      "required": false,
-      "schema": {
-       "default": "",
-       "title": "Path",
-       "type": "string"
-      }
-     }
-    ],
-    "responses": {
-     "200": {
-      "content": {
-       "application/json": {
-        "schema": {}
-       }
-      },
-      "description": "Successful Response"
-     },
-     "422": {
-      "content": {
-       "application/json": {
-        "schema": {
-         "$ref": "#/components/schemas/HTTPValidationError"
-        }
-       }
-      },
-      "description": "Validation Error"
-     }
-    },
-    "summary": "Download File"
-   }
-  },
   "/files/{path}": {
    "get": {
     "description": "静态直连下载（Caddy /files/* 反代至此）：与 /preview 同样走 resolve() 判权。\nCaddyfile 不再直接 file_server 挂 SHARE_ROOT（越权旁路，review 2026-09-02 P0-1）；\nFileResponse 的 filename 参数自带 Content-Disposition: attachment。",

@@ -30,8 +30,25 @@ class BackupConfig {
     this.excludedBuckets = const [],
   });
 
-  static Future<BackupConfig> load() async {
+  /// 读取配置。
+  ///
+  /// ⚠️ `fresh: true` 必须用于**后台引擎**路径（bug·933e「暂停备份按钮失效」根修）：
+  /// 备份引擎跑在独立 isolate（FlutterEngineGroup 每任务拉起），而
+  /// `SharedPreferences.getInstance()` 的 Dart 侧缓存**是每 isolate 一份**——
+  /// 前台 UI 写入 `paused=true` 后，后台引擎的缓存实例仍看到旧值 `false`，
+  /// 于是"暂停"点了没反应、照片照跑。这与 0.4.6 批记录的"跨 isolate prefs
+  /// 缓存坑"同源（当时是后台写、UI 读不到，这次方向相反）。
+  /// `reload()` 强制从平台侧重读，保证引擎看到前台刚写的开关。
+  static Future<BackupConfig> load({bool fresh = false}) async {
     final sp = await SharedPreferences.getInstance();
+    if (fresh) {
+      try {
+        await sp.reload();
+      } catch (_) {
+        // reload 失败（理论不发生）就按当前缓存继续：宁可沿用旧值，也不要
+        // 让读配置本身抛异常把整轮备份打断。
+      }
+    }
     return BackupConfig(
       enabled: sp.getBool(_kEnabled) ?? false,
       paused: sp.getBool(_kPaused) ?? false,

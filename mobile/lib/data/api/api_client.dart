@@ -57,16 +57,32 @@ class ApiClient {
       onError: (e, handler) async {
         // GET 幂等自动重试（改进建议 9.6-P2-4）：备份窗口（pg_dump+文件
         // 复制）内 DB/IO 短暂压力会偶发超时/5xx；对幂等 GET 静默重试一次，
-        // 把"加载失败"降成"慢一点"。只救无响应或 5xx，4xx/证书问题不重试
+        // 把"加载失败"降成"慢一点"。只救无响应、5xx 或 429，4xx/证书不重试。
+        //
+        // 429 也救（bug·882a）：限速是**瞬时**状态——备份洪峰用尽配额时
+        // 服务端回 429+Retry-After:30，此前被归入「4xx 不重试」直接抛给 UI，
+        // 用户看到的就是"照片墙/文件偶发加载失败"。按 Retry-After（上限夹到
+        // 3s，避免 UI 长时间空转）退避一次即可恢复。服务端侧已改为上传独立桶
+        // （不挤占交互桶），此处是第二道兜底：真被限也自动恢复而非报错。
         final ro = e.requestOptions;
         final noResp = e.response == null;
-        final server5xx = (e.response?.statusCode ?? 0) >= 500;
+        final status = e.response?.statusCode ?? 0;
+        final rateLimited = status == 429;
         if (ro.method == 'GET' &&
             ro.extra['__retried'] != true &&
             e.error is! HandshakeException &&
-            (noResp || server5xx)) {
+            (noResp || status >= 500 || rateLimited)) {
           ro.extra['__retried'] = true;
-          await Future.delayed(const Duration(milliseconds: 800));
+          var wait = const Duration(milliseconds: 800);
+          if (rateLimited) {
+            final ra = int.tryParse(
+                e.response?.headers.value('retry-after') ?? '');
+            if (ra != null && ra > 0) {
+              wait = Duration(
+                  milliseconds: (ra * 1000).clamp(500, 3000));
+            }
+          }
+          await Future.delayed(wait);
           try {
             final res = await fresh.fetch<dynamic>(ro);
             return handler.resolve(res);

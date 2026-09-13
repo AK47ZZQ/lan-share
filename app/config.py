@@ -35,7 +35,14 @@ COOKIE_NAME = "ls_session"
 AUDIT_KEEP = 10_000
 DEVICE_TOKEN_TTL = 90 * 86400     # App 设备 Token：90 天滑动过期（APP-DESIGN §3）
 DEVICE_TOKEN_MAX = 20             # 单账号在用设备上限
-API_RATE_LIMIT = 120              # /api/* 每分钟每 IP
+API_RATE_LIMIT = 120              # /api/* 每分钟每 IP（交互类：浏览/列表/缩略图）
+# 上传专用桶（bug·882a 根因修复）：照片备份一批就是几十上百次
+# init/chunk/finish（或直传 multipart），此前全部计入 api:lan 120/min——
+# 备份过程中一旦打满，同一出口 IP 的**所有** /api/* 都被 429（照片墙/文件页
+# 报「加载失败」、SSE 断连退化成轮询继续被拒）。上传端点已全程鉴权
+# （require_user）+ 受配额/分片会话双上限约束，与交互桶隔离是正确切法：
+# 备份不再挤掉浏览，浏览器刷列表也挤不掉备份。chunk 仍按块单独豁免（见 asgi）。
+UPLOAD_RATE_LIMIT = 600           # /api/upload*（init/state/finish/直传）每分钟每 IP
 LOGIN_RATE_LIMIT = 10             # /api/login 每分钟每 IP
 SHARE_RATE_LIMIT = 30             # 分享取件 每分钟每 IP
 LOGIN_MAX_FAILS = 5               # 连续失败次数

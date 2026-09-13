@@ -1,4 +1,4 @@
-# LAN Share — 家庭团队网盘（服务端/Web v3.53 · App v0.28.10+84）
+# LAN Share — 家庭团队网盘（服务端/Web v3.53 · App v1.0.0+100）
 
 家用小团队（2–20 人）的多用户网盘。**产品定位（2026-09-10）**：**App 是家的
 内容入口**（照片备份/浏览、文件、笔记、分享、传输），**Web 是站长管理工作台**
@@ -15,7 +15,7 @@ EXIF 方向矫正；docx/xlsx/csv/pptx/rtf/doc 兼容提取）、照片时间线
 （App「我的」直达开发端，状态：已提交/处理中/已修复/已实装…实时可追）、
 **家庭动态流**、**事件推送 Webhook**、**SSE 实时通知**（`/api/events`）、
 可选 **TOTP 两步验证**、手机直传和**上传二维码**、**WebDAV 挂载
-（含独立密码）**、**PWA 离线应用**、**Flutter 原生 App（v0.28.10+84：浏览/传输/
+（含独立密码）**、**PWA 离线应用**、**Flutter 原生 App（v1.0.0+100：浏览/传输/
 相册自动备份（智能对账）/系统分享/管理面板/笔记分类/通知中心，M-A0~A5 全上线）**。
 生产库 PostgreSQL 16（SQLite 仅测试）。
 
@@ -153,8 +153,9 @@ SHA256 **秒传**；≥256MB **并发 3 路**；上传队列支持**暂停/恢�
 **原生 App（Flutter 跨端，源码 `mobile/`）**：M-A0~A5 里程碑（设备 Token /
 照片墙浏览 / 手动传输 / 相册自动备份 / 系统分享与分享管理 / 登录页 v2 全家桶
 + 内置验证器）**全部完成**，此后进入**版本功能批次**阶段（v0.6.0 → 最新
-**v0.28.10+84**：笔记分类体系 / 沉浸欢迎头 / 通知中心 / 备份智能对账 /
-视觉规范令牌化 / 结构整改 / SSE 实时通知 / 反馈三连修复；照片点赞评论已下线）。
+**v1.0.0+100 首个正式版**：笔记分类体系 / 沉浸欢迎头 / 通知中心 / 备份智能对账 /
+视觉规范令牌化 / 结构整改 / SSE 实时通知 / 备份与浏览限速隔离 / 暂停备份根修；
+照片点赞评论已下线）。
 完整演进与验收口径见 `CHANGELOG.md` 与
 [docs/项目记忆/02-版本里程碑.md](docs/项目记忆/02-版本里程碑.md)；
 App 工程结构/协议见 `mobile/README.md`。
@@ -166,10 +167,10 @@ App 工程结构/协议见 `mobile/README.md`。
 APK + version.json + versions.json）。R8 已关（WorkManager/Room 在裁剪下启动即崩，
 见 `docs/DEVELOPMENT.md`）。
 
-> **当前测试基线（2026-09-13 实测）**：pytest **288** 项（SQLite）+ PostgreSQL
+> **当前测试基线（2026-09-13 实测）**：pytest **344** 项（SQLite）+ PostgreSQL
 > 双引擎 **284+3skip** / Web 单测 **19** 项 + vue-tsc + 契约路径对齐守卫 /
-> Dart **206** 项 + `dart analyze` 0 + UI 分层守卫（基线 0）/
-> 契约 **132 路径（154 操作）** / ruff·mypy·pip-audit 全绿。
+> Dart **212** 项 + `dart analyze` 0 + UI 分层守卫（基线 0）/
+> 契约 **131 路径（155 操作）** / ruff·mypy·pip-audit 全绿。
 
 **WebDAV 独立密码**（v3.7 起）：与登录密码隔离的挂载凭据，设置后 DAV 入口
 只认独立密码，登录密码对 `/dav/` 失效——凭据泄露面分离，可单独轮换，
@@ -228,9 +229,9 @@ lan-share/                     C:\lan-share 是指向本仓库根的 junction（
 ├── Caddyfile                  反代/TLS/forward_auth/:80跳转
 ├── certs/                     自签证书配置（san.cnf；*.pem 私钥不入库）
 ├── scripts/                   构建/运维/契约导出工具（build-apk.bat、export-openapi.py…）
-├── tests/                     37 个测试文件（pytest 288 项；设 LANSHARE_TEST_PG_URL
+├── tests/                     38 个测试文件（pytest 344 项；设 LANSHARE_TEST_PG_URL
 │                              即同一套用例改跑 PostgreSQL——临时 schema 隔离）
-├── contracts/openapi.json     OpenAPI 契约快照（132 路径/154 操作）
+├── contracts/openapi.json     OpenAPI 契约快照（131 路径/155 操作）
 ├── docs/                      API·SECURITY·OPERATIONS·DEVELOPMENT·STATUS-v3·GIT…
 │   ├── 项目记忆/               ⭐ 经验与教训（架构/里程碑/踩坑/发版SOP/路线图）
 │   │   └── archive/           09-10 审查批 + 09-11 运行日志
@@ -280,7 +281,7 @@ tail -f logs/api-stderr.log logs/caddy-stderr.log
 **已完成（按阶段）**：v2 个人网盘（P0–P3）→ **v3 家庭团队版 M0–M6 全部交付**
 （拆包 / PostgreSQL 生产库 / Vue 全站 / 多用户与授权 / 团队体验 / 可靠性 /
 HEIC·WebDAV 独立密码·Webhook·成员视角预览）；**App M-A0~A5 全上线**后进入
-版本功能批次（v0.6 → v0.28.10）；**09-10 起转入平台期**——产品定位更新
+版本功能批次（v0.6 → v0.28.10 → v1.0.0）；**09-10 起转入平台期**——产品定位更新
 （App 内容入口 / Web 站长工作台）、反馈通道与看板、通知与会话治理、
 **知识库/图谱上线后又按主人决策整体下线**（v0.26）、结构整改与视觉规范 v1.0、
 重构小尾巴清零、SSE 实时通知、备份验证与加固。

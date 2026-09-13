@@ -32,9 +32,22 @@ router = APIRouter()
 
 
 def _session_owner_guard(row, user):
-    """分块上传会话只能由创建者（或 admin）续传/收尾。"""
-    if row["user_id"] and row["user_id"] != user["user_id"] and user["role"] != ADMIN:
+    """分块上传会话只能由创建者（或 admin）续传/收尾。
+
+    ⚠️ fail-closed 收紧（v1.0.0 终审，2026-09-13）：原写法
+    `if row["user_id"] and row["user_id"] != user["user_id"] and role != ADMIN`
+    在 `user_id` 为 NULL 时**放行任何人**——而该列是**后加的**（schema.py 走
+    ALTER TABLE 迁移，列可空），历史行即 NULL；任何登录用户都能续传/收尾这类
+    会话（把别人的在途上传写坏或提前 finish 掉，DoS）。实际影响有限（会话短命
+    且有陈旧清扫，NULL 行基本不复存在），但授权守卫不该 fail-open：
+    **无主会话只许 admin 收尾**（admin 本就全权，且 finish 内 owner 会回落为
+    请求者本人，不产生越权写）。"""
+    if user["role"] == ADMIN:
+        return
+    if not row["user_id"] or row["user_id"] != user["user_id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
 def register_blob(path: Path, sha: str, size: int) -> bool:
     """登记内容指纹；发现同内容旧文件则用 NTFS 硬链接去重（返回是否发生了去重）。
 

@@ -13,7 +13,8 @@ from urllib.parse import urlsplit
 import time
 
 from app.config import (API_RATE_LIMIT, API_RATE_LIMIT_PUB, AUTHCHECK_RATE_LIMIT,
-                        LOGIN_RATE_LIMIT, LOGIN_RATE_LIMIT_PUB, SHARE_RATE_LIMIT)
+                        LOGIN_RATE_LIMIT, LOGIN_RATE_LIMIT_PUB, SHARE_RATE_LIMIT,
+                        UPLOAD_RATE_LIMIT)
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, public_netlocs, set_audit_user)
 from app.services import metrics as _metrics
@@ -113,6 +114,12 @@ async def security_middleware(request: Request, call_next):
         bucket = "login@pub" if is_public_entry(request) else "login"
     elif path.startswith("/api/upload/chunk/"):
         limit, bucket = 0, None  # 分块上传按块数计频，不受常规限速（仍有会话认证保护）
+    elif path == "/api/upload" or path.startswith("/api/upload/"):
+        # 上传控制面独立桶（bug·882a）：init/state/finish 与直传 multipart
+        # 此前计入 api:lan 交互桶，备份一批照片即可打满 120/min，把同一 IP 的
+        # 照片墙/文件页/通知/SSE 全挤成 429（用户报「备份时并发加载失败」）。
+        # 这些端点全程需登录 + 受配额与会话上限约束，与浏览桶隔离互不挤占。
+        limit, bucket = UPLOAD_RATE_LIMIT, ("upload:pub" if is_public_entry(request) else "upload:lan")
     elif path.startswith("/api/share/") or path == "/api/share":
         limit, bucket = SHARE_RATE_LIMIT, "share"
     elif path.startswith("/api/") or path == "/authcheck":

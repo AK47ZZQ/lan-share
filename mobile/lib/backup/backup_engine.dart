@@ -59,7 +59,8 @@ class BackupEngine {
     if (!(sp.getBool(BackupKeys.enabled) ?? false)) return 'disabled';
     // 用户手动暂停（v0.17）：手动轮同样尊重——"暂停备份"是明确叫停，
     // 点了"立即备份"想跑，先回设置页解除暂停
-    final cfg = await BackupConfig.load();
+    // fresh: true —— 跨 isolate 读，必须重读平台侧才能看到前台刚写的暂停位
+    final cfg = await BackupConfig.load(fresh: true);
     if (cfg.paused) return 'user_paused';
     try {
       final r = await const MethodChannel('lanshare/backup')
@@ -103,7 +104,8 @@ class BackupEngine {
     }
 
     try {
-      final cfg = await BackupConfig.load();
+      // fresh: true —— 本轮起跑前重读平台侧（见 _pauseReason 注释）
+      final cfg = await BackupConfig.load(fresh: true);
       if (!cfg.enabled) {
         return await finish({'status': 'skip', 'reason': 'disabled'});
       }

@@ -33,8 +33,16 @@ from app.services import note_index
 router = APIRouter()
 
 
+# ⚠️ 只注册 `/files/{path:path}`，**不注册裸 `/files`**（bug·249b 根修，2026-09-13）：
+# 网页版文件页的 Vue 路由是 `/files`（web/src/router.ts），而裸 `/files` 曾注册为
+# 下载端点 → 二者冲突：刷新页面时请求落到下载端点，`resolve("")` 得到 SHARE_ROOT
+# 目录 → 返回 JSON 400「目录请在界面打包下载」，SPA 永远没机会启动 = **用户看到的
+# 白屏**（原话就是这句 detail）。`{path:path}` 不匹配无路径的裸 `/files`，
+# 故删掉该注册项后裸 `/files` 自然落到 main.py 的 SPA 深链回退（其排除清单只排
+# `files/` 带斜杠形态），页面恢复正常；下载功能只走 `/files/<路径>`，
+# Caddy 的 `handle /files/*` 也要求带斜杠，前端 `download()` 一律拼 `/files/<path>`
+# ——三方语义一致，无功能回退。
 @router.get("/files/{path:path}")
-@router.get("/files")
 def download_file(path: str = "", _user=Depends(require_user)):
     """静态直连下载（Caddy /files/* 反代至此）：与 /preview 同样走 resolve() 判权。
     Caddyfile 不再直接 file_server 挂 SHARE_ROOT（越权旁路，review 2026-09-02 P0-1）；

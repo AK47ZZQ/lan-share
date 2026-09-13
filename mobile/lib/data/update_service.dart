@@ -130,6 +130,36 @@ class UpdateService {
     return n.startsWith('lanshare-') && n.endsWith('.apk');
   }
 
+  /// 本版安装包在本地是否已存在且校验通过；有则返回路径，可直接安装。
+  ///
+  /// 用户反馈 f6f2：下载完点"安装"后在系统安装器里取消，再回来点要重下一遍
+  /// ——几十 MB 白流量、白等待，包还占着沙盒。这里做**下载前查缓存**：
+  /// 同一 version 的包只要在 updates/ 里且 sha256 与 size 都对得上，就直接
+  /// 复用（`purgeInstallers` 的 minAge=1h 保证刚下完的包不会被自己清掉）。
+  /// 校验不通过（半截/被换）则删掉返回 null，逼一次干净重下。
+  static Future<String?> cachedInstaller(UpdateInfo info) async {
+    if (info.sha256 == null || info.sha256!.isEmpty) return null;
+    try {
+      final dir = await _updateDir();
+      final safeVer = info.version.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
+      final f = File('${dir.path}/lanshare-$safeVer.apk');
+      if (!f.existsSync()) return null;
+      if (info.size != null && f.lengthSync() != info.size) {
+        await f.delete().catchError((_) => f);
+        return null;
+      }
+      final digest = await sha256.bind(f.openRead()).first;
+      final expected = info.sha256!.replaceAll(':', '').toLowerCase();
+      if (digest.toString() != expected) {
+        await f.delete().catchError((_) => f);
+        return null;
+      }
+      return f.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 清理 updates 子目录里的历史安装包（v0.16.0 用户需求：更新安装完成
   /// 后包已无用，85MB 级会在沙盒里永久堆积）。返回释放的字节数。
   /// 调用时机：登录启动后 / 进入关于页 / 再次下载前。minAge 内的新文件

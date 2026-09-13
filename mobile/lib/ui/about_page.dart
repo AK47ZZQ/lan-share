@@ -108,13 +108,22 @@ class _AboutPageState extends State<AboutPage> {
     try {
       // 下载前先清历史安装包：省出 85MB 级空间，也给本次下载留余量
       await UpdateService.purgeInstallers();
-      final path = await UpdateService.download(remote,
-          onProgress: (received, total) {
-        if (!mounted || total <= 0) return;
-        setState(() => _progress = received / total);
-      });
+      // f6f2 修复：先查本地缓存——上次下载完在系统安装器里取消、或点安装
+      // 后返回，包还在沙盒 updates/ 且 sha256 对得上，直接复用不重下
+      // （几十 MB 白流量 + 白等待）。校验不过的残包会被清掉走正常下载。
+      var path = await UpdateService.cachedInstaller(remote);
       if (!mounted) return;
-      setState(() => _progress = null);
+      if (path != null) {
+        setState(() => _progress = null);
+      } else {
+        path = await UpdateService.download(remote,
+            onProgress: (received, total) {
+          if (!mounted || total <= 0) return;
+          setState(() => _progress = received / total);
+        });
+        if (!mounted) return;
+        setState(() => _progress = null);
+      }
       await UpdateService.install(path);
     } catch (_) {
       if (!mounted) return;
