@@ -535,6 +535,24 @@ class _BackupSettingsPageState extends ConsumerState<BackupSettingsPage> {
                       Text('待备份 照片 ${stats?.pendingPhotos ?? 0} · 视频 ${stats?.pendingVideos ?? 0}'
                           ' · 失败 ${stats?.error ?? 0} 项',
                           style: const TextStyle(fontSize: 13)),
+                      const SizedBox(height: 2),
+                      // 口径说明（20260913215824-61fa）：用户困惑"备份页已备
+                      // 份数 ≠ 主页照片墙数"——两者本就不同集合，说清楚
+                      Text('已备份是本机备份账本；照片墙统计服务端全部可见照片（含网页上传、家人照片），两边数字本就不同。',
+                          style: TextStyle(fontSize: 11.5, color: Colors.grey)),
+                      // server_missing 单列（20260913215824-61fa）：服务端相册
+                      // 目录被删的项此前落进"待备份"永不消化。注意本页数字
+                      // 是"本机备份账本"口径，与照片墙（服务端全部可见媒体）
+                      // 本就不同：这里含你在别处删过的、照片墙还统计网页/
+                      // 家人上传的，两边不该相等。
+                      if ((stats?.missing ?? 0) > 0) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                            '服务端目录已删 ${stats!.missingPhotos} 照片 / ${stats.missingVideos} 视频'
+                            '（去备份详情选重新备份或移除）',
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.orange)),
+                      ],
                       if ((stats?.excludedPending ?? 0) > 0) ...[
                         const SizedBox(height: 2),
                         Text(

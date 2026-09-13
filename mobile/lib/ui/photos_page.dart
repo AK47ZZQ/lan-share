@@ -68,6 +68,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   bool _byAdded = false;
   Map<String, int>? _months;    // facets 缓存（月份选择页用）
   List<_Album>? _albums;        // 精选专辑（0.8.0，管理员维护）
+  // 自定义展示范围（20260913211718-b58a）：空 = 全部文件夹；非空 = 只展示
+  // 命中前缀的照片（服务端 include_dirs 下推，分页/脉搏口径都由服务端保证）
+  Set<String> _includedDirs = {};
   // 每页条数：局域网 120 / 公网 60（弱网首屏少拉半屏，滚动突发更小，v0.10.3）
   int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
@@ -84,6 +87,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     _loadMore();
     _loadAlbums();
     _ensureMonths();   // 年月快滚轴数据源（v0.11），失败静默
+    _restoreWallDirs();
     _scroll.addListener(() {
       if (_scroll.position.extentAfter < 600) _loadMore();
     });
@@ -150,7 +154,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               refresh: force,
               mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
               month: _month,
-              byAdded: _byAdded))
+              byAdded: _byAdded,
+              includeDirs:
+                  _includedDirs.isEmpty ? null : _includedDirs.join(',')))
           .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
           .toList();
       if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
@@ -207,6 +213,100 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     } catch (_) {
       return {};
     }
+  }
+
+  /// 自定义展示范围（20260913211718-b58a）：文件夹多选 → 服务端 include_dirs
+  /// 前缀下推。选择持久化在本地（photo_wall_dirs），设备各自记忆互不影响。
+  Future<void> _restoreWallDirs() async {
+    final sp = await SharedPreferences.getInstance();
+    final saved = sp.getStringList('photo_wall_dirs');
+    if (saved != null && saved.isNotEmpty && mounted) {
+      setState(() => _includedDirs = {...saved});
+      await _refresh();
+    }
+  }
+
+  Future<void> _persistWallDirs() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setStringList('photo_wall_dirs', _includedDirs.toList());
+  }
+
+  Future<void> _pickFolders() async {
+    List<({String dir, int count})> folders;
+    try {
+      folders = await PhotosApi.folders();
+    } catch (_) {
+      showToast('文件夹列表加载失败');
+      return;
+    }
+    if (!mounted || folders.isEmpty) {
+      showToast('还没有照片');
+      return;
+    }
+    final sel = Set<String>.from(_includedDirs);
+    await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (bctx) => SafeArea(
+                child: StatefulBuilder(
+                    builder: (bctx, setB) => Container(
+                        constraints: BoxConstraints(
+                            maxHeight:
+                                MediaQuery.of(bctx).size.height * 0.7),
+                        padding: const EdgeInsets.fromLTRB(
+                            Gap.md, Gap.xxs, Gap.md, Gap.sm),
+                        child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(children: [
+                                const Expanded(
+                                    child: Text('照片墙展示范围',
+                                        style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.bold))),
+                                if (sel.isNotEmpty)
+                                  TextButton(
+                                      onPressed: () => setB(() => sel.clear()),
+                                      child: const Text('清空')),
+                              ]),
+                              Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text('不选任何文件夹 = 展示全部',
+                                      style: TextStyle(
+                                          fontSize: 11.5,
+                                          color: Theme.of(bctx)
+                                              .colorScheme
+                                              .onSurfaceVariant))),
+                              const SizedBox(height: Gap.xxs),
+                              Flexible(
+                                  child: ListView(shrinkWrap: true, children: [
+                                for (final f in folders)
+                                  CheckboxListTile(
+                                      dense: true,
+                                      controlAffinity:
+                                          ListTileControlAffinity.leading,
+                                      title: Text(f.dir,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                      subtitle: Text('${f.count} 项'),
+                                      value: sel.contains(f.dir),
+                                      onChanged: (v) => setB(() => v == true
+                                          ? sel.add(f.dir)
+                                          : sel.remove(f.dir))),
+                              ])),
+                              const SizedBox(height: Gap.xxs),
+                              FilledButton(
+                                  onPressed: () => Navigator.pop(bctx),
+                                  child: const Text('完成')),
+                            ])))));
+    if (!mounted) return;
+    final same = sel.length == _includedDirs.length &&
+        sel.every(_includedDirs.contains);
+    if (same) return;
+    setState(() => _includedDirs = sel);
+    await _persistWallDirs();
+    await _refresh();
   }
 
   /// 按月快跳：facets 月份分布 → 选择后走服务端 month= 过滤
@@ -725,6 +825,27 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                           _refresh();
                                         },
                                         onPressed: _pickMonth)),
+                              // 自定义展示范围入口（20260913211718-b58a）
+                              Padding(
+                                  padding: const EdgeInsets.only(left: 2),
+                                  child: InputChip(
+                                      visualDensity: VisualDensity.compact,
+                                      avatar: const Icon(
+                                          Icons.folder_copy_outlined,
+                                          size: IconSizes.sm),
+                                      label: Text(_includedDirs.isEmpty
+                                          ? '文件夹'
+                                          : '自定义 · ${_includedDirs.length}'),
+                                      onPressed: _pickFolders,
+                                      onDeleted: _includedDirs.isEmpty
+                                          ? null
+                                          : () {
+                                              setState(
+                                                  () => _includedDirs = {});
+                                              // ignore: discarded_futures
+                                              _persistWallDirs();
+                                              _refresh();
+                                            })),
                             ])),
                     Expanded(child: _gridOrEmpty(selecting)),
                   ])),

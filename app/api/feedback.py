@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from app.config import FEEDBACK_MAX_ATTACHMENT_MB, SHARE_ROOT
 from app.security import (ADMIN, allow_rate, audit, client_ip, require_admin,
@@ -33,6 +34,10 @@ from app.api import events as events_bus
 from app.store import users as users_store
 
 router = APIRouter()
+
+
+class FeedbackAppendBody(BaseModel):
+    body: str
 
 FB_DIR = "反馈"
 IMG_DIR = "img"
@@ -262,6 +267,53 @@ def feedback_list(_user=Depends(require_user)):
         items.append(_to_item(mm))
     _regen_kanban()
     return {"items": items}
+
+
+_APPEND_LIMIT_PER_DAY = 30
+
+
+@router.post("/api/feedback/{fid}/append")
+def feedback_append(fid: str, payload: FeedbackAppendBody,
+                    request: Request, _user=Depends(require_user)):
+    """对已有反馈二次补充（20260913225909-e9d1）：正文末尾追加带时间戳的补充段，
+    frontmatter 的 更新 刷新。不动 状态/备注——状态流转仍归 Agent 改文件。
+    补充在任何状态都允许（已完成后的补充往往最有价值）。"""
+    me = users_store.get_username(_user["user_id"])
+    if not allow_rate(f"fb-append:{_user['user_id']}", _APPEND_LIMIT_PER_DAY, 86400):
+        raise HTTPException(status_code=429, detail="今天补充太频繁了，明天再来")
+    text = payload.body.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="补充内容不能为空")
+    if len(text) > 1000:
+        raise HTTPException(status_code=422, detail="补充内容不能超过 1000 字")
+    p = _find_file(fid)
+    if p is None:
+        raise HTTPException(status_code=404, detail="反馈不存在")
+    raw = p.read_text(encoding="utf-8", errors="replace")
+    m = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", raw, re.S)
+    if not m:
+        raise HTTPException(status_code=500, detail="反馈文件格式异常")
+    is_admin = _user["role"] == ADMIN
+    if not is_admin and m.group(1) and "用户: " in m.group(1):
+        owner = next((ln.split(":", 1)[1].strip()
+                      for ln in m.group(1).splitlines()
+                      if ln.split(":", 1)[0].strip() == "用户"), "")
+        if owner != me:
+            raise HTTPException(status_code=403, detail="只能补充自己的反馈")
+    now = _now_str()
+    fm = re.sub(r"^([ \t]*更新[:：]).*$",
+                lambda mm: mm.group(1) + " " + now,
+                m.group(1), count=1, flags=re.M)
+    # 防注入：补充内容里的 "---" 分隔线会破坏 frontmatter 解析边界——统一替换
+    safe_text = re.sub(r"\r?\n-{3,}\s*\r?\n?", "\n", text)
+    new_body = m.group(2).rstrip() + f"\n\n--- 补充 @ {now} ---\n{safe_text}\n"
+    p.write_text(f"---\n{fm}\n---\n\n{new_body}", encoding="utf-8")
+    _regen_kanban()
+    # 提醒 admin 有新补充（复用 feedback 信号通道；客户端收到后拉列表）
+    events_bus.publish_many(users_store.list_active_admin_ids(), {"kind": "feedback"})
+    audit("feedback.append", target=fid,
+          detail=f"len={len(text)}", ip=client_ip(request))
+    return {"ok": True, "updated": now}
 
 
 @router.get("/api/feedback/{fid}")

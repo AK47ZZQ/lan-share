@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 import { authReady, logout as authLogout, me, refreshAuth, avatarBust } from './auth'
@@ -61,9 +61,13 @@ watchEffect(() => {
   // API 虽全部服务端判权，渲染面也不该给。定位更新（2026-09-10）后 '/'
   // 即管理台总览（meta.admin），成员统一落 /files 内容区。
   if (me.value && route.meta.admin && me.value.role !== 'admin') void router.replace('/files')
-  // 路由切换收起移动端抽屉侧栏
-  if (sideOpen.value) sideOpen.value = false
 })
+// 路由切换收起移动端抽屉侧栏。必须是独立的 route watch——曾写在 watchEffect 内
+// 且带 `if (sideOpen.value)` 读取，读取使 sideOpen 成为 effect 依赖：手机上点汉堡
+// 置 true 后 effect 重跑又立即同步置回 false，抽屉一帧都渲染不出（移动端侧栏
+// 打不开的根因，2026-09-13 反馈 20260913225701-3e4c）。写入不建立依赖，watch 显式
+// 依赖 route 才是"路由变化才收起"的正确语义。
+watch(() => route.fullPath, () => { sideOpen.value = false })
 </script>
 
 <template>

@@ -3,8 +3,9 @@
 // 收编 photos_page / album_detail_page（含选照片 AlbumPickerPage）照片侧
 // 全部裸 dio 直发。契约与 Web 端同款：
 //   GET    /api/photos        时间线分页（limit/offset/refresh/media_type/
-//                             month/sort/album，缺省即不带该键）
+//                             month/sort/album/include_dirs，缺省即不带该键）
 //   GET    /api/photos/facets 月份分布（快滚轴/按月快跳/按月全选共用）
+//   GET    /api/photos/folders 文件夹分布（20260913211718-b58a 自定义展示范围）
 //   DELETE /api/files/{p}     多选删除（进服务端回收站，与 FilesApi.delete
 //                             同端点；statusCode==200 才算成功，见下）
 //
@@ -32,6 +33,7 @@ class PhotosApi {
     String? month,
     bool byAdded = false,
     String? album,
+    String? includeDirs,
   }) async {
     final dio = await _dio();
     final r = await dio.get('/api/photos', queryParameters: {
@@ -42,6 +44,7 @@ class PhotosApi {
       'month': ?month,
       if (byAdded) 'sort': 'added',
       'album': ?album,
+      'include_dirs': ?includeDirs,
     });
     return r.data['items'] as List;
   }
@@ -71,6 +74,42 @@ class PhotosApi {
         (m as Map)['month'] as String? ?? '':
             (m['count'] as num?)?.toInt() ?? 0,
     }..removeWhere((k, _) => k.isEmpty);
+  }
+
+  /// 文件夹分布（20260913211718-b58a）：目录前缀 + 可见媒体数，口径与
+  /// /api/photos 完全一致（可见性 + 全局隐藏清单），选择器直接用。
+  static Future<List<({String dir, int count})>> folders() async {
+    final dio = await _dio();
+    final r = await dio.get('/api/photos/folders');
+    return [
+      for (final f in ((r.data['folders'] as List?) ?? const []))
+        (
+          dir: (f as Map)['dir'] as String? ?? '',
+          count: (f['count'] as num?)?.toInt() ?? 0,
+        ),
+    ];
+  }
+
+  /// 照片墙全局隐藏清单（admin）：GET 当前清单；POST 切换某目录 hidden。
+  /// 服务端 /api/photos、facets、folders 三端口径一致，隐藏即全家不可见
+  /// （20260913211805-b4e0），但文件页仍可正常寻址（隐藏≠无权限）。
+  static Future<List<String>> wallExcludes() async {
+    final dio = await _dio();
+    final r = await dio.get('/api/photos/wall-excludes');
+    return [
+      for (final x in ((r.data['excludes'] as List?) ?? const []))
+        x as String,
+    ];
+  }
+
+  static Future<List<String>> setWallExclude(String path, bool hidden) async {
+    final dio = await _dio();
+    final r = await dio.post('/api/photos/wall-excludes',
+        data: <String, dynamic>{'path': path, 'hidden': hidden});
+    return [
+      for (final x in ((r.data['excludes'] as List?) ?? const []))
+        x as String,
+    ];
   }
 
   /// 多选删除（进服务端回收站，30 天保留期内可恢复）。与 FilesApi.delete

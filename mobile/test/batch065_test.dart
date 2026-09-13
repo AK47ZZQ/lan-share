@@ -70,6 +70,23 @@ void main() {
       expect(s.lastUploadedAt, isNull);
       expect(s.pendingPhotos, 1);
     });
+
+    test('server_missing 单列（20260913215824-61fa）：不再落进待备口径', () {
+      // 此前 server_missing 落 else 分支被计入待备份——引擎不碰、对账不复活，
+      // 待备数字只增不减像坏了。现在单列 missing，由详情页处理条消化。
+      final s = statsFromGroups([
+        _g('done', 'image', 10, bytes: 1000),
+        _g('server_missing', 'image', 3),
+        _g('server_missing', 'video', 1),
+        _g('pending', 'image', 2),
+      ], const []);
+      expect(s.missingPhotos, 3);
+      expect(s.missingVideos, 1);
+      expect(s.missing, 4);
+      expect(s.pendingPhotos, 2); // 待备不再被 missing 污染
+      expect(s.pending, 2);
+      expect(s.donePhotos, 10);
+    });
   });
 
   group('LedgerRow.bucket（v2 列）', () {

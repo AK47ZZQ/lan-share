@@ -101,6 +101,11 @@ class LedgerStats {
   int pendingVideos = 0;
   int errorPhotos = 0;
   int errorVideos = 0;
+  // server_missing（20260913215824-61fa）：服务端相册目录被删、等用户决定
+  // 重传/移除的行。此前落进待备口径永远不消化（引擎不碰、对账不复活），
+  // 待备数字只增不减像坏了——单列出来，由详情页的处理条消化。
+  int missingPhotos = 0;
+  int missingVideos = 0;
   int excludedPending = 0; // 已排除相册中的未完成项（不参与备份，单列免得数字对不上）
   int doneBytes = 0; // 已备份内容的逻辑字节和（0.6.0 统计聚合展示）
   int? lastUploadedAt; // 秒
@@ -108,6 +113,7 @@ class LedgerStats {
   int get done => donePhotos + doneVideos;
   int get pending => pendingPhotos + pendingVideos;
   int get error => errorPhotos + errorVideos;
+  int get missing => missingPhotos + missingVideos;
 }
 
 /// 纯聚合：GROUP BY status,kind 的行 + 排除相册的未完成行 → 统计。
@@ -127,6 +133,8 @@ LedgerStats statsFromGroups(
       if (bytes != null) s.doneBytes += bytes;
     } else if (status == 'error') {
       kindIsVideo == 1 ? s.errorVideos += c : s.errorPhotos += c;
+    } else if (status == 'server_missing') {
+      kindIsVideo == 1 ? s.missingVideos += c : s.missingPhotos += c;
     } else {
       // pending/uploading 都算待备
       kindIsVideo == 1 ? s.pendingVideos += c : s.pendingPhotos += c;

@@ -14,11 +14,14 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from app.config import SHARE_ROOT
 from app.roles import ADMIN, MEMBER
 from app.api.deps import preview_viewer
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support, to_rel
+from app.security import audit, client_ip, require_admin
+from app.settings import PHOTO_WALL_EXCLUDES, get_setting, set_setting
 from app.spaces import resolve, visible
 from app.store import photos as photos_store
 from app.store import users as users_store
@@ -194,6 +197,11 @@ def _scan_photos(force: bool = False):
             rel_parts = f.relative_to(SHARE_ROOT).parts
             if any(p.startswith(".") for p in rel_parts):
                 continue
+            if rel_parts[0] == "反馈":
+                # 系统目录不进照片墙（20260913211805-b4e0 关联发现）：反馈截图
+                # 是成员对管理员提交的私有内容，此前被全盘扫描收进 photos 表
+                # 上墙全家可见。扫描即跳过，存量行随 gone 清理自动消失。
+                continue
             if not f.is_file() or f.suffix.lower() not in IMG_EXTS | VID_EXTS:
                 continue
             stat = f.stat()
@@ -231,6 +239,92 @@ def _known_users() -> set[str]:
     return users_store.list_usernames()
 
 
+def _wall_excludes() -> list[str]:
+    """照片墙全局隐藏目录（admin 维护，settings 表 JSON 数组，存相对路径前缀）。
+    语义：命中前缀的媒体在 /api/photos、facets、folders 一律不出——但文件页
+    /api/files 仍可正常寻址（"能寻址≡有权限"不动，只是不上墙）。
+    场景（20260913211805-b4e0）：手机相册「私人相册」经备份落到共享空间
+    照片/<用户>/私人相册/，此前全家照片墙都看得见。"""
+    raw = get_setting(PHOTO_WALL_EXCLUDES, "")
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return []
+        return sorted({p.strip().strip("/") for p in data
+                       if isinstance(p, str) and p.strip().strip("/")})
+    except Exception:
+        return []
+
+
+def _is_wall_excluded(rel: str, excludes: list[str]) -> bool:
+    return any(rel == x or rel.startswith(x + "/") for x in excludes)
+
+
+class WallExcludeBody(BaseModel):
+    path: str
+    hidden: bool
+
+
+@router.get("/api/photos/wall-excludes")
+def wall_excludes_list(_admin=Depends(require_admin)):
+    return {"excludes": _wall_excludes()}
+
+
+@router.post("/api/photos/wall-excludes")
+def wall_excludes_set(body: WallExcludeBody, request: Request,
+                      _admin=Depends(require_admin)):
+    """把目录加入/移出照片墙隐藏清单（admin only，全局生效）。"""
+    target = resolve(_admin, body.path, "read")
+    if not target.is_dir():
+        raise HTTPException(status_code=422, detail="只能隐藏目录")
+    rel = to_rel(target).replace("\\", "/").strip("/")
+    if not rel or rel.startswith(".") or "/." in rel:
+        raise HTTPException(status_code=422, detail="非法目录")
+    excludes = [x for x in _wall_excludes() if x != rel]
+    if body.hidden:
+        excludes.append(rel)
+    set_setting(PHOTO_WALL_EXCLUDES,
+                json.dumps(excludes, ensure_ascii=False))
+    audit("photos.wall_exclude", target=rel,
+          detail=f"hidden={body.hidden}", ip=client_ip(request))
+    return {"excludes": excludes}
+
+
+def _wall_folder(rel: str, users: set[str]) -> str:
+    """照片墙的"文件夹"分组键（选择器粒度）：照片|视频 下第二段是真实用户名
+    时取到第三段（照片/<用户>/<相册>——备份落点的自然单元，与 _photo_uploader
+    同一判定），其余取两级前缀（手工整理目录），单级文件归顶级目录。"""
+    parts = rel.split("/")
+    if (len(parts) > 3 and parts[0] in ("照片", "视频") and parts[1] in users):
+        return "/".join(parts[:3])
+    if len(parts) > 2:
+        return "/".join(parts[:2])
+    return parts[0]
+
+
+@router.get("/api/photos/folders")
+def photo_folders(request: Request, user=Depends(preview_viewer)):
+    """照片墙文件夹维度（20260913211718-b58a）：目录前缀 + 可见媒体数，
+    供客户端渲染「展示哪些文件夹」选择器。口径与 /api/photos 完全一致
+    （同一可见性过滤 + 全局隐藏清单），文件夹统计不会与墙上实际条目打架。"""
+    _scan_photos()
+    users = _known_users()
+    excludes = _wall_excludes()
+    counters: dict[str, int] = {}
+    for r in photos_store.list_paths_by_taken():
+        rel = r["path"]
+        if not visible(user, rel.split("/")):
+            continue
+        if _is_wall_excluded(rel, excludes):
+            continue
+        key = _wall_folder(rel, users)
+        counters[key] = counters.get(key, 0) + 1
+    folders = [{"dir": k, "count": v} for k, v in counters.items()]
+    return {"folders": sorted(folders, key=lambda x: (-x["count"], x["dir"]))}
+
+
 def _photo_uploader(rel: str, users: set[str] | None = None) -> str:
     """拍摄者维度：按路径归属推导（private/<u>/、incoming/<u>/ 归属本人；
     照片/手机相册/<u>/ 为旧版 App 备份落点（0.7.0 前），归属 <u>；
@@ -253,6 +347,7 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
                 uploader: str | None = Query(default=None),
                 media_type: str | None = Query(default=None),
                 album: str | None = Query(default=None),
+                include_dirs: str | None = Query(default=None, max_length=2000),
                 sort: str = Query(default="taken", pattern="^(taken|added)$"),
                 refresh: bool = Query(default=False),
                 user=Depends(preview_viewer)):
@@ -260,7 +355,10 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     sort=added 按入库时间倒序（二维码/手机上传的照片按 EXIF 落历史月份，
     时间线顶部"看不到新照片"的感知问题——入库排序让新上传永远在最前）。
     可按 month=YYYY-MM 与 uploader、media_type=photo|video、album=<精选专辑id>
-    过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。"""
+    过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。
+    include_dirs=逗号分隔目录前缀（20260913211718-b58a）：只出命中前缀的照片
+    （用户自定义照片墙展示范围，App 文件夹选择器下发）；全局隐藏清单
+    （wall-excludes）对所有人生效，且先于一切筛选应用。"""
     _scan_photos(force=refresh)
     users = _known_users()
     # 可见性下推 SQL（R1-P2-10）：member/admin 的 visible() 语义可用路径前缀
@@ -293,6 +391,18 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
         cond if pushdown else "", args, order)
     rows = [r for r in all_rows if visible(user, r["path"].split("/"))] \
         if not pushdown else list(all_rows)
+    # 全局隐藏清单（b4e0）：admin 标记的目录对所有人生效，任何分支都过滤
+    excludes = _wall_excludes()
+    if excludes:
+        rows = [r for r in rows if not _is_wall_excluded(r["path"], excludes)]
+    # 每用户文件夹筛选（b58a）：App 选择器下发的前缀白名单
+    if include_dirs:
+        prefixes = [p.strip().strip("/") for p in include_dirs.split(",")
+                    if p.strip().strip("/")][:32]
+        if prefixes:
+            rows = [r for r in rows
+                    if any(r["path"] == p or r["path"].startswith(p + "/")
+                           for p in prefixes)]
     if month:
         rows = [r for r in rows if (r["taken_at"] or "")[:7] == month]
     if uploader:
@@ -340,14 +450,18 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
 
 @router.get("/api/photos/facets")
 def photo_facets(request: Request, user=Depends(preview_viewer)):
-    """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。"""
+    """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。
+    与照片墙同口径：全局隐藏清单的目录不计入。"""
     _scan_photos()
     users = _known_users()
+    excludes = _wall_excludes()
     rows = photos_store.list_paths_by_taken()
     months: dict[str, int] = {}
     uploaders: dict[str, int] = {}
     for r in rows:
         if not visible(user, r["path"].split("/")):
+            continue
+        if excludes and _is_wall_excluded(r["path"], excludes):
             continue
         m = (r["taken_at"] or "")[:7]
         if len(m) == 7:

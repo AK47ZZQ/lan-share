@@ -141,12 +141,10 @@ extension _FilesPageViews on _FilesPageState {
       },
       onLongPress: () {
         if (_selecting) return;
-        if (e.isDir) {
-          // ignore: discarded_futures
-          _dirSheet(e);
-        } else {
-          _toggleSelect(e); // 文件长按直接进入多选（与照片墙一致）
-        }
+        // 目录长按也进多选（20260913211605-91fc，与照片墙/笔记页心智一致）；
+        // 原目录管理菜单（重命名/钉住/详情）移到多选态 AppBar 的「更多」
+        // 菜单（恰好选一个目录时），不丢入口。
+        _toggleSelect(e);
       },
     );
   }
@@ -171,8 +169,7 @@ extension _FilesPageViews on _FilesPageState {
         },
         onLongPress: () {
           if (_selecting) return;
-          // ignore: discarded_futures
-          e.isDir ? _dirSheet(e) : _toggleSelect(e);
+          _toggleSelect(e); // 文件/目录长按都进多选（20260913211605-91fc）
         },
         borderRadius: radius,
         child: Container(

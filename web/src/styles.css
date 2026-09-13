@@ -348,11 +348,14 @@ nav.tabs a.router-link-active { background: var(--hover); color: var(--accent); 
 .phdate { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 18px 0 10px; }
 
 /* toast */
-.toasts { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 500; display: grid; gap: 8px; }
+/* 容器 pointer-events:none：toast 是瞬态提示，不应挡住其覆盖区域（顶部中央）
+   的点击；单条 toast 恢复 auto（内容仍可选中复制） */
+.toasts { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 500; display: grid; gap: 8px; pointer-events: none; }
 .toast {
   padding: 10px 18px; border-radius: 12px; font-size: 13.5px;
   background: var(--glass-strong); border: 1px solid var(--glass-border);
   box-shadow: var(--shadow); backdrop-filter: blur(16px);
+  pointer-events: auto;
 }
 .toast.err { color: var(--danger); }
 .toast.ok { color: var(--ok); }

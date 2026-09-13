@@ -46,6 +46,12 @@ class _FeedbackPageState extends State<FeedbackPage>
     super.initState();
     _loadEnv();
     _loadHistory();
+    // 切到历史 Tab 自动刷新（20260913225724-f824）：此前只在进页时拉一次，
+    // 开发端翻完状态后用户停在页面里/切 Tab 看到的永远是旧状态。
+    _tab.addListener(() {
+      // indexIsChanging=false 时触发一次（点按动画结束/滑动落定），避免每帧重复拉
+      if (_tab.index == 1 && !_tab.indexIsChanging) _loadHistory(silent: true);
+    });
   }
 
   @override
@@ -67,9 +73,10 @@ class _FeedbackPageState extends State<FeedbackPage>
     });
   }
 
-  Future<void> _loadHistory() async {
+  Future<void> _loadHistory({bool silent = false}) async {
     setState(() {
-      _loading = true;
+      // silent：已有数据时静默刷新，不闪加载圈（切 Tab 自动刷新用）
+      _loading = _items.isEmpty || !silent;
       _error = null;
     });
     try {
@@ -125,7 +132,7 @@ class _FeedbackPageState extends State<FeedbackPage>
         ],
       );
       if (!mounted) return;
-      showToast('已提交，处理状态会在历史里更新');
+      showToast('已提交，处理状态可在历史记录里查看');
       setState(() {
         _titleCtrl.clear();
         _bodyCtrl.clear();
@@ -243,7 +250,7 @@ class _FeedbackPageState extends State<FeedbackPage>
               : const Icon(Icons.send_outlined),
           label: Text(_sending ? '提交中…' : '提交反馈')),
       const SizedBox(height: Gap.xs),
-      Text('提交后直达开发端（会附带 App 版本与系统信息）。\n处理状态在「历史记录」里实时更新。',
+      Text('提交后直达开发端（会附带 App 版本与系统信息）。\n切到「历史记录」会自动刷新状态与备注；详情里可随时补充说明。',
           style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
     ]);
   }
@@ -337,74 +344,7 @@ class _FeedbackPageState extends State<FeedbackPage>
         context: context,
         showDragHandle: true,
         isScrollControlled: true,
-        builder: (bctx) => SafeArea(
-            child: Container(
-                constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(bctx).size.height * 0.75),
-                padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xxs, Gap.md, Gap.sm),
-                child: ListView(shrinkWrap: true, children: [
-                  Row(children: [
-                    Expanded(
-                        child: Text((it['title'] as String?) ?? '',
-                            style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold))),
-                    _statusChip((it['status'] as String?) ?? '已提交', cs),
-                  ]),
-                  const SizedBox(height: Gap.xxs),
-                  Text('${it['type']} · ${it['created']} · ${it['app']}',
-                      style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
-                  if (((it['body'] as String?) ?? '').isNotEmpty)
-                    Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Text(it['body'] as String,
-                            style: const TextStyle(fontSize: 13.5, height: 1.5))),
-                  if (((it['note'] as String?) ?? '').isNotEmpty)
-                    Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                                color: cs.primary.withValues(alpha: 0.08),
-                                borderRadius: Radii.bSm),
-                            child: Text('开发备注：${it['note']}',
-                                style: const TextStyle(fontSize: 12.5)))),
-                  for (final url in ((it['images'] as List?) ?? []))
-                    Padding(
-                        padding: const EdgeInsets.only(top: 10),
-                        child: ClipRRect(
-                            borderRadius: Radii.bSm,
-                            child: FutureBuilder<Uint8List?>(
-                                future: _fetchImage(url as String),
-                                builder: (ctx, snap) => snap.hasData
-                                    ? Image.memory(snap.data!, semanticLabel: '反馈截图',
-                                        fit: BoxFit.contain)
-                                    : const SizedBox(
-                                        height: 120,
-                                        child: Center(
-                                            child: CircularProgressIndicator(
-                                                strokeWidth: 2)))))),
-                ]))));
-  }
-
-  Future<Uint8List?> _fetchImage(String url) async {
-    try {
-      return await FeedbackApi.fetchBytes(url);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Widget _statusChip(String status, ColorScheme cs) {
-    final st = _statusStyle(status, cs);
-    return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: Gap.xxs),
-        decoration: BoxDecoration(
-            color: st.$1.withValues(alpha: 0.14),
-            borderRadius: BorderRadius.circular(Radii.pill)),
-        child: Text(status,
-            style: TextStyle(
-                fontSize: 12, color: st.$1, fontWeight: FontWeight.w600)));
+        builder: (bctx) => _FeedbackDetailSheet(item: it));
   }
 
   // 状态 →（颜色）映射；未知状态回退灰色
@@ -418,5 +358,189 @@ class _FeedbackPageState extends State<FeedbackPage>
       '已暂缓': Colors.orange,
     };
     return (map[status] ?? Colors.grey,);
+  }
+}
+
+/// 反馈详情底部弹层（f824 + e9d1）：打开时按 id 实时拉详情（不复用列表
+/// 缓存里的旧状态/旧备注），底部带「补充说明」输入——对任意状态（含已
+/// 完成）的反馈追加带时间戳的补充段，开发端看板/文件即时可见。
+class _FeedbackDetailSheet extends StatefulWidget {
+  final Map<String, dynamic> item;
+  const _FeedbackDetailSheet({required this.item});
+
+  @override
+  State<_FeedbackDetailSheet> createState() => _FeedbackDetailSheetState();
+}
+
+class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
+  late Map<String, dynamic> it = widget.item;
+  bool _fetching = true;
+  final _appendCtrl = TextEditingController();
+  bool _appending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  @override
+  void dispose() {
+    _appendCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final fid = (widget.item['id'] ?? '').toString();
+      final d = await FeedbackApi.detail(fid);
+      if (!mounted) return;
+      setState(() {
+        if (d != null) it = d;
+        _fetching = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      // 实时拉取失败：回退展示列表缓存项，不打断查看
+      setState(() => _fetching = false);
+    }
+  }
+
+  Future<void> _append() async {
+    final text = _appendCtrl.text.trim();
+    if (text.isEmpty) {
+      showToast('先写点补充内容');
+      return;
+    }
+    setState(() => _appending = true);
+    try {
+      await FeedbackApi.append((it['id'] ?? '').toString(), text);
+      if (!mounted) return;
+      _appendCtrl.clear();
+      showToast('已补充');
+      await _refresh();
+    } catch (e) {
+      if (!mounted) return;
+      final msg = errDetail(e);
+      showToast(msg.isEmpty ? '补充失败，请稍后重试' : msg);
+    } finally {
+      if (mounted) setState(() => _appending = false);
+    }
+  }
+
+  Future<Uint8List?> _fetchImage(String url) async {
+    try {
+      return await FeedbackApi.fetchBytes(url);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+        child: Container(
+            constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.78),
+            padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xxs, Gap.md, Gap.sm),
+            child: ListView(shrinkWrap: true, children: [
+              Row(children: [
+                Expanded(
+                    child: Text((it['title'] as String?) ?? '',
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold))),
+                _StatusChip(status: (it['status'] as String?) ?? '已提交'),
+              ]),
+              const SizedBox(height: Gap.xxs),
+              Text('${it['type']} · ${it['created']} · ${it['app']}',
+                  style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+              if (_fetching)
+                const Padding(
+                    padding: EdgeInsets.only(top: Gap.sm),
+                    child: Center(
+                        child: SizedBox(
+                            width: 18, height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2)))),
+              if (((it['body'] as String?) ?? '').isNotEmpty)
+                Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(it['body'] as String,
+                        style: const TextStyle(fontSize: 13.5, height: 1.5))),
+              if (((it['note'] as String?) ?? '').isNotEmpty)
+                Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                            color: cs.primary.withValues(alpha: 0.08),
+                            borderRadius: Radii.bSm),
+                        child: Text('开发备注：${it['note']}',
+                            style: const TextStyle(fontSize: 12.5)))),
+              for (final url in ((it['images'] as List?) ?? []))
+                Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: ClipRRect(
+                        borderRadius: Radii.bSm,
+                        child: FutureBuilder<Uint8List?>(
+                            future: _fetchImage(url as String),
+                            builder: (ctx, snap) => snap.hasData
+                                ? Image.memory(snap.data!, semanticLabel: '反馈截图',
+                                    fit: BoxFit.contain)
+                                : const SizedBox(
+                                    height: 120,
+                                    child: Center(
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2)))))),
+              const SizedBox(height: Gap.md),
+              TextField(
+                  controller: _appendCtrl,
+                  maxLength: 1000,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                      labelText: '补充说明（追加到这条反馈，开发端可见）',
+                      hintText: '想补充的细节、复现步骤、新发现…',
+                      border: OutlineInputBorder())),
+              const SizedBox(height: Gap.xs),
+              FilledButton.icon(
+                  onPressed: _appending ? null : _append,
+                  icon: _appending
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.chat_bubble_outline, size: 17),
+                  label: Text(_appending ? '提交中…' : '追加补充')),
+              Text('补充会带时间戳追加在原反馈后面，不会覆盖任何内容。',
+                  style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant)),
+            ])));
+  }
+}
+
+/// 状态胶囊（从页面抽出供详情弹层复用；颜色映射同一张表）
+class _StatusChip extends StatelessWidget {
+  final String status;
+  const _StatusChip({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    const map = {
+      '已提交': Colors.grey,
+      '处理中': Colors.blue,
+      '已修复': Colors.green,
+      '已实装': Colors.teal,
+      '已拒绝': Colors.red,
+      '已暂缓': Colors.orange,
+    };
+    final color = map[status] ?? Colors.grey;
+    return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: Gap.xxs),
+        decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(Radii.pill)),
+        child: Text(status,
+            style: TextStyle(
+                fontSize: 12, color: color, fontWeight: FontWeight.w600)));
   }
 }

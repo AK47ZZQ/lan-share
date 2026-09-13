@@ -326,6 +326,19 @@
     "title": "ExportBody",
     "type": "object"
    },
+   "FeedbackAppendBody": {
+    "properties": {
+     "body": {
+      "title": "Body",
+      "type": "string"
+     }
+    },
+    "required": [
+     "body"
+    ],
+    "title": "FeedbackAppendBody",
+    "type": "object"
+   },
    "GrantBody": {
     "properties": {
      "can_read": {
@@ -837,6 +850,24 @@
      "password"
     ],
     "title": "VerifyPwBody",
+    "type": "object"
+   },
+   "WallExcludeBody": {
+    "properties": {
+     "hidden": {
+      "title": "Hidden",
+      "type": "boolean"
+     },
+     "path": {
+      "title": "Path",
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "hidden"
+    ],
+    "title": "WallExcludeBody",
     "type": "object"
    },
    "WebDavPasswordBody": {
@@ -3479,6 +3510,54 @@
     "summary": "Feedback Detail"
    }
   },
+  "/api/feedback/{fid}/append": {
+   "post": {
+    "description": "对已有反馈二次补充（20260913225909-e9d1）：正文末尾追加带时间戳的补充段，\nfrontmatter 的 更新 刷新。不动 状态/备注——状态流转仍归 Agent 改文件。\n补充在任何状态都允许（已完成后的补充往往最有价值）。",
+    "operationId": "feedback_append_api_feedback__fid__append_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "fid",
+      "required": true,
+      "schema": {
+       "title": "Fid",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FeedbackAppendBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Feedback Append"
+   }
+  },
   "/api/feedback/{fid}/img/{name}": {
    "get": {
     "operationId": "feedback_image_api_feedback__fid__img__name__get",
@@ -4179,7 +4258,7 @@
   },
   "/api/photos": {
    "get": {
-    "description": "照片时间线：默认按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）；\nsort=added 按入库时间倒序（二维码/手机上传的照片按 EXIF 落历史月份，\n时间线顶部\"看不到新照片\"的感知问题——入库排序让新上传永远在最前）。\n可按 month=YYYY-MM 与 uploader、media_type=photo|video、album=<精选专辑id>\n过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。",
+    "description": "照片时间线：默认按拍摄日期倒序（EXIF 优先，视频取容器 creation_time）；\nsort=added 按入库时间倒序（二维码/手机上传的照片按 EXIF 落历史月份，\n时间线顶部\"看不到新照片\"的感知问题——入库排序让新上传永远在最前）。\n可按 month=YYYY-MM 与 uploader、media_type=photo|video、album=<精选专辑id>\n过滤。refresh=1 时放宽扫描节流（App 在备份完成后带此参数拉最新）。\ninclude_dirs=逗号分隔目录前缀（20260913211718-b58a）：只出命中前缀的照片\n（用户自定义照片墙展示范围，App 文件夹选择器下发）；全局隐藏清单\n（wall-excludes）对所有人生效，且先于一切筛选应用。",
     "operationId": "list_photos_api_photos_get",
     "parameters": [
      {
@@ -4271,6 +4350,23 @@
      },
      {
       "in": "query",
+      "name": "include_dirs",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "maxLength": 2000,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Include Dirs"
+      }
+     },
+     {
+      "in": "query",
       "name": "sort",
       "required": false,
       "schema": {
@@ -4316,7 +4412,7 @@
   },
   "/api/photos/facets": {
    "get": {
-    "description": "相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。",
+    "description": "相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。\n与照片墙同口径：全局隐藏清单的目录不计入。",
     "operationId": "photo_facets_api_photos_facets_get",
     "responses": {
      "200": {
@@ -4329,6 +4425,74 @@
      }
     },
     "summary": "Photo Facets"
+   }
+  },
+  "/api/photos/folders": {
+   "get": {
+    "description": "照片墙文件夹维度（20260913211718-b58a）：目录前缀 + 可见媒体数，\n供客户端渲染「展示哪些文件夹」选择器。口径与 /api/photos 完全一致\n（同一可见性过滤 + 全局隐藏清单），文件夹统计不会与墙上实际条目打架。",
+    "operationId": "photo_folders_api_photos_folders_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Photo Folders"
+   }
+  },
+  "/api/photos/wall-excludes": {
+   "get": {
+    "operationId": "wall_excludes_list_api_photos_wall_excludes_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Wall Excludes List"
+   },
+   "post": {
+    "description": "把目录加入/移出照片墙隐藏清单（admin only，全局生效）。",
+    "operationId": "wall_excludes_set_api_photos_wall_excludes_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/WallExcludeBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Wall Excludes Set"
    }
   },
   "/api/public-url": {

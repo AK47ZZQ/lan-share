@@ -22,6 +22,7 @@ HEALTH_REPORT_ENABLED = "health_report_enabled"
 HEALTH_REPORT_TIME = "health_report_time"
 ACTIVITY_CLEARED_AT = "activity_cleared_at"
 FEATURED_ALBUMS = "featured_albums"
+PHOTO_WALL_EXCLUDES = "photo_wall_excludes"   # 照片墙全局隐藏目录（JSON 数组，相对路径前缀）
 
 
 def get_setting(key: str, default: str = "") -> str:

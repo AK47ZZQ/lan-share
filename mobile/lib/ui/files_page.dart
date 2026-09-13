@@ -18,6 +18,7 @@ import 'package:share_plus/share_plus.dart';
 import '../data/api/auth_cache.dart';
 import '../data/api/errors.dart';
 import '../data/api/files_api.dart';
+import '../data/api/photos_api.dart';
 import '../data/local/prefs.dart';
 import '../data/media_kinds.dart';
 import '../data/net.dart';
@@ -267,6 +268,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final canManage = ref.read(sessionProvider).role != 'guest';
+    // 照片墙隐藏是全局 admin 能力（20260913211805-b4e0）
+    final isAdmin = ref.read(sessionProvider).role == 'admin';
     // 系统返回键先回上级目录（R1-P3-8）：深层目录按返回直接退出整个页面
     return PopScope(
       canPop: _stack.length <= 1,
@@ -303,6 +306,69 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     child: Text(_selected.length == _current.length
                         ? '全不选'
                         : '全选')),
+                // 恰好选了一个目录时提供原长按菜单里的目录管理项——
+                // 目录长按改为进多选（20260913211605-91fc）后，重命名/
+                // 钉住/详情的唯一入口收编到这里，不丢功能。
+                if (_selectedEntries.length == 1 &&
+                    _selectedEntries.first.isDir)
+                  PopupMenuButton<String>(
+                      tooltip: '目录操作',
+                      icon: const Icon(Icons.more_vert),
+                      onSelected: (v) {
+                        final e = _selectedEntries.first;
+                        if (v == 'pin') {
+                          // ignore: discarded_futures
+                          ref
+                              .read(settingsProvider.notifier)
+                              .togglePinnedDir(e.path);
+                        }
+                        if (v == 'rename') {
+                          setState(() => _selected.clear());
+                          // ignore: discarded_futures
+                          _rename(e);
+                        }
+                        if (v == 'details') {
+                          // ignore: discarded_futures
+                          _showDetails(e);
+                        }
+                        if (v == 'hide') {
+                          _toggleWallHidden(e);
+                        }
+                      },
+                      itemBuilder: (_) => [
+                            const PopupMenuItem(
+                                value: 'pin',
+                                child: ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: Icon(Icons.star_border),
+                                    title: Text('钉为常用目录'))),
+                            if (canManage)
+                              const PopupMenuItem(
+                                  value: 'rename',
+                                  child: ListTile(
+                                      dense: true,
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: Icon(
+                                          Icons.drive_file_rename_outline),
+                                      title: Text('重命名'))),
+                            const PopupMenuItem(
+                                value: 'details',
+                                child: ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: Icon(Icons.info_outline),
+                                    title: Text('详情'))),
+                            if (isAdmin)
+                              const PopupMenuItem(
+                                  value: 'hide',
+                                  child: ListTile(
+                                      dense: true,
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: Icon(
+                                          Icons.visibility_off_outlined),
+                                      title: Text('照片墙隐藏/恢复'))),
+                          ]),
               ]
             : [
                 // v0.20：新建收进菜单——文件夹 / Markdown / 文本

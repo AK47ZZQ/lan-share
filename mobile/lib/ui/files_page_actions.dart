@@ -384,76 +384,6 @@ extension _FilesPageActions on _FilesPageState {
             ])));
   }
 
-  Future<void> _dirSheet(Entry e) async {
-    final pinned = ref.read(settingsProvider).pinnedDirs.contains(e.path);
-    final canManage = ref.read(sessionProvider).role != 'guest';
-    await showModalBottomSheet(
-        context: context,
-        builder: (ctx) => SafeArea(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Padding(
-                  padding: const EdgeInsets.all(Gap.md),
-                  child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(e.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.bold)))),
-              const Divider(height: 1),
-              ListTile(
-                  leading: Icon(pinned ? Icons.star : Icons.star_border),
-                  title: Text(pinned ? '从常用目录移除' : '钉为常用目录'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    // ignore: discarded_futures
-                    ref.read(settingsProvider.notifier).togglePinnedDir(e.path);
-                  }),
-              if (canManage) ...[
-                ListTile(
-                    leading: const Icon(Icons.drive_file_rename_outline),
-                    title: const Text('重命名'),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      // ignore: discarded_futures
-                      _rename(e);
-                    }),
-                ListTile(
-                    leading: const Icon(Icons.drive_file_move_outlined),
-                    title: const Text('移动到…'),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      // ignore: discarded_futures
-                      _transferTo([e], copy: false);
-                    }),
-                ListTile(
-                    leading: const Icon(Icons.copy_all_outlined),
-                    title: const Text('复制到…'),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      // ignore: discarded_futures
-                      _transferTo([e], copy: true);
-                    }),
-                ListTile(
-                    leading: const Icon(Icons.delete_outline),
-                    title: const Text('删除'),
-                    iconColor: Theme.of(context).colorScheme.error,
-                    textColor: Theme.of(context).colorScheme.error,
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      // ignore: discarded_futures
-                      _delete([e]);
-                    }),
-              ],
-              ListTile(
-                  leading: const Icon(Icons.info_outline),
-                  title: const Text('详情'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showDetails(e);
-                  }),
-              const SizedBox(height: Gap.xs),
-            ])));
-  }
 
   // ── 预览（0.12.0，Web 同款：点可预览文件直接进全屏查看器）──
 
@@ -589,6 +519,21 @@ extension _FilesPageActions on _FilesPageState {
       // 此刻删文件会让分享读到刚删除的目标（R1-P2）；残留由系统随
       // cache 目录回收（文件名已带时间戳，不冲突）
       if (mounted) setState(() => _zipping = false);
+    }
+  }
+
+  // ── 照片墙隐藏（20260913211805-b4e0，admin 全局开关）──────────────
+  /// 把目录加入/移出照片墙隐藏清单：已隐藏→恢复，未隐藏→隐藏。
+  /// 隐藏只影响照片墙（/api/photos、facets、folders），文件页仍可寻址。
+  Future<void> _toggleWallHidden(Entry e) async {
+    try {
+      final cur = await PhotosApi.wallExcludes();
+      final hidden = cur.contains(e.path);
+      await PhotosApi.setWallExclude(e.path, !hidden);
+      showToast(hidden ? '已恢复在照片墙展示' : '已从照片墙隐藏（对全家生效）');
+    } catch (err) {
+      final msg = errDetail(err);
+      showToast(msg.isEmpty ? '操作失败，请稍后重试' : msg);
     }
   }
 

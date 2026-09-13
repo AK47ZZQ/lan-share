@@ -53,6 +53,28 @@ class FeedbackApi {
     await dio.post('/api/feedback', data: fd);
   }
 
+  /// 详情（含正文 body）：详情页每次打开实时拉取，避免列表缓存里的
+  /// 旧状态/旧备注（20260913225724-f824）。404 返回 null（已被清理等）。
+  static Future<Map<String, dynamic>?> detail(String fid) async {
+    final dio = await _dio();
+    try {
+      final r = await dio.get('/api/feedback/$fid');
+      final d = r.data;
+      return d is Map ? Map<String, dynamic>.from(d) : null;
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// 二次补充（20260913225909-e9d1）：往已有反馈追加带时间戳的补充段，
+  /// 服务端不动状态字段——状态流转仍归开发端改文件。
+  static Future<void> append(String fid, String body) async {
+    final dio = await _dio();
+    await dio.post('/api/feedback/$fid/append',
+        data: <String, dynamic>{'body': body});
+  }
+
   /// 截图鉴权读取（详情页缩略/大图）
   static Future<Uint8List?> fetchBytes(String url) async {
     final dio = await _dio();
