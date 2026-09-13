@@ -399,3 +399,21 @@ def test_verify_pg_accepts_toc_with_settings(tmp_path, monkeypatch):
     ok, detail = backup_svc._verify_dump(dump)
     assert ok is True, detail
     assert "settings" in detail
+
+
+
+
+def test_pg_toc_requires_public_schema_settings():
+    """宽松 \bsettings\b 会匹配测试 schema 残留（09-13 生产实锤：
+    ls_test_* schema 混进生产库后，public.settings 缺失也能"验证通过"）。"""
+    leftover_only = (
+        "2147483649; 1259 16390 TABLE DATA - public albums postgres\n"
+        "301; 1259 19302 TABLE DATA ls_test_10426603160d settings lanshare\n"
+        "302; 1259 19303 TABLE DATA ls_test_756141d29c9e settings lanshare\n"
+    )
+    assert backup_svc._pg_toc_has_public_settings(leftover_only) is False
+    assert backup_svc._pg_toc_has_public_settings(
+        "2147483649; 1259 16390 TABLE DATA - public settings postgres\n") is True
+    assert backup_svc._pg_toc_has_public_settings(
+        "2147483647; 1255 16386 TABLE - public settings postgres\n") is False  # 仅定义无数据
+    assert backup_svc._pg_toc_has_public_settings("") is False

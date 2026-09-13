@@ -206,6 +206,23 @@ def _dump_engine(tmp: Path):
     return tmp
 
 
+def _pg_toc_has_public_settings(toc: str) -> bool:
+    """TOC 里必须有 **public** schema 的 settings 表数据。
+
+    pg_restore -l 行形如 `301; 1259 19302 TABLE DATA <schema> <table> <owner>`。
+    2026-09-13 实锤：生产库残留 ls_test_* 测试 schema（PG 双引擎测试指向生产
+    库、异常中断未清理）时，宽松的 `\\bsettings\\b` 会匹配测试 schema 的
+    settings——public.settings 缺失也能"验证通过"（假阳性备份）。"""
+    for line in toc.splitlines():
+        if not re.search(r"\bTABLE DATA\b", line):
+            continue
+        parts = line.split()
+        # < knobs ; ... > TABLE DATA schema table owner
+        if len(parts) >= 6 and parts[-3] == "public" and parts[-2] == "settings":
+            return True
+    return False
+
+
 def _verify_dump(dst: Path) -> tuple[bool | None, str]:
     """dump 完整性校验（restore drill 内联）。返回 (结果, 说明)：
 
@@ -224,9 +241,9 @@ def _verify_dump(dst: Path) -> tuple[bool | None, str]:
                 return False, f"pg_restore -l 失败: {r.stderr[-150:]}"
             # TOC 可读之外还要 settings 表在档（与 SQLite 侧"settings 可读"对称）：
             # 空档期/半截归档可能目录能读却缺核心表
-            if not re.search(r"TABLE DATA\b[^\n]*\bsettings\b", r.stdout or ""):
-                return False, "归档目录缺 settings 表（TOC 无 TABLE DATA settings）"
-            return True, "归档目录可读（settings 表在档）"
+            if not _pg_toc_has_public_settings(r.stdout or ""):
+                return False, "归档目录缺 public.settings 表（TOC 无 TABLE DATA public settings）"
+            return True, "归档目录可读（public.settings 表在档）"
         # URI 百分号编码：SHARE_ROOT 含 %/#/? 等字符时裸拼会被 URI 语法吃掉，
         # 校验误报失败（误告警）；Windows 盘符冒号保留（safe 里的 ':'）
         con = sqlite3.connect(f"file:{quote(dst.as_posix(), safe='/:')}?mode=ro", uri=True)
