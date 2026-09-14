@@ -65,10 +65,16 @@ class PhotosApi {
   }
 
   /// 月份分布 facets：解析成 {YYYY-MM: 张数}（空月份键剔除；快滚轴/按月
-  /// 快跳/按月全选三处共用）；失败由调用方按各自策略兜底。
-  static Future<Map<String, int>> monthFacets() async {
+  /// 快跳/按月全选三处共用）；mediaType/includeDirs 与 /api/photos 同名
+  /// 参数语义一致（20260914041746-6c58 跳月偏移推算需要与时间线同口径）；
+  /// 失败由调用方按各自策略兜底。
+  static Future<Map<String, int>> monthFacets(
+      {String? mediaType, String? includeDirs}) async {
     final dio = await _dio();
-    final r = await dio.get('/api/photos/facets');
+    final r = await dio.get('/api/photos/facets', queryParameters: {
+      'media_type': ?mediaType,
+      'include_dirs': ?includeDirs,
+    });
     return {
       for (final m in ((r.data['months'] as List?) ?? const []))
         (m as Map)['month'] as String? ?? '':

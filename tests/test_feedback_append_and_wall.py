@@ -245,3 +245,38 @@ def test_include_dirs_filter(client):
         assert multi["total"] == len(multi["items"]) or multi["total"] >= 2
     finally:
         _cleanup(tag)
+
+
+def test_facets_media_and_dir_filters(client):
+    """facets 新增 media_type / include_dirs 参数（20260914041746-6c58
+    时间轴跳月）：App 快滚轴改为全时间线定位跳转后，跳转偏移按 facets
+    月份计数累计推算，必须与 /api/photos 的筛选口径完全一致——这里验证
+    两端同参数组合计数对齐。"""
+    tag = f"fc{_rand()}"
+    _mk(f"照片/{tag}/甲/f1.jpg")
+    _mk(f"照片/{tag}/乙/f2.jpg")
+    _mk(f"照片/{tag}/乙/f3.mp4")
+    photos._last_photo_scan = 0.0
+    m, _ = _member(client)
+    try:
+        m.get("/api/photos", params={"refresh": "1"})   # 触发扫描
+        # include_dirs 口径：只统计甲
+        fc = m.get("/api/photos/facets", params={
+            "include_dirs": f"照片/{tag}/甲"}).json()
+        assert sum(x["count"] for x in fc["months"]) == 1
+        # media_type 口径：视频 1、照片 2（限定本 tag 目录）
+        fv = m.get("/api/photos/facets", params={
+            "include_dirs": f"照片/{tag}", "media_type": "video"}).json()
+        fp = m.get("/api/photos/facets", params={
+            "include_dirs": f"照片/{tag}", "media_type": "photo"}).json()
+        assert sum(x["count"] for x in fv["months"]) == 1
+        assert sum(x["count"] for x in fp["months"]) == 2
+        # 与 /api/photos 同参数组合的 total 严格对齐（跳月偏移的正确性根基）
+        wall = m.get("/api/photos", params={
+            "include_dirs": f"照片/{tag}/乙", "media_type": "video"}).json()
+        fwall = m.get("/api/photos/facets", params={
+            "include_dirs": f"照片/{tag}/乙", "media_type": "video"}).json()
+        assert wall["total"] == 1
+        assert sum(x["count"] for x in fwall["months"]) == wall["total"]
+    finally:
+        _cleanup(tag)

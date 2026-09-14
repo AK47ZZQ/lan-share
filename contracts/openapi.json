@@ -4412,8 +4412,43 @@
   },
   "/api/photos/facets": {
    "get": {
-    "description": "相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。\n与照片墙同口径：全局隐藏清单的目录不计入。",
+    "description": "相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。\n与照片墙同口径：全局隐藏清单的目录不计入。\nmedia_type / include_dirs（20260914041746-6c58 时间轴跳转）：与 /api/photos\n同名参数语义一致——App 快滚轴改为\"全时间线定位跳转\"后，跳转偏移按\nfacets 月份计数累计推算，必须与当前时间线的筛选口径完全一致，\n否则跳转会落到错误月份。",
     "operationId": "photo_facets_api_photos_facets_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "media_type",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Media Type"
+      }
+     },
+     {
+      "in": "query",
+      "name": "include_dirs",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "maxLength": 2000,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Include Dirs"
+      }
+     }
+    ],
     "responses": {
      "200": {
       "content": {
@@ -4422,6 +4457,16 @@
        }
       },
       "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
      }
     },
     "summary": "Photo Facets"

@@ -6,6 +6,18 @@
 // 重拉（服务端放宽扫描节流），照片墙准实时。
 // 0.6.0：视频纳入（角标+时长/内嵌播放）、类型筛选（全部/照片/视频）、
 //        按月快跳（/api/photos/facets 月份维度，服务端 month= 过滤）。
+// 1.0.2（20260914041746-6c58）：右缘月份轴从"按月过滤"改为**全时间线定位
+//        跳转**——按月过滤会把时间线锁死在单月里（往上翻不了，用户反馈）。
+//        跳转按筛选口径一致的 facets 计数推算偏移，并行补拉后滚动定位到
+//        该月第一天日期头，跳完仍可自由上下翻；轴高亮跟随滚动实时移动；
+//        日期头加大加粗（醒目）。
+// 1.0.2（20260914042013-6e62）：性能——脉搏/备份轮询触发的后台刷新改为
+//        **增量合并**（路径序列全等零重建，滚动/图片全不动）；批量并行拉取；
+//        多选删除并发 4 路（原来逐张串行）。
+// 1.0.2（20260914042829-def1）：多选**滑动连选**——长按进入多选后手指继续
+//        滑动，经过的格子自动勾选/取消，接近屏幕边缘自动滚动接着选；
+//        多选进行中暂缓自动刷新（长按后被顶回列表顶部即旧刷新所致），
+//        退出多选后补一次。
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
@@ -41,6 +53,11 @@ class PhotosPage extends ConsumerStatefulWidget {
   final VoidCallback? onGoFiles;
   const PhotosPage({super.key, this.onGoFiles});
 
+  /// 返回手势接管（20260914042923-b7c1）：多选状态暴露给壳层——根层返回
+  /// 先退多选，再退页签（backExitSelection 由本页 initState 注入）。
+  static final ValueNotifier<bool> selectionActive = ValueNotifier(false);
+  static VoidCallback? backExitSelection;
+
   @override
   ConsumerState<PhotosPage> createState() => _PhotosPageState();
 }
@@ -48,7 +65,9 @@ class PhotosPage extends ConsumerStatefulWidget {
 class _PhotosPageState extends ConsumerState<PhotosPage> {
   final _items = <PhotoItem>[];
   final _scroll = ScrollController();
+  final _railScroll = ScrollController(); // 月份轴自身滚动（高亮跟随居中）
   final _selected = <int>{}; // 多选模式：_items 扁平下标
+  final _cellCtxs = <int, BuildContext>{}; // 可见格子注册表（命中测试/锚定）
   String? _base; // 服务器地址（异步取到后再刷网格）
   bool _loading = false;
   bool _failed = false;
@@ -66,7 +85,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   // （二维码/网页刚传的照片按 EXIF 落历史月份"看不到新图"——入库序
   // 新上传永远在最前，平板视图不分组直接平铺）
   bool _byAdded = false;
-  Map<String, int>? _months;    // facets 缓存（月份选择页用）
+  Map<String, int>? _months;    // facets 缓存（月份选择页/跳月轴共用）
   List<_Album>? _albums;        // 精选专辑（0.8.0，管理员维护）
   // 自定义展示范围（20260913211718-b58a）：空 = 全部文件夹；非空 = 只展示
   // 命中前缀的照片（服务端 include_dirs 下推，分页/脉搏口径都由服务端保证）
@@ -74,9 +93,21 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   // 每页条数：局域网 120 / 公网 60（弱网首屏少拉半屏，滚动突发更小，v0.10.3）
   int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
+  // ── 1.0.2 批次新增状态 ──────────────────────────────────
+  bool _jumping = false;        // 时间轴跳月中（拉取+定位），期间挡新跳转
+  String? _railMonth;           // 月份轴高亮（跟随滚动，非过滤）
+  Timer? _railTick;             // 滚动高亮节流
+  bool _dragSelecting = false;  // 拖拽连选进行中
+  bool _dragAdd = true;         // 拖拽方向：true=勾选 false=取消
+  final _dragTouched = <int>{}; // 本次拖拽已处理过的格子（防来回抖动）
+  Offset? _lastDragPos;         // 自动滚动 tick 的命中测试位置
+  Timer? _dragScroll;           // 拖拽边缘自动滚动
+  bool _pendingRefresh = false; // 多选中暂缓的自动刷新（退出后补一次）
+
   @override
   void initState() {
     super.initState();
+    PhotosPage.backExitSelection = _exitSelection;
     () async {
       final base = await Prefs.lastAddress();
       if (mounted) setState(() => _base = base);
@@ -88,22 +119,30 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     _loadAlbums();
     _ensureMonths();   // 年月快滚轴数据源（v0.11），失败静默
     _restoreWallDirs();
-    _scroll.addListener(() {
-      if (_scroll.position.extentAfter < 600) _loadMore();
-    });
-    // 照片墙准实时：备份引擎完成一轮会写 backup_last_done_at，变化即整页
-    // 强刷（服务端 refresh=1 放宽扫描节流到 5s）。轮询只读本地 prefs，开销可忽略
+    _scroll.addListener(_onScroll);
+    // 照片墙准实时：备份引擎完成一轮会写 backup_last_done_at，变化即
+    // 增量合并刷新（服务端 refresh=1 放宽扫描节流到 5s）。轮询只读本地
+    // prefs，开销可忽略
     _backupWatch = Timer.periodic(
         const Duration(seconds: 10), (_) => _checkBackupDone());
     // 0.7.2 起触发面不只本机备份：20s 脉搏 ping 一次 limit=1&refresh=1
     // （服务端 force 独立 5s 节流，响应只有一个缩略项，开销可忽略），
-    // total/首张变了即整页强刷——网页、别的手机、文件页、分享接收传的
-    // 照片同样自动出现（此前只认备份引擎，家里人网页传 178 项墙面不动）
+    // total/首张变了即增量合并刷新——网页、别的手机、文件页、分享接收
+    // 传的照片同样自动出现（此前只认备份引擎，家里人网页传 178 项墙面不动）
     _pulse = Timer.periodic(const Duration(seconds: 20), (_) => _pulseCheck());
   }
 
+  void _onScroll() {
+    if (_scroll.position.extentAfter < 600) _loadMore();
+    // 月份轴高亮跟随（1.0.2）：节流 180ms，避免每个滚动帧都遍历格子注册表
+    _railTick ??= Timer(const Duration(milliseconds: 180), () {
+      _railTick = null;
+      if (mounted) _updateRailMonth();
+    });
+  }
+
   /// 服务端脉搏：对时间线做一次"有没有变"的轻探测。快照与上次不同
-  /// （新增/删除/最新一张换人）→ 整页强刷。首次只记录不触发。
+  /// （新增/删除/最新一张换人）→ 增量合并刷新。
   Future<void> _pulseCheck() async {
     // 生命周期闸门（R1-P2-2，对齐 AutoSwitch）：退后台/锁屏后不再打网络
     if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
@@ -115,7 +154,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (mounted &&
           prev != null &&
           (prev['total'] != snap.total || prev['first'] != snap.firstPath)) {
-        await _refresh();
+        await _refreshSoft();
       }
     } catch (_) {
       // 网络抖动/未登录：静默，下个 tick 再试
@@ -132,8 +171,52 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     await sp.reload();
     final v = sp.getInt('backup_last_done_at');
     if (v != _lastBackupDone) {
-      await _refresh();
+      await _refreshSoft();
     }
+  }
+
+  /// 批量并行拉取 [from, from+want) 区间（300/页、最多 4 页并行一轮，
+  /// 页内超余按 want 截断）。供翻页(_loadMore)、增量合并(_refreshSoft)、
+  /// 时间轴跳月(_jumpToMonth)共用；过期响应由调用方的 _gen 机制丢弃。
+  Future<(List<PhotoItem>, bool)> _fetchBatch(int from, int want) async {
+    const page = 300;
+    final out = <PhotoItem>[];
+    final seen = <String>{};   // 并行分页与远端数据漂移的去重保险
+    var offset = from;
+    var endReached = false;
+    while (!endReached && out.length < want && mounted) {
+      final offs = <int>[];
+      for (var o = offset;
+          o < offset + page * 4 && o < from + want;
+          o += page) {
+        offs.add(o);
+      }
+      if (offs.isEmpty) break;
+      final lists = await Future.wait([
+        for (final o in offs)
+          PhotosApi.list(
+              limit: page,
+              offset: o,
+              mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
+              month: _month,
+              byAdded: _byAdded,
+              includeDirs:
+                  _includedDirs.isEmpty ? null : _includedDirs.join(','))
+      ]);
+      var got = 0;
+      for (final l in lists) {
+        for (final e in l) {
+          final it = PhotoItem.fromJson(e as Map<String, dynamic>);
+          if (seen.add(it.path)) out.add(it);
+        }
+        got += l.length;
+        if (l.length < page) endReached = true;
+      }
+      if (got == 0) break;
+      offset += got;
+    }
+    if (out.length > want) out.removeRange(want, out.length);
+    return (out, endReached);
   }
 
   Future<void> _loadMore({bool force = false}) async {
@@ -148,22 +231,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final limit = _limit;
     setState(() => _loading = true);
     try {
-      final list = (await PhotosApi.list(
-              limit: limit,
-              offset: _offset,
-              refresh: force,
-              mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
-              month: _month,
-              byAdded: _byAdded,
-              includeDirs:
-                  _includedDirs.isEmpty ? null : _includedDirs.join(',')))
-          .map((e) => PhotoItem.fromJson(e as Map<String, dynamic>))
-          .toList();
+      final (list, endReached) = await _fetchBatch(_offset, limit);
       if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
       setState(() {
         _items.addAll(list);
-        _offset += list.length;
-        _done = list.length < limit;
+        _offset = _items.length;
+        _done = endReached;
         _failed = false;
       });
     } catch (_) {
@@ -177,6 +250,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
   }
 
+  /// 硬刷新（下拉/切筛选/看图删除后）：清空重拉，回到墙顶。
   Future<void> _refresh() async {
     if (!mounted) return;   // R1-P2-4：彻底删除/查看器回调路径可能在 dispose 后触发
     _gen++;
@@ -196,23 +270,353 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (mounted) setState(() {});   // 快滚轴/侧栏月份数目刷新
   }
 
+  /// 增量合并刷新（20260914042013-6e62 / 20260914042829-def1）：脉搏/备份
+  /// 轮询触发的后台刷新不再"清空重拉"——那会整墙转圈、滚动位置归顶
+  /// （多选中长按被顶回列表顶部即旧刷新所致）。改为并行拉到覆盖原数量
+  /// +1 页，路径序列全等则零重建（滚动/图片/动画全不动）；有变化才整体
+  /// 替换并把视口锚回原日期组。多选/跳月中暂缓，退出后补一次。
+  Future<void> _refreshSoft() async {
+    if (!mounted) return;
+    if (_selected.isNotEmpty || _jumping) {
+      _pendingRefresh = true;
+      return;
+    }
+    final gen = ++_gen;          // 换代：作废在途翻页响应，防重放追加
+    final anchorDay = _dayOfFlat(_topVisibleFlat());
+    setState(() => _loading = true);
+    try {
+      final (list, endReached) =
+          await _fetchBatch(0, _items.length + _limit);
+      if (!mounted || gen != _gen) return;
+      var same = list.length == _items.length;
+      if (same) {
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].path != _items[i].path) {
+            same = false;
+            break;
+          }
+        }
+      }
+      if (same) return;    // 零变化：不 setState，滚动与已加载图片全保持
+      setState(() {
+        _items..clear()..addAll(list);
+        _offset = _items.length;
+        _done = endReached;
+        _failed = false;
+      });
+      // 月份分布同步重拉（有实际变化才花这次请求）
+      _months = null;
+      await _ensureMonths();
+      if (mounted) setState(() {});
+      if (anchorDay != null) _scrollToDay(anchorDay);
+    } catch (_) {
+      // 合并失败静默：旧内容仍可用，下个脉搏周期再试
+    } finally {
+      if (mounted && gen == _gen) setState(() => _loading = false);
+    }
+  }
+
   void _setFilter(String v) {
     if (v == _mediaFilter) return;
     setState(() => _mediaFilter = v);
     _refresh();
   }
 
-  /// facets 月份分布拉取（快滚轴/按月快跳共用）；失败返回空表不炸 UI
+  /// facets 月份分布拉取（跳月轴/按月快跳共用）；带当前筛选口径
+  /// （media_type/include_dirs）保证跳月偏移推算与时间线完全一致；
+  /// 失败返回空表不炸 UI
   Future<Map<String, int>> _ensureMonths() async {
     var months = _months;
     if (months != null) return months;
     try {
-      months = await PhotosApi.monthFacets();
+      months = await PhotosApi.monthFacets(
+          mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
+          includeDirs:
+              _includedDirs.isEmpty ? null : _includedDirs.join(','));
       _months = months;
       return months;
     } catch (_) {
       return {};
     }
+  }
+
+  // ── 时间轴跳月（20260914041746-6c58）────────────────────
+
+  /// 右缘月份轴点按：在**全量时间线**内定位到目标月（不再按月过滤）。
+  /// 偏移按 facets 月份计数累计推算（新月份在顶），补拉到目标月后滚动
+  /// 定位该月第一天的日期头；跳完仍可自由上下翻。
+  Future<void> _jumpToMonth(String m) async {
+    if (_jumping || _loading || _selected.isNotEmpty || !mounted) return;
+    final months = await _ensureMonths();
+    if (!mounted || months.isEmpty) return;
+    final keys = months.keys.where((k) => k.length == 7).toList()
+      ..sort((a, b) => b.compareTo(a));
+    var target = 0;
+    var found = false;
+    for (final k in keys) {
+      if (k == m) {
+        found = true;
+        break;
+      }
+      target += months[k] ?? 0;
+    }
+    if (!found) return;
+    final gen = ++_gen;
+    setState(() {
+      _jumping = true;
+      _loading = true;
+    });
+    try {
+      final need = target + 30;   // 目标月起点再预载半屏，落点即有内容
+      if (_items.length < need && !_done) {
+        final (list, endReached) =
+            await _fetchBatch(_items.length, need - _items.length);
+        if (!mounted || gen != _gen) return;
+        setState(() {
+          _items.addAll(list);
+          _offset = _items.length;
+          if (endReached) _done = true;
+        });
+      }
+      String? day;
+      for (final it in _items) {
+        if (it.taken.length >= 7 && it.taken.substring(0, 7) == m) {
+          day = it.taken;
+          break;
+        }
+      }
+      if (!mounted || gen != _gen) return;
+      setState(() {
+        _jumping = false;
+        _loading = false;
+        _railMonth = m;
+      });
+      if (day != null) {
+        await _scrollToDay(day);
+      } else if (_scroll.hasClients) {
+        // facets 有计数但墙上找不到（计数为 0 的空月，防御）：回墙顶
+        await _scroll.animateTo(0,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOutCubic);
+      }
+    } catch (_) {
+      if (mounted && gen == _gen) {
+        setState(() {
+          _jumping = false;
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  /// 滚动定位到某天的日期头。瀑布流高度不定、远处日期头未构建拿不到
+  /// context——用"格子宽高比估算偏移 → 跳过去 → 已构建日期头实测校准"
+  /// 迭代收敛（一般 2~3 轮）。
+  Future<void> _scrollToDay(String day) async {
+    for (var i = 0; i < 5; i++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || !_scroll.hasClients) return;
+      final ctx = GlobalObjectKey('hdr-$day').currentContext;
+      if (ctx != null && ctx.mounted) {
+        await Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 250), alignment: 0);
+        if (mounted) _updateRailMonth();
+        return;
+      }
+      final est = _estimateDayOffset(day);
+      if (est == null) return;   // 目标日不在已加载数据里
+      final jump = _calibrate(day, est) ?? est;
+      _scroll.jumpTo(jump < 0 ? 0 : jump);
+    }
+  }
+
+  /// 分组计算（build 与跳转估算共用同一口径）。
+  List<(String, List<int>)> _computeGroups() {
+    final groups = <(String, List<int>)>[];
+    if (_byAdded) {
+      if (_items.isNotEmpty) {
+        groups.add(('', [for (var i = 0; i < _items.length; i++) i]));
+      }
+    } else {
+      for (var i = 0; i < _items.length; i++) {
+        final day = _items[i].taken;
+        if (groups.isNotEmpty && groups.last.$1 == day) {
+          groups.last.$2.add(i);
+        } else {
+          groups.add((day, [i]));
+        }
+      }
+    }
+    return groups;
+  }
+
+  /// 目标日期头的估算绝对偏移（瀑布流总高 ≈ 总格高/列数 + 单格余量）。
+  /// 返回 null = 目标日不在已加载数据里。
+  double? _estimateDayOffset(String targetDay) {
+    final groups = _computeGroups();
+    final cols = context.gridColumns();
+    final cw = MediaQuery.sizeOf(context).width / cols;
+    const headerH = 54.0;   // 日期头：上下边距 12+8 + 内边距 7*2 + 文本行
+    const spacing = 2.0;
+    var acc = 0.0;
+    for (final (day, flatIdx) in groups) {
+      if (day == targetDay) return acc;
+      var sum = 0.0;
+      for (final f in flatIdx) {
+        final a = _items[f].aspect;
+        sum += cw / (a <= 0 ? 1.0 : a);
+      }
+      acc += headerH + sum / cols + cw + spacing * (flatIdx.length / cols);
+    }
+    return null;
+  }
+
+  /// 用已构建日期头实测绝对偏移校准估算值：返回建议 jumpTo 的位置。
+  double? _calibrate(String targetDay, double estTarget) {
+    final groups = _computeGroups();
+    final tIdx = groups.indexWhere((g) => g.$1 == targetDay);
+    if (tIdx < 0) return null;
+    String? nearDay;
+    var nearDist = 1 << 30;
+    double? nearAbs;
+    for (var i = 0; i < groups.length; i++) {
+      final ctx = GlobalObjectKey('hdr-${groups[i].$1}').currentContext;
+      if (ctx == null) continue;
+      final ro = ctx.findRenderObject();
+      if (ro is! RenderBox || !ro.attached || !ro.hasSize) continue;
+      final abs = _scroll.offset + ro.localToGlobal(Offset.zero).dy;
+      final dist = (i - tIdx).abs();
+      if (dist < nearDist) {
+        nearDist = dist;
+        nearDay = groups[i].$1;
+        nearAbs = abs;
+      }
+    }
+    if (nearDay == null || nearAbs == null) return null;
+    final estNear = _estimateDayOffset(nearDay);
+    if (estNear == null) return null;
+    return nearAbs + (estTarget - estNear);
+  }
+
+  /// 视口顶部所属格子下标：可见格子注册表里全局 y ≥ -60 中最小者。
+  /// 供合并刷新锚定与月份轴高亮跟随共用。
+  int? _topVisibleFlat() {
+    if (_cellCtxs.isEmpty) return null;
+    var bestY = double.infinity;
+    int? best;
+    _cellCtxs.forEach((flat, ctx) {
+      final ro = ctx.findRenderObject();
+      if (ro is RenderBox && ro.attached && ro.hasSize) {
+        final y = ro.localToGlobal(Offset.zero).dy;
+        if (y >= -60 && y < bestY) {
+          bestY = y;
+          best = flat;
+        }
+      }
+    });
+    return best;
+  }
+
+  String? _dayOfFlat(int? flat) {
+    if (flat == null || flat >= _items.length) return null;
+    final t = _items[flat].taken;
+    return t.isEmpty ? null : t;
+  }
+
+  /// 月份轴高亮跟随（1.0.2）：滚动时把轴上高亮移到当前视口顶部所属月份，
+  /// 并让轴自身滚动把该月份条目滚进可视区。
+  void _updateRailMonth() {
+    if (_selected.isNotEmpty || _dragSelecting || _byAdded || _month != null) {
+      return;
+    }
+    final months = _months;
+    if (months == null || months.length < 2) return;
+    final top = _topVisibleFlat();
+    if (top == null || top >= _items.length) return;
+    final t = _items[top].taken;
+    final m = t.length >= 7 ? t.substring(0, 7) : '';
+    if (m.isEmpty || m == _railMonth) return;
+    setState(() => _railMonth = m);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = GlobalObjectKey('rail-$m').currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 150));
+      }
+    });
+  }
+
+  // ── 拖拽连选（20260914042829-def1）──────────────────────
+
+  /// 长按起始格：进入多选（或以"取消"方向开始），并开启拖拽连选与
+  /// 边缘自动滚动。
+  void _dragBegin(int flat, Offset pos) {
+    if (_deleting || _jumping) return;
+    _dragTouched.clear();
+    _dragAdd = !_selected.contains(flat);   // 起始格已选中 → 拖动为取消
+    _toggleSelect(flat);
+    _dragTouched.add(flat);
+    _dragSelecting = true;
+    _lastDragPos = pos;
+    _dragScroll ??= Timer.periodic(
+        const Duration(milliseconds: 32), (_) => _dragTick());
+  }
+
+  void _dragMove(Offset pos) {
+    if (!_dragSelecting) return;
+    _lastDragPos = pos;
+    _dragHitTest(pos);
+  }
+
+  void _dragEnd() {
+    _dragSelecting = false;
+    _lastDragPos = null;
+    _dragTouched.clear();
+    _dragScroll?.cancel();
+    _dragScroll = null;
+  }
+
+  /// 命中测试：手指经过的未处理格子按拖拽方向切换勾选态。
+  void _dragHitTest(Offset pos) {
+    _cellCtxs.forEach((flat, ctx) {
+      if (_dragTouched.contains(flat)) return;
+      final ro = ctx.findRenderObject();
+      if (ro is RenderBox && ro.attached && ro.hasSize) {
+        final tl = ro.localToGlobal(Offset.zero);
+        if (Rect.fromLTWH(tl.dx, tl.dy, ro.size.width, ro.size.height)
+            .inflate(2)
+            .contains(pos)) {
+          _dragTouched.add(flat);
+          if (_dragAdd && !_selected.contains(flat)) {
+            _toggleSelect(flat);
+          } else if (!_dragAdd && _selected.contains(flat)) {
+            _toggleSelect(flat);
+          }
+        }
+      }
+    });
+  }
+
+  /// 拖拽边缘自动滚动：接近屏幕上/下缘按接近程度加速滚动，滚动后补一次
+  /// 命中测试（手指不动、内容在动也要连选）。
+  void _dragTick() {
+    if (!_dragSelecting || !mounted || !_scroll.hasClients) return;
+    final y = _lastDragPos?.dy;
+    if (y == null) return;
+    const edge = 90.0, maxV = 24.0;
+    var v = 0.0;
+    if (y < edge) {
+      v = -(1 - y / edge) * maxV - 2;
+    } else {
+      final bottomDist = MediaQuery.sizeOf(context).height - y;
+      if (bottomDist < edge) v = (1 - bottomDist / edge) * maxV + 2;
+    }
+    if (v == 0) return;
+    _scroll.jumpTo(
+        (_scroll.offset + v).clamp(0.0, _scroll.position.maxScrollExtent));
+    final pos = _lastDragPos;
+    if (pos != null) _dragHitTest(pos);
   }
 
   /// 自定义展示范围（20260913211718-b58a）：文件夹多选 → 服务端 include_dirs
@@ -309,7 +713,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     await _refresh();
   }
 
-  /// 按月快跳：facets 月份分布 → 选择后走服务端 month= 过滤
+  /// 按月快跳：facets 月份分布 → 选择后走服务端 month= 过滤（显式筛选，
+  /// 与右缘跳月轴的"全时间线定位"是两个入口）
   Future<void> _pickMonth() async {
     final months = await _ensureMonths();
     if (!mounted) return;
@@ -492,10 +897,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   @override
   void dispose() {
+    PhotosPage.backExitSelection = null;
+    PhotosPage.selectionActive.value = false;
     Prefs.addressNotifier.removeListener(_onAddressChanged);
     _backupWatch?.cancel();
     _pulse?.cancel();
+    _railTick?.cancel();
+    _dragScroll?.cancel();
     _scroll.dispose();
+    _railScroll.dispose();
     super.dispose();
   }
 
@@ -528,12 +938,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         n++;
       }
     }
-    // 手动上传也要准实时：任务全部完成即整页强刷，不等 10s 备份轮询
+    // 手动上传也要准实时：任务全部完成即增量合并刷新，不等 10s 备份轮询
     if (enqueued.isNotEmpty) {
       void watch() {
         if (!enqueued.any((t) => !t.finished)) {
           engine.removeListener(watch);
-          if (mounted) _refresh();
+          if (mounted) _refreshSoft();
         }
       }
 
@@ -551,10 +961,23 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     setState(() => _selected.contains(flat)
         ? _selected.remove(flat)
         : _selected.add(flat));
-    if (_selected.isEmpty) setState(() {}); // 空选集退出选择模式（AppBar 还原）
+    if (_selected.isEmpty) _afterSelectionEnd();
   }
 
-  void _exitSelection() => setState(() => _selected.clear());
+  /// 多选结束（清空选集）公共出口：补跑多选期间暂缓的自动刷新
+  void _afterSelectionEnd() {
+    setState(() {});
+    if (_pendingRefresh) {
+      _pendingRefresh = false;
+      // ignore: discarded_futures
+      _refreshSoft();
+    }
+  }
+
+  void _exitSelection() {
+    setState(() => _selected.clear());
+    _afterSelectionEnd();
+  }
 
   Future<void> _downloadSelected() async {
     final engine = TransferEngine.I;
@@ -591,17 +1014,26 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     setState(() => _deleting = true);
     var ok = 0, failed = 0;
     try {
-      for (final it in paths) {
-        try {
-          if (await PhotosApi.deleteToTrash(it.path)) {
-            ok++;
-          } else {
+      // 并发 4 路删除（20260914042013-6e62）：大批量逐张串行太慢——
+      // 几百张要等几十秒；4 路并行在局域网约 4 倍速收敛
+      final queue = List<PhotoItem>.from(paths);
+      Future<void> worker() async {
+        while (queue.isNotEmpty && mounted) {
+          final it = queue.removeLast();
+          try {
+            if (await PhotosApi.deleteToTrash(it.path)) {
+              ok++;
+            } else {
+              failed++;
+            }
+          } catch (_) {
             failed++;
           }
-        } catch (_) {
-          failed++;
         }
       }
+
+      await Future.wait(
+          [for (var i = 0; i < 4; i++) worker()]);
     } catch (_) {
       failed += paths.length - ok;
     }
@@ -663,6 +1095,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   @override
   Widget build(BuildContext context) {
     final selecting = _selected.isNotEmpty;
+    // 返回手势接管（20260914042923-b7c1）：壳层读这个通知器决定先退多选
+    PhotosPage.selectionActive.value = selecting;
     return Scaffold(
       appBar: AppBar(
         leading: selecting
@@ -788,8 +1222,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                                         fontSize: 9.5,
                                                         color: Theme.of(
                                                                 context)
-                                                            .colorScheme
-                                                            .outline)),
+                                                                .colorScheme
+                                                                .outline)),
                                               ])))),
                               ])),
                     // 类型筛选 + 月份 chip 行
@@ -866,22 +1300,25 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     return _buildTimeline(selecting);
   }
 
-  /// 年月快滚轴（v0.11）：右缘竖排月份，直点跳月；月份数 ≥2 且非多选时显示。
-  /// 只读 _months（initState 已静默预取），不自己发请求、不 setState 别人。
+  /// 年月快滚轴（v0.11 引入，1.0.2 改造为**跳转轴**）：右缘竖排月份，
+  /// 点按在全量时间线内定位到该月（不再按月过滤——那会锁死单月翻不了）；
+  /// 高亮跟随滚动实时移动。月份数 ≥2、非多选、非入库序、未按月过滤时显示。
+  /// 只读 _months（已带筛选口径），不自己发请求。
   Widget? _monthRail(bool selecting) {
-    if (selecting || _byAdded) return null;   // 入库序平铺视图不显示月份轴
+    if (selecting || _byAdded || _month != null) return null;
     final months = _months;
     if (months == null || months.length < 2) return null;
     final entries = months.entries.toList()
       ..sort((a, b) => b.key.compareTo(a.key));   // 新月份在顶
     final cs = Theme.of(context).colorScheme;
-    Widget entry(String label, String? month, {int? count}) {
-      final on = _month == month;
+    Widget entry(String label, String month, String? monthKey,
+        {int? count, required VoidCallback onTap}) {
+      final on = monthKey == null
+          ? (_railMonth == null || _railMonth!.isEmpty)
+          : _railMonth == monthKey;
       return InkWell(
-          onTap: () => setState(() {
-                _month = month;
-                _refresh();
-              }),
+          key: monthKey == null ? null : GlobalObjectKey('rail-$monthKey'),
+          onTap: onTap,
           child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
               decoration: BoxDecoration(
@@ -917,11 +1354,19 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             color: cs.outline.withValues(alpha: 0.25),
                             width: 0.5))),
                 child: SingleChildScrollView(
+                    controller: _railScroll,
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  entry('全部', null),
-                  for (final e in entries)
-                    entry(e.key.substring(2), e.key, count: e.value),  // 2026-08 → 26-08
-                ])))));
+                      entry('全部', '', null, onTap: () {
+                        if (_scroll.hasClients) {
+                          _scroll.animateTo(0,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeOutCubic);
+                        }
+                      }),
+                      for (final e in entries)
+                        entry(e.key.substring(2), e.key, e.key,
+                            count: e.value, onTap: () => _jumpToMonth(e.key)),
+                    ])))));
   }
 
   Widget _selectionBar() {
@@ -969,49 +1414,37 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 即廉价回收，回来只重建可见的十几个格且直接命中磁盘缓存；照片量不设限。
   Widget _buildTimeline(bool selecting) {
     // v0.20 入库序：不按日分组，整列平铺（新上传永远置顶，日期头无意义）
-    final groups = <(String, List<int>)>[];
-    if (_byAdded) {
-      if (_items.isNotEmpty) {
-        groups.add(('', [for (var i = 0; i < _items.length; i++) i]));
-      }
-    } else {
-      for (var i = 0; i < _items.length; i++) {
-        final day = _items[i].taken;
-        if (groups.isNotEmpty && groups.last.$1 == day) {
-          groups.last.$2.add(i);
-        } else {
-          groups.add((day, [i]));
-        }
-      }
-    }
+    final groups = _computeGroups();
     final body = CustomScrollView(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           for (final (day, flatIdx) in groups) ...[
             // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
-            // 很难看，真机反馈 0.4.5）；入库序无日期头
+            // 很难看，真机反馈 0.4.5）；入库序无日期头。
+            // 1.0.2 醒目化：全宽色条 + 15px 粗体（此前 12.5 小药丸不显眼）；
+            // GlobalObjectKey 供跳月定位/校准与滚动锚定使用
             if (day.isNotEmpty)
               SliverToBoxAdapter(
-                child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Container(
-                        margin: const EdgeInsets.fromLTRB(Gap.sm, 10, Gap.sm, 6),
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: Gap.sm, vertical: 5),
-                        decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(Radii.pill)),
-                        child: Text(_dayLabel(day),
-                            style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 12.5,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .primary))))),
+                child: Container(
+                    key: GlobalObjectKey('hdr-$day'),
+                    width: double.infinity,
+                    margin:
+                        const EdgeInsets.fromLTRB(Gap.sm, 12, Gap.sm, 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: Gap.md, vertical: 7),
+                    decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(Radii.sm)),
+                    child: Text(_dayLabel(day),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                            letterSpacing: 0.2,
+                            color: Theme.of(context).colorScheme.primary)))),
             // 瀑布流：SliverWaterfallFlow 保留 Sliver 虚拟化（0.4.4 教训不回退），
             // 格子高度来自服务端探测的真实宽高比；未知的回退方格。
             // v0.11 用 flutter_staggered_grid_view 的 SliverMasonryGrid：
@@ -1033,13 +1466,23 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                       final flat = flatIdx[j];
                       final selected = _selected.contains(flat);
                       final item = _items[flat];
-                      return AspectRatio(
+                      return _CellReg(
+                          flat: flat,
+                          registry: _cellCtxs,
+                          child: AspectRatio(
                           aspectRatio: item.aspect,
                           child: GestureDetector(
                         onTap: selecting
                             ? () => _toggleSelect(flat)
                             : () => _openViewer(flat),
-                        onLongPress: () => _toggleSelect(flat),
+                        // 拖拽连选（20260914042829-def1）：长按起始即开始，
+                        // 手指继续滑动经过的格子自动勾选/取消
+                        onLongPressStart: (d) =>
+                            _dragBegin(flat, d.globalPosition),
+                        onLongPressMoveUpdate: (d) =>
+                            _dragMove(d.globalPosition),
+                        onLongPressEnd: (_) => _dragEnd(),
+                        onLongPressCancel: _dragEnd,
                         child: Stack(fit: StackFit.expand, children: [
                           Hero(
                               tag: 'ph-${item.path}',
@@ -1090,7 +1533,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                             size: 15, color: Colors.white)
                                         : null)),
                         ])),
-                      );
+                      ));
                     },
                     childCount: flatIdx.length)),
           ],
@@ -1103,13 +1546,43 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2))))),
         ]);
+    Widget content = body;
     final rail = _monthRail(selecting);
-    return rail == null
-        ? body
-        : Stack(children: [
-            body,
-            Positioned(right: 2, top: 60, bottom: 90, child: rail),
-          ]);
+    if (rail != null) {
+      content = Stack(children: [
+        body,
+        Positioned(right: 2, top: 60, bottom: 90, child: rail),
+      ]);
+    }
+    if (_jumping) {
+      // 跳月定位中：底部悬浮进度提示（拉取+校准滚动一般 1~3 秒）
+      content = Stack(children: [
+        content,
+        Positioned(
+            left: 0,
+            right: 0,
+            bottom: 28,
+            child: Center(
+                child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: Gap.md, vertical: Gap.xs),
+                    decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(20)),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white)),
+                      SizedBox(width: 8),
+                      Text('正在定位时间线…',
+                          style:
+                              TextStyle(fontSize: 12, color: Colors.white)),
+                    ])))),
+      ]);
+    }
+    return content;
   }
 
   static String _dayLabel(String iso) {
@@ -1127,6 +1600,51 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (deleted == true) _refresh();
     });
   }
+}
+
+/// 可见格子注册表（1.0.2）：多选拖拽命中测试与滚动锚定需要"flat → 坐标"，
+/// Sliver 懒构建下只有可见格子有 RenderObject——挂载/更新/卸载时维护映射，
+/// 可见约 30 格，遍历零成本。
+class _CellReg extends StatefulWidget {
+  final int flat;
+  final Map<int, BuildContext> registry;
+  final Widget child;
+  const _CellReg(
+      {required this.flat, required this.registry, required this.child});
+
+  @override
+  State<_CellReg> createState() => _CellRegState();
+}
+
+class _CellRegState extends State<_CellReg> {
+  @override
+  void initState() {
+    super.initState();
+    widget.registry[widget.flat] = context;
+  }
+
+  @override
+  void didUpdateWidget(covariant _CellReg old) {
+    super.didUpdateWidget(old);
+    if (old.flat != widget.flat) {
+      // Sliver 复用 element：换号时先注销旧下标再登记新下标
+      if (widget.registry[old.flat] == context) {
+        widget.registry.remove(old.flat);
+      }
+      widget.registry[widget.flat] = context;
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.registry[widget.flat] == context) {
+      widget.registry.remove(widget.flat);
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// 精选专辑条目（v0.14 文件夹式）：/api/albums 列表只给 count/cover，

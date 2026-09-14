@@ -449,24 +449,42 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
 
 
 @router.get("/api/photos/facets")
-def photo_facets(request: Request, user=Depends(preview_viewer)):
+def photo_facets(request: Request,
+                 media_type: str | None = Query(default=None),
+                 include_dirs: str | None = Query(default=None, max_length=2000),
+                 user=Depends(preview_viewer)):
     """相册筛选维度：月份与拍摄者分布（对当前用户可见范围统计）。
-    与照片墙同口径：全局隐藏清单的目录不计入。"""
+    与照片墙同口径：全局隐藏清单的目录不计入。
+    media_type / include_dirs（20260914041746-6c58 时间轴跳转）：与 /api/photos
+    同名参数语义一致——App 快滚轴改为"全时间线定位跳转"后，跳转偏移按
+    facets 月份计数累计推算，必须与当前时间线的筛选口径完全一致，
+    否则跳转会落到错误月份。"""
     _scan_photos()
     users = _known_users()
     excludes = _wall_excludes()
+    # include_dirs 前缀白名单与 /api/photos 同一解析（截断 32 个）
+    prefixes: list[str] = []
+    if include_dirs:
+        prefixes = [p.strip().strip("/") for p in include_dirs.split(",")
+                    if p.strip().strip("/")][:32]
     rows = photos_store.list_paths_by_taken()
     months: dict[str, int] = {}
     uploaders: dict[str, int] = {}
     for r in rows:
-        if not visible(user, r["path"].split("/")):
+        rel = r["path"]
+        if not visible(user, rel.split("/")):
             continue
-        if excludes and _is_wall_excluded(r["path"], excludes):
+        if excludes and _is_wall_excluded(rel, excludes):
+            continue
+        if media_type in ("photo", "video") and _media_type(rel) != media_type:
+            continue
+        if prefixes and not any(rel == p or rel.startswith(p + "/")
+                                for p in prefixes):
             continue
         m = (r["taken_at"] or "")[:7]
         if len(m) == 7:
             months[m] = months.get(m, 0) + 1
-        u = _photo_uploader(r["path"], users)
+        u = _photo_uploader(rel, users)
         uploaders[u] = uploaders.get(u, 0) + 1
     return {
         "months": [{"month": m, "count": c} for m, c in sorted(months.items(), reverse=True)],

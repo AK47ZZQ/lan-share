@@ -8,8 +8,12 @@
 // 0.6.1 修复恶性锁死：锁判定收进 provider（appLock && !本进程已解锁），
 //        只在"真正进过后台(paused/hidden)再回来"时落锁——指纹弹窗自身的
 //        inactive→resumed 不算切后台；弹窗在屏期间挂起判定；登出重登不重锁。
+// 1.0.2（20260914042923-b7c1）：接管系统返回手势——根层此前无 PopScope，
+//        任何页签一拉返回直接退到桌面。现在：多选中→先退多选；非首页页签
+//        →回首页；首页→2 秒内二次返回才退出（Toast 提示）。
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show SystemUiOverlayStyle;
+import 'package:flutter/services.dart'
+    show SystemNavigator, SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 
@@ -24,6 +28,7 @@ import 'me_page.dart';
 import 'photos_page.dart';
 import 'transfers_page.dart';
 import 'theme/design_tokens.dart';
+import 'widgets/kit.dart';
 
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
@@ -35,6 +40,8 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserver {
   int _tab = 0;
   bool _consuming = false; // 分享消费互斥（incoming 推送与 initState 拉取并发）
+  // 双击返回退出（20260914042923-b7c1）：首页 2 秒内二次返回才真退出
+  DateTime _lastBackAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// 传输页（v0.25 起不再是底栏页签）：统一从这里 push，
   /// 首页传输卡/文件页传输入口/"我的"页宫格三处共用。
@@ -163,7 +170,28 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
       );
     }
     // 状态栏图标亮度随页签：首页顶部是渐变品牌头（白图标），其余浅底（深图标）
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    // 返回手势接管（20260914042923-b7c1）：见文件头注释。
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (_tab == 1 && PhotosPage.selectionActive.value) {
+          PhotosPage.backExitSelection?.call();
+          return;
+        }
+        if (_tab != 0) {
+          setState(() => _tab = 0);
+          return;
+        }
+        final now = DateTime.now();
+        if (now.difference(_lastBackAt) < const Duration(seconds: 2)) {
+          await SystemNavigator.pop();
+        } else {
+          _lastBackAt = now;
+          showToast('再返回一次退出 LAN Share');
+        }
+      },
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: _tab == 0 ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       child: Scaffold(
       // 传输页改走 Navigator.push（不再占底栏页签）——保留原页面与全部功能
@@ -193,6 +221,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
           NavigationDestination(icon: Icon(Icons.person_outline),
               selectedIcon: Icon(Icons.person), label: '我的'),
         ],
+      ),
       ),
       ),
     );
