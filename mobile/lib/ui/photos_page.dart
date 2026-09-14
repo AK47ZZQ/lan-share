@@ -22,7 +22,6 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'dart:ui' show ImageFilter;
 
 import 'package:waterfall_flow/waterfall_flow.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -95,7 +94,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   // ── 1.0.2 批次新增状态 ──────────────────────────────────
   bool _jumping = false;        // 时间轴跳月中（拉取+定位），期间挡新跳转
-  String? _railMonth;           // 月份轴高亮（跟随滚动，非过滤）
+  // 月份轴高亮（跟随滚动）。用 ValueNotifier 而非 setState：滚动中每到月份
+  // 边界就会变——setState 会重建整页（全部 sliver 树 + O(n) 分组重算），
+  // 快滑跨月时就是一串重建风暴（31cd「滑动特别卡」主因之一）；收敛到轴自身重建
+  final ValueNotifier<String?> _railMonthN = ValueNotifier<String?>(null);
   Timer? _railTick;             // 滚动高亮节流
   bool _dragSelecting = false;  // 拖拽连选进行中
   bool _dragAdd = true;         // 拖拽方向：true=勾选 false=取消
@@ -175,8 +177,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
   }
 
-  /// 批量并行拉取 [from, from+want) 区间（300/页、最多 4 页并行一轮，
-  /// 页内超余按 want 截断）。供翻页(_loadMore)、增量合并(_refreshSoft)、
+  /// 批量并行拉取 [from, from+want) 区间（每页 300、最多 4 页并行一轮；
+  /// 末页按 want 截断请求长度——此前固定要 300 条但只留 want 条，白烧
+  /// 服务端扫描与流量）。供翻页(_loadMore)、增量合并(_refreshSoft)、
   /// 时间轴跳月(_jumpToMonth)共用；过期响应由调用方的 _gen 机制丢弃。
   Future<(List<PhotoItem>, bool)> _fetchBatch(int from, int want) async {
     const page = 300;
@@ -185,17 +188,17 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     var offset = from;
     var endReached = false;
     while (!endReached && out.length < want && mounted) {
-      final offs = <int>[];
+      final offs = <(int, int)>[];   // (offset, limit)
       for (var o = offset;
           o < offset + page * 4 && o < from + want;
           o += page) {
-        offs.add(o);
+        offs.add((o, (from + want - o).clamp(1, page)));
       }
       if (offs.isEmpty) break;
       final lists = await Future.wait([
-        for (final o in offs)
+        for (final (o, lim) in offs)
           PhotosApi.list(
-              limit: page,
+              limit: lim,
               offset: o,
               mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
               month: _month,
@@ -204,13 +207,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                   _includedDirs.isEmpty ? null : _includedDirs.join(','))
       ]);
       var got = 0;
-      for (final l in lists) {
+      for (var i = 0; i < lists.length; i++) {
+        final lim = offs[i].$2;
+        final l = lists[i];
         for (final e in l) {
           final it = PhotoItem.fromJson(e as Map<String, dynamic>);
           if (seen.add(it.path)) out.add(it);
         }
         got += l.length;
-        if (l.length < page) endReached = true;
+        if (l.length < lim) endReached = true;
       }
       if (got == 0) break;
       offset += got;
@@ -277,7 +282,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 替换并把视口锚回原日期组。多选/跳月中暂缓，退出后补一次。
   Future<void> _refreshSoft() async {
     if (!mounted) return;
-    if (_selected.isNotEmpty || _jumping) {
+    if (_selected.isNotEmpty || _jumping || _dragSelecting) {
+      // _dragSelecting：拖拽连选中合并会把 _items 整体替换，_dragTouched
+      // 的下标瞬间指向别的照片——继续拖会勾错格子（对抗审查 R31）
       _pendingRefresh = true;
       return;
     }
@@ -389,7 +396,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       setState(() {
         _jumping = false;
         _loading = false;
-        _railMonth = m;
+        _railMonthN.value = m;
       });
       if (day != null) {
         await _scrollToDay(day);
@@ -524,7 +531,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   /// 月份轴高亮跟随（1.0.2）：滚动时把轴上高亮移到当前视口顶部所属月份，
-  /// 并让轴自身滚动把该月份条目滚进可视区。
+  /// 并让轴自身滚动把该月份条目滚进可视区。只碰 ValueNotifier，不 setState。
   void _updateRailMonth() {
     if (_selected.isNotEmpty || _dragSelecting || _byAdded || _month != null) {
       return;
@@ -535,8 +542,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (top == null || top >= _items.length) return;
     final t = _items[top].taken;
     final m = t.length >= 7 ? t.substring(0, 7) : '';
-    if (m.isEmpty || m == _railMonth) return;
-    setState(() => _railMonth = m);
+    if (m.isEmpty || m == _railMonthN.value) return;
+    _railMonthN.value = m;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = GlobalObjectKey('rail-$m').currentContext;
       if (ctx != null) {
@@ -904,6 +911,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     _pulse?.cancel();
     _railTick?.cancel();
     _dragScroll?.cancel();
+    _railMonthN.dispose();
     _scroll.dispose();
     _railScroll.dispose();
     super.dispose();
@@ -1304,6 +1312,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 点按在全量时间线内定位到该月（不再按月过滤——那会锁死单月翻不了）；
   /// 高亮跟随滚动实时移动。月份数 ≥2、非多选、非入库序、未按月过滤时显示。
   /// 只读 _months（已带筛选口径），不自己发请求。
+  /// 31cd 性能改造：①高亮用 ValueListenableBuilder 局部重建（此前随页面
+  /// setState 整页重建）；②BackdropFilter 实时模糊撤掉——滑动中每帧对轴
+  /// 区域 saveLayer+blur，低端机显著掉帧，半透明实色观感相近、成本近零。
   Widget? _monthRail(bool selecting) {
     if (selecting || _byAdded || _month != null) return null;
     final months = _months;
@@ -1312,10 +1323,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       ..sort((a, b) => b.key.compareTo(a.key));   // 新月份在顶
     final cs = Theme.of(context).colorScheme;
     Widget entry(String label, String month, String? monthKey,
-        {int? count, required VoidCallback onTap}) {
-      final on = monthKey == null
-          ? (_railMonth == null || _railMonth!.isEmpty)
-          : _railMonth == monthKey;
+        {int? count, required bool on, required VoidCallback onTap}) {
       return InkWell(
           key: monthKey == null ? null : GlobalObjectKey('rail-$monthKey'),
           onTap: onTap,
@@ -1338,25 +1346,25 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               ])));
     }
 
-    // 毛玻璃底（v0.13）：此前半透明色块直接叠在第三列照片上，遮挡且发闷；
-    // BackdropFilter 实时模糊透出底下内容，贴右缘窄条观感干净
     return ClipRRect(
         borderRadius: const BorderRadius.horizontal(left: Radius.circular(Radii.sm)),
-        child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-            child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-                decoration: BoxDecoration(
-                    color: cs.surface.withValues(alpha: 0.55),
-                    border: Border(
-                        left: BorderSide(
-                            color: cs.outline.withValues(alpha: 0.25),
-                            width: 0.5))),
-                child: SingleChildScrollView(
+        child: Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+            decoration: BoxDecoration(
+                color: cs.surface.withValues(alpha: 0.92),
+                border: Border(
+                    left: BorderSide(
+                        color: cs.outline.withValues(alpha: 0.25),
+                        width: 0.5))),
+            child: ValueListenableBuilder<String?>(
+                valueListenable: _railMonthN,
+                builder: (_, railMonth, _) => SingleChildScrollView(
                     controller: _railScroll,
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      entry('全部', '', null, onTap: () {
+                      entry('全部', '', null,
+                          on: railMonth == null || railMonth.isEmpty,
+                          onTap: () {
                         if (_scroll.hasClients) {
                           _scroll.animateTo(0,
                               duration: const Duration(milliseconds: 300),
@@ -1365,7 +1373,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                       }),
                       for (final e in entries)
                         entry(e.key.substring(2), e.key, e.key,
-                            count: e.value, onTap: () => _jumpToMonth(e.key)),
+                            count: e.value,
+                            on: railMonth == e.key,
+                            onTap: () => _jumpToMonth(e.key)),
                     ])))));
   }
 
@@ -1417,15 +1427,24 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final groups = _computeGroups();
     final body = CustomScrollView(
         controller: _scroll,
+        // 提前构建缓存区（默认 250px）：缩略图请求提前起步，快滑到时已在
+        // 下载/解码路上，减少落地后的转圈（31cd「加载慢」感知优化）。
+        // 新 API ScrollCacheExtent 未从 material 导出，暂用旧参数（已实测可用）
+        // ignore: deprecated_member_use
+        cacheExtent: 600,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
           for (final (day, flatIdx) in groups) ...[
             // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
             // 很难看，真机反馈 0.4.5）；入库序无日期头。
             // 1.0.2 醒目化：全宽色条 + 15px 粗体（此前 12.5 小药丸不显眼）；
-            // GlobalObjectKey 供跳月定位/校准与滚动锚定使用
+            // GlobalObjectKey 供跳月定位/校准与滚动锚定使用。
+            // sliver 级 ValueKey（31cd）：增量合并插入新组后，框架按 key
+            // 而非位置匹配 sliver——否则插入点之后的组全部错位复用，
+            // 视口内格子 URL 集体变化 → 已加载图全变转圈重拉
             if (day.isNotEmpty)
               SliverToBoxAdapter(
+                key: ValueKey<String>('grp-h-$day'),
                 child: Container(
                     key: GlobalObjectKey('hdr-$day'),
                     width: double.infinity,
@@ -1452,6 +1471,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             // （上游 issue #265/#286/#338），按日分组=每天一个=真机必卡死，
             // v0.13 换 waterfall_flow（该包即为此修复的社区版，API 同型）。
             SliverWaterfallFlow(
+                key: ValueKey<String>('grp-${day.isEmpty ? "~" : day}'),
                 gridDelegate:
                     SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
                         // v1.0 响应式：列数随窗口档位自适应（手机 3 / 横屏 4 /
@@ -1462,11 +1482,22 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                         mainAxisSpacing: 2, crossAxisSpacing: 2),
                 delegate: SliverChildBuilderDelegate(
                     addRepaintBoundaries: true,
+                    // 格子按路径找新下标（31cd）：合并刷新后元素随路径复用，
+                    // AuthImage 状态原封不动——插入新照片不再把视口内
+                    // 未变的格子打回转圈重拉。key 形如 cell-<path>，截前缀还路径
+                    findChildIndexCallback: (key) {
+                      final p = (key as ValueKey<String>).value.substring(5);
+                      for (var j = 0; j < flatIdx.length; j++) {
+                        if (_items[flatIdx[j]].path == p) return j;
+                      }
+                      return null;
+                    },
                     (context, j) {
                       final flat = flatIdx[j];
                       final selected = _selected.contains(flat);
                       final item = _items[flat];
                       return _CellReg(
+                          key: ValueKey<String>('cell-${item.path}'),
                           flat: flat,
                           registry: _cellCtxs,
                           child: AspectRatio(
@@ -1610,7 +1641,7 @@ class _CellReg extends StatefulWidget {
   final Map<int, BuildContext> registry;
   final Widget child;
   const _CellReg(
-      {required this.flat, required this.registry, required this.child});
+      {super.key, required this.flat, required this.registry, required this.child});
 
   @override
   State<_CellReg> createState() => _CellRegState();

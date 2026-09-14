@@ -29,6 +29,7 @@ from app.api import events                             # SSE 实时通知（B3�
 from app.services import backup as backup_svc          # 每日备份编排（B5）
 from app.services import metrics as metrics_svc        # 指标与水位告警（B5）
 from app.services import log_sweep          # noqa: F401 —— NSSM 日志归档裁剪（import 即注册 sweep）
+from app.services import thumb_warmup       # 缩略图后台预热（20260914213301-31cd）
 from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
 
 for _mod in (admin, appver, auth, totp, profile, account, devices, files,
@@ -47,6 +48,7 @@ metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发�
 async def _lifespan(_app):
     await system.startup()          # 清理五件套 + 注册式 sweep 周期循环
     await notify.startup()          # 定时广播扫描循环
+    await thumb_warmup.startup()    # 缩略图预热循环（asyncio.create_task 自持）
     await healthreport.startup()    # 健康日报每日调度
     await events.startup()          # 记录主事件循环（SSE publish 线程桥）
     yield

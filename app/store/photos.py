@@ -33,6 +33,14 @@ def load_index() -> list:
     return _db().execute("SELECT path, mtime_ns, size FROM photos").fetchall()
 
 
+def list_newest_rows(limit: int) -> list:
+    """最新入库 N 行 (path, mtime_ns, size)（缩略图预热候选集——用户最先
+    浏览的就是刚上传的这些；added_at 单调，新→旧）。"""
+    return _db().execute(
+        "SELECT path, mtime_ns, size FROM photos "
+        "ORDER BY added_at DESC, rowid DESC LIMIT ?", (limit,)).fetchall()
+
+
 def list_for_gallery(where_sql: str = "", args: "tuple | list" = (),
                      order_sql: str = "") -> list:
     """画廊行集（下推过滤版）。where/order 两个片段由 API 层按**白名单分支**

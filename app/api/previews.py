@@ -8,6 +8,7 @@ import mimetypes
 import os
 import subprocess
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -101,36 +102,15 @@ async def preview_file(path: str, w: int | None = Query(default=None),
 # IMG_EXTS/VID_EXTS 单一事实源在 filetools（07 审查 §5.1-3），与照片时间线共用
 
 
-@router.get("/thumb/{path:path}")
-def thumb_file(request: Request, path: str, _user=Depends(require_user)):
-    """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。
-    ETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存
-    自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。"""
+def generate_thumb(target: Path, cached: Path, ext: str) -> None:
+    """生成一张缩略图写入 cached（图片 Pillow draft+EXIF 矫正，视频 ffmpeg
+    抽帧）。/thumb 端点与后台预热服务（services/thumb_warmup）共用同一实现，
+    防止两处口径漂移。失败抛 HTTPException（415/404/500），由调用方分诊。"""
     from PIL import Image
-    target = resolve(_user, path, "read")
-    ensure_exists(target, detail="Not found")
-    ext = target.suffix.lower()
-    if ext not in IMG_EXTS | VID_EXTS:
-        raise HTTPException(status_code=404, detail="No thumbnail for this type")
-
-    stat = target.stat()
-    key = hashlib.md5(f"{path}:{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()
-    etag = f'W/"{key}"'
-    # Cache-Control 由 Caddy 对 /thumb/* 统一设置（private, no-cache），
-    # 这里只负责 ETag 与 304——两边都设会出重复头
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag})
-    cache_dir = SHARE_ROOT / ".thumbs"
-    cache_dir.mkdir(exist_ok=True)
-    cached = cache_dir / f"{key}.jpg"
-    resp_headers = {"ETag": etag}
-    if cached.exists():
-        return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)
-
-    tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
+    tmp = cached.parent / f".tmp-{os.getpid()}-{threading.get_ident()}-{cached.stem}.jpg"
     try:
         if ext in IMG_EXTS:
-            from PIL import Image, ImageOps
+            from PIL import ImageOps
             img = Image.open(target)
             _reject_pixel_bomb(img)   # 同 preview：解压炸弹拦截（红队 P1-2）
             # JPEG draft 解码：直接按 1/2、1/4… 尺寸解码再缩放，大图首生成快数倍
@@ -154,9 +134,42 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
             if not tmp.exists():
                 raise HTTPException(status_code=404, detail="Thumbnail failed")
         os.replace(tmp, cached)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+@router.get("/thumb/{path:path}")
+def thumb_file(request: Request, path: str, _user=Depends(require_user)):
+    """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。
+    ETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存
+    自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。"""
+    target = resolve(_user, path, "read")
+    ensure_exists(target, detail="Not found")
+    ext = target.suffix.lower()
+    if ext not in IMG_EXTS | VID_EXTS:
+        raise HTTPException(status_code=404, detail="No thumbnail for this type")
+
+    stat = target.stat()
+    key = hashlib.md5(f"{path}:{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()
+    etag = f'W/"{key}"'
+    # Cache-Control 由 Caddy 对 /thumb/* 统一设置（private, no-cache），
+    # 这里只负责 ETag 与 304——两边都设会出重复头
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    cache_dir = SHARE_ROOT / ".thumbs"
+    cache_dir.mkdir(exist_ok=True)
+    cached = cache_dir / f"{key}.jpg"
+    resp_headers = {"ETag": etag}
+    if cached.exists():
+        return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)
+
+    try:
+        generate_thumb(target, cached, ext)
     except HTTPException:
         raise
     except Exception:
-        tmp.unlink(missing_ok=True)
+        (cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg").unlink(
+            missing_ok=True)
         raise HTTPException(status_code=500, detail="Thumbnail error")
     return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)

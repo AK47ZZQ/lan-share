@@ -21,6 +21,12 @@ import 'ui/widgets/kit.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // 解码位图缓存扩容（20260914213301-31cd）：默认 1000 张/100MiB——320px
+  // 缩略图解码后约 400KB/张，默认按字节上限只能留约 250 张，照片墙上千张
+  // 来回滚动必然反复淘汰→重解码→本该秒开的格子又转圈。扩到 4000 张/
+  // 384MiB；磁盘缓存另有 5000 对象档，这里只影响解码后的内存驻留
+  PaintingBinding.instance.imageCache.maximumSize = 4000;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 384 << 20;
   // edge-to-edge（v0.20）：Android 10-14 默认不画到状态栏后面，首页品牌头
   // 上方露一条系统白底。全局开启后渐变自然铺到屏顶（BrandHeader 自带
   // topInset 让位），各页 AppBar 自行处理 inset 不受影响
