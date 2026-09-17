@@ -81,6 +81,21 @@ def insert(user_id: int, type: str, title: str, body: str = "",
            (user_id, type, title, body, link, time.time(), broadcast_id))
 
 
+def recent_unread_by_link(user_id: int, link: str, window: float):
+    """合并节流用：window 秒内同 link 的最近一条未读通知（无则 None）。
+    （效率舱 M1：家庭清单完成/指派通知按窗口合并，防刷屏。）"""
+    return _db().execute(
+        "SELECT * FROM notifications WHERE user_id=? AND link=? "
+        "AND read_at IS NULL AND created_at>=? ORDER BY id DESC LIMIT 1",
+        (user_id, link, time.time() - window)).fetchone()
+
+
+def bump_body(nid: int, body: str) -> int:
+    """合并节流：只更新正文与时间（保持一条，不新增行）。"""
+    return _write("UPDATE notifications SET body=?, created_at=? WHERE id=?",
+                  (body, time.time(), nid))
+
+
 def mark_all_read(uid: int) -> int:
     return _write("UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL",
                   (time.time(), uid))

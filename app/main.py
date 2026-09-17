@@ -31,11 +31,12 @@ from app.services import metrics as metrics_svc        # 指标与水位告警�
 from app.services import log_sweep          # noqa: F401 —— NSSM 日志归档裁剪（import 即注册 sweep）
 from app.services import thumb_warmup       # 缩略图后台预热（20260914213301-31cd）
 from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
+from app.api import todos                              # 效率舱·待办（v1.1 M1）
 
 for _mod in (admin, appver, auth, totp, profile, account, devices, files,
              uploads, trash, previews, share,
              webdav, system, notify, healthreport, photos, albums, qr, notes,
-             console, feedback, events):
+             console, feedback, events, todos):
     app.include_router(_mod.router)
 backup_svc.ensure_scheduled()   # B5：进程内每日备份兜底（外部计划任务失效时的第二道防线）
 metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发现遗漏，终审未覆盖注册面）

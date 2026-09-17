@@ -26,6 +26,7 @@ import 'home_page.dart';
 import 'notes_page.dart';
 import 'me_page.dart';
 import 'photos_page.dart';
+import 'todos_page.dart';
 import 'transfers_page.dart';
 import 'theme/design_tokens.dart';
 import 'widgets/kit.dart';
@@ -48,6 +49,13 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
   void _openTransfers() {
     Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const TransfersPage()));
+  }
+
+  /// 文件页（v1.1 效率舱 IA 重构起不再是底栏页签）：统一从这里 push，
+  /// 首页快捷栏/照片页/"我的"页宫格三处共用（对应当年传输页的同款手法）。
+  void _openFiles() {
+    Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => FilesPage(onGoTransfers: _openTransfers)));
   }
   final LockGate _lockGate = LockGate(); // 生命周期→落锁判定（单测覆盖）
 
@@ -125,7 +133,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
     try {
       final n = await ShareBridge.consumePending();
       if (!mounted || n == 0) return;
-      setState(() => _tab = 3);
+      // v1.1：文件页不再是底栏页签（效率舱 IA 重构），改 push 直达——
+      // 顺带修掉 v0.25 重排后遗留的陈旧下标（原 _tab=3 落在笔记页）
+      Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => FilesPage(onGoTransfers: _openTransfers)));
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
               '已收到 $n 个分享文件，上传到「分享暂存」'),
@@ -171,6 +182,55 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
     }
     // 状态栏图标亮度随页签：首页顶部是渐变品牌头（白图标），其余浅底（深图标）
     // 返回手势接管（20260914042923-b7c1）：见文件头注释。
+    // v1.1 效率舱 IA 重构：底栏 首页/照片/效率/笔记/我的；文件页降为 push 路由
+    //（先例：v0.25 传输让位笔记）。guest 无效率舱（服务端 family 数据对访客
+    // 不可见），页签列表按角色动态生成、索引不硬编码。
+    final session = ref.watch(sessionProvider);
+    final isGuest = session.role == 'guest';
+    final dests = <(NavigationDestination, Widget)>[
+      (
+        const NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: '首页'),
+        HomePage(
+            onGoPhotos: () => setState(() => _tab = 1),
+            onGoFiles: _openFiles,
+            onGoTransfers: _openTransfers,
+            onGoMe: () => setState(() => _tab = _destCount - 1))
+      ),
+      (
+        const NavigationDestination(
+            icon: Icon(Icons.photo_outlined),
+            selectedIcon: Icon(Icons.photo),
+            label: '照片'),
+        PhotosPage(onGoFiles: _openFiles)
+      ),
+      if (!isGuest)
+        (
+          const NavigationDestination(
+              icon: Icon(Icons.checklist_outlined),
+              selectedIcon: Icon(Icons.checklist),
+              label: '效率'),
+          const TodosPage()
+        ),
+      (
+        const NavigationDestination(
+            icon: Icon(Icons.edit_note_outlined),
+            selectedIcon: Icon(Icons.edit_note),
+            label: '笔记'),
+        const NotesPage()
+      ),
+      (
+        const NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: '我的'),
+        MePage(onGoFiles: _openFiles)
+      ),
+    ];
+    final destCount = dests.length; // 成员 5 / 访客 4
+    if (_tab >= destCount) _tab = 0; // 角色切换后防越界
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -194,36 +254,20 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
       child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: _tab == 0 ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       child: Scaffold(
-      // 传输页改走 Navigator.push（不再占底栏页签）——保留原页面与全部功能
-      body: IndexedStack(index: _tab, children: [
-        HomePage(
-            onGoPhotos: () => setState(() => _tab = 1),
-            onGoFiles: () => setState(() => _tab = 2),
-            onGoTransfers: _openTransfers,
-            onGoMe: () => setState(() => _tab = 4)),
-        PhotosPage(onGoFiles: () => setState(() => _tab = 2)),
-        FilesPage(onGoTransfers: _openTransfers),
-        const NotesPage(),
-        MePage(onGoFiles: () => setState(() => _tab = 2)),
-      ]),
+      // 传输页/文件页都走 Navigator.push（不再占底栏页签）——保留原页面与全部功能
+      body: IndexedStack(
+          index: _tab,
+          children: [for (final d in dests) d.$2]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home), label: '首页'),
-          NavigationDestination(icon: Icon(Icons.photo_outlined),
-              selectedIcon: Icon(Icons.photo), label: '照片'),
-          NavigationDestination(icon: Icon(Icons.folder_outlined),
-              selectedIcon: Icon(Icons.folder), label: '文件'),
-          NavigationDestination(icon: Icon(Icons.edit_note_outlined),
-              selectedIcon: Icon(Icons.edit_note), label: '笔记'),
-          NavigationDestination(icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person), label: '我的'),
-        ],
+        destinations: [for (final d in dests) d.$1],
       ),
       ),
       ),
     );
   }
+
+  int get _destCount =>
+      ref.read(sessionProvider).role == 'guest' ? 4 : 5;
 }

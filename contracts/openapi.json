@@ -418,6 +418,41 @@
     "title": "KickBody",
     "type": "object"
    },
+   "ListBody": {
+    "properties": {
+     "kind": {
+      "default": "personal",
+      "title": "Kind",
+      "type": "string"
+     },
+     "name": {
+      "maxLength": 60,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "ListBody",
+    "type": "object"
+   },
+   "ListRenameBody": {
+    "properties": {
+     "name": {
+      "maxLength": 60,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "ListRenameBody",
+    "type": "object"
+   },
    "MoveBody": {
     "properties": {
      "dest_dir": {
@@ -644,6 +679,133 @@
      }
     },
     "title": "SharePrepareBody",
+    "type": "object"
+   },
+   "TodoCreateBody": {
+    "properties": {
+     "assignee_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Assignee Id"
+     },
+     "due_at": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Due At"
+     },
+     "list_id": {
+      "title": "List Id",
+      "type": "integer"
+     },
+     "notes": {
+      "default": "",
+      "title": "Notes",
+      "type": "string"
+     },
+     "priority": {
+      "default": 0,
+      "title": "Priority",
+      "type": "integer"
+     },
+     "title": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+     }
+    },
+    "required": [
+     "list_id",
+     "title"
+    ],
+    "title": "TodoCreateBody",
+    "type": "object"
+   },
+   "TodoPatchBody": {
+    "properties": {
+     "assignee_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Assignee Id"
+     },
+     "due_at": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Due At"
+     },
+     "notes": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Notes"
+     },
+     "priority": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Priority"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Status"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     }
+    },
+    "title": "TodoPatchBody",
     "type": "object"
    },
    "TotpCodeBody": {
@@ -5084,6 +5246,270 @@
      }
     },
     "summary": "Share History"
+   }
+  },
+  "/api/todos": {
+   "get": {
+    "operationId": "list_todos_api_todos_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Todos"
+   },
+   "post": {
+    "operationId": "create_todo_api_todos_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TodoCreateBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create Todo"
+   }
+  },
+  "/api/todos/lists": {
+   "get": {
+    "operationId": "list_lists_api_todos_lists_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "List Lists"
+   },
+   "post": {
+    "operationId": "create_list_api_todos_lists_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ListBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Create List"
+   }
+  },
+  "/api/todos/lists/{lid}": {
+   "delete": {
+    "operationId": "delete_list_api_todos_lists__lid__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "lid",
+      "required": true,
+      "schema": {
+       "title": "Lid",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete List"
+   },
+   "patch": {
+    "operationId": "rename_list_api_todos_lists__lid__patch",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "lid",
+      "required": true,
+      "schema": {
+       "title": "Lid",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ListRenameBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Rename List"
+   }
+  },
+  "/api/todos/{tid}": {
+   "delete": {
+    "operationId": "delete_todo_api_todos__tid__delete",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "tid",
+      "required": true,
+      "schema": {
+       "title": "Tid",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Delete Todo"
+   },
+   "patch": {
+    "operationId": "patch_todo_api_todos__tid__patch",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "tid",
+      "required": true,
+      "schema": {
+       "title": "Tid",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TodoPatchBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Patch Todo"
    }
   },
   "/api/trash": {

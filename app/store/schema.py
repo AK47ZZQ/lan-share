@@ -171,8 +171,32 @@ _PG_SCHEMA = """
         mtime_ns BIGINT NOT NULL,
         size BIGINT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS todo_lists(
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'personal',
+        created_at DOUBLE PRECISION NOT NULL,
+        UNIQUE(user_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS todos(
+        id BIGSERIAL PRIMARY KEY,
+        list_id BIGINT NOT NULL REFERENCES todo_lists(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
+        due_at DOUBLE PRECISION,
+        priority INTEGER NOT NULL DEFAULT 0,
+        assignee_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'todo',
+        done_at DOUBLE PRECISION,
+        done_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+        reminded_at DOUBLE PRECISION,
+        deleted_at DOUBLE PRECISION,
+        created_at DOUBLE PRECISION NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
     CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
+    CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(list_id, status);
 """
 
 # 照片评论/表情回应（photo_comments / photo_reactions）已按改进建议
@@ -181,7 +205,7 @@ _PG_SCHEMA = """
 # 注意：不再使用，勿把两表加回 _PG_SEQUENCES。
 
 _PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "device_tokens",
-                 "announcements")
+                 "announcements", "todo_lists", "todos")
 
 
 def pg_setval_sequences(conn: _PgConn):
@@ -436,8 +460,32 @@ def _migrate_v3():
                 mtime_ns INTEGER NOT NULL,
                 size INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS todo_lists(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'personal',
+                created_at REAL NOT NULL,
+                UNIQUE(user_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS todos(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                list_id INTEGER NOT NULL REFERENCES todo_lists(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                due_at REAL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'todo',
+                done_at REAL,
+                done_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                reminded_at REAL,
+                deleted_at REAL,
+                created_at REAL NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
             CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
+            CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(list_id, status);
             -- 照片评论/表情回应两表（photo_comments/photo_reactions）已按
             -- 改进建议 9.6-P2-13 下线，不再建表；存量库中的旧表保留不删
         """)

@@ -114,6 +114,7 @@ watch(() => route.fullPath, () => { sideOpen.value = false })
             </template>
             <div class="side-group">内容</div>
             <router-link class="side-item" to="/files" @click="sideOpen = false"><span>🗂️</span> 文件</router-link>
+            <router-link v-if="me.role !== 'guest'" class="side-item" to="/todos" @click="sideOpen = false"><span>✅</span> 待办</router-link>
             <router-link class="side-item" to="/photos" @click="sideOpen = false"><span>🖼️</span> 照片</router-link>
             <router-link class="side-item" to="/trash" @click="sideOpen = false"><span>🗑️</span> 回收站</router-link>
             <router-link class="side-item" to="/activity" @click="sideOpen = false"><span>🔔</span> 家庭动态</router-link>
@@ -166,6 +167,7 @@ watch(() => route.fullPath, () => { sideOpen.value = false })
             </div>
             <router-link v-if="isAdmin" class="um-item" to="/" @click="menuOpen = false"><span>📊</span> 总览</router-link>
             <router-link class="um-item" to="/files" @click="menuOpen = false"><span>🗂️</span> 文件</router-link>
+            <router-link v-if="me.role !== 'guest'" class="um-item" to="/todos" @click="menuOpen = false"><span>✅</span> 待办</router-link>
             <router-link class="um-item" to="/photos" @click="menuOpen = false"><span>🖼️</span> 照片</router-link>
             <router-link class="um-item" to="/trash" @click="menuOpen = false"><span>🗑️</span> 回收站</router-link>
             <router-link class="um-item" to="/shares" @click="menuOpen = false"><span>🔗</span> 我的分享</router-link>

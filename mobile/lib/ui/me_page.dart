@@ -12,7 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'about_page.dart';
 import 'feedback_page.dart';
-import 'notes_page.dart';
+import 'files_page.dart';
 import 'transfers_page.dart';
 import 'admin_page.dart';
 import 'backup_settings_page.dart';
@@ -918,9 +918,16 @@ class _MePageState extends ConsumerState<MePage> {
                           _quickTile(Icons.share_outlined, '我的分享', () =>
                               Navigator.push(context, MaterialPageRoute(
                                   builder: (_) => const SharesPage()))),
-                        _quickTile(Icons.edit_note_outlined, '笔记', () =>
+                        // v1.1 效率舱 IA 重构：底栏已无"文件"页签，宫格里的
+                        // "笔记"与底栏页签完全重复 → 用"文件"替位（仍 5 项
+                        // 不换行；文件页本体从底栏降为 push 路由，见 home_shell）
+                        _quickTile(Icons.folder_outlined, '文件', () =>
                             Navigator.push(context, MaterialPageRoute(
-                                builder: (_) => const NotesPage()))),
+                                builder: (_) => FilesPage(
+                                    onGoTransfers: () => Navigator.push(
+                                        context, MaterialPageRoute(
+                                        builder: (_) =>
+                                            const TransfersPage())))))),
                         _quickTile(Icons.delete_outline, '回收站', () =>
                             Navigator.push(context, MaterialPageRoute(
                                 builder: (_) => const TrashPage()))),
