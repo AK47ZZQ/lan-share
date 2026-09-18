@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -96,10 +97,11 @@ def _ffprobe_meta(path: Path) -> tuple[float | None, str | None, str | None]:
 def _probe_video_durations(cap: int = 20):
     """补扫照片行缺失的时长/编码/尺寸。duration 语义：NULL=待补扫（仅视频），
     0=非视频/已处理。图片行入库即写 0；存量 NULL 图片行在此收编，之后补扫查询
-    不再被图片行白拉全表。codec/width/height 是 v0.11 新列：duration 已有而
-    codec 或尺寸缺失的行同样纳入补扫（探到啥刷啥，互不阻塞）；尺寸用 PIL 只
-    读文件头，约 1-5ms/张，视频行不探尺寸。两段式更新，PG 友好：CASE 里悬空
-    NULL 参数会让 psycopg 报 IndeterminateDatatype；taken_at 仅在有值时单独刷。"""
+    不再被图片行白拉全表。候选集口径见 store.photos.list_probe_missing（探成功
+    的视频行必须离场——width 恒 NULL 是设计，不是缺失，05a0 批修正）。
+    尺寸用 PIL 只读文件头，约 1-5ms/张，视频行不探尺寸。两段式更新，PG 友好：
+    CASE 里悬空 NULL 参数会让 psycopg 报 IndeterminateDatatype；taken_at 仅在
+    有值时单独刷。"""
     rows = photos_store.list_probe_missing()
     if not rows:
         return
@@ -165,6 +167,41 @@ def _photo_taken_at(f: Path) -> str:
     return mtime
 
 
+def _iter_media_entries():
+    """SHARE_ROOT 全盘媒体枚举（_scan_photos 专用），yield (正斜杠相对路径, DirEntry)。
+
+    不用 SHARE_ROOT.rglob("*") 的原因（反馈 20260917234058-05a0 实测定位）：
+    rglob 对每个文件 is_file()+stat() 两次系统调用，且 .thumbs 的 1.4 万缓存
+    文件枚举完才发现要跳——生产 22k 文件树单轮 2.4s，照片墙"第一页慢"全耗在
+    这（扫描完成前请求被 _photo_scan_lock 排队）。os.scandir 的 DirEntry 在
+    Windows 上 stat 信息随目录枚举免费拿到，目录级剪枝让点前缀目录根本不入
+    枚举：同树单轮 0.2s 量级。
+
+    语义与旧 rglob 循环逐条对齐（回归钉 tests/test_photos_scan）：
+    点前缀目录/文件一律排除；顶层「反馈」目录排除（成员反馈截图不上墙）；
+    只出 IMG_EXTS|VID_EXTS；文件跟随符号链接、目录不跟随。"""
+    media_exts = IMG_EXTS | VID_EXTS
+    stack = [("", SHARE_ROOT)]
+    while stack:
+        rel_dir, d = stack.pop()
+        with os.scandir(d) as it:
+            for entry in it:
+                name = entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    if name.startswith(".") or (not rel_dir and name == "反馈"):
+                        continue
+                    stack.append((f"{rel_dir}/{name}" if rel_dir else name,
+                                  Path(entry.path)))
+                    continue
+                if name.startswith("."):
+                    continue
+                if os.path.splitext(name)[1].lower() not in media_exts:
+                    continue
+                if not entry.is_file():
+                    continue
+                yield (f"{rel_dir}/{name}" if rel_dir else name, entry)
+
+
 def _scan_photos(force: bool = False):
     """增量扫描图片库：新/变更文件提取拍摄日期，消失的文件清理条目。
     普通请求 60s 内不重复扫；force（客户端已知有新照片，如备份刚完成/
@@ -193,29 +230,19 @@ def _scan_photos(force: bool = False):
         # 几万文件的库每轮扫描就是几万次往返）；gone 的差集也直接由它推导
         known = {r["path"]: (r["mtime_ns"], r["size"])
                  for r in photos_store.load_index()}
-        for f in SHARE_ROOT.rglob("*"):
-            rel_parts = f.relative_to(SHARE_ROOT).parts
-            if any(p.startswith(".") for p in rel_parts):
-                continue
-            if rel_parts[0] == "反馈":
-                # 系统目录不进照片墙（20260913211805-b4e0 关联发现）：反馈截图
-                # 是成员对管理员提交的私有内容，此前被全盘扫描收进 photos 表
-                # 上墙全家可见。扫描即跳过，存量行随 gone 清理自动消失。
-                continue
-            if not f.is_file() or f.suffix.lower() not in IMG_EXTS | VID_EXTS:
-                continue
-            stat = f.stat()
-            rel = to_rel(f)
+        for rel, entry in _iter_media_entries():
             seen.add(rel)
             row = known.get(rel)
-            if row and row[0] == stat.st_mtime_ns and row[1] == stat.st_size:
+            st = entry.stat()   # scandir 缓存，无额外系统调用
+            if row and row[0] == st.st_mtime_ns and row[1] == st.st_size:
                 continue
             # 图片行 duration 写 0（非视频即"已处理"），视频留 NULL 交给补扫；
             # 内容变更（mtime 变）时 duration 一并重置，换过的视频会被重新探测。
             # added_at：首次入库打点（ON CONFLICT 更新分支不碰它——拍照时间
             # 排序不变，只有新文件才拿到现在时刻）
-            updates.append((rel, _photo_taken_at(f), stat.st_mtime_ns, stat.st_size,
-                            None if f.suffix.lower() in VID_EXTS else 0,
+            updates.append((rel, _photo_taken_at(SHARE_ROOT / rel),
+                            st.st_mtime_ns, st.st_size,
+                            None if os.path.splitext(rel)[1].lower() in VID_EXTS else 0,
                             time.time()))
         photos_store.apply_scan(updates, [p for p in known if p not in seen])
         _last_photo_scan = time.time()

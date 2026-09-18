@@ -18,6 +18,7 @@ import pytest
 import app.api.photos as photos
 from app.config import SHARE_ROOT
 from app.db import _db, _db_lock
+from app.store import photos as photos_store
 
 
 def _root() -> Path:
@@ -64,7 +65,9 @@ def photos_env():
     photos._last_force_scan = 0.0
     yield
     _cleanup("照片/随手拍", "照片/节流验证", "照片/admin/2026-旅行",
-             "照片/家庭合影", "随手新建")
+             "照片/家庭合影", "随手新建", ".scan-dot-e2e-x7",
+             "照片/scan-prune-e2e-x7")
+    (_root() / ".scan-dot-e2e-x7.jpg").unlink(missing_ok=True)  # 单文件，_cleanup 只清目录
 
 
 def test_force_scan_not_starved_by_plain_hits(client, photos_env):
@@ -105,3 +108,44 @@ def test_new_folder_photos_enter_timeline(auth, photos_env):
     assert "照片/家庭合影/集体照.png" in items
     assert items["照片/家庭合影/集体照.png"]["uploader"] == "共享空间"
     assert items["随手新建/llq录入.mov"]["media_type"] == "video"
+
+
+def test_dot_prefixed_paths_never_scanned(client, photos_env):
+    """点前缀目录/文件永不入库（反馈 05a0 批）：扫描遍历从 rglob 逐条 dot
+    判断改为 scandir 目录级剪枝后，语义必须逐条对齐——.thumbs 这类缓存
+    目录整个不下探，隐藏媒体文件也不能借符号链接/非常规名字混上墙。"""
+    _mk(".scan-dot-e2e-x7/a.jpg")     # 点前缀目录里的媒体
+    _mk(".scan-dot-e2e-x7.jpg")       # 点前缀媒体文件
+    _mk("照片/scan-prune-e2e-x7/ok.jpg")  # 正常目录对照组
+    photos._last_photo_scan = 0.0
+    photos._scan_photos()
+    assert not _rows("scan-dot-e2e-x7"), "点前缀路径混入照片墙 = 剪枝语义回退"
+    assert len(_rows("scan-prune-e2e-x7")) == 1, "正常目录照片被剪枝误伤"
+
+
+def test_probe_candidates_exclude_probed_videos(client, photos_env):
+    """补扫候选集口径（反馈 05a0 批修正）：探成功的视频行（width 恒 NULL 是
+    设计）不得重回候选集——否则每轮扫描都把它们重新 ffprobe 一遍且永不收敛
+    （生产实测 37 行 × 20/轮 ≈ 1.4s/轮）。尺寸待补的图片行（duration=0 且
+    width NULL）必须仍在候选集。"""
+    ins = ("INSERT INTO photos(path, taken_at, mtime_ns, size, duration, "
+           "codec, width, height, added_at) VALUES(?,?,?,?,?,?,?,?,?)")
+    with _db_lock:
+        _db().execute(ins, ("scan-probe-x7/probed.mp4", "2026-01-01", 1, 1,
+                            12.5, "h264", None, None, 1.0))   # 探成功的视频
+        _db().execute(ins, ("scan-probe-x7/pending.mp4", "2026-01-01", 2, 2,
+                            None, None, None, None, 1.0))     # 待补视频
+        _db().execute(ins, ("scan-probe-x7/nosize.jpg", "2026-01-01", 3, 3,
+                            0, None, None, None, 1.0))        # 尺寸待补图片
+        _db().execute(ins, ("scan-probe-x7/done.jpg", "2026-01-01", 4, 4,
+                            0, None, 1920, 1080, 1.0))        # 已齐备图片
+        _db().commit()
+    try:
+        hit = {r["path"] for r in photos_store.list_probe_missing()
+               if r["path"].startswith("scan-probe-x7/")}
+        assert hit == {"scan-probe-x7/pending.mp4", "scan-probe-x7/nosize.jpg"}, \
+            f"候选集口径漂移：{hit}"
+    finally:
+        with _db_lock:
+            _db().execute("DELETE FROM photos WHERE path LIKE 'scan-probe-x7/%'")
+            _db().commit()

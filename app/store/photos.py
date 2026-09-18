@@ -16,9 +16,17 @@ from app.db import _db, _db_lock
 
 
 def list_probe_missing() -> list:
-    """时长/编码/尺寸任一缺失的行（视频补扫候选集）。"""
+    """补扫候选集（反馈 05a0 批修正口径）：duration 未定（未探视频 + 存量
+    图片收编），或 codec 与 width **同缺**（待探视频 / 尺寸待补图片——后者
+    实际由 _probe_image_sizes 的 list_missing_sizes 取走，此处带上无害）。
+
+    单缺不进候选集：视频 width 恒 NULL、图片 codec 恒 NULL 都是设计使然而
+    非缺失。此前 `duration IS NULL OR codec IS NULL OR width IS NULL` 让探
+    成功的视频（width 恒 NULL）与全部图片（codec 恒 NULL）永驻候选集——
+    生产实测 37 行视频 × 20/轮被反复 ffprobe ≈ 1.4s/轮，每次扫描都付。"""
     return _db().execute("SELECT path, duration, codec, width FROM photos "
-                         "WHERE duration IS NULL OR codec IS NULL OR width IS NULL").fetchall()
+                         "WHERE duration IS NULL "
+                         "OR (codec IS NULL AND width IS NULL)").fetchall()
 
 
 def list_missing_sizes(limit: int) -> list:
