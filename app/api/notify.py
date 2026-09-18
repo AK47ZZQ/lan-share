@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.db import _db_lock, transaction
 from app.security import audit, client_ip, require_admin, require_user
 from app.api import events as events_bus
+from app.services import loop_health
 from app.store import notifications as notif_store
 from app.store import users as users_store
 from app.settings import (NOTIFY_PREFS_PREFIX, get_setting, set_setting)
@@ -264,12 +265,9 @@ async def startup():
 
     由 app.main 的 lifespan 统一调度（router.on_event 已弃用）。"""
     async def loop():
-        import logging
         while True:
-            try:
+            async with loop_health.watched("scheduled broadcast"):
                 await _fire_due_once()
-            except Exception:
-                logging.exception("scheduled broadcast round failed")
             await _sleep(60)
     async def _sleep(sec: float):
         import asyncio

@@ -22,6 +22,7 @@ from pathlib import Path
 from app.api.previews import generate_thumb
 from app.config import SHARE_ROOT
 from app.filetools import IMG_EXTS, VID_EXTS
+from app.services import loop_health
 from app.store import photos as photos_store
 
 _TICK_SECONDS = 30     # 轮间隔
@@ -91,11 +92,12 @@ async def startup() -> None:
 
     async def loop():
         while True:
-            try:
+            # 单轮异常吞掉记日志：逸出会杀死 while 循环，预热静默停摆。
+            # 成败同时登记进 loop_health——本循环曾因 SQL 用了 SQLite 独有的
+            # rowid 而在生产 PG 上每轮抛错、静默停摆数日（v3.56 教训），
+            # "吞异常保活"必须配"看得见"，否则保活=失踪。
+            async with loop_health.watched("thumb warmup"):
                 await asyncio.to_thread(_tick)
-            except Exception:
-                # 单轮异常吞掉记日志：逸出会杀死 while 循环，预热静默停摆
-                logging.exception("thumb warmup round failed")
             await asyncio.sleep(_TICK_SECONDS)
 
     asyncio.create_task(loop())

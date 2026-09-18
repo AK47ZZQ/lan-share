@@ -35,10 +35,19 @@ def load_index() -> list:
 
 def list_newest_rows(limit: int) -> list:
     """最新入库 N 行 (path, mtime_ns, size)（缩略图预热候选集——用户最先
-    浏览的就是刚上传的这些；added_at 单调，新→旧）。"""
+    浏览的就是刚上传的这些；added_at 单调，新→旧）。
+
+    排序键必须**双引擎等价**，这里踩过两个坑（v3.56）：
+    - 原先的 `rowid DESC` 是 SQLite 独有伪列，生产 PG 直接 UndefinedColumn，
+      而调用方的 per-round 异常吞掉让它静默停摆数日；
+    - `added_at DESC` 在 SQLite 把 NULL 排最后、在 PG 排最前（实测），
+      存量 NULL 行会在 PG 上顶满候选集。故 added_at 由 schema 启动期回填
+      清零（见 store/schema.py），这里不再用 COALESCE——表达式会让
+      idx_photos_added 失效，预热每 30s 一轮，必须走索引。
+    tiebreaker 用 path（非 rowid）：预热只要"确定的新→旧"，不需要插入序。"""
     return _db().execute(
         "SELECT path, mtime_ns, size FROM photos "
-        "ORDER BY added_at DESC, rowid DESC LIMIT ?", (limit,)).fetchall()
+        "ORDER BY added_at DESC, path LIMIT ?", (limit,)).fetchall()
 
 
 def list_for_gallery(where_sql: str = "", args: "tuple | list" = (),

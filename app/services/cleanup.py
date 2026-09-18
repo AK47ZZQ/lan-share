@@ -8,7 +8,6 @@ share 票据），本模块只负责：
 - 周期调度：CLEANUP_INTERVAL 一轮，线程池执行（全树 rglob 是同步 IO）
 """
 import asyncio
-import logging
 import re
 import shutil
 import time
@@ -16,6 +15,7 @@ from typing import Callable
 
 from app.config import CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS
 from app.db import _db, _db_lock
+from app.services import loop_health
 from app.store import devices as devices_store
 from app.store import notifications as notifications_store
 from app.store import shares as shares_store
@@ -30,36 +30,35 @@ def register_sweep(name: str, fn: Callable[[], None]) -> None:
 
 
 def run_registered() -> None:
-    for _name, fn in _sweeps:
-        fn()
+    for name, fn in _sweeps:
+        # 分项就地吞 + 分项登记：一个坏 sweep 不该毒掉后面的 sweep 和 _cleanup_db
+        with loop_health.watched_sync(f"sweep:{name}"):
+            fn()
 
 
 async def startup() -> None:
     """先跑一轮再起周期循环（由 app.main lifespan 统一调度）。"""
 
     def _run_all():
-        _cleanup_tmp()
-        _cleanup_trash()
-        run_registered()
-        _cleanup_db()
+        # 四段各自隔离（同上）：全树 rglob 的 tmp/trash 清理最容易因竞态抛
+        # OSError，段间不隔离则一次竞态 = 本轮 DB 过期行全部不清
+        for name, fn in (("tmp", _cleanup_tmp), ("trash", _cleanup_trash),
+                         ("registered", run_registered), ("db", _cleanup_db)):
+            with loop_health.watched_sync(f"cleanup:{name}"):
+                fn()
 
     async def cleanup_loop():
         while True:
             # 清理任务含全树 rglob（同步 IO），必须放线程池——直接 await 会周期性
             # 冻住整个事件循环（review 2026-09-02 P2-4）
-            # 单轮异常必须吞掉记日志：清理内部对竞态（文件在 iterdir 与 stat/unlink
-            # 之间被并发删掉）不设防，一次 OSError 逸出就会杀死 while 循环——
-            # 此后到重启为止所有定时清理（回收站过期/上传会话/zip/DB）全部停摆
-            try:
+            # 单轮异常必须吞掉记日志：逸出就会杀死 while 循环——此后到重启为止
+            # 所有定时清理全部停摆。watched 同时登记，见 services/loop_health
+            async with loop_health.watched("cleanup"):
                 await asyncio.to_thread(_run_all)
-            except Exception:
-                logging.exception("cleanup round failed")
             await asyncio.sleep(CLEANUP_INTERVAL)
 
-    try:
+    async with loop_health.watched("cleanup"):
         await asyncio.to_thread(_run_all)
-    except Exception:
-        logging.exception("first cleanup round failed")
     asyncio.create_task(cleanup_loop())
 
 

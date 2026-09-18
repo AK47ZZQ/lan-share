@@ -1,5 +1,5 @@
-"""每日健康日报：磁盘水位 / 昨晚备份产物 / 证书到期 / 公网隧道探活 / DB 统计，
-汇总成一条推送打 Webhook（notify_webhook_url，未配置则只在管理端可见）。
+"""每日健康日报：磁盘水位 / 昨晚备份产物 / 证书到期 / 公网隧道探活 / 后台任务
+停摆 / DB 统计，汇总成一条推送打 Webhook（notify_webhook_url，未配置则只在管理端可见）。
 
 设计要点：
 - 调度是"每分钟看一次表"而非长睡眠：改配置即时生效，重启不重发（按日期去重，
@@ -21,6 +21,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.config import PROJECT_ROOT, SHARE_ROOT
 from app.security import audit, client_ip, require_admin
+from app.services import loop_health
 from app.store import devices as devices_store
 from app.store import photos as photos_store
 from app.store import shares as shares_store
@@ -127,6 +128,9 @@ def gather_health(probe_public: bool = False) -> dict:
         "cert_days_left": _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem"),
         "public_ok": _probe_public(PUBLIC_PROBE) if probe_public else None,
         "counts": counts,
+        # 后台循环连续失败名单（v3.56）：预热/清理这类"吞异常保活"的任务一旦在
+        # 生产引擎上每轮抛错，进程照跑、日志照刷、功能零产出——只有这里能看见
+        "loops_failing": loop_health.failing(),
     }
 
 
@@ -184,6 +188,16 @@ def format_report(d: dict) -> tuple[str, bool]:
         lines.append("🌐 公网隧道：通" if d["public_ok"] else "🌐 公网隧道：探活失败 ⚠️")
         warn = warn or not d["public_ok"]
 
+    # 后台任务停摆（v3.56）：只在有连续失败时占版面——日报是推送，不是状态页
+    bad = d.get("loops_failing") or []
+    if bad:
+        warn = True
+        names = "、".join(f"{r['name']}（连续 {r['consecutive']} 轮）" for r in bad)
+        lines.append(f"⚙️ 后台任务停摆：{names} ⚠️")
+        first_err = (bad[0].get("last_error") or "")[:120]
+        if first_err:
+            lines.append(f"　最近错误：{first_err}")
+
     c = d.get("counts") or {}
     lines.append(f"👥 成员 {c.get('users', '—')} · 照片 {c.get('photos', '—')} · "
                  f"在架分享 {c.get('shares', '—')} · 设备 {c.get('devices', '—')}")
@@ -240,17 +254,14 @@ async def admin_test_healthreport(request: Request, _admin=Depends(require_admin
 async def startup():
     """由 app.main 的 lifespan 统一调度（router.on_event 已弃用）。"""
     import asyncio
-    import logging
 
     from app.api.notify import push_webhook
 
     async def loop():
         global _last_sent_date
         while True:
-            try:
+            async with loop_health.watched("health report"):
                 await run_in_threadpool(_tick)
-            except Exception:
-                logging.exception("health report tick failed")
             await asyncio.sleep(60)
 
     def _tick():

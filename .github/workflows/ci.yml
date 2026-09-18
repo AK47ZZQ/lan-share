@@ -35,6 +35,12 @@ jobs:
       - name: UI 分层守卫（mobile/lib/ui 不得直连 dio）
         run: python scripts/check-ui-layering.py
 
+      # v3.56：业务层 SQL 里出现 PG 不认的 SQLite 方言（rowid/PRAGMA/AUTOINCREMENT…）
+      # 即红。起因是 `ORDER BY added_at DESC, rowid DESC` 门禁全绿上线、生产 PG
+      # 每 30s 抛 UndefinedColumn，缩略图预热静默停摆数日。纯静态扫描，零依赖。
+      - name: SQLite 专有语法守卫（双引擎 SQL 可移植性）
+        run: python scripts/check-sqlite-isms.py
+
       - name: mypy
         run: python -m mypy app
 

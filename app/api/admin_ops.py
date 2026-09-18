@@ -227,12 +227,15 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
 
 @router.get("/api/metrics")
 def admin_metrics(_admin=Depends(require_admin)):
-    """进程内指标快照：请求状态码/延迟分布 + 磁盘水位 + 备份编排状态。"""
+    """进程内指标快照：请求状态码/延迟分布 + 磁盘水位 + 备份编排状态 +
+    后台循环健康（loops：每轮成败计数，停摆中的循环 consecutive 持续增长）。"""
+    from app.services import loop_health as _loops
     from app.services import metrics as _metrics
     return {
         "requests": _metrics.snapshot(),
         "disk_used_pct": _metrics.disk_used_pct(),
         "backup": _backup_orchestrator_status(),
+        "loops": _loops.snapshot(),
     }
 
 

@@ -21,6 +21,36 @@ from app.config import SHARE_ROOT
 from app.db import _db, _db_lock, USE_PG
 from app.db import _PgConn  # 仅类型标注用
 
+# 索引**单源**定义（v3.56）：PG 与 SQLite 的 CREATE INDEX 语法在本库用到的
+# 形态下完全一致（IF NOT EXISTS / DESC / 部分索引 WHERE 两边都支持），所以一份
+# 文本同时拼进两条建库路径（_PG_SCHEMA 尾、_migrate_v3 的 executescript 尾）。
+# 此前索引散在两处各写一遍——正是"改一处忘一处"的双轨盲区，加一条就要同步两处。
+_INDEXES = """
+    CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
+    CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
+    CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(list_id, status);
+    -- v3.56 补齐：每条都对应一处核实过的真实查询，非预防性堆砌（多余索引在白烧
+    -- 写入成本）。预热每 30s 一轮 ORDER BY added_at DESC LIMIT 600，无索引即
+    -- 全表扫+排序，是全库频率最高的一条排序查询
+    CREATE INDEX IF NOT EXISTS idx_photos_added ON photos(added_at DESC, path);
+    -- 登出/改密/停用账号：sessions 按 user_id 等值删
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    -- 每小时 shares.purge_expired 按 expires_at 收口
+    CREATE INDEX IF NOT EXISTS idx_shares_expires ON shares(expires_at);
+    -- 每小时 trash.delete_before 按 deleted_at 收口
+    CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at);
+    -- 广播撤回/统计按 broadcast_id 过滤（notifications 是全库增长最快的表）
+    CREATE INDEX IF NOT EXISTS idx_notif_broadcast ON notifications(broadcast_id);
+    -- 启动期审计回填每次扫 username='' 的待补行；部分索引把常驻全扫降为空段扫
+    CREATE INDEX IF NOT EXISTS idx_audit_pending ON audit_log(id) WHERE username='';
+"""
+
+# 存量 photos.added_at 回填（v3.56，双轨共用一条语句）：`ORDER BY added_at DESC`
+# 在 SQLite 把 NULL 排最后、在 PG 排最前（实测差异），NULL 留在库里会让预热候选
+# 集被最老的行顶满。用 mtime_ns 折算作"进库时间"代理，只碰 NULL 行故幂等收敛。
+_PHOTOS_ADDED_BACKFILL = (
+    "UPDATE photos SET added_at=mtime_ns/1000000000.0 WHERE added_at IS NULL")
+
 _PG_SCHEMA = """
     CREATE TABLE IF NOT EXISTS users(
         id BIGSERIAL PRIMARY KEY,
@@ -194,9 +224,6 @@ _PG_SCHEMA = """
         deleted_at DOUBLE PRECISION,
         created_at DOUBLE PRECISION NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
-    CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
-    CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(list_id, status);
 """
 
 # 照片评论/表情回应（photo_comments / photo_reactions）已按改进建议
@@ -255,6 +282,11 @@ def init_db():
         _db().execute("ALTER TABLE photos ADD COLUMN IF NOT EXISTS added_at DOUBLE PRECISION")
         # v0.21：通知管理——广播组 id（撤回/发送记录按组操作）
         _db().execute("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS broadcast_id TEXT")
+        # 索引必须建在**全部增量 ALTER 之后**：idx_photos_added / idx_notif_broadcast
+        # 落在增量列上，先建索引会在"存量表尚无该列"的库上直接报错
+        _db().executescript(_INDEXES)
+        # v3.56：存量 NULL 打点清零（为什么必须回填见 _PHOTOS_ADDED_BACKFILL 定义处）
+        _db().execute(_PHOTOS_ADDED_BACKFILL)
         # 提取码明文停存（R1-P2-5 + R2-P2）：PG 分支同样清洗存量值（幂等）
         _db().execute("UPDATE shares SET password_plain=NULL WHERE password_plain IS NOT NULL")
         _backfill_audit_usernames()
@@ -386,6 +418,8 @@ def _migrate_v3():
             conn.execute("ALTER TABLE photos ADD COLUMN height INTEGER")
         if "added_at" not in pcols:
             conn.execute("ALTER TABLE photos ADD COLUMN added_at REAL")
+        # v3.56：与 PG 分支共用同一条回填语句（双轨漂移本身就是本批要治的东西）
+        conn.execute(_PHOTOS_ADDED_BACKFILL)
         # v0.21：通知广播组 id（改进建议 9.6-P2-14，撤回/发送记录按组操作）
         ncols = {r["name"] for r in conn.execute("PRAGMA table_info(notifications)").fetchall()}
         if ncols and "broadcast_id" not in ncols:
@@ -483,12 +517,10 @@ def _migrate_v3():
                 deleted_at REAL,
                 created_at REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
-            CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id, id);
-            CREATE INDEX IF NOT EXISTS idx_todos_list ON todos(list_id, status);
             -- 照片评论/表情回应两表（photo_comments/photo_reactions）已按
             -- 改进建议 9.6-P2-13 下线，不再建表；存量库中的旧表保留不删
-        """)
+            -- 索引不在这里写：统一来自 _INDEXES（单源，两引擎共用一份文本）
+        """ + _INDEXES)
         # 仅当库内已无 admin 时才晋升（R1-P2-1）：此前每次启动无条件把最小 id
         # 用户提为 admin，管理员被降级/删号后重启会"复活"成 admin
         conn.execute("UPDATE users SET role='admin' WHERE id=(SELECT MIN(id) FROM users) "

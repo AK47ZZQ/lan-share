@@ -4021,7 +4021,7 @@
   },
   "/api/metrics": {
    "get": {
-    "description": "进程内指标快照：请求状态码/延迟分布 + 磁盘水位 + 备份编排状态。",
+    "description": "进程内指标快照：请求状态码/延迟分布 + 磁盘水位 + 备份编排状态 +\n后台循环健康（loops：每轮成败计数，停摆中的循环 consecutive 持续增长）。",
     "operationId": "admin_metrics_api_metrics_get",
     "responses": {
      "200": {
