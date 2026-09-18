@@ -57,6 +57,21 @@ class PhotosPage extends ConsumerStatefulWidget {
   static final ValueNotifier<bool> selectionActive = ValueNotifier(false);
   static VoidCallback? backExitSelection;
 
+  /// 跳月目标偏移：facets 月份计数（新月在顶）按序累计到目标月为止，
+  /// 即目标月首项在全量时间线里的下标。返回 null = 目标月不在 facets。
+  /// 纯函数（df72 批抽出可测）。
+  @visibleForTesting
+  static int? jumpTargetFromFacets(Map<String, int> months, String m) {
+    final keys = months.keys.where((k) => k.length == 7).toList()
+      ..sort((a, b) => b.compareTo(a));
+    var target = 0;
+    for (final k in keys) {
+      if (k == m) return target;
+      target += months[k] ?? 0;
+    }
+    return null;
+  }
+
   @override
   ConsumerState<PhotosPage> createState() => _PhotosPageState();
 }
@@ -66,6 +81,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   final _scroll = ScrollController();
   final _railScroll = ScrollController(); // 月份轴自身滚动（高亮跟随居中）
   final _selected = <int>{}; // 多选模式：_items 扁平下标
+  // 日期头/月份轴条目的 BuildContext 注册表（df72 批）：跳月定位需要"目标日
+  // 期头是否已布局 + 其实测偏移"。不可用 GlobalKey——①GlobalObjectKey 相等
+  // 判断 identical(value)，build 与查找两侧各自插值新建的同名 key 永不相等，
+  // 查找恒 null（校准自 1.0.2 起从未生效，落点全靠估算误差）；②换成真
+  // GlobalKey 后 sliver 子项被急切布局，渲染与滚动位置脱钩（模拟器实测
+  // position=49681 而画面停在墙顶）。仿 _CellReg 用 context 注册表：
+  // 只有真布局过的头才会登记。
+  final _hdrCtxs = <String, BuildContext>{};
+  final _railCtxs = <String, BuildContext>{};
   final _cellCtxs = <int, BuildContext>{}; // 可见格子注册表（命中测试/锚定）
   String? _base; // 服务器地址（异步取到后再刷网格）
   bool _loading = false;
@@ -348,7 +372,6 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   // ── 时间轴跳月（20260914041746-6c58）────────────────────
-
   /// 右缘月份轴点按：在**全量时间线**内定位到目标月（不再按月过滤）。
   /// 偏移按 facets 月份计数累计推算（新月份在顶），补拉到目标月后滚动
   /// 定位该月第一天的日期头；跳完仍可自由上下翻。
@@ -356,18 +379,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (_jumping || _loading || _selected.isNotEmpty || !mounted) return;
     final months = await _ensureMonths();
     if (!mounted || months.isEmpty) return;
-    final keys = months.keys.where((k) => k.length == 7).toList()
-      ..sort((a, b) => b.compareTo(a));
-    var target = 0;
-    var found = false;
-    for (final k in keys) {
-      if (k == m) {
-        found = true;
-        break;
-      }
-      target += months[k] ?? 0;
-    }
-    if (!found) return;
+    final target = PhotosPage.jumpTargetFromFacets(months, m);
+    if (target == null) return;
     final gen = ++_gen;
     setState(() {
       _jumping = true;
@@ -393,11 +406,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         }
       }
       if (!mounted || gen != _gen) return;
-      setState(() {
-        _jumping = false;
-        _loading = false;
-        _railMonthN.value = m;
-      });
+      _railMonthN.value = m;
       if (day != null) {
         await _scrollToDay(day);
       } else if (_scroll.hasClients) {
@@ -407,11 +416,21 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             curve: Curves.easeOutCubic);
       }
     } catch (_) {
-      if (mounted && gen == _gen) {
-        setState(() {
-          _jumping = false;
-          _loading = false;
-        });
+      // 网络失败：停在原地（不粗暴回顶），落点收尾统一走 finally
+    } finally {
+      // _jumping 必须盖住整个落点校准（_scrollToDay 多轮估算+jumpTo）——
+      // 此前在**校准前**就清了标志：主人正在上传时，20s 脉搏检测到变化
+      // 触发 _refreshSoft，趁隙整表重拉+全墙重建，与校准滚动相撞——落点
+      // 被甩回顶部、缩略图在反复重建中永远追不上（反馈
+      // 20260919004417-df72「定位后照片不加载/自己划回顶部」的根因）。
+      // 收尾统一在此；跳转期间暂缓的刷新补跑一次，锚点=落点日期。
+      if (mounted) {
+        setState(() { _jumping = false; _loading = false; });
+        if (gen == _gen && _pendingRefresh) {
+          _pendingRefresh = false;
+          // ignore: discarded_futures
+          _refreshSoft();
+        }
       }
     }
   }
@@ -423,12 +442,22 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     for (var i = 0; i < 5; i++) {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted || !_scroll.hasClients) return;
-      final ctx = GlobalObjectKey('hdr-$day').currentContext;
+      final ctx = _hdrCtxs[day];
       if (ctx != null && ctx.mounted) {
-        await Scrollable.ensureVisible(ctx,
-            duration: const Duration(milliseconds: 250), alignment: 0);
-        if (mounted) _updateRailMonth();
-        return;
+        // 命中已布局日期头：按其实测绝对偏移直接落点（ensureVisible 对
+        // 深处 sliver 子元素可能不产生滚动，df72 批实测），落定后再用
+        // ensureVisible 对齐到头行。
+        final ro = ctx.findRenderObject();
+        if (ro is RenderBox && ro.attached && ro.hasSize) {
+          final abs = _scroll.offset + ro.localToGlobal(Offset.zero).dy;
+          _scroll.jumpTo(abs < 0 ? 0 : abs);
+          await Future.delayed(const Duration(milliseconds: 300));
+          if (!ctx.mounted) return;
+          await Scrollable.ensureVisible(ctx,
+              duration: const Duration(milliseconds: 250), alignment: 0);
+          if (mounted) _updateRailMonth();
+          return;
+        }
       }
       final est = _estimateDayOffset(day);
       if (est == null) return;   // 目标日不在已加载数据里
@@ -473,7 +502,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         final a = _items[f].aspect;
         sum += cw / (a <= 0 ? 1.0 : a);
       }
-      acc += headerH + sum / cols + cw + spacing * (flatIdx.length / cols);
+      acc += headerH + sum / cols + spacing * (flatIdx.length / cols);
     }
     return null;
   }
@@ -487,7 +516,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     var nearDist = 1 << 30;
     double? nearAbs;
     for (var i = 0; i < groups.length; i++) {
-      final ctx = GlobalObjectKey('hdr-${groups[i].$1}').currentContext;
+      final ctx = _hdrCtxs[groups[i].$1];
       if (ctx == null) continue;
       final ro = ctx.findRenderObject();
       if (ro is! RenderBox || !ro.attached || !ro.hasSize) continue;
@@ -545,7 +574,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (m.isEmpty || m == _railMonthN.value) return;
     _railMonthN.value = m;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = GlobalObjectKey('rail-$m').currentContext;
+      final ctx = _railCtxs[m];
       if (ctx != null) {
         Scrollable.ensureVisible(ctx,
             alignment: 0.5,
@@ -1325,25 +1354,28 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     Widget entry(String label, String month, String? monthKey,
         {int? count, required bool on, required VoidCallback onTap}) {
       return InkWell(
-          key: monthKey == null ? null : GlobalObjectKey('rail-$monthKey'),
+          key: monthKey == null ? null : ValueKey<String>('rail-$monthKey'),
           onTap: onTap,
-          child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
-              decoration: BoxDecoration(
-                  color: on ? cs.primary.withValues(alpha: 0.18) : null,
-                  borderRadius: BorderRadius.circular(6)),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Text(label,
-                    style: TextStyle(
-                        fontSize: 9.5,
-                        height: 1.15,
-                        fontWeight: on ? FontWeight.w800 : FontWeight.w500,
-                        color: on ? cs.primary : cs.outline)),
-                if (count != null)
-                  Text('$count',
-                      style: TextStyle(
-                          fontSize: 8, height: 1.1, color: cs.outline)),
-              ])));
+          child: _CtxReg(
+              registry: _railCtxs,
+              tag: monthKey ?? '',
+              child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: on ? cs.primary.withValues(alpha: 0.18) : null,
+                      borderRadius: BorderRadius.circular(6)),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(label,
+                        style: TextStyle(
+                            fontSize: 9.5,
+                            height: 1.15,
+                            fontWeight: on ? FontWeight.w800 : FontWeight.w500,
+                            color: on ? cs.primary : cs.outline)),
+                    if (count != null)
+                      Text('$count',
+                          style: TextStyle(
+                              fontSize: 8, height: 1.1, color: cs.outline)),
+                  ]))));
     }
 
     return ClipRRect(
@@ -1445,25 +1477,29 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             if (day.isNotEmpty)
               SliverToBoxAdapter(
                 key: ValueKey<String>('grp-h-$day'),
-                child: Container(
-                    key: GlobalObjectKey('hdr-$day'),
-                    width: double.infinity,
-                    margin:
-                        const EdgeInsets.fromLTRB(Gap.sm, 12, Gap.sm, 8),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: Gap.md, vertical: 7),
-                    decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .primary
-                            .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(Radii.sm)),
-                    child: Text(_dayLabel(day),
-                        style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 15,
-                            letterSpacing: 0.2,
-                            color: Theme.of(context).colorScheme.primary)))),
+                child: _CtxReg(
+                    registry: _hdrCtxs,
+                    tag: day,
+                    child: Container(
+                        width: double.infinity,
+                        margin:
+                            const EdgeInsets.fromLTRB(Gap.sm, 12, Gap.sm, 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: Gap.md, vertical: 7),
+                        decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(Radii.sm)),
+                        child: Text(_dayLabel(day),
+                            style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                                letterSpacing: 0.2,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary))))),
             // 瀑布流：SliverWaterfallFlow 保留 Sliver 虚拟化（0.4.4 教训不回退），
             // 格子高度来自服务端探测的真实宽高比；未知的回退方格。
             // v0.11 用 flutter_staggered_grid_view 的 SliverMasonryGrid：
@@ -1645,6 +1681,48 @@ class _CellReg extends StatefulWidget {
 
   @override
   State<_CellReg> createState() => _CellRegState();
+}
+
+/// 按字符串登记 BuildContext 的轻量包装（df72 批）：日期头/月份轴条目用。
+/// 不用 GlobalObjectKey——其相等判断 identical(value)，两侧各自插值新建的
+/// 同名 key 永不相等；真 GlobalKey 又会让 sliver 子项急切布局、渲染与滚动
+/// 位置脱钩。注册表 + dispose 清理，语义与 _CellReg 相同。
+class _CtxReg extends StatefulWidget {
+  final Map<String, BuildContext> registry;
+  final String tag;
+  final Widget child;
+  const _CtxReg(
+      {required this.registry, required this.tag, required this.child});
+  @override
+  State<_CtxReg> createState() => _CtxRegState();
+}
+
+class _CtxRegState extends State<_CtxReg> {
+  @override
+  void initState() {
+    widget.registry[widget.tag] = context;
+    super.initState();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CtxReg old) {
+    if (old.tag != widget.tag && widget.registry[old.tag] == context) {
+      widget.registry.remove(old.tag);
+    }
+    widget.registry[widget.tag] = context;
+    super.didUpdateWidget(old);
+  }
+
+  @override
+  void dispose() {
+    if (widget.registry[widget.tag] == context) {
+      widget.registry.remove(widget.tag);
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _CellRegState extends State<_CellReg> {
