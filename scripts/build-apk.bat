@@ -22,6 +22,12 @@ if %ERRORLEVEL% GEQ 8 (
   exit /b 1
 )
 
+echo === Verify mirror freshness (lib/*.dart + pubspec must equal source) ===
+REM v1.1.0+104 事故（反馈 df91）：构建时镜像未同步（pubspec 新、Dart 旧），
+REM APK 带新版本号却是旧 UI——sha256 一致、时间线正确等证据只证明"包是那时
+REM 构建的"，证明不了"包里是最新代码"。逐文件哈希比对，不新鲜即中止。
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SRC%\..\scripts\verify-mirror.ps1" || exit /b 1
+
 echo === flutter pub get ===
 cd /d "%DST%"
 set PATH=%FLUTTER_BIN%;%PATH%
