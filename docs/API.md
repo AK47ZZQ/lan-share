@@ -34,7 +34,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 > 📱 **Bearer 认证（App 专用，与 Cookie 并存）**：所有 🔑 端点均可带
 > `Authorization: Bearer <token>` 访问（无需 Cookie）。浏览器不会自动携带该头，
 > 无 CSRF 面；停用账号即刻失效；审计操作者同等记录。
-| GET | `/authcheck` | 🔓 | Caddy forward_auth 子请求入口；200=会话有效 / 401 |
+| GET | `/authcheck` | 🔓 | Caddy forward_auth 子请求入口；200=凭据有效 / 401（v3.57 起 cookie 会话与 App Bearer 同等有效） |
 
 ## 文件
 

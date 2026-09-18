@@ -32,6 +32,8 @@
 	# 此前此处直接 file_server 挂整个 SHARE_ROOT，任何登录用户都能越权读取
 	# 他人 private/、.trash/.chunks/.zips 与 .meta.db——权限模型被整体绕过。
 	# 现在反代到后端 /files/{path} 端点，由 resolve() 按 private/incoming/grants 判权。
+	# v3.57：/authcheck 与后端同等接受 Cookie 会话与 Bearer 设备 Token，
+	# 预检与路由内判权不再是两套门控（真正的判权始终是逐条 resolve()）。
 	handle /files/* {
 		forward_auth localhost:8766 {
 			uri /authcheck

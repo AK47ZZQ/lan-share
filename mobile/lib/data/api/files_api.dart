@@ -82,8 +82,11 @@ class FilesApi {
     await dio.delete('/api/files/${_enc(path)}');
   }
 
-  /// /preview/ 通道读字节：/files/ 被 Caddy forward_auth 拦（authcheck 只认
-  /// Cookie），App Bearer 必 401；/preview 对非图片回 FileResponse（v0.17.2）
+  /// /preview/ 通道读字节。历史上是因为 /files/ 的 Caddy forward_auth
+  /// （authcheck）只认 Cookie、App 的 Bearer 必 401 才改走这里；v3.57 起
+  /// authcheck 已同等接受 Bearer，**但 App 仍保留 /preview**：它免掉一次
+  /// forward_auth 子请求，且已与媒体代理/播放器缓存链路（media_proxy）打通，
+  /// 迁移到 /files 需要真机重验下载/续传/暂停全路径，收益不值这次回归风险。
   static Future<List<int>> previewBytes(String path) async {
     final dio = await _dio();
     final r = await dio.get<List<int>>('/preview/${_enc(path)}',

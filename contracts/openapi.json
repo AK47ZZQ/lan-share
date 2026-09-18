@@ -5964,7 +5964,7 @@
   },
   "/authcheck": {
    "get": {
-    "description": "Caddy forward_auth 子请求入口：会话有效 200，否则 401。",
+    "description": "Caddy forward_auth 子请求入口（`/files/*` 前置粗筛）：任一有效凭据即 200。\n\nv3.57 起 **cookie 会话与 App Bearer 设备 Token 同等有效**。此前只认\ncookie，导致三条读字节通道里唯一带 forward_auth 的那条把 App 全部挡在\n门外，App 只能整体改走 `/preview` 下载——能力相同的端点门控各不相同，\n是长期漂移源（Caddyfile 的 `/files/*` 段注释同步更新）。\n\n放开 Bearer 不放宽任何权限：判权仍发生在 `/files` 路由内的\n`require_user` + `spaces.resolve()`，那里本来就同时认 cookie 与 Bearer\n（与本处共用同一 helper 与中间件缓存的 `request.state._ls_user`，\n所以这道子请求不产生第二次 DB 往返）。响应恒为固定 \"ok\"，\n不构成凭据探测之外的信息泄露面。",
     "operationId": "authcheck_authcheck_get",
     "responses": {
      "200": {

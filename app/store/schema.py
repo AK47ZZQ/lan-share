@@ -43,6 +43,8 @@ _INDEXES = """
     CREATE INDEX IF NOT EXISTS idx_notif_broadcast ON notifications(broadcast_id);
     -- 启动期审计回填每次扫 username='' 的待补行；部分索引把常驻全扫降为空段扫
     CREATE INDEX IF NOT EXISTS idx_audit_pending ON audit_log(id) WHERE username='';
+    -- v3.57：ttl_state 每小时按 expires_at 回收过期票据（表虽小，随 scope 增长）
+    CREATE INDEX IF NOT EXISTS idx_ttl_expires ON ttl_state(expires_at);
 """
 
 # 存量 photos.added_at 回填（v3.56，双轨共用一条语句）：`ORDER BY added_at DESC`
@@ -223,6 +225,13 @@ _PG_SCHEMA = """
         reminded_at DOUBLE PRECISION,
         deleted_at DOUBLE PRECISION,
         created_at DOUBLE PRECISION NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS ttl_state(
+        scope TEXT NOT NULL,
+        tkey TEXT NOT NULL,
+        tval TEXT NOT NULL,
+        expires_at DOUBLE PRECISION NOT NULL,
+        PRIMARY KEY(scope, tkey)
     );
 """
 
@@ -516,6 +525,15 @@ def _migrate_v3():
                 reminded_at REAL,
                 deleted_at REAL,
                 created_at REAL NOT NULL
+            );
+            -- v3.57 状态外置：跨重启存活的短时效票据（配对码/zip 票据与在途位/
+            -- 分享取件票据）。表主人 store/ttl_state.py，语义见该模块 docstring
+            CREATE TABLE IF NOT EXISTS ttl_state(
+                scope TEXT NOT NULL,
+                tkey TEXT NOT NULL,
+                tval TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                PRIMARY KEY(scope, tkey)
             );
             -- 照片评论/表情回应两表（photo_comments/photo_reactions）已按
             -- 改进建议 9.6-P2-13 下线，不再建表；存量库中的旧表保留不删

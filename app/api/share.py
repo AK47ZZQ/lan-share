@@ -26,9 +26,9 @@ from app.security import (audit, client_ip, get_bearer_user, get_session_user,
 from app.filetools import human_size, safe_path, to_rel
 from app.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
-from app.services import cleanup
 from app.spaces import resolve
 from app.store import shares as shares_store
+from app.store import ttl_state
 from app.store import users as users_store
 from app.api.notify import insert_notification, push_webhook
 
@@ -149,22 +149,15 @@ def _get_active_share(token: str) -> sqlite3.Row:
 
 
 _share_fails: dict[str, list[float]] = {}
-
-
-def sweep_tickets() -> None:
-    """过期分享取件票据回收（原散落在 system._cleanup_db 尾部，经 cleanup 注册调度）。"""
-    with _tickets_lock:
-        for k in [k for k, v in _tickets.items() if v["exp"] < time.time()]:
-            del _tickets[k]
-
-
-cleanup.register_sweep("share_tickets", sweep_tickets)
+# ↑ 提取码防爆破计数**故意留在进程内**：它是"一分钟内的尝试次数"，重启丢掉的
+# 只是计数本身、无用户可见损失，落库反而给每次失败尝试加一次写事务（v3.57 外置
+# 的取舍口径见 store/ttl_state.py 模块 docstring 的表格）。
 
 
 def reset_share_state() -> None:
-    """清空进程内分享票据与防爆破状态（测试专用接口，07 审查批次 2 测试解钉）。"""
-    with _tickets_lock:
-        _tickets.clear()
+    """清空分享票据与防爆破状态（测试专用接口，07 审查批次 2 测试解钉）。"""
+    ttl_state.clear_scope(ttl_state.SCOPE_SHARE_TICKET)
+    ttl_state.clear_scope(ttl_state.SCOPE_SHARE_AUDIT)
     with _share_fails_lock:
         _share_fails.clear()
 _share_fails_lock = threading.Lock()
@@ -223,9 +216,10 @@ def share_meta(token: str, request: Request):
     }
 
 
-# 取件票据：POST 验证密码后换一次性短时效 URL，密码不出现在任何 URL/日志
-_tickets: dict[str, dict] = {}
-_tickets_lock = threading.Lock()
+# 取件票据：POST 验证密码后换一次性短时效 URL，密码不出现在任何 URL/日志。
+# v3.57 起落 ttl_state 表（scope=share_ticket），TTL 内可被同一大文件的多个
+# Range 分段请求复用；重启不再把已验证过提取码的下载链接清空。
+_AUDIT_TTL_MULT = 24   # 审计位有效期 = 票据 × 24（下载可远长于票据寿命）
 
 
 @router.post("/api/share/{token}/prepare")
@@ -243,37 +237,35 @@ def share_prepare(request: Request, token: str, body: SharePrepareBody):
     # 的未决事务里，锁死后续所有写操作）
     if not shares_store.consume_download(token):
         raise HTTPException(status_code=410, detail="下载次数已达上限")
-    with _tickets_lock:
-        # 顺带清理过期票据
-        now = time.time()
-        for k in [k for k, v in _tickets.items() if v["exp"] < now]:
-            del _tickets[k]
-        _tickets[tkt] = {"token": token, "exp": now + TICKET_TTL}
+    now = time.time()
+    # 票据 + 审计位两条独立写入（不包事务，见 store/ttl_state.put_if_absent
+    # 注释：SQLite 下跨两条语句的写事务会制造 database is locked）。
+    # 审计位 TTL 故意**长于**票据：大文件下到一半票据过期是常态，旧实现靠
+    # "查不到票据就当没审计过"兜住这种情况，这里用更长的有效期显式兜住。
+    ttl_state.put(ttl_state.SCOPE_SHARE_TICKET, tkt, token, TICKET_TTL, now)
+    ttl_state.put(ttl_state.SCOPE_SHARE_AUDIT, tkt, token,
+                  TICKET_TTL * _AUDIT_TTL_MULT, now)
     return {"ok": True, "url": f"/api/share/{token}/dl?tkt={tkt}",
             "name": s["name"], "expires": TICKET_TTL}
 
 
-def _share_download_done(token: str, path: str, ip: str, tkt: str = ""):
+def _share_download_done(token: str, path: str, ip: str, tkt: str):
     """下载响应发送完成后审计（客户端中途取消不计）。
 
     按票据去重：手机下载管理器（小米等）会对大文件并发多个 Range 分段请求，
-    每段完成都会走到这里——同一 tkt 只审计 1 次。计数已移至 prepare 发票时
-    （R1-P2-4），此处不再递增 downloads。"""
-    with _tickets_lock:
-        info = _tickets.get(tkt)
-        if info is not None:
-            if info.get("counted_audit"):
-                return
-            info["counted_audit"] = True
+    每段完成都会走到这里——同一 tkt 只审计 1 次。外置后去重靠 `take()` 的
+    原子消费（旧实现是往票据 dict 里塞 counted_audit 标志位，重启即失效）。
+    计数已移至 prepare 发票时（R1-P2-4），此处不再递增 downloads。"""
+    if tkt and ttl_state.take(ttl_state.SCOPE_SHARE_AUDIT, tkt) is None:
+        return
     audit("share_download", path, ip=ip)
 
 
 @router.get("/api/share/{token}/dl")
 async def share_download(request: Request, token: str, tkt: str):
-    # 票据在 TTL 内可复用（大文件断线后浏览器重试/Range 续传不至于 403），过期由清理任务回收
-    with _tickets_lock:
-        info = _tickets.get(tkt)
-    if not info or info["token"] != token or info["exp"] < time.time():
+    # 票据在 TTL 内可复用（大文件断线后浏览器重试/Range 续传不至于 403）；
+    # get() 不消费且自带过期判定，过期回收由 cleanup._cleanup_db 统一收口
+    if ttl_state.get(ttl_state.SCOPE_SHARE_TICKET, tkt) != token:
         raise HTTPException(status_code=403, detail="下载链接已失效，请刷新页面重试")
     # 次数上限已在 prepare 发票时原子把关（R1-P2-4）：此处不再复查——
     # prepare 计数后 downloads 已达上限，复查会把自己的合法票据 410 掉

@@ -12,8 +12,9 @@ import pytest
 from app.api.healthreport import format_report, gather_health
 from app.services import cleanup, loop_health
 
-# 每条清理/调度项都必须注册（注册靠模块 import 副作用，最容易悄悄丢）
-EXPECTED_SWEEPS = {"upload_sessions", "share_tickets", "zip_tickets",
+# 每条清理/调度项都必须注册（注册靠模块 import 副作用，最容易悄悄丢）。
+# v3.57：share_tickets 项已并入 cleanup._cleanup_db 的 ttl_state 统一过期回收。
+EXPECTED_SWEEPS = {"upload_sessions", "zip_tickets",
                    "log_archives", "todo_due", "daily_backup", "disk_watermark"}
 
 

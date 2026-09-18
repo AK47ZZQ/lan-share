@@ -142,11 +142,21 @@ async def logout(request: Request, response: Response):
 
 
 @router.get("/authcheck")
-async def authcheck(request: Request):
-    """Caddy forward_auth 子请求入口：会话有效 200，否则 401。"""
-    if await run_in_threadpool(get_session_user, request):
-        return PlainTextResponse("ok")
-    raise HTTPException(status_code=401, detail="Not authenticated")
+def authcheck(request: Request, _user=Depends(require_user)):
+    """Caddy forward_auth 子请求入口（`/files/*` 前置粗筛）：任一有效凭据即 200。
+
+    v3.57 起 **cookie 会话与 App Bearer 设备 Token 同等有效**。此前只认
+    cookie，导致三条读字节通道里唯一带 forward_auth 的那条把 App 全部挡在
+    门外，App 只能整体改走 `/preview` 下载——能力相同的端点门控各不相同，
+    是长期漂移源（Caddyfile 的 `/files/*` 段注释同步更新）。
+
+    放开 Bearer 不放宽任何权限：判权仍发生在 `/files` 路由内的
+    `require_user` + `spaces.resolve()`，那里本来就同时认 cookie 与 Bearer
+    （与本处共用同一 helper 与中间件缓存的 `request.state._ls_user`，
+    所以这道子请求不产生第二次 DB 往返）。响应恒为固定 "ok"，
+    不构成凭据探测之外的信息泄露面。
+    """
+    return PlainTextResponse("ok")
 
 
 @router.get("/api/auth/me")

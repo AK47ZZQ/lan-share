@@ -12,7 +12,7 @@ from conftest import ADMIN_PASS, ADMIN_USER
 
 from app.db import _db
 from app.main import app
-import app.api.devices as _devices
+from app.store import ttl_state
 
 
 @pytest.fixture()
@@ -69,8 +69,11 @@ def test_pair_code_full_flow(client, clean_devices):
 def test_pair_code_expiry(client):
     admin = _admin(client)
     code = admin.post("/api/pair/code").json()["code"]
-    # 手工置过期（不改产品行为，白盒拨时钟）
-    _devices._pair_codes[code] = (_devices._pair_codes[code][0], time.time() - 1)
+    # 手工置过期（不改产品行为，白盒拨时钟）：v3.57 起配对码在 ttl_state 表里，
+    # 用"过去的时间戳"重写同一枚码即等价于过期（expires_at 落在 now 之前）
+    uid = ttl_state.get(ttl_state.SCOPE_PAIR_CODE, code)
+    assert uid, "配对码没落库（本用例前置失败）"
+    ttl_state.put(ttl_state.SCOPE_PAIR_CODE, code, uid, 180, now=time.time() - 600)
     assert _bare(client).post("/api/pair/claim",
                               json={"code": code}).status_code == 401
 

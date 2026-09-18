@@ -20,6 +20,7 @@ from app.store import devices as devices_store
 from app.store import notifications as notifications_store
 from app.store import shares as shares_store
 from app.store import trash as trash_store
+from app.store import ttl_state
 
 # (名称, 清理函数) 注册表：各域模块在自身被导入时注册
 _sweeps: list[tuple[str, Callable[[], None]]] = []
@@ -132,3 +133,6 @@ def _cleanup_db():
     devices_store.delete_expired(now)
     shares_store.purge_expired(now)
     notifications_store.delete_read_before(now - 30 * 86400)
+    # v3.57 外置票据的过期回收（配对码/zip 票据与在途位/分享取件票据）：
+    # 与其它"行级过期"同类，放这里而不是另开 sweep——少一个"忘了注册"的机会
+    ttl_state.sweep_expired(now)

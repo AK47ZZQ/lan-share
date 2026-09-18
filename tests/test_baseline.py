@@ -43,6 +43,38 @@ def test_authcheck_forward_auth(client, auth):
     assert auth.get("/authcheck").status_code == 200
 
 
+def test_authcheck_and_files_gate_agree(client, auth, workdir):
+    """v3.57 读通道门控一致性：`/authcheck` 与 `/files/*` 对同一凭据必须同结论。
+
+    历史：authcheck 只认 Cookie，App 的 Bearer 被 Caddy 预检挡在 `/files` 外，
+    只能整体改道 `/preview` 下载。现在预检与路由共用同一 `require_user`。
+    这里用一个真实文件把两件事钉住：① Bearer 能通过预检；② 预检**不比路由更
+    宽松**（更危险的方向是"预检放过、路由却拒"，那会让 Caddy 形同虚设）。
+    """
+    r = auth.post(f"/api/upload/{workdir}",
+                  files={"file": ("gate.txt", b"gate parity", "text/plain")})
+    assert r.status_code == 200, r.text
+    rel = f"{workdir}/gate.txt"
+
+    dev_name = f"门禁一致性测试机 {os.urandom(3).hex()}"
+    tok = auth.post("/api/auth/token", json={"name": dev_name}).json()["token"]
+    hdr = {"Authorization": f"Bearer {tok}"}
+    assert client.get("/authcheck", headers=hdr).status_code == 200, \
+        "Bearer 仍被预检拒绝=App 依旧只能走 /preview，本批改动没生效"
+    assert client.get(f"/files/{rel}", headers=hdr).status_code == 200
+
+    # 无凭据：两处同时拦
+    assert client.get("/authcheck").status_code == 401
+    assert client.get(f"/files/{rel}").status_code == 401
+
+    # 吊销设备后两处同时失效（按唯一设备名定位，绝不取"列表最后一条"）
+    devs = auth.get("/api/auth/devices").json()["devices"]
+    dev = next(d for d in devs if d["name"] == dev_name)
+    assert auth.delete(f"/api/auth/devices/{dev['id']}").status_code == 200
+    assert client.get("/authcheck", headers=hdr).status_code == 401
+    assert client.get(f"/files/{rel}", headers=hdr).status_code == 401
+
+
 def test_logout_revokes_session(auth):
     assert auth.get("/api/auth/me").status_code == 200
     assert auth.post("/api/logout").status_code == 200

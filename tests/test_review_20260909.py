@@ -5,7 +5,7 @@ APK sha256 缓存、zip 打包票据上限。"""
 import base64
 import hashlib
 
-from app.db import _db
+from app.db import _db, _db_lock
 from app.main import app
 
 
@@ -101,17 +101,32 @@ def test_apk_sha256_cached(tmp_path):
 
 
 def test_zip_ticket_cap_rejects(auth):
-    """票据字典打满后 /api/zip 应回 429，且不再占用 busy 位。"""
+    """票据表打满后 /api/zip 应回 429，且不留下在途打包位。
+
+    v3.57：票据从进程内 dict 落到 ttl_state 表，本用例改为**按唯一前缀造数 +
+    按前缀清理**（不再掏 `archive._lock`/`_tickets` 私有态）——顺带把"上限判定
+    用真实计数口径"这件事也一起验了。
+    """
+    import os
+
     from app.services import archive
-    fake = [f"fake-token-{i}" for i in range(200)]
-    with archive._lock:
-        saved = dict(archive._tickets)
-        for t in fake:
-            archive._tickets[t] = {"path": None, "exp": 9e15}
+    from app.store import ttl_state as ts
+
+    tag = f"cap-{os.urandom(3).hex()}"
+    keys = [f"{tag}-{i}" for i in range(archive._TICKET_CAP)]
+    for t in keys:
+        ts.put(ts.SCOPE_ZIP_TICKET, t, "whatever.zip", 10 ** 9)
     try:
+        assert ts.count(ts.SCOPE_ZIP_TICKET) >= archive._TICKET_CAP
         r = auth.post("/api/zip", json={"paths": ["whatever.txt"]})
         assert r.status_code == 429, r.text
     finally:
-        with archive._lock:
-            archive._tickets.clear()
-            archive._tickets.update(saved)
+        with _db_lock:
+            _db().execute("DELETE FROM ttl_state WHERE scope=? AND tkey LIKE ?",
+                          (ts.SCOPE_ZIP_TICKET, f"{tag}%"))
+            _db().commit()
+    # 上限预检发生在占位之前：被打回那一次不该留下在途位锁死该账号
+    # （在清理 fake 票据之后验——否则 SlotCap 会先挡住，测不到占位这一步）
+    archive.release_slot("admin")          # 清可能残留（正常应无行）
+    archive.acquire_slot("admin")          # 不抛 SlotBusy/SlotCap 即通过
+    archive.release_slot("admin")

@@ -9,7 +9,7 @@ rowid 事故（v3.54 引入、生产 PG 每 30s 抛 UndefinedColumn、静默停�
 
 静态 lint（`scripts/check-sqlite-isms.py`）只能抓字面量里的已知关键字；动态
 拼装的 SQL、列名改动、函数级 mis-use 都得靠**执行**。本文件就是执行：种一份
-最小数据，把 9 个表主模块的**每一个公开读函数**在当前引擎上调一遍。
+最小数据，把 10 个表主模块的**每一个公开读函数**在当前引擎上调一遍。
 
 跑法与整轮测试相同——不设 `LANSHARE_TEST_PG_URL` 走 SQLite，设了就走真 PG
 （conftest 在库内临时 schema 建表，绝不碰生产 `public`）。同一份文件、两次执行。
@@ -36,6 +36,7 @@ from app.store import photos as photos_store
 from app.store import shares as shares_store
 from app.store import todos as todos_store
 from app.store import trash as trash_store
+from app.store import ttl_state as ttl_store
 from app.store import users as users_store
 
 # 口令哈希列只存不自证：这里给一个形状合法的假值（不参与任何校验路径）
@@ -182,6 +183,28 @@ def test_share_readers(seeded):
     # 下载计数——这里只断形态，不断绝对值
     assert stats["total"] >= 1 and stats["active"] >= 1
     assert isinstance(stats["downloads"], int)
+
+
+# ─── ttl_state（v3.57 外置票据；ON CONFLICT/RETURNING 双方言都要真跑）────
+
+
+def test_ttl_state_readers(seeded):
+    k = f"{seeded['tag']}-t"
+    assert ttl_store.put_if_absent("smoke", k, "v", 600) is True
+    assert ttl_store.put_if_absent("smoke", k, "v", 600) is False
+    assert ttl_store.get("smoke", k) == "v"
+    assert (k, "v") in ttl_store.get_all("smoke")
+    assert ttl_store.count("smoke") == 1
+    assert ttl_store.count() >= 1
+    assert ttl_store.take("smoke", k) == "v"        # DELETE ... RETURNING
+    assert ttl_store.get("smoke", k) is None
+    ttl_store.put("smoke", k, "v", 600)
+    assert ttl_store.delete("smoke", k) == 1
+    ttl_store.put("smoke", k, "v2", 600)
+    assert ttl_store.delete_scope_value("smoke", "v2") == 1
+    ttl_store.put("smoke", k, "v3", -1)             # 直接置过期
+    assert ttl_store.sweep_expired() >= 1
+    assert ttl_store.clear_scope("smoke") >= 0
 
 
 # ─── photos / note_search（rowid 事故现场）───────────────────

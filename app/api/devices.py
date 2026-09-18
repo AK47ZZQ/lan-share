@@ -2,11 +2,11 @@
 
 Cookie 会话换长效设备 Token（App 专用，APP-DESIGN §3 / 里程碑 M-A0）；
 配对码登录：已登录 Web 端生成一次性 6 位码，手机免密换设备 Token
-（60 秒级时效 + 一码一用 + 按 IP 限速防爆破；进程内存态，NSSM 单 worker）。
+（60 秒级时效 + 一码一用 + 按 IP 限速防爆破；配对码自 v3.57 起落
+`store/ttl_state` 表，跨重启与跨进程有效）。
 """
 import re
 import secrets
-import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,6 +18,7 @@ from app.db import _db_lock
 from app.security import (_sha, allow_rate, audit, client_ip, is_public_entry,
                           require_user)
 from app.store import devices as devices_store
+from app.store import ttl_state
 from app.store import users as users_store
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
@@ -112,14 +113,18 @@ class PairClaimBody(BaseModel):
 
 
 _PAIR_TTL = 180.0  # 3 分钟：留足"拿起另一台设备→解锁→找到入口→输码"的时间；6 位码 + 一码一用 + claim 限速下不放大爆破面
-# 进程内存态即可：本项目 NSSM 单 worker 部署；重启即全失效（重生成即可）
-_pair_codes: dict[str, tuple[int, float]] = {}
+# v3.57 外置到 ttl_state 表（scope=pair_code）：配对是"另一台设备正在输入这枚
+# 码"的用户在途动作，进程内字典会让服务端重启把正在进行的配对直接打断，且多
+# worker 下生成的码在另一进程里claim不到。原子消费由 ttl_state.take() 保证。
 
 
 def reset_pair_codes() -> None:
-    """清空进程内配对码状态（测试专用接口，07 审查批次 2 测试解钉）。"""
-    _pair_codes.clear()
-_pair_lock = threading.Lock()
+    """清空配对码（测试专用接口，07 审查批次 2 测试解钉）。
+
+    外置后它不再是"进程态清理"而是真删库行——测试要的语义没变（上一条不干扰
+    下一条），实现从 dict.clear() 换成整表清空。
+    """
+    ttl_state.clear_all()
 
 
 @router.post("/api/pair/code")
@@ -128,12 +133,12 @@ async def pair_code_create(request: Request, user=Depends(require_user)):
     if not allow_rate(f"paircode:{user['user_id']}", 10, 60):
         raise HTTPException(status_code=429, detail="生成过于频繁，请稍后再试")
     code = f"{secrets.randbelow(1_000_000):06d}"
-    now = time.time()
-    with _pair_lock:
-        for k in [k for k, v in _pair_codes.items()
-                  if v[1] < now or v[0] == user["user_id"]]:
-            _pair_codes.pop(k)
-        _pair_codes[code] = (user["user_id"], now + _PAIR_TTL)
+    # 顶掉本账号旧码再写新码。两条独立写入（不包事务，理由见
+    # store/ttl_state.put_if_absent docstring）：并发下最坏是短时间内多留一枚
+    # 旧码，而 claim 要求码值精确匹配 + 一码一用，不构成越权面。
+    ttl_state.delete_scope_value(ttl_state.SCOPE_PAIR_CODE, str(user["user_id"]))
+    ttl_state.put(ttl_state.SCOPE_PAIR_CODE, code,
+                  str(user["user_id"]), _PAIR_TTL)
     audit("pair_code_create", user["username"], ip=client_ip(request))
     return {"code": code, "expires_in": int(_PAIR_TTL)}
 
@@ -152,16 +157,14 @@ async def pair_claim(request: Request, body: PairClaimBody):
     if not allow_rate(f"pairclaim:{ip}", 30 if pub else 5, 60):
         raise HTTPException(status_code=429, detail="尝试过于频繁，请稍后再试")
     now = time.time()
-    with _pair_lock:
-        # 懒清理：claim 路径也顺带清过期项——只靠生成端清理时，
-        # 生成后无人认领的过期码会一直残留（同账号顶掉才消失）
-        for k in [k for k, v in _pair_codes.items() if v[1] < now]:
-            _pair_codes.pop(k)
-        hit = _pair_codes.pop(code, None)
-    if not hit or hit[1] < now:
+    # 原子消费（一码一用）：take() 用 DELETE...RETURNING 实现，并发/多进程下
+    # 只有一个请求能拿到值——比原先"进程锁内 pop"的保证更强，且过期码不可能
+    # 被误消费（条件里带 expires_at>now），也就不再需要 claim 路径的懒清理。
+    hit = ttl_state.take(ttl_state.SCOPE_PAIR_CODE, code, now)
+    if hit is None:
         audit("pair_claim_fail", ip=ip)
         raise HTTPException(status_code=401, detail="配对码无效或已过期")
-    user_id, _ = hit
+    user_id = int(hit)
     row = users_store.get(user_id)
     if not row:
         raise HTTPException(status_code=401, detail="配对码无效或已过期")

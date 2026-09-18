@@ -109,7 +109,13 @@
   只做 forward_auth 预检 + 反代，**不再直接 file_server 挂 SHARE_ROOT**——
   下载统一落在后端 `/files/{path}` 端点，经 `resolve()` 按 private/incoming/
   grants 判权；点目录（`.meta.db`/`.trash`/`.chunks` 等）由 `safe_path` 拒绝。
-  注意 forward_auth 只认 Cookie 会话，App（Bearer）下载走 `/preview/`。
+  安全要点（v3.57）：**真正判权的是逐条 `resolve()`，forward_auth 只是粗筛**——
+  预检曾只认 Cookie，于是同一条 `/files/*` 路径对 Web 走"预检+判权"、对 App
+  走"预检 401 后改道 `/preview/` 只有判权"。现预检与后端同等接受 Cookie 与
+  Bearer 设备 Token（同一 `require_user`），消除"两套门控"的漂移面；
+  放开预检不等于放宽权限：Bearer 在 `/files` 路由内本来就能过 `require_user`。
+  App 仍走 `/preview/` 下载（少一次子请求 + 已与播放器缓存链路打通），
+  迁移需真机重验下载/续传/暂停，本批不做。
 - **上传完整性**：分块合并后强制 SHA256 + 大小校验，不符即拒；秒传只信任服务端计算过的指纹。
 - **上传大小上限**：单请求 `/api/upload` 2GB；分片上传总大小硬上限 64GB（配额另约束）；
   WebDAV PUT 20GB（流式写盘）。分块大小按文件大小自适应（≤2GB→5MB / ≤5GB→16MB /
