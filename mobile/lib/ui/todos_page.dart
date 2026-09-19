@@ -169,7 +169,7 @@ class _TodosPageState extends State<TodosPage> {
       return;
     }
     if (target == 'done' && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      final controller = ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('已完成「${t.title}」'),
         duration: const Duration(seconds: 3),
         action: SnackBarAction(
@@ -182,6 +182,15 @@ class _TodosPageState extends State<TodosPage> {
           },
         ),
       ));
+      // 兜底自动关闭（t108 批）：SDK 超时定时器在本 App 的嵌套 Scaffold
+      // 结构下不触发（主人实测"已完成"条挂住不消失，模拟器复现 3 分钟
+      // 不退）。到点强制收起；用户已点撤销/关闭时 close 会抛
+      // StateError，吞掉即可。到点延迟留出入口+退出动画余量。
+      Future.delayed(const Duration(seconds: 3, milliseconds: 600), () {
+        try {
+          controller.close();
+        } catch (_) {}
+      });
     }
   }
 

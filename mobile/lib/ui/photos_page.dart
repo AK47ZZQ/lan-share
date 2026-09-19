@@ -117,7 +117,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
   // ── 1.0.2 批次新增状态 ──────────────────────────────────
-  bool _jumping = false;        // 时间轴跳月中（拉取+定位），期间挡新跳转
+  bool _jumping = false;        // 月视图切换/接续进行中（挡新切换与拖选）
+  bool _advancing = false;      // 月视图自动接更早月份进行中（防重入）
   // 月份轴高亮（跟随滚动）。用 ValueNotifier 而非 setState：滚动中每到月份
   // 边界就会变——setState 会重建整页（全部 sliver 树 + O(n) 分组重算），
   // 快滑跨月时就是一串重建风暴（31cd「滑动特别卡」主因之一）；收敛到轴自身重建
@@ -160,6 +161,14 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   void _onScroll() {
     if (_scroll.position.extentAfter < 600) _loadMore();
+    // 月视图滚到底：自动接更早的月份（1.1.4 时间线重构）
+    if (_month != null &&
+        _done &&
+        !_loading &&
+        !_advancing &&
+        _scroll.position.extentAfter < 80) {
+      _advanceOlderMonth();
+    }
     // 月份轴高亮跟随（1.0.2）：节流 180ms，避免每个滚动帧都遍历格子注册表
     _railTick ??= Timer(const Duration(milliseconds: 180), () {
       _railTick = null;
@@ -371,68 +380,75 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
   }
 
-  // ── 时间轴跳月（20260914041746-6c58）────────────────────
-  /// 右缘月份轴点按：在**全量时间线**内定位到目标月（不再按月过滤）。
-  /// 偏移按 facets 月份计数累计推算（新月份在顶），补拉到目标月后滚动
-  /// 定位该月第一天的日期头；跳完仍可自由上下翻。
+  // ── 时间轴跳月（20260914041746-6c58 引入；1.1.4 重构，反馈 6b09 续）──
+  /// 右缘月份轴点按：**切换到目标月的月视图**（服务端 month= 过滤）。
+  /// 落点即该月最新一天，只拉当月数据、缩略图量小，秒级落地零卡顿；
+  /// 滚到底部自动接更早的月份（_advanceOlderMonth），轴上「全部」与顶部
+  /// 横幅随时回全时间线。
+  /// 历史教训：此前是"全时间线深跳转"——按 facets 累计推算偏移，预拉数千条
+  /// 数据、估算数万像素落点，自 1.0.2 起连修四轮（df72/6b09 两轮+两版文档
+  /// 修正）仍反复出现卡顿/照片加载不出/弹回顶部，1.1.4 整体放弃该路线。
+  /// 估算/校准机制（_scrollToDay 一族）保留给合并刷新的视口锚定使用。
   Future<void> _jumpToMonth(String m) async {
-    if (_jumping || _loading || _selected.isNotEmpty || !mounted) return;
-    final months = await _ensureMonths();
-    if (!mounted || months.isEmpty) return;
-    final target = PhotosPage.jumpTargetFromFacets(months, m);
-    if (target == null) return;
-    final gen = ++_gen;
+    if (_loading || _selected.isNotEmpty || !mounted) return;
+    if (_month == m) return;
     setState(() {
       _jumping = true;
-      _loading = true;
+      _month = m;
+    });
+    _railMonthN.value = m;
+    try {
+      await _refresh();
+    } finally {
+      // 月视图切换本身即全量重拉，切换期间暂缓的合并刷新无需补跑
+      _pendingRefresh = false;
+      if (mounted) setState(() => _jumping = false);
+    }
+  }
+
+  /// 月视图滚到底：自动接**更早**的月份（整月切换，不与当月混流——
+  /// 混流会让 month= 过滤下的合并刷新口径失真）。
+  Future<void> _advanceOlderMonth() async {
+    final months = _months;
+    final cur = _month;
+    if (months == null || cur == null || _advancing) return;
+    final keys = months.keys.where((k) => k.length == 7).toList()
+      ..sort((a, b) => b.compareTo(a));
+    final i = keys.indexOf(cur);
+    if (i < 0 || i + 1 >= keys.length) return;   // 已是最早月份
+    _advancing = true;
+    final next = keys[i + 1];
+    _railMonthN.value = next;
+    setState(() {
+      _month = next;
+      _jumping = true;
     });
     try {
-      final need = target + 30;   // 目标月起点再预载半屏，落点即有内容
-      if (_items.length < need && !_done) {
-        final (list, endReached) =
-            await _fetchBatch(_items.length, need - _items.length);
-        if (!mounted || gen != _gen) return;
-        setState(() {
-          _items.addAll(list);
-          _offset = _items.length;
-          if (endReached) _done = true;
-        });
-      }
-      String? day;
-      for (final it in _items) {
-        if (it.taken.length >= 7 && it.taken.substring(0, 7) == m) {
-          day = it.taken;
-          break;
-        }
-      }
-    if (!mounted || gen != _gen) return;
-    _railMonthN.value = m;
-    if (day != null) {
-      await _scrollToDay(day);
-    } else if (_scroll.hasClients) {
-      // facets 有计数但墙上找不到（计数为 0 的空月，防御）：回墙顶
-      await _scroll.animateTo(0,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOutCubic);
-      }
-    } catch (_) {
-      // 网络失败：停在原地（不粗暴回顶），落点收尾统一走 finally
+      await _refresh();
     } finally {
-      // _jumping 必须盖住整个落点校准（_scrollToDay 多轮估算+jumpTo）——
-      // 此前在**校准前**就清了标志：主人正在上传时，20s 脉搏检测到变化
-      // 触发 _refreshSoft，趁隙整表重拉+全墙重建，与校准滚动相撞——落点
-      // 被甩回顶部、缩略图在反复重建中永远追不上（反馈
-      // 20260919004417-df72「定位后照片不加载/自己划回顶部」的根因）。
-      // 收尾统一在此；跳转期间暂缓的刷新补跑一次，锚点=落点日期。
-      if (mounted) {
-        setState(() { _jumping = false; _loading = false; });
-        if (gen == _gen && _pendingRefresh) {
-          _pendingRefresh = false;
-          // ignore: discarded_futures
-          _refreshSoft();
-        }
-      }
+      _pendingRefresh = false;
+      _advancing = false;
+      if (mounted) setState(() => _jumping = false);
     }
+  }
+
+  /// 回全时间线（顶部横幅 / 月份轴「全部」）。
+  void _exitMonthView() {
+    if (_month == null || _loading || _advancing) return;
+    _railMonthN.value = null;
+    setState(() {
+      _month = null;
+      _jumping = true;
+    });
+    // ignore: discarded_futures
+    () async {
+      try {
+        await _refresh();
+      } finally {
+        _pendingRefresh = false;
+        if (mounted) setState(() => _jumping = false);
+      }
+    }();
   }
 
   /// 滚动定位到某天的日期头。瀑布流高度不定、远处日期头未构建拿不到
@@ -562,7 +578,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 月份轴高亮跟随（1.0.2）：滚动时把轴上高亮移到当前视口顶部所属月份，
   /// 并让轴自身滚动把该月份条目滚进可视区。只碰 ValueNotifier，不 setState。
   void _updateRailMonth() {
-    if (_selected.isNotEmpty || _dragSelecting || _byAdded || _month != null) {
+    if (_selected.isNotEmpty || _dragSelecting || _byAdded) {
       return;
     }
     final months = _months;
@@ -783,8 +799,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                           onTap: () => Navigator.pop(ctx, e.key)),
                   ])));
     if (sel == null || !mounted) return;
-    setState(() => _month = sel.isEmpty ? null : sel);
-    _refresh();
+    // 与右缘月份轴走同一条月视图切换路径（横幅/接续/高亮行为一致）
+    if (sel.isEmpty) {
+      _exitMonthView();
+    } else {
+      // ignore: discarded_futures
+      _jumpToMonth(sel);
+    }
   }
 
   /// 精选专辑加载（0.8.0）：失败静默（行不显示），不阻塞照片墙
@@ -1291,10 +1312,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                                 size: IconSizes.sm),
                                         label:
                                             Text(_monthLabel(_month!)),
-                                        onDeleted: () {
-                                          setState(() => _month = null);
-                                          _refresh();
-                                        },
+                                        onDeleted: _exitMonthView,
                                         onPressed: _pickMonth)),
                               // 自定义展示范围入口（20260913211718-b58a）
                               Padding(
@@ -1345,7 +1363,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// setState 整页重建）；②BackdropFilter 实时模糊撤掉——滑动中每帧对轴
   /// 区域 saveLayer+blur，低端机显著掉帧，半透明实色观感相近、成本近零。
   Widget? _monthRail(bool selecting) {
-    if (selecting || _byAdded || _month != null) return null;
+    // 月视图下轴保持可见：它是月份间跳转的枢纽，「全部」条目回全时间线
+    if (selecting || _byAdded) return null;
     final months = _months;
     if (months == null || months.length < 2) return null;
     final entries = months.entries.toList()
@@ -1397,12 +1416,17 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                       entry('全部', '', null,
                           on: railMonth == null || railMonth.isEmpty,
                           onTap: () {
-                        if (_scroll.hasClients) {
-                          _scroll.animateTo(0,
-                              duration: const Duration(milliseconds: 300),
-                              curve: Curves.easeOutCubic);
-                        }
-                      }),
+                            if (_month != null) {
+                              _exitMonthView();
+                              return;
+                            }
+                            if (_scroll.hasClients) {
+                              _scroll.animateTo(0,
+                                  duration:
+                                      const Duration(milliseconds: 300),
+                                  curve: Curves.easeOutCubic);
+                            }
+                          }),
                       for (final e in entries)
                         entry(e.key.substring(2), e.key, e.key,
                             count: e.value,
@@ -1466,6 +1490,49 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         cacheExtent: 600,
         physics: const AlwaysScrollableScrollPhysics(),
         slivers: [
+          // 月视图横幅（1.1.4 时间线重构）：明示当前口径 + 一键回全时间线
+          if (_month != null)
+            SliverToBoxAdapter(
+                key: const ValueKey<String>('month-banner'),
+                child: Padding(
+                    padding:
+                        const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, 0),
+                    child: InkWell(
+                        onTap: _exitMonthView,
+                        borderRadius: Radii.bSm,
+                        child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: Gap.md, vertical: Gap.xs),
+                            decoration: BoxDecoration(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .secondaryContainer,
+                                borderRadius:
+                                    BorderRadius.circular(Radii.sm)),
+                            child: Row(children: [
+                              Icon(Icons.filter_alt_outlined,
+                                  size: 14,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSecondaryContainer),
+                              const SizedBox(width: Gap.xxs),
+                              Expanded(
+                                  child: Text(
+                                      '正在看 ${_monthLabel(_month!)} · 点此返回全部时间线',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelSmall
+                                          ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSecondaryContainer))),
+                              Icon(Icons.close,
+                                  size: 14,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSecondaryContainer),
+                            ]))))),
           for (final (day, flatIdx) in groups) ...[
             // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
             // 很难看，真机反馈 0.4.5）；入库序无日期头。

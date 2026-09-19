@@ -39,11 +39,21 @@ void showToast(String msg) {
   // 原先 admin_page 自己带 `width: 360` 就是为这个场景——收编时若只做"统一"，
   // 会把这个平板优化一起抹掉。窄屏返回 null 即保持铺满的默认行为。
   final w = MediaQuery.maybeSizeOf(st.context)?.width ?? 0;
-  st.showSnackBar(SnackBar(
+  final controller = st.showSnackBar(SnackBar(
     content: Text(msg),
     duration: const Duration(seconds: 2),
     width: w > Breakpoints.medium ? 480 : null,
   ));
+  // 兜底自动关闭（t108 批）：SDK 的超时定时器在 ScaffoldMessenger.build 里
+  // 以 route.isCurrent 为门控创建，本 App 的嵌套 Scaffold 结构下实测不会
+  // 触发——提示条会永久悬浮（主人实测"已完成 xxx"挂住不消失）。这里到点
+  // 强制收起。close() 在该条已被关掉/顶掉时会因 _snackBars 为空抛
+  // StateError，吞掉即可。
+  Future.delayed(const Duration(seconds: 2, milliseconds: 500), () {
+    try {
+      controller.close();
+    } catch (_) {}
+  });
 }
 
 // 说明：曾准备提供 showToastLong（4 秒停留），但核查后发现当前所有失败文案
