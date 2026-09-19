@@ -88,6 +88,7 @@ class _TodosPageState extends State<TodosPage> {
   bool _showCal = false;              // 日历视图（cfd2）：AppBar 切换
   DateTime _calMonth =                // 日历当前展示月（取 1 号）
       DateTime(DateTime.now().year, DateTime.now().month, 1);
+  int? _calSelDay;                    // 日历选中日（null=默认今天/1 号）
   List<_Todo> _todos = const [];
   List<_TodoList> _lists = const [];
   Map<int, Map<String, String>> _members = const {};
@@ -197,7 +198,7 @@ class _TodosPageState extends State<TodosPage> {
     }
   }
 
-  Future<void> _createTodo() async {
+  Future<void> _createTodo({num? preferDueAt}) async {
     if (!mounted) return;
     if (_lists.isEmpty) {
       showToast('先在右上角「清单管理」里建一个清单');
@@ -206,7 +207,10 @@ class _TodosPageState extends State<TodosPage> {
     final created = await showModalBottomSheet<bool>(
         context: context,
         isScrollControlled: true,
-        builder: (_) => _TodoEditSheet(lists: _lists, members: _members));
+        builder: (_) => _TodoEditSheet(
+            lists: _lists,
+            members: _members,
+            initialDueAt: preferDueAt));   // 日历"在这天加一件"预填
     if (created == true) await _load();
   }
 
@@ -373,21 +377,30 @@ class _TodosPageState extends State<TodosPage> {
     );
   }
 
-  // ── 日历视图（cfd2，M4 提前）──────────────────────────────
-  /// 月历 + 截止日分布：点某天看当天待办并可勾选完成；无截止日的待办
-  /// 不上日历（列表视图仍可见）。纯 App 内渲染，零新依赖。
+  // ── 日历视图（cfd2 引入；9f3d 完善：月统计/逾期红标/优先级色点/
+  // 选中日内嵌面板/点某天新建预填日期）────────────────────
+  /// 月历 + 截止日分布。点日期格选中，下方内嵌面板展示当天待办（可勾选/
+  /// 长按操作），空日期格可一键新建预填该日截止的待办。纯 App 内渲染，
+  /// 零新依赖。无截止日的待办不上日历（列表视图仍可见）。
   Widget _calendarView(ColorScheme cs) {
     final first = DateTime(_calMonth.year, _calMonth.month, 1);
     final daysInMonth = DateTime(_calMonth.year, _calMonth.month + 1, 0).day;
     final lead = (first.weekday + 6) % 7;   // 周一=0 … 周日=6
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final isCurMonth = now.year == _calMonth.year && now.month == _calMonth.month;
+    final selDay = _calSelDay ?? (isCurMonth ? now.day : 1);
     final byDay = <int, List<_Todo>>{};
+    var mTotal = 0, mOpen = 0, mOverdue = 0;
     for (final t in _todos) {
       if (t.dueAt == null) continue;
       final d = DateTime.fromMillisecondsSinceEpoch((t.dueAt! * 1000).toInt());
-      if (d.year == _calMonth.year && d.month == _calMonth.month) {
-        byDay.putIfAbsent(d.day, () => []).add(t);
-      }
+      if (d.year != _calMonth.year || d.month != _calMonth.month) continue;
+      byDay.putIfAbsent(d.day, () => []).add(t);
+      mTotal++;
+      if (t.done) continue;
+      mOpen++;
+      if (DateTime(d.year, d.month, d.day).isBefore(today)) mOverdue++;
     }
     return AdaptiveContent(
         child: Column(children: [
@@ -397,8 +410,10 @@ class _TodosPageState extends State<TodosPage> {
             IconButton(
                 tooltip: '上个月',
                 icon: const Icon(Icons.chevron_left_outlined),
-                onPressed: () => setState(() => _calMonth = DateTime(
-                    _calMonth.year, _calMonth.month - 1, 1))),
+                onPressed: () => setState(() {
+                      _calMonth = DateTime(_calMonth.year, _calMonth.month - 1, 1);
+                      _calSelDay = null;
+                    })),
             const SizedBox(width: Gap.sm),
             Text('${_calMonth.year} 年 ${_calMonth.month} 月',
                 style: Theme.of(context)
@@ -409,13 +424,31 @@ class _TodosPageState extends State<TodosPage> {
             IconButton(
                 tooltip: '下个月',
                 icon: const Icon(Icons.chevron_right_outlined),
-                onPressed: () => setState(() => _calMonth = DateTime(
-                    _calMonth.year, _calMonth.month + 1, 1))),
+                onPressed: () => setState(() {
+                      _calMonth = DateTime(_calMonth.year, _calMonth.month + 1, 1);
+                      _calSelDay = null;
+                    })),
             TextButton(
-                onPressed: () => setState(() => _calMonth =
-                    DateTime(now.year, now.month, 1)),
+                onPressed: () => setState(() {
+                      _calMonth = DateTime(now.year, now.month, 1);
+                      _calSelDay = null;
+                    }),
                 child: const Text('今天')),
           ])),
+      // 月统计（9f3d）：本月总量 / 未完成 / 逾期（红）
+      Padding(
+          padding: const EdgeInsets.only(bottom: Gap.xxs),
+          child: Text.rich(TextSpan(children: [
+            TextSpan(text: '本月 $mTotal 件 · 未完成 $mOpen 件'),
+            if (mOverdue > 0)
+              TextSpan(
+                  text: ' · 逾期 $mOverdue 件',
+                  style: TextStyle(color: cs.error, fontWeight: FontWeight.w700)),
+          ]),
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: cs.outline))),
       Row(children: [
         for (final w in ['一', '二', '三', '四', '五', '六', '日'])
           Expanded(
@@ -430,34 +463,45 @@ class _TodosPageState extends State<TodosPage> {
       Expanded(
           child: GridView.count(
               crossAxisCount: 7,
-              childAspectRatio: 0.8,
-              padding: const EdgeInsets.only(bottom: Gap.xxxl),
+              childAspectRatio: 0.9,
+              padding: const EdgeInsets.only(bottom: Gap.xxs),
               children: [
                 for (var i = 0; i < lead; i++) const SizedBox.shrink(),
                 for (var day = 1; day <= daysInMonth; day++)
                   _calDayCell(cs, day, byDay[day] ?? const [],
-                      isToday: now.year == _calMonth.year &&
-                          now.month == _calMonth.month &&
-                          now.day == day),
+                      isToday: isCurMonth && now.day == day,
+                      selected: selDay == day,
+                      overdue: DateTime(_calMonth.year, _calMonth.month, day)
+                          .isBefore(today),
+                      onTap: () => setState(() => _calSelDay = day)),
               ])),
+      const Divider(height: 1),
+      _calDayPanel(cs, selDay, byDay[selDay] ?? const []),
     ]));
   }
 
   Widget _calDayCell(ColorScheme cs, int day, List<_Todo> todos,
-      {required bool isToday}) {
+      {required bool isToday,
+      required bool selected,
+      required bool overdue,
+      required VoidCallback onTap}) {
     final open = todos.where((t) => !t.done).length;
+    final red = overdue && open > 0;   // 过去的日子还有没做完的 → 红字提示
     return InkWell(
-        onTap: todos.isEmpty
-            ? null
-            : () => _showDaySheet('${_calMonth.month} 月 $day 日', todos),
+        onTap: onTap,
         borderRadius: BorderRadius.circular(Radii.sm),
         child: Container(
             margin: const EdgeInsets.all(1),
             decoration: BoxDecoration(
-                color: isToday
-                    ? cs.primary.withValues(alpha: 0.12)
-                    : null,
-                borderRadius: BorderRadius.circular(Radii.sm)),
+                color: selected
+                    ? cs.primary.withValues(alpha: 0.18)
+                    : isToday
+                        ? cs.primary.withValues(alpha: 0.08)
+                        : null,
+                borderRadius: BorderRadius.circular(Radii.sm),
+                border: selected
+                    ? Border.all(color: cs.primary, width: 1.2)
+                    : null),
             child: Column(mainAxisAlignment: MainAxisAlignment.center,
                 children: [
               Text('$day',
@@ -465,11 +509,18 @@ class _TodosPageState extends State<TodosPage> {
                       .textTheme
                       .labelMedium
                       ?.copyWith(
-                          fontWeight: isToday ? FontWeight.w800 : null,
-                          color: isToday ? cs.primary : null)),
+                          fontWeight: isToday || selected || red
+                              ? FontWeight.w800
+                              : null,
+                          color: red
+                              ? cs.error
+                              : isToday || selected
+                                  ? cs.primary
+                                  : null)),
               if (todos.isNotEmpty) ...[
                 const SizedBox(height: 2),
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  // 色点按优先级：高=红 / 中=橙 / 普通=主色；已完成灰
                   for (final t in todos.take(3))
                     Container(
                         width: 5,
@@ -477,7 +528,13 @@ class _TodosPageState extends State<TodosPage> {
                         margin: const EdgeInsets.symmetric(horizontal: 1),
                         decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: t.done ? cs.outline : cs.primary)),
+                            color: t.done
+                                ? cs.outline
+                                : switch (t.priority) {
+                                    2 => cs.error,
+                                    1 => cs.tertiary,
+                                    _ => cs.primary,
+                                  })),
                 ]),
                 if (open > 0)
                   Text('$open',
@@ -489,68 +546,50 @@ class _TodosPageState extends State<TodosPage> {
             ])));
   }
 
-  /// 某天的待办清单（底部弹层）：可勾选完成/撤销——页面态与弹层本地态
-  /// 同步（toggle 按最新页面数据定位，避免旧对象状态翻转错乱）
-  Future<void> _showDaySheet(String header, List<_Todo> items) async {
-    final local = List<_Todo>.from(items);
-    await showModalBottomSheet(
-        context: context,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, setSheet) => SafeArea(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Padding(
-                  padding: const EdgeInsets.all(Gap.md),
-                  child: Text(header,
-                      style: Theme.of(ctx)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700))),
-              if (local.isEmpty)
-                Padding(
-                    padding: const EdgeInsets.only(bottom: Gap.xl),
-                    child: Text('这天没有待办',
-                        style: Theme.of(ctx).textTheme.bodySmall)),
-              for (final t in local)
-                ListTile(
-                    leading: Icon(
-                        t.done
-                            ? Icons.check_circle_outlined
-                            : Icons.radio_button_unchecked_outlined,
-                        color: t.done
-                            ? Theme.of(ctx).colorScheme.primary
-                            : Theme.of(ctx).colorScheme.outline),
-                    title: Text(t.title,
-                        style: Theme.of(ctx)
+  /// 选中日的内嵌面板（9f3d，替代原底部弹层）：展示当天待办（复用列表
+  /// 卡片，可勾选/长按改期删除），并支持"在这天加一件"（预填截止日）。
+  Widget _calDayPanel(ColorScheme cs, int day, List<_Todo> todos) {
+    final open = todos.where((t) => !t.done).length;
+    final header = '${_calMonth.month} 月 $day 日 · '
+        '${todos.isEmpty ? '没有待办' : (open == 0 ? '已全部完成' : '未完成 $open 件')}';
+    return SizedBox(
+        height: 240,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+          Padding(
+              padding: const EdgeInsets.fromLTRB(Gap.md, Gap.sm, Gap.md, 0),
+              child: Row(children: [
+                Expanded(
+                    child: Text(header,
+                        style: Theme.of(context)
                             .textTheme
-                            .bodyLarge
-                            ?.copyWith(
-                                decoration: t.done
-                                    ? TextDecoration.lineThrough
-                                    : null,
-                                color: t.done
-                                    ? Theme.of(ctx).colorScheme.onSurfaceVariant
-                                    : null)),
-                    onTap: () {
-                      final cur = _todos
-                          .firstWhere((x) => x.id == t.id, orElse: () => t);
-                      final target = cur.done ? 'todo' : 'done';
-                      setSheet(() {
-                        final i = local.indexWhere((x) => x.id == t.id);
-                        if (i >= 0) {
-                          local[i] = cur.copyWith(
-                              status: target,
-                              doneAt: target == 'done'
-                                  ? DateTime.now().millisecondsSinceEpoch /
-                                      1000
-                                  : null);
-                        }
-                      });
+                            .titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w700))),
+                FilledButton.tonalIcon(
+                    onPressed: () {
                       // ignore: discarded_futures
-                      _toggle(cur);
-                    }),
-              const SizedBox(height: Gap.sm),
-            ]))));
+                      _createTodo(
+                          preferDueAt: DateTime(_calMonth.year, _calMonth.month,
+                                  day, 23, 59)
+                              .millisecondsSinceEpoch /
+                              1000);
+                    },
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('加一件',
+                        style: TextStyle(fontSize: 12))),
+              ])),
+          Expanded(
+              child: todos.isEmpty
+                  ? Center(
+                      child: Text('这天还没有安排，点右上「加一件」',
+                          style: Theme.of(context).textTheme.bodySmall))
+                  : ListView(
+                      padding: const EdgeInsets.only(
+                          left: Gap.md, right: Gap.md, top: Gap.xs),
+                      children: [for (final t in todos) _todoCard(t)])),
+        ]));
   }
+
 
   Widget _todayCard(ColorScheme cs, {required int done, required int total}) {
     return Card(
@@ -704,8 +743,10 @@ class _TodosPageState extends State<TodosPage> {
 class _TodoEditSheet extends StatefulWidget {
   final List<_TodoList> lists;
   final Map<int, Map<String, String>> members;
+  final num? initialDueAt;   // 日历"在这天加一件"预填截止日（9f3d）
 
-  const _TodoEditSheet({required this.lists, required this.members});
+  const _TodoEditSheet(
+      {required this.lists, required this.members, this.initialDueAt});
 
   @override
   State<_TodoEditSheet> createState() => _TodoEditSheetState();
@@ -714,7 +755,7 @@ class _TodoEditSheet extends StatefulWidget {
 class _TodoEditSheetState extends State<_TodoEditSheet> {
   final _title = TextEditingController();
   late _TodoList _list = widget.lists.first;
-  num? _dueAt;
+  late num? _dueAt = widget.initialDueAt;
   int _priority = 0;
   int? _assignee;
   bool _saving = false;

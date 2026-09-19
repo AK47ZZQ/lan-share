@@ -123,6 +123,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   // 临近底部就把更早月份**追加**到墙上（不清空不跳变），直到没有更早月份。
   String? _mCursor;
   int _mOffset = 0;
+  // 月视图顶部前插游标（1.1.6，反馈 5d2d）：已前插到的最新月份；_refresh
+  // 复位为锚月。向前插入会移动既有内容的滚动位置，补偿见 _prependNewerMonth。
+  String? _topCursor;
+  bool _prepending = false;
+  int _emptyPrepends = 0;   // 连续前插到空月计数（熔断防一路空打到未来）
   // 月份轴高亮（跟随滚动）。用 ValueNotifier 而非 setState：滚动中每到月份
   // 边界就会变——setState 会重建整页（全部 sliver 树 + O(n) 分组重算），
   // 快滑跨月时就是一串重建风暴（31cd「滑动特别卡」主因之一）；收敛到轴自身重建
@@ -343,6 +348,106 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     return '$y-${(mo - 1).toString().padLeft(2, '0')}';
   }
 
+  /// 游标月的上一个**更晚**月份（无缝上滑用）。没有更晚月份（已到当前月）
+  /// 返回 null。facets 可用时优先（跳过空月），否则按日历回退。
+  String? _newerMonth(String m) {
+    final months = _months;
+    final nowM =
+        '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}';
+    String? next;
+    if (months != null && months.isNotEmpty) {
+      final keys = months.keys.where((k) => k.length == 7).toList()
+        ..sort((a, b) => b.compareTo(a));
+      final i = keys.indexOf(m);
+      if (i >= 0) next = i > 0 ? keys[i - 1] : null;
+    }
+    next ??= () {
+      final y = int.tryParse(m.substring(0, 4)) ?? 2026;
+      final mo = int.tryParse(m.substring(5, 7)) ?? 1;
+      return mo == 12 ? '${y + 1}-01' : '$y-${(mo + 1).toString().padLeft(2, '0')}';
+    }();
+    return next.compareTo(nowM) > 0 ? null : next;   // 不前插未来的月份
+  }
+
+  /// 月视图顶部无缝前插（1.1.6，反馈 5d2d）：滚到月视图顶且上方还有更晚
+  /// 月份时，把更新的月份整月取回并**前插**到墙上。
+  /// 向前插入会移动既有内容的滚动位置——用锚点补偿：插入前记录视口顶部
+  /// 日期头的屏幕 y，插入后同一日期头的位移量 = 需补偿的滚动量（锚点是真实
+  /// 布局过的日期头，瀑布流高度不定也精确，jumpTo 一次到位）。
+  Future<void> _prependNewerMonth() async {
+    if (_month == null ||
+        _prepending ||
+        _loading ||
+        _jumping ||
+        _selected.isNotEmpty ||   // 多选中下标即选中集，前插会移位——暂停
+        _dragSelecting ||
+        !mounted) {
+      return;
+    }
+    final cur = _topCursor ?? _month!;
+    final next = _newerMonth(cur);
+    if (next == null) return;
+    final gen = _gen;
+    _prepending = true;
+    try {
+      // 锚点：视口顶所属日期头（_ctxReg 按天注册，sliver 有 ValueKey，
+      // 前插后元素按 key 复用、context 仍可用）
+      final anchorDay = _dayOfFlat(_topVisibleFlat());
+      BuildContext? anchorCtx;
+      var preY = 0.0;
+      if (anchorDay != null) {
+        final c = _hdrCtxs[anchorDay];
+        final ro = c?.findRenderObject();
+        if (c != null && c.mounted && ro is RenderBox && ro.attached && ro.hasSize) {
+          anchorCtx = c;
+          preY = ro.localToGlobal(Offset.zero).dy;
+        }
+      }
+      // 整月取回（降序，可直接前插到锚月上方；月内分页直到取尽）
+      final fetched = <PhotoItem>[];
+      var off = 0;
+      var end = false;
+      while (!end && mounted && gen == _gen && fetched.length <= 2400) {
+        final (list, endReached) =
+            await _fetchBatch(off, 600, monthOverride: next);
+        fetched.addAll(list);
+        off += list.length;
+        end = endReached || list.isEmpty;
+      }
+      if (!mounted || gen != _gen) return;
+      if (fetched.isEmpty) {
+        // 空月（facets 缺失按日历回退才会碰到）：推进游标下次再试
+        if (++_emptyPrepends > 12) return;   // 一路空到当前月：视为已到顶
+        _topCursor = next;
+        return;
+      }
+      _emptyPrepends = 0;
+      // 取数期间用户可能继续滚动：插入前重测锚点，补偿才准
+      if (anchorCtx != null) {
+        final ro = anchorCtx.findRenderObject();
+        if (ro is RenderBox && ro.attached && ro.hasSize) {
+          preY = ro.localToGlobal(Offset.zero).dy;
+        } else {
+          anchorCtx = null;
+        }
+      }
+      setState(() => _items.insertAll(0, fetched));
+      _topCursor = next;
+      if (anchorCtx != null && mounted) {
+        await WidgetsBinding.instance.endOfFrame;   // 等插入后的布局
+        if (!mounted || !anchorCtx.mounted) return;
+        final ro = anchorCtx.findRenderObject();
+        if (ro is RenderBox && ro.attached && ro.hasSize && _scroll.hasClients) {
+          final postY = ro.localToGlobal(Offset.zero).dy;
+          final delta = postY - preY;
+          if (delta > 0) _scroll.jumpTo(_scroll.offset + delta);
+        }
+      }
+    } finally {
+      _prepending = false;
+    }
+  }
+
   /// 硬刷新（下拉/切筛选/看图删除后）：清空重拉，回到墙顶。
   Future<void> _refresh() async {
     if (!mounted) return;   // R1-P2-4：彻底删除/查看器回调路径可能在 dispose 后触发
@@ -353,9 +458,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       _offset = 0;
       _done = false;
       _failed = false;
-      // 月视图游标复位到锚月（续流状态一并重置）
+      // 月视图游标复位到锚月（向下续流/向上前插状态一并重置）
       _mCursor = _month;
       _mOffset = 0;
+      _topCursor = _month;
+      _emptyPrepends = 0;
     });
     await _loadMore(force: true);
     // 月份分布随刷新重拉（v0.14）：此前 _months 首拉后永久缓存，备份/
@@ -1246,9 +1353,17 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           ? const Center(child: CircularProgressIndicator())
           : _base == null
               ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
-                  onRefresh: _refresh,
-                  child: Column(children: [
+              : _monthBody(selecting),
+      bottomNavigationBar: selecting && !_deleting ? _selectionBar() : null,
+    );
+  }
+
+  /// 照片墙主体（1.1.6 拆出）：全时间线包 RefreshIndicator（下拉刷新）；
+  /// 月视图**不包**——顶部下拉手势让位给"无缝上滑前插更早月份"（5d2d），
+  /// 否则两者在同一手势上撞车（实测：前插取数期间刷新换代，前插被丢弃）。
+  /// 月视图下同步新照片走顶部横幅/轴「全部」回全时间线后下拉刷新。
+  Widget _monthBody(bool selecting) {
+    final inner = Column(children: [
                     // 精选专辑行（v0.14 文件夹式）：封面缩略图迷你卡，
                     // 点按进专辑详情（勾选添加/移出/下载），长按删除入口
                     if (_albums != null && _albums!.isNotEmpty)
@@ -1374,9 +1489,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                             })),
                             ])),
                     Expanded(child: _gridOrEmpty(selecting)),
-                  ])),
-      bottomNavigationBar: selecting && !_deleting ? _selectionBar() : null,
-    );
+                  ]);
+    if (_month != null) return inner;
+    return RefreshIndicator(onRefresh: _refresh, child: inner);
   }
 
   Widget _gridOrEmpty(bool selecting) {
@@ -1543,10 +1658,14 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final groups = _computeGroups();
     final body = NotificationListener<ScrollNotification>(
         onNotification: (n) {
-          // 底部过滚动兜底（ddb0）：当月内容不足一屏/已滚到硬底时 position
-          // 不再变化、onScroll 不会再触发——过滚动通知是"还想往下看"的唯一
-          // 信号，用它驱动月视图续流取更早月份
-          if (n is OverscrollNotification && n.overscroll > 0) _loadMore();
+          if (n is OverscrollNotification) {
+            // 底部过滚动（ddb0）：当月内容不足一屏/已滚到硬底时 position
+            // 不再变化、onScroll 不会再触发——过滚动通知是"还想往下看"的
+            // 唯一信号，驱动月视图续流取更早月份
+            if (n.overscroll > 0) _loadMore();
+            // 顶部过滚动（5d2d 无缝上滑）：月视图里把更新的月份前插进来
+            if (n.overscroll < 0) _prependNewerMonth();
+          }
           return false;
         },
         child: CustomScrollView(
