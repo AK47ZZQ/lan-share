@@ -129,7 +129,8 @@ curl -k https://192.168.1.100:8765/healthz
 
 ### 4.0 进程内每日兜底备份（v3.52，`app/services/backup.py`）
 
-外部计划任务（上节）是**主备份**；v3.52 起服务进程内另有每日兜底：清理循环
+外部计划任务已 **Disabled（2026-09-13 主人决策）**——**进程内兜底备份（本节）
+现在是当前唯一的自动元数据备份链**；v3.52 起服务进程内每日运行：清理循环
 每小时醒一次，过 `BACKUP_HOUR`（默认 4 点）后的首轮把元数据库 dump（SQLite
 在线 backup API / PG 走 pg_dump）+ settings 全量 JSON 快照写到
 `SHARE_ROOT/.backups/`，滚动保留 `BACKUP_KEEP=7` 组；状态存 settings
