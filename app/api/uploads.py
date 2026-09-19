@@ -172,6 +172,12 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             # 同内容早退分支在可读判定之后，语义不变。
             readable = sample.is_file() and sample_readable(_user, sample)
             if readable:
+                # 配额计价必须用样例真实大小（对抗审查 F5）：body.size 是客户端
+                # 自报值，与样例内容可以毫无关系——自报小 size 过预检后链接大
+                # 样例即绕过配额。overwrite 场景旧 dest 已先进回收站（移出配额
+                # 树），此刻计价即落位后的真实占用；quota 拒绝时旧文件在回收站
+                # 可找回（与 _dav_put 的计价次序一致）。
+                sample_size = sample.stat().st_size
                 try:
                     if dest.is_dir():
                         # 与直传/finish 同款守卫（红队 P2-1）：缺了它，秒传会把
@@ -181,21 +187,23 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                         try:
                             # 同目录重传同名文件：sample 即 dest 本身，挪进回收站
                             # 会导致下面 os.link 找不到源（WinError 2）——已是同
-                            # 内容，直接判定秒传完成，不动旧文件
+                            # 内容，直接判定秒传完成，不动旧文件（无新增字节，
+                            # 不再计价）
                             if os.path.samestat(os.stat(dest), os.stat(sample)):
                                 audit("upload_instant", to_rel(dest),
-                                      human_size(body.size), client_ip(request))
+                                      human_size(sample_size), client_ip(request))
                                 return {"instant": True, "path": to_rel(dest),
-                                        "size": body.size, "size_human": human_size(body.size)}
+                                        "size": sample_size, "size_human": human_size(sample_size)}
                         except OSError:
                             pass
                         move_to_trash(dest, to_rel(dest))
+                    enforce_quota(_user, dest, sample_size)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     os.link(sample, dest)
                     audit("upload_instant", to_rel(dest),
-                          human_size(body.size), client_ip(request))
+                          human_size(sample_size), client_ip(request))
                     return {"instant": True, "path": to_rel(dest),
-                            "size": body.size, "size_human": human_size(body.size)}
+                            "size": sample_size, "size_human": human_size(sample_size)}
                 except OSError as e:
                     import logging
                     logging.warning("instant upload hardlink failed: %s", e)
