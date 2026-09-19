@@ -272,6 +272,13 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
         for t in targets:
             if not t.exists():
                 raise HTTPException(status_code=404, detail=f"Not found: {t.name}")
+            # 根目录不可打包（2026-09-19 对抗审查 F6）：resolve("")/("/"）= SHARE_ROOT，
+            # zip 循环里 f.relative_to(t.parent) 对根无意义必抛 ValueError → 500，
+            # 且此前全树 rglob + 逐文件写 zip 已白烧数分钟 IO、.zips 留孤儿大文件
+            # （实测 7 分钟+，见 tests/test_review_20260919 的红证）。UI 只打包选中项，
+            # 拒绝根目标零功能损失。
+            if t == SHARE_ROOT:
+                raise HTTPException(status_code=400, detail="不能打包根目录，请选择具体文件或子目录")
 
         # 磁盘余量预计价（红队 P2-2）：打包是整树复制且 .zips 不在配额视野内，
         # 串行循环可把磁盘打满；拒绝"预计打包量 > 剩余空间 - 5GB 余量"的请求

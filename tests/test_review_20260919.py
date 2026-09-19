@@ -152,3 +152,15 @@ def test_instant_upload_quota_prices_real_sample_size(client, workdir):
             _db().commit()
         import shutil as _sh
         _sh.rmtree(SHARE_ROOT / "private" / uname, ignore_errors=True)
+
+
+def test_zip_rejects_share_root_target(auth):
+    """F6：打包目标是共享根（paths=[""] 或 "/"）必须 400 拒绝。
+
+    修复前：resolve("")=SHARE_ROOT 通过存在性检查，zip 循环里
+    f.relative_to(t.parent) 抛 ValueError → 500，且全树 rglob 白烧 IO、
+    .zips 留孤儿文件（要等 sweep 2×TTL 才回收）。"""
+    r = auth.post("/api/zip", json={"paths": [""]})
+    assert r.status_code == 400, f"{r.status_code} {r.text}"
+    assert not (SHARE_ROOT / ".zips").exists() or \
+        not any((SHARE_ROOT / ".zips").iterdir()), "根目录打包不该留下孤儿 zip"
