@@ -84,3 +84,24 @@ def test_photo_pushdown_never_leaks_case_variants(client, two_clients, poisoned_
     got_a = paths(a)
     assert POISON_CAP not in got_a, "大小写变体毒行泄漏给 admin"
     assert POISON_LOW not in got_a, "他人 private（小写）泄漏给 admin"
+
+
+def test_reset_pair_codes_is_scope_precise():
+    """F4 回归：reset_pair_codes 只清配对码 scope，不得殃及 zip/分享票据。
+
+    此前误用 ttl_state.clear_all() 整表清空——函数名撒谎；conftest 每个测试
+    间隔都调它，跨域票据的共存场景在测试里永远无法出现。"""
+    from app.api.devices import reset_pair_codes
+    from app.store import ttl_state as ts
+
+    ts.put(ts.SCOPE_PAIR_CODE, "123456", "1", 60)
+    ts.put(ts.SCOPE_ZIP_TICKET, "rk-zip-tkt", "whatever.zip", 60)
+    ts.put(ts.SCOPE_SHARE_TICKET, "rk-share-tkt", "sharetoken", 60)
+    try:
+        reset_pair_codes()
+        assert ts.get(ts.SCOPE_PAIR_CODE, "123456") is None
+        assert ts.get(ts.SCOPE_ZIP_TICKET, "rk-zip-tkt") == "whatever.zip"
+        assert ts.get(ts.SCOPE_SHARE_TICKET, "rk-share-tkt") == "sharetoken"
+    finally:
+        ts.delete(ts.SCOPE_ZIP_TICKET, "rk-zip-tkt")
+        ts.delete(ts.SCOPE_SHARE_TICKET, "rk-share-tkt")

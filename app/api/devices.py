@@ -122,9 +122,11 @@ def reset_pair_codes() -> None:
     """清空配对码（测试专用接口，07 审查批次 2 测试解钉）。
 
     外置后它不再是"进程态清理"而是真删库行——测试要的语义没变（上一条不干扰
-    下一条），实现从 dict.clear() 换成整表清空。
+    下一条），实现从 dict.clear() 换成**按 scope 精确清空**。2026-09-19 对抗
+    审查 F4：此前误用 clear_all() 把整张 ttl_state（zip 票据/分享票据/审计位/
+    打包位）一并清掉——函数名撒谎，且测试隔离会掩盖跨域票据的共存场景。
     """
-    ttl_state.clear_all()
+    ttl_state.clear_scope(ttl_state.SCOPE_PAIR_CODE)
 
 
 @router.post("/api/pair/code")
