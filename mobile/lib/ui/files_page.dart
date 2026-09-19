@@ -315,6 +315,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       tooltip: '条目操作',
                       icon: const Icon(Icons.more_vert),
                       onSelected: (v) {
+                        // 菜单展开期间选中集可能被异步刷新清空
+                        // （R2 审查：_selectedEntries.first 会抛 StateError）
+                        if (_selectedEntries.isEmpty) return;
                         final e = _selectedEntries.first;
                         if (v == 'pin') {
                           // ignore: discarded_futures

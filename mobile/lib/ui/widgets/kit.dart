@@ -39,21 +39,58 @@ void showToast(String msg) {
   // 原先 admin_page 自己带 `width: 360` 就是为这个场景——收编时若只做"统一"，
   // 会把这个平板优化一起抹掉。窄屏返回 null 即保持铺满的默认行为。
   final w = MediaQuery.maybeSizeOf(st.context)?.width ?? 0;
-  final controller = st.showSnackBar(SnackBar(
-    content: Text(msg),
-    duration: const Duration(seconds: 2),
-    width: w > Breakpoints.medium ? 480 : null,
-  ));
-  // 兜底自动关闭（t108 批）：SDK 的超时定时器在 ScaffoldMessenger.build 里
-  // 以 route.isCurrent 为门控创建，本 App 的嵌套 Scaffold 结构下实测不会
-  // 触发——提示条会永久悬浮（主人实测"已完成 xxx"挂住不消失）。这里到点
-  // 强制收起。close() 在该条已被关掉/顶掉时会因 _snackBars 为空抛
-  // StateError，吞掉即可。
-  Future.delayed(const Duration(seconds: 2, milliseconds: 500), () {
+  showSnackTracked(
+      st,
+      SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 2),
+        width: w > Breakpoints.medium ? 480 : null,
+      ),
+      autoClose: const Duration(seconds: 2, milliseconds: 500));
+}
+
+// ── SnackBar 兜底关闭（t108 批引入，R3 审查重做为追踪式）──────────────
+// SDK 的超时定时器在 ScaffoldMessenger.build 里以 route.isCurrent 为门控
+// 创建，本 App 的嵌套 Scaffold 结构下实测不会触发——提示条会永久悬浮
+// （主人实测"已完成 xxx"挂住不消失）。此前的"每条各自 Future.delayed 后
+// close()"有误伤问题：旧条被顶掉/关闭后，迟到的 close() 会把**当前展示的
+// 新条**关掉（ScaffoldFeatureController.close 的实现是关掉"当前条"）。
+// 追踪式设计：同一时刻只认一条自己发出的提示条——
+// ① show 前先关掉上一条被追踪的（不排队、直接顶掉，语义即"新提示覆盖旧提示"）；
+// ② 到点只关自己，且已被关掉（撤销/移除）就不再补刀（closed.isCompleted 守卫）。
+ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _trackedSnack;
+
+/// 直调 showSnackBar 的调用点（带 action 的提示条等）走这个包装，获得与
+/// showToast 相同的兜底关闭与"新条顶旧条"语义。autoClose = 兜底关闭延迟
+/// （建议 = duration + 出入场动画余量）。
+ScaffoldFeatureController<SnackBar, SnackBarClosedReason> showSnackTracked(
+    ScaffoldMessengerState st, SnackBar bar,
+    {required Duration autoClose}) {
+  _dismissTrackedSnack();
+  final controller = st.showSnackBar(bar);
+  _trackedSnack = controller;
+  // 已被关掉（撤销/被顶掉）的标记：closed 是 Future，用 then 落旗
+  var gone = false;
+  // ignore: discarded_futures
+  controller.closed.then((_) => gone = true);
+  Future.delayed(autoClose, () {
+    if (_trackedSnack != controller || gone) return;   // 已关/已被接管
+    _trackedSnack = null;
     try {
       controller.close();
     } catch (_) {}
   });
+  return controller;
+}
+
+void _dismissTrackedSnack() {
+  final c = _trackedSnack;
+  _trackedSnack = null;
+  if (c != null) {
+    try {
+      c.close();
+    } catch (_) {}
+  }
 }
 
 // 说明：曾准备提供 showToastLong（4 秒停留），但核查后发现当前所有失败文案

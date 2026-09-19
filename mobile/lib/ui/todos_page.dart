@@ -173,28 +173,25 @@ class _TodosPageState extends State<TodosPage> {
       return;
     }
     if (target == 'done' && mounted) {
-      final controller = ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('已完成「${t.title}」'),
-        duration: const Duration(seconds: 3),
-        action: SnackBarAction(
-          label: '撤销',
-          onPressed: () async {
-            try {
-              await TodosApi.patchTodo(t.id, status: 'todo');
-            } catch (_) {}
-            if (mounted) await _load();
-          },
-        ),
-      ));
-      // 兜底自动关闭（t108 批）：SDK 超时定时器在本 App 的嵌套 Scaffold
-      // 结构下不触发（主人实测"已完成"条挂住不消失，模拟器复现 3 分钟
-      // 不退）。到点强制收起；用户已点撤销/关闭时 close 会抛
-      // StateError，吞掉即可。到点延迟留出入口+退出动画余量。
-      Future.delayed(const Duration(seconds: 3, milliseconds: 600), () {
-        try {
-          controller.close();
-        } catch (_) {}
-      });
+      // 兜底自动关闭走 kit 的追踪式包装（t108 批；R3 审查统一入口）：
+      // SDK 超时定时器在本 App 嵌套 Scaffold 结构下不触发，且"自己
+      // Future.delayed 后 close()"会在提示条被顶掉时误关新条
+      showSnackTracked(
+          ScaffoldMessenger.of(context),
+          SnackBar(
+            content: Text('已完成「${t.title}」'),
+            duration: const Duration(seconds: 3),
+            action: SnackBarAction(
+              label: '撤销',
+              onPressed: () async {
+                try {
+                  await TodosApi.patchTodo(t.id, status: 'todo');
+                } catch (_) {}
+                if (mounted) await _load();
+              },
+            ),
+          ),
+          autoClose: const Duration(seconds: 3, milliseconds: 600));
     }
   }
 
@@ -768,10 +765,17 @@ class _TodoEditSheetState extends State<_TodoEditSheet> {
 
   Future<void> _pickDue() async {
     final now = DateTime.now();
+    final firstDate = now.subtract(const Duration(days: 365));
+    // 已预填截止日时，日期选择器定位到该日（而非今天）——日历"加一件"
+    // 预填后用户改期的场景（R2 审查）；clamp 防预填超出可选范围
+    var initial = _dueAt != null
+        ? DateTime.fromMillisecondsSinceEpoch((_dueAt! * 1000).toInt())
+        : now;
+    if (initial.isBefore(firstDate)) initial = firstDate;
     final d = await showDatePicker(
         context: context,
-        initialDate: now,
-        firstDate: now.subtract(const Duration(days: 365)),
+        initialDate: initial,
+        firstDate: firstDate,
         lastDate: now.add(const Duration(days: 365 * 3)));
     if (d == null) return;
     if (!mounted) return;

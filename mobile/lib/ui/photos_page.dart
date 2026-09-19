@@ -72,6 +72,44 @@ class PhotosPage extends ConsumerStatefulWidget {
     return null;
   }
 
+  /// 月视图向下续流的游标推进（1.1.5；R4 审查提为纯函数可测）：
+  /// facets 命中按分布取下一个更早月（跳过空月），否则按日历回退
+  /// （空月由调用方的空页快速跳过）。
+  @visibleForTesting
+  static String? nextOlderMonth(Map<String, int>? months, String m) {
+    if (months != null && months.isNotEmpty) {
+      final keys = months.keys.where((k) => k.length == 7).toList()
+        ..sort((a, b) => b.compareTo(a));
+      final i = keys.indexOf(m);
+      if (i >= 0) return i + 1 < keys.length ? keys[i + 1] : null;
+    }
+    final y = int.tryParse(m.substring(0, 4)) ?? 2026;
+    final mo = int.tryParse(m.substring(5, 7)) ?? 1;
+    if (mo == 1) return '${y - 1}-12';
+    return '$y-${(mo - 1).toString().padLeft(2, '0')}';
+  }
+
+  /// 月视图向上前插的游标推进（1.1.6；R4 审查提为纯函数可测）：
+  /// facets 命中按分布取上一个更晚月，否则按日历回退；[nowM] 为当前
+  /// 自然月上限——不前插未来的月份。
+  @visibleForTesting
+  static String? newerMonth(
+      Map<String, int>? months, String m, String nowM) {
+    String? next;
+    if (months != null && months.isNotEmpty) {
+      final keys = months.keys.where((k) => k.length == 7).toList()
+        ..sort((a, b) => b.compareTo(a));
+      final i = keys.indexOf(m);
+      if (i >= 0) next = i > 0 ? keys[i - 1] : null;
+    }
+    next ??= () {
+      final y = int.tryParse(m.substring(0, 4)) ?? 2026;
+      final mo = int.tryParse(m.substring(5, 7)) ?? 1;
+      return mo == 12 ? '${y + 1}-01' : '$y-${(mo + 1).toString().padLeft(2, '0')}';
+    }();
+    return next.compareTo(nowM) > 0 ? null : next;
+  }
+
   @override
   ConsumerState<PhotosPage> createState() => _PhotosPageState();
 }
@@ -118,6 +156,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   // ── 1.0.2 批次新增状态 ──────────────────────────────────
   bool _jumping = false;        // 月视图切换进行中（挡新切换与拖选）
+  String _jumpingLabel = '正在打开时间线…';   // 底部悬浮提示文案（进/出方向不同）
   // 月视图无缝续流（1.1.5，反馈 ddb0/0471/7e15）：`_month`=锚月（横幅/轴），
   // `_mCursor`=正在追加的月份（从锚月起向过去推进），`_mOffset`=游标月内偏移。
   // 临近底部就把更早月份**追加**到墙上（不清空不跳变），直到没有更早月份。
@@ -263,8 +302,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _loadMore({bool force = false}) async {
     // force（下拉/切筛选后的整墙重拉）绕过 _loading guard：否则分页请求
     // 在途时点筛选会把照片墙清成假空态且无人再拉（R1-P1）；gen 校验
-    // 已保证旧响应被丢弃，不会串页
-    if ((!force && _loading) || _done || !mounted) return;
+    // 已保证旧响应被丢弃，不会串页。非 force 时与 _prepending 互斥（前插
+    // 在途不并行向下追加，锚点补偿才准）；**force 不受 _prepending 挡**——
+    // _refresh 在前插取数期间发生时必须照常加载，否则清空的墙永远没人
+    // 再拉（ADV1 P0：前插中退出月视图/切筛选 → 空墙死等）；此时前插的
+    // 取数结果由 gen 校验丢弃，安全
+    if ((!force && (_loading || _prepending)) || _done || !mounted) return;
     final gen = _gen;
     // _limit 依赖异步赋值的 _base：必须在此刻物化，请求与 _done 判断
     // 用同一个值——否则首屏请求发出时 _base 还没到位被判成公网（limit=60），
@@ -334,39 +377,14 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   /// 游标月的下一个**更早**月份。facets 可用时按月份分布走（跳过空月）；
   /// 否则按日历回退（空月会被空页快速跳过）。
-  String? _nextOlderMonth(String m) {
-    final months = _months;
-    if (months != null && months.isNotEmpty) {
-      final keys = months.keys.where((k) => k.length == 7).toList()
-        ..sort((a, b) => b.compareTo(a));
-      final i = keys.indexOf(m);
-      if (i >= 0) return i + 1 < keys.length ? keys[i + 1] : null;
-    }
-    final y = int.tryParse(m.substring(0, 4)) ?? 2026;
-    final mo = int.tryParse(m.substring(5, 7)) ?? 1;
-    if (mo == 1) return '${y - 1}-12';
-    return '$y-${(mo - 1).toString().padLeft(2, '0')}';
-  }
+  String? _nextOlderMonth(String m) => PhotosPage.nextOlderMonth(_months, m);
 
   /// 游标月的上一个**更晚**月份（无缝上滑用）。没有更晚月份（已到当前月）
   /// 返回 null。facets 可用时优先（跳过空月），否则按日历回退。
   String? _newerMonth(String m) {
-    final months = _months;
-    final nowM =
-        '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}';
-    String? next;
-    if (months != null && months.isNotEmpty) {
-      final keys = months.keys.where((k) => k.length == 7).toList()
-        ..sort((a, b) => b.compareTo(a));
-      final i = keys.indexOf(m);
-      if (i >= 0) next = i > 0 ? keys[i - 1] : null;
-    }
-    next ??= () {
-      final y = int.tryParse(m.substring(0, 4)) ?? 2026;
-      final mo = int.tryParse(m.substring(5, 7)) ?? 1;
-      return mo == 12 ? '${y + 1}-01' : '$y-${(mo + 1).toString().padLeft(2, '0')}';
-    }();
-    return next.compareTo(nowM) > 0 ? null : next;   // 不前插未来的月份
+    final now = DateTime.now();
+    return PhotosPage.newerMonth(_months, m,
+        '${now.year}-${now.month.toString().padLeft(2, '0')}');
   }
 
   /// 月视图顶部无缝前插（1.1.6，反馈 5d2d）：滚到月视图顶且上方还有更晚
@@ -415,6 +433,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         end = endReached || list.isEmpty;
       }
       if (!mounted || gen != _gen) return;
+      // 取数期间用户可能已进入拖选/多选：insertAll(0) 会使 _selected 的
+      // flat 下标整体移位 → 批量删除删错照片（ADV1 P1）。放弃本次前插，
+      // 用户下次上滑会重新触发
+      if (_selected.isNotEmpty || _dragSelecting) return;
       if (fetched.isEmpty) {
         // 空月（facets 缺失按日历回退才会碰到）：推进游标下次再试
         if (++_emptyPrepends > 12) return;   // 一路空到当前月：视为已到顶
@@ -561,9 +583,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 触发还依赖恰好落在阈值内的一次滚动事件，时灵时不灵）改为游标追加式
   /// 无缝续流。估算/校准机制（_scrollToDay 一族）保留给合并刷新的视口锚定。
   Future<void> _jumpToMonth(String m) async {
-    if (_loading || _selected.isNotEmpty || !mounted) return;
+    // _jumping 也要挡：上一次切换的 finally 清标志后，_refresh 尾部
+    // （_ensureMonths 阶段）仍在途——连点两个月会在此窗口内穿插（R1 审查）
+    if (_loading || _jumping || _selected.isNotEmpty || !mounted) return;
     setState(() {
       _jumping = true;
+      _jumpingLabel = '正在打开 ${_monthLabel(m)}…';
       _month = m;
     });
     _railMonthN.value = m;
@@ -578,11 +603,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   /// 回全时间线（顶部横幅 / 月份轴「全部」）。
   void _exitMonthView() {
-    if (_month == null || _loading) return;
+    // _selected：与 _jumpToMonth 对齐——多选中不静默清空选择（ADV1 3c）
+    if (_month == null || _loading || _selected.isNotEmpty) return;
     _railMonthN.value = null;
     setState(() {
       _month = null;
       _jumping = true;
+      _jumpingLabel = '正在返回全部时间线…';
     });
     // ignore: discarded_futures
     () async {
@@ -748,7 +775,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 长按起始格：进入多选（或以"取消"方向开始），并开启拖拽连选与
   /// 边缘自动滚动。
   void _dragBegin(int flat, Offset pos) {
-    if (_deleting || _jumping) return;
+    // _prepending：前插在途时启动拖选，插入完成后 _selected 的 flat 下标
+    // 会整体移位 → 批量删除删错照片（ADV1 P1）
+    if (_deleting || _jumping || _prepending) return;
     _dragTouched.clear();
     _dragAdd = !_selected.contains(flat);   // 起始格已选中 → 拖动为取消
     _toggleSelect(flat);
@@ -1152,9 +1181,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       engine.addListener(watch);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(n > 0 ? '已加入上传队列 $n 张' : '照片已在队列中'),
-        duration: const Duration(seconds: 2)));
+    showSnackTracked(
+        ScaffoldMessenger.of(context),
+        SnackBar(
+            content: Text(n > 0 ? '已加入上传队列 $n 张' : '照片已在队列中'),
+            duration: const Duration(seconds: 2)),
+        autoClose: const Duration(seconds: 2, milliseconds: 500));
   }
 
   // ── 多选模式 ──────────────────────────────────────────────
@@ -1192,9 +1224,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     _exitSelection();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(n > 0 ? '已加入下载队列 $n 张' : '任务已在队列中'),
-        duration: const Duration(seconds: 2)));
+    showSnackTracked(
+        ScaffoldMessenger.of(context),
+        SnackBar(
+            content: Text(n > 0 ? '已加入下载队列 $n 张' : '任务已在队列中'),
+            duration: const Duration(seconds: 2)),
+        autoClose: const Duration(seconds: 2, milliseconds: 500));
   }
 
   Future<void> _deleteSelected() async {
@@ -1241,9 +1276,14 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     if (!mounted) return;
     setState(() => _deleting = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(failed > 0 ? '已删 $ok 张，$failed 张失败' : '已删除 $ok 张'),
-        duration: const Duration(seconds: 2)));
+    showSnackTracked(
+        ScaffoldMessenger.of(context),
+        SnackBar(
+            content: Text(failed > 0
+                ? '已删 $ok 张，$failed 张失败'
+                : '已删除 $ok 张'),
+            duration: const Duration(seconds: 2)),
+        autoClose: const Duration(seconds: 2, milliseconds: 500));
     await _refresh();
   }
 
@@ -1276,8 +1316,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final res = await purgeServerFiles(paths.map((it) => it.path));
       if (!mounted) return;
       _exitSelection();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(res.report), duration: const Duration(seconds: 3)));
+      showSnackTracked(
+          ScaffoldMessenger.of(context),
+          SnackBar(
+              content: Text(res.report),
+              duration: const Duration(seconds: 3)),
+          autoClose: const Duration(seconds: 3, milliseconds: 600));
     } finally {
       // 编排层任何异常都不能把底栏永久藏掉
       if (mounted) setState(() => _deleting = false);
@@ -1894,15 +1938,16 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                   decoration: BoxDecoration(
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(20)),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    SizedBox(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const SizedBox(
                         width: 12,
                         height: 12,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.white)),
-                    SizedBox(width: 8),
-                    Text('正在定位时间线…',
-                        style: TextStyle(fontSize: 12, color: Colors.white)),
+                    const SizedBox(width: 8),
+                    Text(_jumpingLabel,
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.white)),
                   ])))));
     }
     return Stack(children: children);
