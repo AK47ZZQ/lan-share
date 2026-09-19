@@ -416,8 +416,11 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
              if sort == "added" else "taken_at DESC, path")
     all_rows = photos_store.list_for_gallery(
         cond if pushdown else "", args, order)
-    rows = [r for r in all_rows if visible(user, r["path"].split("/"))] \
-        if not pushdown else list(all_rows)
+    # visible() 必须无条件兜底（2026-09-19 对抗审查 F3）：下推只是 DB 侧预过滤，
+    # 而 PG 的 LIKE 大小写敏感（SQLite 只折叠 ASCII）——磁盘目录若存在 'Private'
+    # 等大小写变体，下推条件在 PG 会把他人 private 当 shared 放行。visible()
+    # 对 member/admin 是纯内存判定（无 DB 往返），逐行代价微秒级，正确性优先。
+    rows = [r for r in all_rows if visible(user, r["path"].split("/"))]
     # 全局隐藏清单（b4e0）：admin 标记的目录对所有人生效，任何分支都过滤
     excludes = _wall_excludes()
     if excludes:

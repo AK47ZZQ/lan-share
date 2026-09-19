@@ -70,7 +70,11 @@ def test_dav_options_advertises_class_two(auth):
 
 
 def test_dav_lock_blocks_other_user_then_owner_releases(client):
-    """完整锁生命周期：他人写入被 423 拦下 → 非锁主 UNLOCK 被拒 → 锁主释放后放行。"""
+    """完整锁生命周期：他人写入被 423 拦下 → 非锁主 UNLOCK 被拒 → 锁主释放后放行。
+
+    （2026-09-19 对抗审查 F1 收紧：LOCK 要求写权（RFC 4918 §9.10），故锁主
+    member 必须持目标目录写授权——原版用只读 member 拿写锁挡 admin 写入，
+    恰是把"只读者可写 DoS 全体"的越权面当预期固化了。）"""
     d = f"davlock-{_rand()}"
     admin = _admin(client)
     assert admin.post(f"/api/mkdir/{d}").status_code == 200
@@ -78,6 +82,10 @@ def test_dav_lock_blocks_other_user_then_owner_releases(client):
 
     uname = f"davlocku-{_rand()}"
     _mk_member(client, uname)
+    from app.db import _db
+    uid = _db().execute("SELECT id FROM users WHERE username=?", (uname,)).fetchone()["id"]
+    assert admin.post("/api/admin/grants", json={
+        "user_id": uid, "path": d, "can_read": True, "can_write": True}).status_code == 200
     member = _member_session(client, uname)
 
     dav = f"/dav/{d}/f.txt"

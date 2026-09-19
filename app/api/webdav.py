@@ -135,7 +135,10 @@ def _dav_tree_size(p: Path) -> int:
     return p.stat().st_size
 
 
-_READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS", "LOCK", "UNLOCK"}
+# LOCK/UNLOCK 不在 read 集（2026-09-19 对抗审查 F1）：LOCK 是写操作（RFC 4918
+# §9.10 要求写权），走 read 通道时只读 member 可 LOCK 共享根（resolve("",
+# "read")=SHARE_ROOT），令全体写者（含 admin）423 一小时且可无限续期 = 写 DoS。
+_READ_METHODS = {"GET", "HEAD", "PROPFIND", "PROPPATCH", "OPTIONS"}
 
 
 # ─── WebDAV 写锁（11 号复审 P2-5）─────────────────────────────

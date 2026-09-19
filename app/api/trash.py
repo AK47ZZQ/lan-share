@@ -109,8 +109,19 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
         raise HTTPException(status_code=404, detail="Trash file missing")
     dest = resolve(_user, row["orig_path"], "write")
     if dest.exists():
+        # 冲突重命名必须连"恢复名"一起查（2026-09-19 对抗审查 F2）：只查主名时，
+        # 第二个同 orig_path 条目的恢复会在「f (恢复).txt」已存在时走 shutil.move
+        # 的 copy2 回退（Windows os.rename 必抛）——静默覆盖上一份恢复副本
+        # （bug·27ce"rename 静默替换"同族）。逐个后缀找到空位，宁多勿覆盖。
         stem, suffix = dest.stem, dest.suffix
-        dest = dest.with_name(f"{stem} (恢复){suffix}")
+        n = 1
+        while True:
+            tag = "" if n == 1 else f" {n}"   # 首个冲突保持旧名「(恢复)」，向后兼容
+            cand = dest.with_name(f"{stem} (恢复{tag}){suffix}")
+            if not cand.exists():
+                dest = cand
+                break
+            n += 1
     dest.parent.mkdir(parents=True, exist_ok=True)
     await run_in_threadpool(shutil.move, str(trash_path), str(dest))
     await run_in_threadpool(_drop_trash_row, trash_id)
