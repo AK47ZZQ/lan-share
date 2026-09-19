@@ -113,3 +113,26 @@ def test_dav_non_owner_cannot_unlock(auth, workdir):
     assert r2.status_code == 403, r2.text
     _admin(auth).request("UNLOCK", f"/dav/{workdir}/{fname}",
                          headers={"Lock-Token": f"<{token}>"})
+
+
+def test_dav_lock_on_ancestor_dir_blocks_descendant_write(auth, workdir):
+    """depth 语义（_conflicting_lock 沿祖先链上溯）：目录上的锁阻挡其子孙的写。"""
+    a_name, b_name = "dvanc" + _rand(), "dvanb" + _rand()
+    _mk_member(auth, a_name, MEMBER_PASS)
+    _mk_member(auth, b_name, MEMBER_PASS)
+    _grant(auth, a_name, workdir, can_write=True)
+    _grant(auth, b_name, workdir, can_write=True)
+    a = _member_session(auth, a_name, MEMBER_PASS)
+    b = _member_session(auth, b_name, MEMBER_PASS)
+    sub = f"{workdir}/anc{_rand()}"
+    assert a.request("MKCOL", f"/dav/{sub}").status_code in (200, 201)
+    # A 锁子目录；B 写该目录**内部**的文件 → 423（锁在目标自身，最基本情形）
+    r = a.request("LOCK", f"/dav/{sub}/")
+    assert r.status_code == 200
+    token = r.headers.get("lock-token", "").strip("<>")
+    rb = b.put(f"/dav/{sub}/inner.txt", content=b"x")
+    assert rb.status_code == 423, rb.text
+    # A 解锁后 B 可写
+    assert a.request("UNLOCK", f"/dav/{sub}/",
+                     headers={"Lock-Token": f"<{token}>"}).status_code == 204
+    assert b.put(f"/dav/{sub}/inner.txt", content=b"x").status_code in (200, 201, 204)
