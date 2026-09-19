@@ -117,8 +117,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
   // ── 1.0.2 批次新增状态 ──────────────────────────────────
-  bool _jumping = false;        // 月视图切换/接续进行中（挡新切换与拖选）
-  bool _advancing = false;      // 月视图自动接更早月份进行中（防重入）
+  bool _jumping = false;        // 月视图切换进行中（挡新切换与拖选）
+  // 月视图无缝续流（1.1.5，反馈 ddb0/0471/7e15）：`_month`=锚月（横幅/轴），
+  // `_mCursor`=正在追加的月份（从锚月起向过去推进），`_mOffset`=游标月内偏移。
+  // 临近底部就把更早月份**追加**到墙上（不清空不跳变），直到没有更早月份。
+  String? _mCursor;
+  int _mOffset = 0;
   // 月份轴高亮（跟随滚动）。用 ValueNotifier 而非 setState：滚动中每到月份
   // 边界就会变——setState 会重建整页（全部 sliver 树 + O(n) 分组重算），
   // 快滑跨月时就是一串重建风暴（31cd「滑动特别卡」主因之一）；收敛到轴自身重建
@@ -161,14 +165,6 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   void _onScroll() {
     if (_scroll.position.extentAfter < 600) _loadMore();
-    // 月视图滚到底：自动接更早的月份（1.1.4 时间线重构）
-    if (_month != null &&
-        _done &&
-        !_loading &&
-        !_advancing &&
-        _scroll.position.extentAfter < 80) {
-      _advanceOlderMonth();
-    }
     // 月份轴高亮跟随（1.0.2）：节流 180ms，避免每个滚动帧都遍历格子注册表
     _railTick ??= Timer(const Duration(milliseconds: 180), () {
       _railTick = null;
@@ -214,7 +210,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 末页按 want 截断请求长度——此前固定要 300 条但只留 want 条，白烧
   /// 服务端扫描与流量）。供翻页(_loadMore)、增量合并(_refreshSoft)、
   /// 时间轴跳月(_jumpToMonth)共用；过期响应由调用方的 _gen 机制丢弃。
-  Future<(List<PhotoItem>, bool)> _fetchBatch(int from, int want) async {
+  Future<(List<PhotoItem>, bool)> _fetchBatch(int from, int want,
+      {String? monthOverride}) async {
+    final month = monthOverride ?? _month;   // 月视图续流按游标月取数
     const page = 300;
     final out = <PhotoItem>[];
     final seen = <String>{};   // 并行分页与远端数据漂移的去重保险
@@ -234,7 +232,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               limit: lim,
               offset: o,
               mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
-              month: _month,
+              month: month,
               byAdded: _byAdded,
               includeDirs:
                   _includedDirs.isEmpty ? null : _includedDirs.join(','))
@@ -269,14 +267,55 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final limit = _limit;
     setState(() => _loading = true);
     try {
-      final (list, endReached) = await _fetchBatch(_offset, limit);
-      if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
-      setState(() {
-        _items.addAll(list);
-        _offset = _items.length;
-        _done = endReached;
-        _failed = false;
-      });
+      if (_month == null) {
+        // ── 全时间线模式：原有全局翻页 ──
+        final (list, endReached) = await _fetchBatch(_offset, limit);
+        if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
+        setState(() {
+          _items.addAll(list);
+          _offset = _items.length;
+          _done = endReached;
+          _failed = false;
+        });
+      } else {
+        // ── 月视图无缝续流（1.1.5，反馈 ddb0/0471/7e15）──
+        // 从游标月(_mCursor)的 _mOffset 继续取，当月取尽自动接更早月份，
+        // 直到凑满一页或没有更早月份。追加方向向下、不动既有内容——
+        // 滚动位置天然稳定，也不再出现"整月切换"的清空闪跳。
+        // 此前的接续靠"extentAfter<80 时的一次滚动事件"触发，当月内容
+        // 恰好一屏/最后一滑落在阈值外时永远等不到事件（"有些时候没办法
+        // 下滑"的根因）；改为加载循环本身跨月推进 + 底部过滚动兜底。
+        var got = 0;
+        var emptyStreak = 0;
+        while (got < limit && mounted && gen == _gen && !_done) {
+          final (list, endReached) =
+              await _fetchBatch(_mOffset, limit - got, monthOverride: _mCursor);
+          if (!mounted || gen != _gen) return;
+          if (list.isNotEmpty) {
+            setState(() => _items.addAll(list));
+            got += list.length;
+            emptyStreak = 0;
+          }
+          if (endReached) {
+            final cur = _mCursor;
+            if (cur == null) break;   // 游标丢失：当月到底（防御，正常不会发生）
+            final next = _nextOlderMonth(cur);
+            if (next == null) {
+              setState(() { _done = true; _failed = false; });
+              break;
+            }
+            setState(() { _mCursor = next; _mOffset = 0; });
+          } else {
+            setState(() { _mOffset += list.length; _failed = false; });
+          }
+          // facets 失败/漂移时按日历回退逐月探，连 12 个空月就当到底，
+          // 防止一路空打到最早年份
+          if (list.isEmpty && ++emptyStreak > 12) {
+            setState(() => _done = true);
+            break;
+          }
+        }
+      }
     } catch (_) {
       if (mounted && gen == _gen) setState(() => _failed = true);
     } finally {
@@ -286,6 +325,22 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final sp = await SharedPreferences.getInstance();
       _lastBackupDone = sp.getInt('backup_last_done_at');
     }
+  }
+
+  /// 游标月的下一个**更早**月份。facets 可用时按月份分布走（跳过空月）；
+  /// 否则按日历回退（空月会被空页快速跳过）。
+  String? _nextOlderMonth(String m) {
+    final months = _months;
+    if (months != null && months.isNotEmpty) {
+      final keys = months.keys.where((k) => k.length == 7).toList()
+        ..sort((a, b) => b.compareTo(a));
+      final i = keys.indexOf(m);
+      if (i >= 0) return i + 1 < keys.length ? keys[i + 1] : null;
+    }
+    final y = int.tryParse(m.substring(0, 4)) ?? 2026;
+    final mo = int.tryParse(m.substring(5, 7)) ?? 1;
+    if (mo == 1) return '${y - 1}-12';
+    return '$y-${(mo - 1).toString().padLeft(2, '0')}';
   }
 
   /// 硬刷新（下拉/切筛选/看图删除后）：清空重拉，回到墙顶。
@@ -298,6 +353,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       _offset = 0;
       _done = false;
       _failed = false;
+      // 月视图游标复位到锚月（续流状态一并重置）
+      _mCursor = _month;
+      _mOffset = 0;
     });
     await _loadMore(force: true);
     // 月份分布随刷新重拉（v0.14）：此前 _months 首拉后永久缓存，备份/
@@ -315,6 +373,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 替换并把视口锚回原日期组。多选/跳月中暂缓，退出后补一次。
   Future<void> _refreshSoft() async {
     if (!mounted) return;
+    // 月视图（含已续流的更早月份）不做合并：合并口径是"锚月过滤后的列表"，
+    // 整表替换会把已续流的月份洗掉、视口塌回月尾。月视图内容短暂，新照片
+    // 回全时间线可见；需要手动同步时下拉刷新即可。
+    if (_month != null) return;
     if (_selected.isNotEmpty || _jumping || _dragSelecting) {
       // _dragSelecting：拖拽连选中合并会把 _items 整体替换，_dragTouched
       // 的下标瞬间指向别的照片——继续拖会勾错格子（对抗审查 R31）
@@ -380,18 +442,19 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
   }
 
-  // ── 时间轴跳月（20260914041746-6c58 引入；1.1.4 重构，反馈 6b09 续）──
-  /// 右缘月份轴点按：**切换到目标月的月视图**（服务端 month= 过滤）。
+  // ── 时间轴跳月（20260914041746-6c58 引入；1.1.4 月视图直达、
+  // 1.1.5 无缝续流，反馈 6b09/ddb0/0471/7e15）──
+  /// 右缘月份轴点按：**切换到目标月起的月视图**（服务端 month= 过滤）。
   /// 落点即该月最新一天，只拉当月数据、缩略图量小，秒级落地零卡顿；
-  /// 滚到底部自动接更早的月份（_advanceOlderMonth），轴上「全部」与顶部
-  /// 横幅随时回全时间线。
-  /// 历史教训：此前是"全时间线深跳转"——按 facets 累计推算偏移，预拉数千条
-  /// 数据、估算数万像素落点，自 1.0.2 起连修四轮（df72/6b09 两轮+两版文档
-  /// 修正）仍反复出现卡顿/照片加载不出/弹回顶部，1.1.4 整体放弃该路线。
-  /// 估算/校准机制（_scrollToDay 一族）保留给合并刷新的视口锚定使用。
+  /// 滚动临近底部自动把更早的月份**无缝追加**到墙上（_loadMore 月模式，
+  /// 不清空不跳变），轴上「全部」与顶部横幅随时回全时间线。
+  /// 历史教训：最初的"全时间线深跳转"——按 facets 累计推算偏移，预拉数千条
+  /// 数据、估算数万像素落点，自 1.0.2 起连修四轮仍反复卡顿/加载不出/弹回
+  /// 顶部，1.1.4 放弃该路线；1.1.5 再把"整月切换式接续"（每次清空重载，
+  /// 触发还依赖恰好落在阈值内的一次滚动事件，时灵时不灵）改为游标追加式
+  /// 无缝续流。估算/校准机制（_scrollToDay 一族）保留给合并刷新的视口锚定。
   Future<void> _jumpToMonth(String m) async {
     if (_loading || _selected.isNotEmpty || !mounted) return;
-    if (_month == m) return;
     setState(() {
       _jumping = true;
       _month = m;
@@ -406,35 +469,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
   }
 
-  /// 月视图滚到底：自动接**更早**的月份（整月切换，不与当月混流——
-  /// 混流会让 month= 过滤下的合并刷新口径失真）。
-  Future<void> _advanceOlderMonth() async {
-    final months = _months;
-    final cur = _month;
-    if (months == null || cur == null || _advancing) return;
-    final keys = months.keys.where((k) => k.length == 7).toList()
-      ..sort((a, b) => b.compareTo(a));
-    final i = keys.indexOf(cur);
-    if (i < 0 || i + 1 >= keys.length) return;   // 已是最早月份
-    _advancing = true;
-    final next = keys[i + 1];
-    _railMonthN.value = next;
-    setState(() {
-      _month = next;
-      _jumping = true;
-    });
-    try {
-      await _refresh();
-    } finally {
-      _pendingRefresh = false;
-      _advancing = false;
-      if (mounted) setState(() => _jumping = false);
-    }
-  }
-
   /// 回全时间线（顶部横幅 / 月份轴「全部」）。
   void _exitMonthView() {
-    if (_month == null || _loading || _advancing) return;
+    if (_month == null || _loading) return;
     _railMonthN.value = null;
     setState(() {
       _month = null;
@@ -1355,13 +1392,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     return _buildTimeline(selecting);
   }
 
-  /// 年月快滚轴（v0.11 引入，1.0.2 改造为**跳转轴**）：右缘竖排月份，
-  /// 点按在全量时间线内定位到该月（不再按月过滤——那会锁死单月翻不了）；
-  /// 高亮跟随滚动实时移动。月份数 ≥2、非多选、非入库序、未按月过滤时显示。
+  /// 年月快滚轴（v0.11 引入；1.0.2 改跳转轴；1.1.5 按年分组——反馈 7e15
+  /// "按月跳转过于频繁"）：年行点按跳该年最新月，高亮年自动展开月份行；
+  /// 高亮跟随滚动实时移动。月份数 ≥2、非多选、非入库序时显示。
   /// 只读 _months（已带筛选口径），不自己发请求。
-  /// 31cd 性能改造：①高亮用 ValueListenableBuilder 局部重建（此前随页面
-  /// setState 整页重建）；②BackdropFilter 实时模糊撤掉——滑动中每帧对轴
-  /// 区域 saveLayer+blur，低端机显著掉帧，半透明实色观感相近、成本近零。
+  /// 31cd 性能改造：①高亮用局部重建（此前随页面 setState 整页重建）；
+  /// ②BackdropFilter 实时模糊撤掉——低端机掉帧，半透明实色观感相近。
   Widget? _monthRail(bool selecting) {
     // 月视图下轴保持可见：它是月份间跳转的枢纽，「全部」条目回全时间线
     if (selecting || _byAdded) return null;
@@ -1369,6 +1405,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (months == null || months.length < 2) return null;
     final entries = months.entries.toList()
       ..sort((a, b) => b.key.compareTo(a.key));   // 新月份在顶
+    // 按年分组（7e15）：年行默认折叠、只占一行；当前高亮年自动展开月份行
+    // 供细粒度跳转。点年行 = 跳到该年最新月份。
+    final byYear = <String, List<MapEntry<String, int>>>{};
+    for (final e in entries) {
+      byYear.putIfAbsent(e.key.substring(0, 4), () => []).add(e);
+    }
+    final yearKeys = byYear.keys.toList()..sort((a, b) => b.compareTo(a));
     final cs = Theme.of(context).colorScheme;
     Widget entry(String label, String month, String? monthKey,
         {int? count, required bool on, required VoidCallback onTap}) {
@@ -1427,11 +1470,28 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                                   curve: Curves.easeOutCubic);
                             }
                           }),
-                      for (final e in entries)
-                        entry(e.key.substring(2), e.key, e.key,
-                            count: e.value,
-                            on: railMonth == e.key,
-                            onTap: () => _jumpToMonth(e.key)),
+                      for (final y in yearKeys) ...[
+                        entry(y, 'y-$y', null,
+                            count: byYear[y]!
+                                .fold<int>(0, (s, e) => s + e.value),
+                            on: railMonth != null &&
+                                railMonth.isNotEmpty &&
+                                railMonth.startsWith(y),
+                            onTap: () =>
+                                _jumpToMonth(byYear[y]!.first.key)),
+                        // 高亮年展开月份行（跟随手滑/跳转所在月份）
+                        if (railMonth != null &&
+                            railMonth.isNotEmpty &&
+                            railMonth.startsWith(y))
+                          for (final e in byYear[y]!)
+                            Padding(
+                                padding: const EdgeInsets.only(left: 5),
+                                child: entry(e.key.substring(5), e.key,
+                                    e.key,
+                                    count: e.value,
+                                    on: railMonth == e.key,
+                                    onTap: () => _jumpToMonth(e.key))),
+                      ],
                     ])))));
   }
 
@@ -1481,7 +1541,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Widget _buildTimeline(bool selecting) {
     // v0.20 入库序：不按日分组，整列平铺（新上传永远置顶，日期头无意义）
     final groups = _computeGroups();
-    final body = CustomScrollView(
+    final body = NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          // 底部过滚动兜底（ddb0）：当月内容不足一屏/已滚到硬底时 position
+          // 不再变化、onScroll 不会再触发——过滚动通知是"还想往下看"的唯一
+          // 信号，用它驱动月视图续流取更早月份
+          if (n is OverscrollNotification && n.overscroll > 0) _loadMore();
+          return false;
+        },
+        child: CustomScrollView(
         controller: _scroll,
         // 提前构建缓存区（默认 250px）：缩略图请求提前起步，快滑到时已在
         // 下载/解码路上，减少落地后的转圈（31cd「加载慢」感知优化）。
@@ -1519,7 +1587,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                               const SizedBox(width: Gap.xxs),
                               Expanded(
                                   child: Text(
-                                      '正在看 ${_monthLabel(_month!)} · 点此返回全部时间线',
+                                      '正在看 ${_monthLabel(_month!)} 起（往下滑自动接更早月份）· 点此返回全部时间线',
                                       style: Theme.of(context)
                                           .textTheme
                                           .labelSmall
@@ -1679,7 +1747,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                         child: SizedBox(width: 18, height: 18,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2))))),
-        ]);
+        ]));
     // 6b09 根修：CustomScrollView 必须永远占据本方法返回树的**同一槽位、
     // 同一层级**。此前包裹结构随状态变形——月份轴出现/消失（_months 加载
     // 完成、进多选、按月过滤、入库序）时 body ↔ Stack([body, rail]) 互切，

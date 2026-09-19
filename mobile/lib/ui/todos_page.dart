@@ -85,6 +85,9 @@ class _TodoList {
 class _TodosPageState extends State<TodosPage> {
   bool _loading = true;
   bool _showDone = false;
+  bool _showCal = false;              // 日历视图（cfd2）：AppBar 切换
+  DateTime _calMonth =                // 日历当前展示月（取 1 号）
+      DateTime(DateTime.now().year, DateTime.now().month, 1);
   List<_Todo> _todos = const [];
   List<_TodoList> _lists = const [];
   Map<int, Map<String, String>> _members = const {};
@@ -318,6 +321,12 @@ class _TodosPageState extends State<TodosPage> {
         title: const Text('待办'),
         actions: [
           IconButton(
+              tooltip: _showCal ? '列表视图' : '日历视图',
+              icon: Icon(_showCal
+                  ? Icons.list_outlined
+                  : Icons.calendar_month_outlined),
+              onPressed: () => setState(() => _showCal = !_showCal)),
+          IconButton(
               icon: const Icon(Icons.playlist_add_outlined),
               tooltip: '清单管理',
               onPressed: _manageLists),
@@ -334,7 +343,9 @@ class _TodosPageState extends State<TodosPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
+          : _showCal
+              ? _calendarView(cs)
+              : RefreshIndicator(
               onRefresh: _load,
               child: AdaptiveContent(
                 child: ListView(
@@ -360,6 +371,185 @@ class _TodosPageState extends State<TodosPage> {
               ),
             ),
     );
+  }
+
+  // ── 日历视图（cfd2，M4 提前）──────────────────────────────
+  /// 月历 + 截止日分布：点某天看当天待办并可勾选完成；无截止日的待办
+  /// 不上日历（列表视图仍可见）。纯 App 内渲染，零新依赖。
+  Widget _calendarView(ColorScheme cs) {
+    final first = DateTime(_calMonth.year, _calMonth.month, 1);
+    final daysInMonth = DateTime(_calMonth.year, _calMonth.month + 1, 0).day;
+    final lead = (first.weekday + 6) % 7;   // 周一=0 … 周日=6
+    final now = DateTime.now();
+    final byDay = <int, List<_Todo>>{};
+    for (final t in _todos) {
+      if (t.dueAt == null) continue;
+      final d = DateTime.fromMillisecondsSinceEpoch((t.dueAt! * 1000).toInt());
+      if (d.year == _calMonth.year && d.month == _calMonth.month) {
+        byDay.putIfAbsent(d.day, () => []).add(t);
+      }
+    }
+    return AdaptiveContent(
+        child: Column(children: [
+      Padding(
+          padding: const EdgeInsets.symmetric(vertical: Gap.xs),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            IconButton(
+                tooltip: '上个月',
+                icon: const Icon(Icons.chevron_left_outlined),
+                onPressed: () => setState(() => _calMonth = DateTime(
+                    _calMonth.year, _calMonth.month - 1, 1))),
+            const SizedBox(width: Gap.sm),
+            Text('${_calMonth.year} 年 ${_calMonth.month} 月',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(width: Gap.sm),
+            IconButton(
+                tooltip: '下个月',
+                icon: const Icon(Icons.chevron_right_outlined),
+                onPressed: () => setState(() => _calMonth = DateTime(
+                    _calMonth.year, _calMonth.month + 1, 1))),
+            TextButton(
+                onPressed: () => setState(() => _calMonth =
+                    DateTime(now.year, now.month, 1)),
+                child: const Text('今天')),
+          ])),
+      Row(children: [
+        for (final w in ['一', '二', '三', '四', '五', '六', '日'])
+          Expanded(
+              child: Center(
+                  child: Text(w,
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: cs.outline)))),
+      ]),
+      const SizedBox(height: Gap.xxs),
+      Expanded(
+          child: GridView.count(
+              crossAxisCount: 7,
+              childAspectRatio: 0.8,
+              padding: const EdgeInsets.only(bottom: Gap.xxxl),
+              children: [
+                for (var i = 0; i < lead; i++) const SizedBox.shrink(),
+                for (var day = 1; day <= daysInMonth; day++)
+                  _calDayCell(cs, day, byDay[day] ?? const [],
+                      isToday: now.year == _calMonth.year &&
+                          now.month == _calMonth.month &&
+                          now.day == day),
+              ])),
+    ]));
+  }
+
+  Widget _calDayCell(ColorScheme cs, int day, List<_Todo> todos,
+      {required bool isToday}) {
+    final open = todos.where((t) => !t.done).length;
+    return InkWell(
+        onTap: todos.isEmpty
+            ? null
+            : () => _showDaySheet('${_calMonth.month} 月 $day 日', todos),
+        borderRadius: BorderRadius.circular(Radii.sm),
+        child: Container(
+            margin: const EdgeInsets.all(1),
+            decoration: BoxDecoration(
+                color: isToday
+                    ? cs.primary.withValues(alpha: 0.12)
+                    : null,
+                borderRadius: BorderRadius.circular(Radii.sm)),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+              Text('$day',
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelMedium
+                      ?.copyWith(
+                          fontWeight: isToday ? FontWeight.w800 : null,
+                          color: isToday ? cs.primary : null)),
+              if (todos.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  for (final t in todos.take(3))
+                    Container(
+                        width: 5,
+                        height: 5,
+                        margin: const EdgeInsets.symmetric(horizontal: 1),
+                        decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: t.done ? cs.outline : cs.primary)),
+                ]),
+                if (open > 0)
+                  Text('$open',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(fontSize: 9, color: cs.outline)),
+              ],
+            ])));
+  }
+
+  /// 某天的待办清单（底部弹层）：可勾选完成/撤销——页面态与弹层本地态
+  /// 同步（toggle 按最新页面数据定位，避免旧对象状态翻转错乱）
+  Future<void> _showDaySheet(String header, List<_Todo> items) async {
+    final local = List<_Todo>.from(items);
+    await showModalBottomSheet(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, setSheet) => SafeArea(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Padding(
+                  padding: const EdgeInsets.all(Gap.md),
+                  child: Text(header,
+                      style: Theme.of(ctx)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700))),
+              if (local.isEmpty)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: Gap.xl),
+                    child: Text('这天没有待办',
+                        style: Theme.of(ctx).textTheme.bodySmall)),
+              for (final t in local)
+                ListTile(
+                    leading: Icon(
+                        t.done
+                            ? Icons.check_circle_outlined
+                            : Icons.radio_button_unchecked_outlined,
+                        color: t.done
+                            ? Theme.of(ctx).colorScheme.primary
+                            : Theme.of(ctx).colorScheme.outline),
+                    title: Text(t.title,
+                        style: Theme.of(ctx)
+                            .textTheme
+                            .bodyLarge
+                            ?.copyWith(
+                                decoration: t.done
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                color: t.done
+                                    ? Theme.of(ctx).colorScheme.onSurfaceVariant
+                                    : null)),
+                    onTap: () {
+                      final cur = _todos
+                          .firstWhere((x) => x.id == t.id, orElse: () => t);
+                      final target = cur.done ? 'todo' : 'done';
+                      setSheet(() {
+                        final i = local.indexWhere((x) => x.id == t.id);
+                        if (i >= 0) {
+                          local[i] = cur.copyWith(
+                              status: target,
+                              doneAt: target == 'done'
+                                  ? DateTime.now().millisecondsSinceEpoch /
+                                      1000
+                                  : null);
+                        }
+                      });
+                      // ignore: discarded_futures
+                      _toggle(cur);
+                    }),
+              const SizedBox(height: Gap.sm),
+            ]))));
   }
 
   Widget _todayCard(ColorScheme cs, {required int done, required int total}) {
