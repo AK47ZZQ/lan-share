@@ -177,8 +177,10 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                 # 样例即绕过配额。overwrite 场景旧 dest 已先进回收站（移出配额
                 # 树），此刻计价即落位后的真实占用；quota 拒绝时旧文件在回收站
                 # 可找回（与 _dav_put 的计价次序一致）。
-                sample_size = sample.stat().st_size
                 try:
+                    # 样例在 is_file() 与 stat() 之间被并发删除（如硬链接源被
+                    # 移动/覆盖）→ OSError 降级走正常分片，不 500
+                    sample_size = sample.stat().st_size
                     if dest.is_dir():
                         # 与直传/finish 同款守卫（红队 P2-1）：缺了它，秒传会把
                         # 整个同名目录树静默移进回收站再用 1 字节文件顶位
