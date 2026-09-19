@@ -121,7 +121,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | MKCOL | 创建目录（保留名拒绝） |
 | DELETE | 移入回收站 |
 | MOVE / COPY | Destination 头定位；`Overwrite: T` 时旧目标进回收站 |
-| LOCK / UNLOCK | 应答假锁（不真正持锁），满足客户端兼容 |
+| LOCK / UNLOCK | 进程内排他写锁（RFC 4918 Class 2，11 号复审实装）：要求**写权限**（2026-09-20 F1 收紧，此前走 read 通道可被只读者拿锁挡住全体写者）；持锁时他人写 → 423，UNLOCK 仅锁主 |
 | PROPPATCH | 应答成功但不落盘（客户端兼容） |
 
 ## 限速（应用层，按真实客户端 IP）
