@@ -306,13 +306,13 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     child: Text(_selected.length == _current.length
                         ? '全不选'
                         : '全选')),
-                // 恰好选了一个目录时提供原长按菜单里的目录管理项——
-                // 目录长按改为进多选（20260913211605-91fc）后，重命名/
-                // 钉住/详情的唯一入口收编到这里，不丢功能。
-                if (_selectedEntries.length == 1 &&
-                    _selectedEntries.first.isDir)
+                // 恰好选了一项时提供操作菜单——目录项原在长按菜单里
+                //（重命名/钉住/详情），目录长按改为进多选
+                //（20260913211605-91fc）后收编到这里；c220 扩展：勾选单个
+                // **文件**同样出菜单并可重命名（此前文件在多选态无重命名入口）。
+                if (_selectedEntries.length == 1)
                   PopupMenuButton<String>(
-                      tooltip: '目录操作',
+                      tooltip: '条目操作',
                       icon: const Icon(Icons.more_vert),
                       onSelected: (v) {
                         final e = _selectedEntries.first;
@@ -335,7 +335,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                           _toggleWallHidden(e);
                         }
                       },
-                      itemBuilder: (_) => [
+                      itemBuilder: (_) {
+                        final e = _selectedEntries.first;
+                        return [
+                          if (e.isDir)
                             const PopupMenuItem(
                                 value: 'pin',
                                 child: ListTile(
@@ -343,32 +346,33 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                                     contentPadding: EdgeInsets.zero,
                                     leading: Icon(Icons.star_border),
                                     title: Text('钉为常用目录'))),
-                            if (canManage)
-                              const PopupMenuItem(
-                                  value: 'rename',
-                                  child: ListTile(
-                                      dense: true,
-                                      contentPadding: EdgeInsets.zero,
-                                      leading: Icon(
-                                          Icons.drive_file_rename_outline),
-                                      title: Text('重命名'))),
+                          if (canManage)
                             const PopupMenuItem(
-                                value: 'details',
+                                value: 'rename',
                                 child: ListTile(
                                     dense: true,
                                     contentPadding: EdgeInsets.zero,
-                                    leading: Icon(Icons.info_outline),
-                                    title: Text('详情'))),
-                            if (isAdmin)
-                              const PopupMenuItem(
-                                  value: 'hide',
-                                  child: ListTile(
-                                      dense: true,
-                                      contentPadding: EdgeInsets.zero,
-                                      leading: Icon(
-                                          Icons.visibility_off_outlined),
-                                      title: Text('照片墙隐藏/恢复'))),
-                          ]),
+                                    leading: Icon(
+                                        Icons.drive_file_rename_outline),
+                                    title: Text('重命名'))),
+                          const PopupMenuItem(
+                              value: 'details',
+                              child: ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: Icon(Icons.info_outline),
+                                  title: Text('详情'))),
+                          if (isAdmin && e.isDir)
+                            const PopupMenuItem(
+                                value: 'hide',
+                                child: ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: Icon(
+                                        Icons.visibility_off_outlined),
+                                    title: Text('照片墙隐藏/恢复'))),
+                        ];
+                      }),
               ]
             : [
                 // v0.20：新建收进菜单——文件夹 / Markdown / 文本

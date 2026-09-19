@@ -118,8 +118,12 @@ class _TodosPageState extends State<TodosPage> {
     return DateTime(now.year, now.month, now.day).millisecondsSinceEpoch / 1000;
   }
 
-  // ── 分组（今天含逾期；无日期或远期归"以后"）────────────────
+  // ── 分组（今天=今天零点~明天零点，含逾期；无日期或远期归"以后"）────
+  // b799 修复：此前"今天"组只收 dueAt<今天零点（即纯逾期），今天 23:59
+  // 截止的待办全被分进"未来 7 天"——顶部"今日待办"卡恒 0/0、"今天"组
+  // 恒空（20260919013131-b799「提示框一直显示 0/0 不会显示待办」根因）
   Map<String, List<_Todo>> get _groups {
+    final todayEnd = _todayStart + 86400;
     final weekEnd = _todayStart + 7 * 86400;
     final today = <_Todo>[];
     final week = <_Todo>[];
@@ -129,8 +133,8 @@ class _TodosPageState extends State<TodosPage> {
       if (t.done) {
         done.add(t);
       } else if (t.dueAt != null && t.dueAt! < weekEnd) {
-        // 逾期也算"今天"（红字标示），未逾期近 7 天进"未来 7 天"
-        (t.dueAt! < _todayStart ? today : week).add(t);
+        // 今天（零点~明天零点，逾期也算今天红字标示）/ 未来 7 天
+        (t.dueAt! < todayEnd ? today : week).add(t);
       } else {
         later.add(t);
       }
@@ -373,11 +377,12 @@ class _TodosPageState extends State<TodosPage> {
 
   Widget _group(String title, List<_Todo> items) {
     final cs = Theme.of(context).colorScheme;
-    final overdue = title == '今天';
+    final hasOverdue = title == '今天' &&
+        items.any((t) => t.dueAt != null && t.dueAt! < _todayStart);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
           padding: const EdgeInsets.fromLTRB(Gap.xxs, Gap.sm, 0, Gap.xxs),
-          child: Text(overdue && items.isNotEmpty ? '今天（含逾期）' : title,
+          child: Text(hasOverdue ? '今天（含逾期）' : title,
               style: Theme.of(context)
                   .textTheme
                   .labelLarge

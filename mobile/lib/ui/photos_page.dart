@@ -405,13 +405,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           break;
         }
       }
-      if (!mounted || gen != _gen) return;
-      _railMonthN.value = m;
-      if (day != null) {
-        await _scrollToDay(day);
-      } else if (_scroll.hasClients) {
-        // facets 有计数但墙上找不到（计数为 0 的空月，防御）：回墙顶
-        await _scroll.animateTo(0,
+    if (!mounted || gen != _gen) return;
+    _railMonthN.value = m;
+    if (day != null) {
+      await _scrollToDay(day);
+    } else if (_scroll.hasClients) {
+      // facets 有计数但墙上找不到（计数为 0 的空月，防御）：回墙顶
+      await _scroll.animateTo(0,
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeOutCubic);
       }
@@ -1613,43 +1613,45 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             child: CircularProgressIndicator(
                                 strokeWidth: 2))))),
         ]);
-    Widget content = body;
+    // 6b09 根修：CustomScrollView 必须永远占据本方法返回树的**同一槽位、
+    // 同一层级**。此前包裹结构随状态变形——月份轴出现/消失（_months 加载
+    // 完成、进多选、按月过滤、入库序）时 body ↔ Stack([body, rail]) 互切，
+    // _jumping 时再套一层 Stack([Stack([body, rail]), toast])：父槽位
+    // runtimeType 变化（CustomScrollView ↔ Stack）会令 CustomScrollView
+    // **整树重建、ScrollPosition 新建（从 0 起）**——跳月落点在 finally 清
+    // _jumping 的那一帧瞬间作废弹回墙顶（真机录屏：落点 2025-03 后 1 秒
+    // 回顶；模拟器插桩：finally 时 position=129168 而画面/轴高亮在墙顶）。
+    // 改为固定 Stack：child 0 恒为 body，rail/toast 只作兄弟节点增删。
     final rail = _monthRail(selecting);
+    final children = <Widget>[body];
     if (rail != null) {
-      content = Stack(children: [
-        body,
-        Positioned(right: 2, top: 60, bottom: 90, child: rail),
-      ]);
+      children.add(Positioned(right: 2, top: 60, bottom: 90, child: rail));
     }
     if (_jumping) {
       // 跳月定位中：底部悬浮进度提示（拉取+校准滚动一般 1~3 秒）
-      content = Stack(children: [
-        content,
-        Positioned(
-            left: 0,
-            right: 0,
-            bottom: 28,
-            child: Center(
-                child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: Gap.md, vertical: Gap.xs),
-                    decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(20)),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white)),
-                      SizedBox(width: 8),
-                      Text('正在定位时间线…',
-                          style:
-                              TextStyle(fontSize: 12, color: Colors.white)),
-                    ])))),
-      ]);
+      children.add(Positioned(
+          left: 0,
+          right: 0,
+          bottom: 28,
+          child: Center(
+              child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: Gap.md, vertical: Gap.xs),
+                  decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(20)),
+                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                    SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white)),
+                    SizedBox(width: 8),
+                    Text('正在定位时间线…',
+                        style: TextStyle(fontSize: 12, color: Colors.white)),
+                  ])))));
     }
-    return content;
+    return Stack(children: children);
   }
 
   static String _dayLabel(String iso) {
