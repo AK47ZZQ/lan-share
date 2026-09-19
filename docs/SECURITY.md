@@ -105,6 +105,10 @@
   **特殊段全量 normcase（2026-09-02 修复 P0-2）**：`resolve()`/`visible()`/
   `enforce_quota()`/授权表同步对 `private`/`incoming` 段一律 normcase 比较——
   Windows 大小写不敏感，`Private/<他人>/` 这类变体不再落入 shared 默认可读分支。
+  **SQL 侧同源收紧（2026-09-20 F3）**：/api/photos 的可见性下推 SQL 用
+  `LIKE 'private/%'` 判私人段——PG 的 LIKE 大小写敏感（SQLite 只折叠 ASCII），
+  磁盘目录存在大小写变体时下推会在 PG 上放行他人 private；下推只是预过滤，
+  纯内存的 `visible()` 无条件兜底（生产库只读审计当日 0 变体行）。
 - **`/files/*` 静态下载走应用层判权（2026-09-02 修复 P0-1）**：Caddy 对 `/files/*`
   只做 forward_auth 预检 + 反代，**不再直接 file_server 挂 SHARE_ROOT**——
   下载统一落在后端 `/files/{path}` 端点，经 `resolve()` 按 private/incoming/
