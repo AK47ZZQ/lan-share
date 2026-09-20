@@ -64,3 +64,28 @@ def test_clean_filename_boundary_inputs(raw):
     out = clean_filename(raw)
     assert out and not out.endswith((".", " "))
     assert len(out) <= 200
+
+
+# ─── 端到端：清洗器正确 ≠ 写路径调用了它 ───
+# 上面全是纯函数断言。真正的失效模式是"某条写路径漏调 clean_filename"——
+# 那需要过一次 HTTP。M15 消融实验暴露这个缺口是有意义的：设备名的写入
+# **不报错**（字节进控制台），所以漏一次就是"客户端看到成功、盘上没有文件"。
+# 用 mkdir 而非 upload 来钉：`os.mkdir('…\\con')` 会立刻抛错→500，测试能干净地红；
+# 而真的往 con 写内容会让用例挂住而不是失败（本会话实测 3/3 >90s），
+# 那等于往门禁里埋一颗不定时的雷，故不在此覆盖（已挂账）。
+@pytest.mark.parametrize("raw,expect", [("con", "_con"), ("NUL", "_NUL"),
+                                        ("lpt1.txt", "_lpt1.txt")])
+def test_mkdir_api_path_actually_sanitizes(auth, raw, expect):
+    import os
+    import shutil
+    from app.config import SHARE_ROOT
+
+    r = auth.post(f"/api/mkdir/{raw}")
+    assert r.status_code == 200, r.text
+    assert r.json()["path"] == expect, "接口返回的名字没被清洗"
+    # 盘上真相只能用 listdir：Path('...\\con').exists() 对设备名**恒为 True**
+    # （2026-09-20 实测），拿 exists() 断言"没建出 con"会得到反向结论。
+    entries = os.listdir(SHARE_ROOT)
+    assert expect in entries, "目录没真正落盘"
+    assert raw not in entries and raw.lower() not in [e.lower() for e in entries]
+    shutil.rmtree(SHARE_ROOT / expect, ignore_errors=True)   # 自建自清
