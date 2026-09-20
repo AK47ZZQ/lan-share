@@ -244,6 +244,18 @@
   带"自洽 sha256"的恶意 APK 推送全体客户端升级）。
 - **分享提取码不再落库**：只存加盐哈希，明文在创建响应中一次性下发；存量列已
   一次性清洗；分享计数在 prepare 发票时原子递增（防并发取票绕过 max_downloads）。
+- **一次性消耗必须"先认领、再动手"（check-then-act 是这类缺陷的共同形状）**：
+  所有"同一份资源至多被 N 个请求各自拿一次"的性质，都必须由**单语句原子认领**实现，
+  不允许"SELECT 判存在 → 后删/后改"。已就位的四把同一族原语：
+  `shares.consume_download`（`UPDATE…WHERE downloads<max`）、`ttl_state.take`
+  （`DELETE…RETURNING`）、`ttl_state.put_if_absent`（`ON CONFLICT DO NOTHING`）、
+  `trash.take`（`DELETE…RETURNING`，2026-09-21 D5：并发恢复同一 id 实测 10 轮里
+  2 轮出 3 个赢家 ⇒ 同一内容落出多份副本）。
+  认领之后的失败**必须补偿**：`trash.put_back` 保留原 id 与 `deleted_at`
+  （否则搬移失败会让 .trash 里的文件再也点不到，或把 30 天倒计时续期）。
+  删除侧的对偶问题是"两条并发删除各自算出唯一 trash 目标名"，用**源路径条带锁**
+  （`filetools._TRASH_STRIPES`，单进程多线程拓扑下足以封死）解决；
+  反向消融实测：加锁 0/10 红、退回加锁前 2/10 红（`tests/test_adversarial_concurrency.py`）。
 - **公网入口判定加源地址复核**：`X-LanShare-Entry: public` 且 client_ip 为
   127.0.0.1（frpc 本机转发）才按公网分账——LAN 设备直连隧道端口不再放大限速。
 - **解析面**：PIL 解码前像素钳制 60MP（thumb/preview，防解压炸弹 DoS）；

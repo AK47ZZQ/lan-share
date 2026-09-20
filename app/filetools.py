@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import shutil
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -131,8 +132,31 @@ def dir_tree(path: Path) -> dict:
     return {"path": rel_path if rel_path != "." else "", "items": items}
 
 
+# 同一路径的"移入回收站"必须串行。trash 目标名带 time_ns() 唯一后缀，两路并发
+# 删除同一文件会算出**不同**的目标名：A 的 os.replace 在飞时，B 先拿到
+# PermissionError（Windows 上源要稍后才消失）、判"源还在"而退化成 shutil.move
+# 复制路径 —— 结果同一份内容登记出多行，且有的行指向不存在的文件
+#（D5 删除侧，实测 [404,200,200,404,404] 与坏行）。
+# 本服务是单进程多线程（AGENTS.md §2），条带锁足以封死该窗口；固定 32 条带
+# 不随路径数增长、无需清理；用 RLock 是为了同线程重入（上传覆盖内部会再调一次）不死锁。
+_TRASH_STRIPES = tuple(threading.RLock() for _ in range(32))
+
+
+def _trash_stripe(target: Path) -> threading.RLock:
+    return _TRASH_STRIPES[hash(os.path.normcase(str(target))) % len(_TRASH_STRIPES)]
+
+
 def move_to_trash(target: Path, orig_path: str):
-    """把文件/目录移入回收站并登记（界面删除、WebDAV 删除/覆盖、上传覆盖共用）。"""
+    """把文件/目录移入回收站并登记（界面删除、WebDAV 删除/覆盖、上传覆盖共用）。
+
+    按源路径串行（见 _TRASH_STRIPES）：rename 与登记必须是一个不可分割的单位，
+    否则并发同名删除会互相把对方的成功当成自己的失败。
+    """
+    with _trash_stripe(target):
+        _move_to_trash_locked(target, orig_path)
+
+
+def _move_to_trash_locked(target: Path, orig_path: str) -> None:
     trash_root = SHARE_ROOT / ".trash"
     trash_root.mkdir(exist_ok=True)
     trash_path = trash_root / f"{time.time_ns()}_{target.name}"

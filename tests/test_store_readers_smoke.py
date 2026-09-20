@@ -240,6 +240,23 @@ def test_trash_readers(seeded):
     total, size = trash_store.overview_stats()
     assert total >= 1 and size >= 5
 
+def test_trash_claim_roundtrip(seeded):
+    """take/put_back 必须被**真正执行**——rowid 事故的教训：没跑过的语句连变红的机会都没有。
+
+    `DELETE ... RETURNING` 是 D5 原子认领的全部依赖，两个引擎都得可用；
+    占位符翻译（? → %s）与 RealDictRow 取值也在这里一起验掉。
+    """
+    tid = seeded["trash_id"]
+    row = trash_store.take(tid)
+    assert row is not None and row["id"] == tid, "RETURNING 没取回行（方言差异？）"
+    assert trash_store.get(tid) is None, "认领后索引行必须已消失"
+    trash_store.put_back(row)
+    back = trash_store.get(tid)
+    assert back is not None, "补偿写回没把行还回来"
+    assert back["orig_path"] == row["orig_path"] and back["trash_path"] == row["trash_path"]
+    assert back["deleted_at"] == row["deleted_at"], "30 天倒计时不得因失败重试而重置"
+
+
 
 def test_notification_readers(seeded):
     uid, bid, now = seeded["uid"], seeded["bid"], seeded["now"]

@@ -101,13 +101,23 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
     # 与删除入口同款可见性校验（review 2026-09-02 P1-1）：缺了它，成员可枚举
-    # trash id 把他人 private/incoming 的回收站条目"恢复"进自己空间
+    # trash id 把他人 private/incoming 的回收站条目"恢复"进自己空间。
+    # 判权必须在认领**之前**——否则未授权者能用"认领"把别人的行吃掉。
     _ensure_can_touch(_user, row)
-    trash_path = SHARE_ROOT / row["trash_path"]
+    # 原子认领（D5）：单语句 DELETE...RETURNING，同一 id 并发只有一个赢家。
+    # 此前是"SELECT 判存在 → 事后 DELETE"的 check-then-act，实测 10 轮里 2 轮
+    # 出现 3 个赢家（同一内容落出多份副本 + 多余的「(恢复)」名）。
+    claimed = await run_in_threadpool(trash_store.take, trash_id)
+    if not claimed:
+        raise HTTPException(status_code=404,
+                            detail="该条目已被恢复（刚被另一个请求取走）")
+    trash_path = SHARE_ROOT / claimed["trash_path"]
     if not trash_path.exists():
-        await run_in_threadpool(_drop_trash_row, trash_id)
+        # 坏行（索引在、文件不在）：认领已顺手把它从索引里摘掉，
+        # 不再"挂在列表里点一次错一次"。
         raise HTTPException(status_code=404, detail="Trash file missing")
-    dest = resolve(_user, row["orig_path"], "write")
+    # 用**认领到的行**做权威来源（判权到认领之间别人改过的话，以拿到的这份为准）
+    dest = resolve(_user, claimed["orig_path"], "write")
     if dest.exists():
         # 冲突重命名必须连"恢复名"一起查（2026-09-19 对抗审查 F2）：只查主名时，
         # 第二个同 orig_path 条目的恢复会在「f (恢复).txt」已存在时走 shutil.move
@@ -126,13 +136,17 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     try:
         await run_in_threadpool(shutil.move, str(trash_path), str(dest))
     except FileNotFoundError:
-        # 并发恢复同一条：上面 exists() 与 move 之间被别的请求搬走了。
-        # 与"Trash file missing"同款处置——顺手清掉这条已无文件的行，
-        # 否则它永久挂在列表里点一次错一次。竞态不该冒 500（R1-P2-2 口径）。
-        await run_in_threadpool(_drop_trash_row, trash_id)
+        # 文件被不走索引的旁路搬走了：行已由本次认领清掉，不会再留僵尸行。
+        # 竞态不该冒 500（R1-P2-2 口径）。
         raise HTTPException(status_code=404,
-                            detail="该条目已被恢复（可能刚被另一个请求取走）") from None
-    await run_in_threadpool(_drop_trash_row, trash_id)
+                            detail="该条目已不存在（文件已被移走，索引已清理）") from None
+    except OSError:
+        # 盘故障/权限/空间不足：必须把行**退回**。否则文件还躺在 .trash 里而
+        # 索引已消失，用户再也点不到它——这是"先认领再搬移"顺序自带的新风险，
+        # 用补偿写回关闭（put_back 保留原 deleted_at，30 天倒计时不重置）。
+        await run_in_threadpool(trash_store.put_back, claimed)
+        raise HTTPException(status_code=503,
+                            detail="恢复失败，条目已退回回收站，可稍后重试") from None
     audit("restore", to_rel(dest), ip=client_ip(request))
     return {"ok": True, "path": to_rel(dest)}
 

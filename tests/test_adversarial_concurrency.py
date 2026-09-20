@@ -176,18 +176,80 @@ def test_concurrent_delete_leaves_no_broken_trash_rows(auth, workdir):
     with _workers(5) as pool:
         codes = list(pool.map(fire, _spawns(auth, 5)))
     assert not [c for c in codes if c >= 500], codes
-    assert any(c in (200, 204) for c in codes), codes
+    # 严格性质（D5 修复后才敢钉）：赢家**恰好一个**、索引**只一行**、
+    # 且该行必须指向真实存在的文件——坏行等于用户点"恢复"却拿不出东西。
+    assert sum(1 for c in codes if c in (200, 204)) == 1, f"并发删除出现多赢家（重复登记）：{codes}"
     rows = _db().execute("SELECT trash_path FROM trash WHERE orig_path=?",
                          (f"{workdir}/{name}",)).fetchall()
-    assert rows, "删除后至少要留下回收站记录"
-    # ⚠️ D5 的第二个症状（实测）：并发下会留下**指向不存在文件的坏行**
-    # （如 `.trash/1789…_del-race.txt` 在盘上根本不存在）。
-    # 这里只保证"至少有一条真能恢复"，坏行的清算是 15 号挂账里
-    # "trash 行原子认领"那一并解决，不在断言里写死成常红。
-    assert any((SHARE_ROOT / r["trash_path"]).exists() for r in rows), \
-        f"没有一条回收站记录对应真实文件：{[r['trash_path'] for r in rows]}"
+    assert len(rows) == 1, f"回收站必须只登记一行：{[r['trash_path'] for r in rows]}"
+    assert (SHARE_ROOT / rows[0]["trash_path"]).exists(), f"回收站行指向不存在的文件（坏行）：{rows[0]['trash_path']}"
     assert not (SHARE_ROOT / workdir / name).exists(), "文件必须已离开原位置"
 
+
+
+# ── D5 收口：恢复必须"恰好一次"，且失败要能把行还给用户 ─────────────
+
+def test_concurrent_restore_yields_exactly_one_winner(auth, workdir):
+    """跨请求不变量（本批 D5）：同一 trash id 并发恢复，**赢家必须恰好 1 个**。
+
+    修复前实测 [200,404,404,200,404,200]（3 个赢家 = 同一内容落出多份副本/
+    多余 (恢复) 名）。修法：`store.trash.take()` 用单语句 DELETE...RETURNING
+    做原子认领，与 ttl_state.take / consume_download 同一套已验证原语。
+    """
+    name = "restore-exactly-once.txt"
+    auth.post(f"/api/upload/{workdir}", files={"file": (name, b"x", "text/plain")})
+    assert auth.delete(f"/api/files/{workdir}/{name}").status_code in (200, 204)
+    tid = _db().execute(
+        "SELECT id FROM trash WHERE orig_path=? ORDER BY id DESC",
+        (f"{workdir}/{name}",)).fetchone()["id"]
+
+    def fire(c):
+        return c.post(f"/api/trash/{tid}/restore").status_code
+
+    with _workers(6) as pool:
+        codes = list(pool.map(fire, _spawns(auth, 6)))
+    assert not [c for c in codes if c >= 500], codes
+    assert codes.count(200) == 1, f"至多一次被违反：{codes}"
+    assert (SHARE_ROOT / workdir / name).exists(), "赢家必须把文件放回原位"
+    # 只该有一份副本：不得出现 "(恢复)" 变体
+    sibs = sorted(x.name for x in (SHARE_ROOT / workdir).iterdir())
+    assert sibs == [name], f"并发恢复造出了多余副本：{sibs}"
+
+
+def test_restore_move_failure_gives_the_row_back(auth, workdir, monkeypatch):
+    """搬移失败**不得**把回收站行吃掉：否则文件还在 .trash 里却再也点不到。
+
+    这是"先删行再搬文件"顺序的唯一真风险，用补偿写回关闭；
+    不补偿的话，D5 的修法本身就成了新的丢数据路径。
+    """
+    import shutil as _sh
+    name = "restore-compensate.txt"
+    auth.post(f"/api/upload/{workdir}", files={"file": (name, b"y", "text/plain")})
+    assert auth.delete(f"/api/files/{workdir}/{name}").status_code in (200, 204)
+    row = _db().execute("SELECT * FROM trash WHERE orig_path=? ORDER BY id DESC",
+                        (f"{workdir}/{name}",)).fetchone()
+    tid = row["id"]
+
+    def boom(*a, **k):
+        raise OSError("模拟盘故障/权限问题")
+
+    monkeypatch.setattr("app.api.trash.shutil.move", boom)
+    r = auth.post(f"/api/trash/{tid}/restore")
+    assert r.status_code >= 500, f"搬移失败应冒服务端错误，实测 {r.status_code}"
+    rows = _db().execute("SELECT * FROM trash WHERE orig_path=?",
+                         (f"{workdir}/{name}",)).fetchall()
+    assert len(rows) == 1, f"补偿写回不得造出重复行：{len(rows)}"
+    back = rows[0]
+    assert back["id"] == tid, "补偿应把同一行还回来（前端状态不跳）"
+    assert back["deleted_at"] == row["deleted_at"], "30 天倒计时不得因失败重试而重置"
+    assert back["trash_path"] == row["trash_path"]
+    assert (SHARE_ROOT / back["trash_path"]).exists(), "失败时文件必须仍留在 .trash"
+    # 还回来之后必须真的能恢复成功（补偿不是把死行塞回列表）
+    # 注意先撤销 monkeypatch——否则"重试仍失败"是测试自己造的，不是服务端行为
+    monkeypatch.undo()
+    r2 = auth.post(f"/api/trash/{tid}/restore")
+    assert r2.status_code == 200, f"补偿后重试应成功，实测 {r2.status_code}"
+    assert (SHARE_ROOT / workdir / name).exists(), "重试成功后文件必须落回原位"
 
 # ── 资源耗尽：在途分片会话不得无限膨胀（红队 P2）─────────────────
 
