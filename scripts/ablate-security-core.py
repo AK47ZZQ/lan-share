@@ -27,13 +27,48 @@
 
 from __future__ import annotations
 
+import atexit
 import re
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# 正在被改坏的文件 -> 原始字节。本工具改的是**工作区文件**，而仓库根经 junction
+# 就是线上目录（C:\lan-share），所以"跑一半被打断"绝不能留下改坏的状态。
+_active: dict[str, bytes] = {}
+
+
+def _restore_all() -> None:
+    for rel, pristine in list(_active.items()):
+        try:
+            (ROOT / rel).write_bytes(pristine)
+            del _active[rel]
+        except OSError:
+            print(f"!! 还原失败 {rel}，请立即 git checkout -- {rel}")
+
+
+atexit.register(_restore_all)
+
+
+def _on_signal(signum, _frame):
+    _restore_all()
+    sys.exit(128 + signum)
+
+
+for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGBREAK):
+    try:
+        signal.signal(_sig, _on_signal)
+    except (ValueError, OSError, RuntimeError):   # 非主线程 / 平台不支持
+        pass
+# ⚠️ SIGKILL（kill -9 / 任务被强杀）无法拦截：届时必须手工
+#    `git checkout -- app/spaces.py app/filetools.py app/api/webdav.py`
+#    并跑一次 pytest 确认守卫回来了（2026-09-20 实测踩过：强杀后
+#    filetools.py 留着 `if False and RESERVED_NAME.match(n)`，
+#    等于线上文件带着"Windows 保留名守卫已关闭"的状态放在盘上）。
 
 # (id, 不变量, 文件, 原文, 改坏后, 期望被抓到的原因)
 MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
@@ -157,10 +192,12 @@ def main() -> int:
             print(f"{mid}  SKIP（锚点问题）: {rel}\n", flush=True)
             continue
         try:
+            _active[rel] = pristine        # 被打断时 atexit/signal 处理器据此还原
             rc, dur, first = _run_suite()
         finally:
             fp.write_bytes(pristine)
-            if (ROOT / rel).read_bytes() != pristine:
+            del _active[rel]
+            if fp.read_bytes() != pristine:
                 print(f"!! {mid} 还原失败，请手工 git checkout -- {rel}")
         verdict = "被抓到" if rc != 0 else "存活(覆盖缺口)"
         print(f"{mid:4} {verdict:14} {dur:5.0f}s  {inv}\n     ↳ {first}\n", flush=True)
