@@ -1,4 +1,4 @@
-# LAN Share — 家庭团队网盘（服务端 v3.59 · Web v3.55 · App v1.1.7+111）
+# LAN Share — 家庭团队网盘（服务端 v3.61 · Web v3.55 · App v1.1.8+112）
 
 家用小团队（2–20 人）的多用户网盘。**产品定位（2026-09-10）**：**App 是家的
 内容入口**（照片备份/浏览、文件、笔记、分享、传输），**Web 是站长管理工作台**
@@ -167,10 +167,11 @@ App 工程结构/协议见 `mobile/README.md`。
 APK + version.json + versions.json）。R8 已关（WorkManager/Room 在裁剪下启动即崩，
 见 `docs/DEVELOPMENT.md`）。
 
-> **当前测试基线（2026-09-13 实测）**：pytest **344** 项（SQLite）+ PostgreSQL
-> 双引擎 **284+3skip** / Web 单测 **19** 项 + vue-tsc + 契约路径对齐守卫 /
-> Dart **212** 项 + `dart analyze` 0 + UI 分层守卫（基线 0）/
-> 契约 **131 路径（155 操作）** / ruff·mypy·pip-audit 全绿。
+> **当前测试基线（2026-09-21 凌晨实测）**：pytest **489** 项（SQLite）+ PostgreSQL
+> 双引擎 **486+3skip** / Web 单测 **19** 项 + vue-tsc + 契约路径对齐守卫 /
+> Dart 见 `mobile/`（`flutter test`）+ `dart analyze` 0 + UI 分层守卫（基线 0）/
+> 契约 **138 路径** / ruff·mypy 全绿；pip-audit 尚余 6 条在工具链专用包上
+> （`httpx2`/`httpcore2`，不在服务端 import 图里，待拆 venv 后处理）。
 
 **WebDAV 独立密码**（v3.7 起）：与登录密码隔离的挂载凭据，设置后 DAV 入口
 只认独立密码，登录密码对 `/dav/` 失效——凭据泄露面分离，可单独轮换，
