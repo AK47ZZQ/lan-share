@@ -139,7 +139,17 @@ def move_to_trash(target: Path, orig_path: str):
     try:
         os.replace(target, trash_path)
     except OSError:
-        shutil.move(str(target), str(trash_path))
+        # 这个 fallback 的本意是"同盘 rename 被拒（跨设备/权限）→ 退化成搬移"。
+        # 但它也会接住"目标刚被别人并发移走"（两个同名并发删除），此时
+        # shutil.move 对不存在的源再抛 FileNotFoundError 冒成 500。
+        # 判存在 + 搬移之间还有窗口（Windows 上对方 move 中途会先抛
+        # PermissionError 再让源消失），所以搬移本身也要收口。
+        try:
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="文件已被并发移走") from None
+            shutil.move(str(target), str(trash_path))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="文件已被并发移走") from None
     size = None
     if trash_path.is_file():
         size = trash_path.stat().st_size
@@ -167,6 +177,15 @@ async def save_upload(file: UploadFile, dest: Path, quota_user=None,
         raise HTTPException(status_code=409, detail="同名目录已存在")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.uploading-{os.getpid()}-{time.time_ns()}")
+    # 文件名本身已截到 200，但叠上目录深度 + .uploading 临时后缀后总长可超
+    # Windows MAX_PATH(260) → aiofiles.open 抛 FileNotFoundError 冒成 500。
+    # 落盘前一次判定，给它一个用户能照做的 400（放浅一层/改短名字）。
+    # 只限 NT：POSIX 上限是 4096/255，用同一个阈值会误拒合法长名。
+    if os.name == "nt" and len(str(tmp)) > 259:
+        raise HTTPException(
+            status_code=400,
+            detail="文件名过长：叠加目录深度与临时后缀后超出系统路径上限，"
+                   "请放浅一层目录或改短文件名")
     size = 0
     sha256 = hashlib.sha256()
     overflow = False

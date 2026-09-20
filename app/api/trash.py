@@ -123,7 +123,15 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
                 break
             n += 1
     dest.parent.mkdir(parents=True, exist_ok=True)
-    await run_in_threadpool(shutil.move, str(trash_path), str(dest))
+    try:
+        await run_in_threadpool(shutil.move, str(trash_path), str(dest))
+    except FileNotFoundError:
+        # 并发恢复同一条：上面 exists() 与 move 之间被别的请求搬走了。
+        # 与"Trash file missing"同款处置——顺手清掉这条已无文件的行，
+        # 否则它永久挂在列表里点一次错一次。竞态不该冒 500（R1-P2-2 口径）。
+        await run_in_threadpool(_drop_trash_row, trash_id)
+        raise HTTPException(status_code=404,
+                            detail="该条目已被恢复（可能刚被另一个请求取走）") from None
     await run_in_threadpool(_drop_trash_row, trash_id)
     audit("restore", to_rel(dest), ip=client_ip(request))
     return {"ok": True, "path": to_rel(dest)}
