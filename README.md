@@ -167,8 +167,8 @@ App 工程结构/协议见 `mobile/README.md`。
 APK + version.json + versions.json）。R8 已关（WorkManager/Room 在裁剪下启动即崩，
 见 `docs/DEVELOPMENT.md`）。
 
-> **当前测试基线（2026-09-21 凌晨实测）**：pytest **489** 项（SQLite）+ PostgreSQL
-> 双引擎 **486+3skip** / Web 单测 **19** 项 + vue-tsc + 契约路径对齐守卫 /
+> **当前测试基线（2026-09-21 03:52 全量实测）**：pytest **490** 项（SQLite，366s）+
+> PostgreSQL 双引擎 **487+3skip**（537s，两引擎总数对账一致）/ Web 单测 **19** 项 + vue-tsc + 契约路径对齐守卫 /
 > Dart 见 `mobile/`（`flutter test`）+ `dart analyze` 0 + UI 分层守卫（基线 0）/
 > 契约 **138 路径** / ruff·mypy 全绿；pip-audit 尚余 6 条在工具链专用包上
 > （`httpx2`/`httpcore2`，不在服务端 import 图里，待拆 venv 后处理）。
