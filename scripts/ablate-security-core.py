@@ -80,6 +80,17 @@ MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
      '    target = resolve(user, path, need) if path else (\n'
      '        SHARE_ROOT if need == "read" else resolve(user, "", "write"))',
      "证明 D1 修复必要性：回退后 guest 根列举用例应变红"),
+    ("M13", "截断后再剥结尾点/空格（本轮 D2 修复）", "app/filetools.py",
+     "    return n[:200].rstrip('. ') or 'unnamed'",
+     "    return n[:200] or 'unnamed'",
+     "证明 D2 修复必要性：回退后 200 字符边界名字会重新落出结尾点"),
+    ("M14", "文件名控制符过滤", "app/filetools.py",
+     r"""    n = re.sub(r'[/\\:*?"<>|\x00-\x1f]', '_', name or 'unnamed')""",
+     r"""    n = re.sub(r'[/\\:*?"<>|]', '_', name or 'unnamed')""",
+     "控制符漏洗 → 落盘 OSError 500（手机端 Linux FS 可传来）"),
+    ("M15", "Windows 保留名守卫", "app/filetools.py",
+     "    if RESERVED_NAME.match(n):", "    if False and RESERVED_NAME.match(n):",
+     "con.txt/nul 之类在 NTFS 上不可创建，落盘即失败"),
 ]
 
 

@@ -90,7 +90,10 @@ def clean_filename(name: str | None) -> str:
         n = '_' + n
     if RESERVED_NAME.match(n):
         n = '_' + n
-    return n[:200] or 'unnamed'
+    # 截断必须再剥一次结尾点/空格：上面的 rstrip 发生在 [:200] 之前，
+    # 足够长的名字会在第 200 个字符处重新落出点/空格（"aaa….txt" → "aaa…."），
+    # 而 NTFS 会静默剥离它们——登记名与磁盘实际名就此分叉。
+    return n[:200].rstrip('. ') or 'unnamed'
 
 
 RESERVED_NAME = re.compile(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', re.I)
