@@ -109,6 +109,20 @@
   `LIKE 'private/%'` 判私人段——PG 的 LIKE 大小写敏感（SQLite 只折叠 ASCII），
   磁盘目录存在大小写变体时下推会在 PG 上放行他人 private；下推只是预过滤，
   纯内存的 `visible()` 无条件兜底（生产库只读审计当日 0 变体行）。
+- **判权入口唯一性（2026-09-20 修复 D1·P1）**：`spaces.resolve()` 是"虚拟路径 →
+  物理路径"的**唯一**判权入口，任何"为省一次调用而抄近路"的写法都会造出第二条
+  权限通道。实例：WebDAV `dav_handler` 曾对空路径特判
+  `SHARE_ROOT if need == "read"`，于是挂载根的**读**操作不经 resolve()——
+  对 shared 无默认权限的 guest `PROPFIND /dav/` 直接 207，列出共享顶层全部
+  条目名/大小/mtime；且"只授子目录"的 guest 顺带获得根列举能力
+  （vkey `shared/` 不匹配 `shared/photos`，但当时根本没做这次匹配）。
+  同批 F1 已修过同一格的**写**侧，读侧漏网。修法取减法：
+  `resolve(user, "", need)` 对 member/admin 本就返回 SHARE_ROOT，特判冗余且危险。
+  自查要点：见到 `if path else …` / `x or DEFAULT_PATH` 一类的"退化默认值"，
+  必须问"这条捷径上还做不做判权"。
+  回归：`tests/test_ablation_pins.py` 由消融实验驱动补钉
+  （`python scripts/ablate-security-core.py` 会把 12 条安全不变量逐条改坏，
+  报告测试有没有报警；存活项须复核分类后方可进 `EXPECTED_SURVIVORS`）。
 - **`/files/*` 静态下载走应用层判权（2026-09-02 修复 P0-1）**：Caddy 对 `/files/*`
   只做 forward_auth 预检 + 反代，**不再直接 file_server 挂 SHARE_ROOT**——
   下载统一落在后端 `/files/{path}` 端点，经 `resolve()` 按 private/incoming/
