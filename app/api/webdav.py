@@ -426,8 +426,11 @@ async def dav_handler(request: Request, path: str = ""):
         segs = [s for s in path.replace("\\", "/").split("/") if s not in ("", ".")]
         path = "/".join(clean_filename(s) for s in segs)
     need = "read" if method in _READ_METHODS or method == "COPY" else "write"
-    target = resolve(user, path, need) if path else (
-        SHARE_ROOT if need == "read" else resolve(user, "", "write"))
+    # 根集合（path 为空）没有第二条路：resolve(user, "", need) 对 member/admin
+    # 本就返回 SHARE_ROOT，对 guest 按 grant 判定。此前这里特判成
+    # `SHARE_ROOT if need == "read"`，等于让读根绕过安全核心——无 grant 的 guest
+    # PROPFIND /dav/ 直接 207 列出 shared 顶层（2026-09-20 对抗审查 D1）。
+    target = resolve(user, path, need)
     exists = target.exists()
 
     if method == "OPTIONS":
