@@ -4,6 +4,12 @@ logs/
 __pycache__/
 *.pyc
 
+# ---- 项目自带环境（2026-09-21 迁移：venv + PG + 构建工具链全部收编进仓库目录） ----
+# .venv/ = 专用 Python venv（pip install -r requirements.txt 可重建）
+# env/   = pginstall(PG数据+zonky)/pgsql/ffmpeg/flutter/android-sdk —— 含生产数据库，严禁入库
+/.venv/
+/env/
+
 # ---- Flutter / Android（mobile/）----
 # 镜像构建会写入 C:\lan-share-mobile/.gradle 缓存几百 MB；不要进库
 mobile/build/

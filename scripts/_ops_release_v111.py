@@ -5,7 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
-REPO = Path(r"C:\Users\<你的用户名>\Desktop\AI Agent 共享空间\协作产物\lan-share")
+REPO = Path(r"C:\lan-share")
 DIST = REPO / "data" / "App安装包"
 APK_SRC = REPO / "mobile" / "build" / "apk" / "lanshare-release.apk"
 APK_DST = DIST / "lanshare.apk"

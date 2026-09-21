@@ -6,7 +6,7 @@ REM   + SQLite 专有语法守卫（业务层 SQL 出现 PG 不认的 SQLite 方
 REM 规则集见 pyproject.toml（风格类豁免说明在同处）；pip-audit 依赖网络，
 REM 离线时该段会失败——可临时注释，其余五段必须绿。
 setlocal
-set PYTHON=C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
+set PYTHON=C:\lan-share\.venv\Scripts\python.exe
 
 echo === pytest baseline ===
 "%PYTHON%" -m pytest tests/ -q

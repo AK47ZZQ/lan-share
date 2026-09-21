@@ -4,7 +4,7 @@ REM 需要管理员权限运行
 
 set NSSM=C:\Users\<你的用户名>\.openclaw\nssm\nssm
 set PROJECT=C:\lan-share
-set PYTHON=C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
+set PYTHON=C:\lan-share\.venv\Scripts\python.exe
 
 echo ===================================
 echo   Registering LAN Share services

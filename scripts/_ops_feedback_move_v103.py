@@ -3,7 +3,7 @@
 import shutil
 from pathlib import Path
 
-REPO = Path(r"C:\Users\<你的用户名>\Desktop\AI Agent 共享空间\协作产物\lan-share")
+REPO = Path(r"C:\lan-share")
 SRC = REPO / "data" / "反馈" / "进行中" / "20260914213301-31cd.md"
 DST = REPO / "data" / "反馈" / "已完成" / "20260914213301-31cd.md"
 

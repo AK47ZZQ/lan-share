@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-REPO = Path(r"C:\Users\<你的用户名>\Desktop\AI Agent 共享空间\协作产物\lan-share")
+REPO = Path(r"C:\lan-share")
 SRC = REPO / "data" / "反馈" / "待处理"
 DST = REPO / "data" / "反馈" / "已完成"
 NOW = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

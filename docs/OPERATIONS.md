@@ -65,8 +65,11 @@ curl -k https://192.168.1.100:8765/healthz
 ## 3. 数据库（PostgreSQL 16）
 
 - 连接：`127.0.0.1:5433`，库 `lanshare`，用户 `lanshare`，密码在
-  `C:\pginstall\pgpass.conf`（不在任何仓库文件里）。
-- 数据目录：`C:\pginstall\data`。
+  `C:\lan-share\env\pginstall\pgpass.conf`（2026-09-21 迁入项目 env/，gitignored，
+  不在任何仓库文件里）。
+- 数据目录：`C:\lan-share\env\pginstall\data`（2026-09-21 迁入项目）。
+- 注意：`postgresql.conf` 的 `log_directory` 必须用**新绝对路径**
+  `C:/lan-share/env/pginstall/logs`——曾因沿旧路径 `C:/pginstall/logs` 导致服务起不来。
 - 手工备份：
   ```bat
   C:\env\pgsql\bin\pg_dump.exe -h 127.0.0.1 -p 5433 -U lanshare -d lanshare ^

@@ -55,7 +55,7 @@ def _media_type(rel: str) -> str:
     return "video" if Path(rel).suffix.lower() in VID_EXTS else "photo"
 
 
-_FFPROBE_FALLBACKS = ("C:/env/ffmpeg/bin/ffprobe.exe",)   # NSSM 服务 PATH 常不带 ffmpeg
+_FFPROBE_FALLBACKS = ("C:/lan-share/env/ffmpeg/bin/ffprobe.exe",)   # NSSM 服务 PATH 常不带 ffmpeg
 
 
 def _ffprobe_exe() -> str | None:

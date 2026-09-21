@@ -12,7 +12,7 @@ if "%MODE%"=="" set MODE=debug
 set SRC=C:\lan-share\mobile
 set DST=C:\lan-share-mobile
 set PYTHON=C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
-set FLUTTER_BIN=C:\flutter\flutter\bin
+set FLUTTER_BIN=C:\lan-share\env\flutter\bin
 
 echo === Mirror mobile source to %DST% (ASCII path) ===
 if not exist "%DST%" mkdir "%DST%"
