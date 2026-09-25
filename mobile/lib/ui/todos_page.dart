@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/todos_api.dart';
+import '../data/local/todo_cache.dart';
 import '../data/api/pomodoros_api.dart';
 import 'pomodoro_page.dart';
 import 'theme/design_tokens.dart';
@@ -94,6 +95,7 @@ class _TodosPageState extends State<TodosPage> {
   List<_Todo> _todos = const [];
   List<_TodoList> _lists = const [];
   Map<int, Map<String, String>> _members = const {};
+  bool _offline = false;              // M2：断网兜底展示缓存（勾选进补传队列）
 
   @override
   void initState() {
@@ -102,6 +104,10 @@ class _TodosPageState extends State<TodosPage> {
   }
 
   Future<void> _load() async {
+    // M2 离线补传：联网后把断网期间的勾选按"最后写入胜"回放，再拉取
+    await TodoCache.replay((id, status) async {
+      await TodosApi.patchTodo(id, status: status);
+    });
     try {
       final all = await TodosApi.listAll();
       final listsRes = await TodosApi.lists();
@@ -110,12 +116,27 @@ class _TodosPageState extends State<TodosPage> {
         _todos = [for (final m in all.$1) _Todo(m as Map)];
         _members = all.$2;
         _lists = [for (final m in listsRes.$1) _TodoList(m as Map)];
+        _offline = false;
         _loading = false;
       });
+      // 快照落 sqflite（失败可丢），断网时兜底展示
+      await TodoCache.saveSnapshot(all.$1);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loading = false);
-      showToast(errDetail(e));
+      // M2 §3.7 断网兜底：读本地快照只读展示，勾选进补传队列
+      final cached = await TodoCache.loadSnapshot();
+      if (!mounted) return;
+      if (cached.isNotEmpty) {
+        setState(() {
+          _todos = [for (final m in cached) _Todo(m as Map)];
+          _offline = true;
+          _loading = false;
+        });
+        showToast('离线模式：显示本地缓存，勾选将在联网后同步');
+      } else {
+        setState(() => _loading = false);
+        showToast(errDetail(e));
+      }
     }
   }
 
@@ -167,6 +188,12 @@ class _TodosPageState extends State<TodosPage> {
     setState(() {
       _todos = [for (final x in _todos) x.id == t.id ? updated : x];
     });
+    if (_offline) {
+      // 断网勾选：入补传队列（最后写入胜），联网后 _load 前回放
+      await TodoCache.queueToggle(t.id, target);
+      if (mounted) showToast('已离线记录，联网后同步');
+      return;
+    }
     try {
       await TodosApi.patchTodo(t.id, status: target);
     } catch (e) {
@@ -383,6 +410,26 @@ class _TodosPageState extends State<TodosPage> {
                     padding:
                         const EdgeInsets.only(top: Gap.sm, bottom: Gap.xxxl),
                     children: [
+                      if (_offline)
+                        Card(
+                          color: Theme.of(context).colorScheme.errorContainer,
+                          shape: const RoundedRectangleBorder(
+                              borderRadius: Radii.bCard),
+                          child: Padding(
+                            padding: const EdgeInsets.all(Gap.sm),
+                            child: Row(children: [
+                              const Icon(Icons.cloud_off_outlined,
+                                  size: IconSizes.sm),
+                              const SizedBox(width: Gap.xs),
+                              Expanded(
+                                  child: Text(
+                                      '离线模式：显示本地缓存，勾选将在联网后同步',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall)),
+                            ]),
+                          ),
+                        ),
                       _todayCard(cs, done: doneToday, total: doneToday + openToday),
                       for (final e in g.entries)
                         if (e.key != '已完成' || _showDone) _group(e.key, e.value),
