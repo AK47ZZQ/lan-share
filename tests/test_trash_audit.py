@@ -3,6 +3,8 @@
 只读对账：任何用例都不得真删 .trash 文件。
 """
 import json
+
+import pytest
 import os
 import time
 from pathlib import Path
@@ -10,8 +12,16 @@ from pathlib import Path
 from app.config import SHARE_ROOT
 from app.db import _db
 from app.services import trash_audit
-from app.settings import get_setting
+from app.settings import get_setting, set_setting
 from app.store import trash as trash_store
+
+
+@pytest.fixture(autouse=True)
+def _clean_audit_settings_key():
+    """对账测试会写 settings 键（健康日报读它）——用毕即清，
+    防止泄漏进后续文件的 format/gather 用例（09-25 实录：2 个误红）。"""
+    yield
+    set_setting(trash_audit.AUDIT_KEY, "")
 
 
 def _mk_trash_file(name: str, age_days: float) -> Path:
