@@ -8,6 +8,7 @@
   单测不走。备份产物只看 BACKUP_DEST 里的文件时间戳——备份是 Task Scheduler
   独立跑的，服务端不参与也就不该去驱动它，日报只负责"看得见"。
 """
+import json
 import os
 import re
 import shutil
@@ -102,6 +103,16 @@ def _probe_public(hostport: str) -> bool:
         return False
 
 
+def _last_trash_orphans() -> dict | None:
+    raw = get_setting("trash_orphan_audit_last")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 def gather_health(probe_public: bool = False) -> dict:
     du = shutil.disk_usage(str(SHARE_ROOT))
     used_pct = round(du.used / du.total * 100, 1)
@@ -131,6 +142,8 @@ def gather_health(probe_public: bool = False) -> dict:
         # 后台循环连续失败名单（v3.56）：预热/清理这类"吞异常保活"的任务一旦在
         # 生产引擎上每轮抛错，进程照跑、日志照刷、功能零产出——只有这里能看见
         "loops_failing": loop_health.failing(),
+        # .trash 无主残留对账（D5 残余风险 a，services/trash_audit）：只读可见
+        "trash_orphans": _last_trash_orphans(),
     }
 
 

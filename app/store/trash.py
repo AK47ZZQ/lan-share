@@ -21,6 +21,12 @@ def get(trash_id: int):
     return _db().execute("SELECT * FROM trash WHERE id=?", (trash_id,)).fetchone()
 
 
+def referenced_trash_names() -> set[str]:
+    """回收站索引里全部 trash_path 的文件名集合（.trash 对账用，只读）。"""
+    rows = _db().execute("SELECT trash_path FROM trash").fetchall()
+    return {r["trash_path"].rsplit("/", 1)[-1] for r in rows if r["trash_path"]}
+
+
 def overview_stats() -> tuple[int, int]:
     """(条数, 总字节)（管理端概览统计）。"""
     total = _db().execute("SELECT COUNT(*) AS v FROM trash").fetchone()["v"]

@@ -29,6 +29,7 @@ from app.api import events                             # SSE 实时通知（B3�
 from app.services import backup as backup_svc          # 每日备份编排（B5）
 from app.services import metrics as metrics_svc        # 指标与水位告警（B5）
 from app.services import log_sweep          # noqa: F401 —— NSSM 日志归档裁剪（import 即注册 sweep）
+from app.services import trash_audit       # noqa: F401 —— .trash 无主残留对账（import 即注册 sweep）
 from app.services import thumb_warmup       # 缩略图后台预热（20260914213301-31cd）
 from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
 from app.api import todos                              # 效率舱·待办（v1.1 M1）
