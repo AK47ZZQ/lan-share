@@ -6,11 +6,14 @@
 C:/lan-share-backup 的外部计划任务产物）。
 """
 import json
+from pathlib import Path
 import time
+
+import pytest
 
 from conftest import MEMBER_PASS
 
-from app.config import BACKUP_DIR
+from app.config import BACKUP_DIR, PG_BIN_FALLBACK
 from app.services import backup as backup_svc
 from app.services import metrics as metrics_svc
 from app.settings import get_setting, set_setting
@@ -417,3 +420,19 @@ def test_pg_toc_requires_public_schema_settings():
     assert backup_svc._pg_toc_has_public_settings(
         "2147483647; 1255 16386 TABLE - public settings postgres\n") is False  # 仅定义无数据
     assert backup_svc._pg_toc_has_public_settings("") is False
+
+
+def test_deployed_pg_bin_default_resolves_real_tool():
+    """部署机回归钉（2026-09-25 实录）：迁移批把默认回退目录写成不存在的
+    env/pgsql/bin，本文件既有用例因 monkeypatch 了 PG_BIN_FALLBACK 而全绿，
+    生产 pg_dump 解析断链 4 天没有任何门禁能抓。此用例**不 patch 任何东西**，
+    直接用 config 里的真实默认值解析；非部署机（目录不存在）跳过。"""
+    if not Path(PG_BIN_FALLBACK).is_dir():
+        # 部署机判据：env 布局里 pginstall 与 PG 工具目录同级。标记在而
+        # 工具目录不在 = 正是本次事故形态，必须红而不是跳过
+        deploy_marker = Path(PG_BIN_FALLBACK).parent.parent / "pginstall"
+        if deploy_marker.is_dir():
+            pytest.fail(f"部署机默认 PG 工具目录不存在：{PG_BIN_FALLBACK}")
+        pytest.skip(f"非部署机：{PG_BIN_FALLBACK} 不存在")
+    assert backup_svc._resolve_tool("pg_dump") is not None
+    assert backup_svc._resolve_tool("pg_restore") is not None

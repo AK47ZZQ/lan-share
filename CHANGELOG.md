@@ -2,6 +2,30 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](docs/archive/CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 docs/项目记忆/02-里程碑。
 
+## 2026-09-25 — 服务端 v3.63（12:01 上线）：修复迁移批遗留的每日备份断链（P1）
+
+- **问题（P1）**：09-21 自包含迁移批把 PG 客户端工具的回退目录写成了盘上
+  **不存在**的 `env/pgsql/bin`（实际目录是 `env/pgsql-bin`，客户端工具直接在
+  目录根部、无 `bin` 一层）。结果：迁移当晚起**每日兜底 dump 一直失败**
+  （备份状态登记 `ok:false「当前引擎无可用 dump 工具」`），且 webhook 告警
+  未配置 ⇒ 无人被动收到。幸有 4 天内无 DB 灾难，未造成实际损失。
+- **发现过程**：v3.62 会话在旧真身目录上部署后冒烟直查生产库发现哈希未变，
+  顺藤排查出迁移批丢了旧仓未提交的路径修正；`_resolve_tool('pg_dump')`
+  实测返回 None、`.backups/` 最后一份 dump 停在 09-21 14:40。
+- **修复**：`app/config.py`（PG_BIN_FALLBACK 默认值）、`env.bat`
+  （LANSHARE_PGDUMP）、`scripts/restore-drill.bat`（PGRESTORE）三处统一改回
+  `env/pgsql-bin`。
+- **回归钉（关键）**：既有工具解析单测因 monkeypatch 了 `PG_BIN_FALLBACK`，
+  对"部署默认值被写错"完全不设防——这正是本次漏网根因。新增
+  `test_deployed_pg_bin_default_resolves_real_tool`：**不 patch 任何东西**，
+  用 config 真实默认值解析 pg_dump/pg_restore；部署机标记（env/pginstall）
+  在而工具目录不在 ⇒ 必须**红**（反向消融实测：坏路径 1 failed / 好路径 24 passed）。
+- **备份链已恢复**：12:00 手动触发一次真实 dump —— `ok:true, verified:true`
+  （归档目录可读、public.settings 表在档），`.backups/` 出现 09-25 新档。
+  12:01 服务重启加载新默认值，healthz 200。
+- **顺带提醒**：本次事故再次证明「告警只落管理端 = 没有告警」，webhook 配置
+  仍待主人拍板（15-路线图运维节）。
+
 ## 2026-09-25 — 服务端 v3.62：分享提取码哈希升级为 scrypt（与登录口令同源）
 
 - **安全问题收口（15-路线图 P3 挂账）**：此前带提取码的分享链接，提取码在库里

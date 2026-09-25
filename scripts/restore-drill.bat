@@ -13,7 +13,7 @@ REM bottom. The lanshare role has NO CREATEDB (checked 2026-09-09), so tier 2
 REM needs a one-time privilege decision by the owner.
 REM NOTE: keep this file pure ASCII (cmd mangles UTF-8 line structure).
 setlocal
-set PGRESTORE=C:\lan-share\env\pgsql\bin\pg_restore.exe
+set PGRESTORE=C:\lan-share\env\pgsql-bin\pg_restore.exe
 set PGPASSFILE=C:\lan-share\env\pginstall\pgpass.conf
 set BACKUP_DEST=C:\lan-share-backup
 
