@@ -14,6 +14,7 @@ import re
 import shutil
 import socket
 import ssl
+import sys
 import time
 from pathlib import Path
 
@@ -103,6 +104,20 @@ def _probe_public(hostport: str) -> bool:
         return False
 
 
+def _pip_check() -> str | None:
+    """运行环境依赖冲突快查（09-21 httpx2 静默回退实录后的可见性补丁）。
+    门禁与运行时共用同一 venv，pip check 非零 = 生产解释器带着冲突在跑。
+    子进程 ~1-2s，只在日报生成/管理端拉取时发生；失败不阻断健康采集。"""
+    import subprocess
+    try:
+        r = subprocess.run([sys.executable, "-m", "pip", "check"],
+                           capture_output=True, text=True, timeout=60)
+        out = (r.stdout or "").strip()
+        return None if r.returncode == 0 else (out or f"exit {r.returncode}")
+    except Exception as e:
+        return f"pip check 执行失败: {e}"
+
+
 def _last_trash_orphans() -> dict | None:
     raw = get_setting("trash_orphan_audit_last")
     if not raw:
@@ -144,6 +159,7 @@ def gather_health(probe_public: bool = False) -> dict:
         "loops_failing": loop_health.failing(),
         # .trash 无主残留对账（D5 残余风险 a，services/trash_audit）：只读可见
         "trash_orphans": _last_trash_orphans(),
+        "pip_check": _pip_check(),
     }
 
 
@@ -210,6 +226,11 @@ def format_report(d: dict) -> tuple[str, bool]:
         first_err = (bad[0].get("last_error") or "")[:120]
         if first_err:
             lines.append(f"　最近错误：{first_err}")
+
+    pc = d.get("pip_check")
+    if pc:
+        warn = True
+        lines.append(f"🐍 依赖冲突（pip check）：{pc[:160]} ⚠️")
 
     # .trash 无主残留（v3.66）：只读对账的可见性出口——日报是它的唯一播报面
     to = d.get("trash_orphans")
