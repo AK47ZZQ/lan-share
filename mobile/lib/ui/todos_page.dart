@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/todos_api.dart';
+import '../data/api/pomodoros_api.dart';
 import 'pomodoro_page.dart';
 import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
@@ -217,6 +218,12 @@ class _TodosPageState extends State<TodosPage> {
         context: context,
         builder: (_) => SafeArea(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (t.status != 'done')
+                ListTile(
+                    leading: const Icon(Icons.timer_outlined),
+                    title: const Text('开始专注'),
+                    subtitle: const Text('计时会计入该待办（M2）'),
+                    onTap: () => Navigator.pop(context, 'focus')),
               ListTile(
                   leading: const Icon(Icons.event_outlined),
                   title: const Text('改期'),
@@ -231,6 +238,20 @@ class _TodosPageState extends State<TodosPage> {
                   onTap: () => Navigator.pop(context, 'delete')),
             ])));
     if (!mounted || act == null) return;
+    if (act == 'focus') {
+      // 效率舱 §78：待办"开始专注"，会话记账到该待办（服务端收口可见性）
+      try {
+        await PomodorosApi.start(todoId: t.id);
+      } catch (e) {
+        if (mounted) showToast(errDetail(e));
+        return;
+      }
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => PomodoroPage(todoId: t.id, todoTitle: t.title)));
+      if (mounted) await _load();
+      return;
+    }
     if (act == 'delete') {
       try {
         await TodosApi.deleteTodo(t.id);
