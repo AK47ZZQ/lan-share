@@ -49,7 +49,7 @@
 - **发版证据**：`MIRROR OK` + 包内 `versionCode='114' versionName='1.1.10'`
   （aapt 直读）+ sha256 `a83f7535…` 与 v1.1.9 不同；三件套齐（APK 覆盖 +
   version.json + versions.json 插队首 89 条）；`/api/app/latest` 实测 114。
-  旧包留 `C:\lan-share-mobilepk-backup\lanshare-1.1.9+113.apk`。
+  旧包留 `C:\lan-share-mobile\apk-backup\lanshare-1.1.9+113.apk`。
 - **真机提醒**：常驻通知（M2 的后台计时保障）仍按计划挂真机验证批次，本版
   计时依赖 App 打开；家人更新后即可用基础专注流。
 - **b8b3 修复的模拟器 E2E 补齐（15:0x）**：手动切到公网隧道（入口徽标变「公网」）
