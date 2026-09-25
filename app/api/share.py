@@ -191,7 +191,9 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
         raise HTTPException(status_code=401, detail="Password required")
     stored = s["password_hash"]
     # 双格式校验：scrypt$（新，security.py 单源）/ 旧 <salt_hex>$<sha256>。
-    # share_prepare 为 sync def，本就运行在线程池内，同步 scrypt 不阻塞事件循环
+    # share_prepare 为 sync def，本就运行在线程池内，同步 scrypt 不阻塞事件
+    # 循环；单次 scrypt ~300ms 意味着并发 prepare 有线程池容量上限（默认池
+    # 40 线程 ⇒ ~40 并发取件饱和）——家庭规模 2-20 人下远不可达，属有意取舍
     if stored.startswith("scrypt$"):
         ok = verify_password(password, stored)
     else:
@@ -204,8 +206,14 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
             ok = False   # 畸形哈希 fail-closed 为 403 而非 500
         if ok:
             # 存量行惰性升级：无需迁移脚本，存量分享链接保持可用；触发前提是
-            # 已给出正确密码，公开端点不因此新增写入原语
-            shares_store.set_password_hash(token, hash_password(password))
+            # 已给出正确密码，公开端点不因此新增写入原语。
+            # 并发收敛（对抗审查 P1-1）：预读跳过并行请求已完成的升级（免重复
+            # 300ms scrypt）；CAS 条件更新（旧哈希作 WHERE 条件）保证单一写者，
+            # 极端竞态下最多各算一次、绝不双写
+            cur = shares_store.get_by_token(token)["password_hash"] or ""
+            if not cur.startswith("scrypt$"):
+                shares_store.set_password_hash_if(
+                    token, hash_password(password), stored)
     if not ok:
         _record_share_fail(token)
         audit("share_badpwd", s["name"], ip=client_ip(request))

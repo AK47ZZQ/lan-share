@@ -96,9 +96,11 @@ def renew(token: str, expires_at: float) -> None:
     _write("UPDATE shares SET expires_at=? WHERE token=?", (expires_at, token))
 
 
-def set_password_hash(token: str, password_hash: str) -> None:
-    """提取码哈希惰性升级（api/share.py 校验成功时把旧 sha256 行改写为 scrypt）。"""
-    _write("UPDATE shares SET password_hash=? WHERE token=?", (password_hash, token))
+def set_password_hash_if(token: str, password_hash: str, expect: str) -> int:
+    """CAS 式惰性升级：仅当库中哈希仍等于校验时读到的旧值才写入
+    （并发首次取件下保证单一写者，返回 rowcount：1=本请求完成升级）。"""
+    return _write("UPDATE shares SET password_hash=? WHERE token=? AND password_hash=?",
+                  (password_hash, token, expect))
 
 
 def set_max_downloads(token: str, max_downloads: int) -> None:

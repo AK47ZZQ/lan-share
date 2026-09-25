@@ -88,3 +88,34 @@ def test_legacy_row_survives_db_roundtrip_via_raw_sql(client):
     row = _db().execute("SELECT password_hash FROM shares WHERE token=?",
                         (token,)).fetchone()
     assert row["password_hash"].startswith("scrypt$")
+
+
+def test_legacy_row_concurrent_prepare_single_writer(client):
+    """对抗审查 P1-1/P2-4：并发 prepare 同一旧格式行——全部 200、CAS 保证
+    单一写者、最终哈希可用。"""
+    import concurrent.futures as cf
+    token = secrets.token_urlsafe(16)
+    _insert_share(token, _legacy_hash("5555"))
+    with cf.ThreadPoolExecutor(max_workers=6) as pool:
+        sts = list(pool.map(
+            lambda _: client.post(f"/api/share/{token}/prepare",
+                                  json={"password": "5555"}).status_code,
+            range(6)))
+    assert all(s == 200 for s in sts), sts
+    row = _db().execute("SELECT password_hash FROM shares WHERE token=?",
+                        (token,)).fetchone()
+    assert row["password_hash"].startswith("scrypt$")
+    assert verify_password("5555", row["password_hash"])
+
+
+def test_cas_write_requires_matching_expect(client):
+    """CAS 写方法：expect 不匹配 ⇒ 0 行改写（旧哈希保持原样）。"""
+    token = secrets.token_urlsafe(16)
+    legacy = _legacy_hash("4444")
+    _insert_share(token, legacy)
+    n = shares_store.set_password_hash_if(token, "scrypt$X", "不是这行")
+    assert n == 0
+    assert _stored_hash(token) == legacy
+    n = shares_store.set_password_hash_if(token, "scrypt$Y", legacy)
+    assert n == 1
+    assert _stored_hash(token) == "scrypt$Y"

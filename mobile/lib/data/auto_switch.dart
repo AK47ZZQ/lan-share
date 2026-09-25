@@ -214,6 +214,9 @@ class AutoSwitch {
   }
 
   void _tick() {
+    // _probing 的安全前提（对抗审查 P3-2）：本函数从判空到置位**全程同步**、
+    // 无任何 await，Dart 单线程事件循环下不可能交错——未来重构若在这两行间
+    // 引入 await，此守卫即失效（届时应换成 Completer 锁）
     if (_probing || !_enabled) return;
     if (SchedulerBinding.instance.lifecycleState != AppLifecycleState.resumed) {
       return; // 退后台：省电省流量（observer 只是额外保险，这里双保险）

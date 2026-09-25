@@ -13,6 +13,7 @@ import json
 import re
 import socket
 import threading
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -173,15 +174,28 @@ def _cert_fingerprint() -> str:
     return fp
 
 
+_ENTRIES_TTL = 60.0   # 秒；App 每 20s/端探测一次，60s 缓存把 N 客户端 × 3 设施
+_ENTRIES_CACHE: list = []   # [(monotonic_ts, resp_dict)]，set_public_url 时清（先例 reset_netloc_cache）
+
+
 @router.get("/api/app/entries")
 def app_entries():
     """主/备公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置对应隧道；
     App 端只展示非空项，主备切换、指纹预校验都以此为准。"""
-    pub = get_setting(PUBLIC_BASE_URL)
-    alt = get_setting(PUBLIC_BASE_URL_ALT)
-    return {"public": pub or None, "public_alt": alt or None,
+    now = time.monotonic()
+    if _ENTRIES_CACHE and now - _ENTRIES_CACHE[0][0] < _ENTRIES_TTL:
+        return _ENTRIES_CACHE[0][1]
+    resp = {"public": get_setting(PUBLIC_BASE_URL) or None,
+            "public_alt": get_setting(PUBLIC_BASE_URL_ALT) or None,
             "lan": _lan_addresses(),
             "cert_sha256": _cert_fingerprint()}
+    _ENTRIES_CACHE[:] = [(now, resp)]
+    return resp
+
+
+def reset_entries_cache() -> None:
+    """管理端改公网地址后即时生效（对抗审查 P2-2；先例 security.reset_netloc_cache）。"""
+    _ENTRIES_CACHE.clear()
 
 
 _LAN_PORT = 8765   # 局域网入口端口（Caddy TLS），与 Caddyfile 同源
