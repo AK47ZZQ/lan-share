@@ -339,6 +339,30 @@
     "title": "FeedbackAppendBody",
     "type": "object"
    },
+   "FinishBody": {
+    "properties": {
+     "ended_at": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Ended At"
+     },
+     "status": {
+      "title": "Status",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "title": "FinishBody",
+    "type": "object"
+   },
    "GrantBody": {
     "properties": {
      "can_read": {
@@ -679,6 +703,37 @@
      }
     },
     "title": "SharePrepareBody",
+    "type": "object"
+   },
+   "StartBody": {
+    "properties": {
+     "break_min": {
+      "default": 5,
+      "maximum": 60.0,
+      "minimum": 0.0,
+      "title": "Break Min",
+      "type": "integer"
+     },
+     "focus_min": {
+      "default": 25,
+      "maximum": 180.0,
+      "minimum": 1.0,
+      "title": "Focus Min",
+      "type": "integer"
+     },
+     "todo_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Todo Id"
+     }
+    },
+    "title": "StartBody",
     "type": "object"
    },
    "TodoCreateBody": {
@@ -4700,6 +4755,144 @@
      }
     },
     "summary": "Wall Excludes Set"
+   }
+  },
+  "/api/pomodoro/running": {
+   "get": {
+    "operationId": "running_pomodoro_api_pomodoro_running_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Running Pomodoro"
+   }
+  },
+  "/api/pomodoro/start": {
+   "post": {
+    "operationId": "start_pomodoro_api_pomodoro_start_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/StartBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Start Pomodoro"
+   }
+  },
+  "/api/pomodoro/summary": {
+   "get": {
+    "description": "近 N 天（含今天）逐日专注统计。SQL 只做区间过滤，聚合在 Python 侧\n（§3.5 双引擎同构）；今日 = 本地日期，跨零点不拆分（R2-05）。",
+    "operationId": "pomodoro_summary_api_pomodoro_summary_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "days",
+      "required": false,
+      "schema": {
+       "default": 7,
+       "title": "Days",
+       "type": "integer"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Pomodoro Summary"
+   }
+  },
+  "/api/pomodoro/{sid}/finish": {
+   "post": {
+    "operationId": "finish_pomodoro_api_pomodoro__sid__finish_post",
+    "parameters": [
+     {
+      "in": "path",
+      "name": "sid",
+      "required": true,
+      "schema": {
+       "title": "Sid",
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FinishBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Finish Pomodoro"
    }
   },
   "/api/public-url": {

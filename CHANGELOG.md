@@ -2,6 +2,27 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](docs/archive/CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 docs/项目记忆/02-里程碑。
 
+## 2026-09-25 — 服务端 v3.65：M2 番茄钟服务端切片（效率舱主线）
+
+- **新能力（效率舱最终计划 §3.3）**：番茄会话记账——`POST /api/pomodoro/start`
+  开专注（可挂待办）、`/api/pomodoro/{id}/finish` 正常结束或放弃、
+  `GET /api/pomodoro/running` 断线恢复、`GET /api/pomodoro/summary` 今日/近 N 天
+  逐日专注统计。**服务端权威时间戳 + 三态结算**：正常结束按实际上报时长；
+  放弃按已专注时长计入（不惩罚）；App 被杀/断网由清理循环每小时惰性结算
+  （按计划时长，标记 auto_closed）——挂机杀 App 时长也不丢。
+- **同用户单 running**（R2-06）：开新会话自动收束残留会话。**按日归属**（R2-05）：
+  跨零点不拆分；"今日"聚合在 Python 侧算（双引擎同构纪律）。
+- **新表 `pomodoro_sessions`**：schema 三处同步（PG / SQLite 迁移 / 迁移脚本
+  TABLE_ORDER），迁移覆盖测试通过；备份为全库 dump 自动覆盖，零新增。
+- **个人数据**：会话仅本人可读（与 personal 清单同口径，admin 也不看）；guest 不可用。
+- **边界与取舍**：`break_min` 列本期只落库不消费（休息段由 App 计时，
+  向前兼容留列）；不做审计流（高频小记录，噪声>排查价值）；常驻通知与
+  离线缓存属 App 端，**本切片不含**——App 番茄钟页面在 M2 后续批次交付。
+- **门禁**：SQLite **512 passed**（+11 用例）；PG 引擎番茄钟+迁移覆盖 **15 passed**；
+  ruff/mypy 零告警；契约快照 138→142 路径。反向消融：结算判据反转 → 3 红；
+  去掉单 running 收束 → 2 红。线上实测（debug 账号自建自清）：start/finish/
+  summary 全通、summary 归零确认清理，sweep 注册表打印验证含 `pomodoro_settle`。
+
 ## 2026-09-25 — App v1.1.9+113 + 服务端 v3.64：局域网入口自动再发现（回应反馈 b8b3）
 
 - **主人反馈（20260924220138-b8b3）**：「局域网连接失败，但是公网能连接」（App 1.1.8+112）。

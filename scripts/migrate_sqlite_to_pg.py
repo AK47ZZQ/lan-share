@@ -35,7 +35,7 @@ TABLE_ORDER = [
     "users", "sessions", "device_tokens", "grants", "invites", "shares",
     "audit_log", "blobs", "trash", "upload_sessions", "photos", "note_search",
     "settings", "notifications", "admin_broadcasts", "announcements",
-    "todo_lists", "todos", "ttl_state",
+    "todo_lists", "todos", "ttl_state", "pomodoro_sessions",
 ]
 
 # 有意不迁移的表：已下线功能的残留（schema 里也不再建表，存量库可能还有）

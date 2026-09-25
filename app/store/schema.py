@@ -233,6 +233,16 @@ _PG_SCHEMA = """
         expires_at DOUBLE PRECISION NOT NULL,
         PRIMARY KEY(scope, tkey)
     );
+    CREATE TABLE IF NOT EXISTS pomodoro_sessions(
+        id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        todo_id BIGINT REFERENCES todos(id) ON DELETE SET NULL,
+        started_at DOUBLE PRECISION NOT NULL,
+        ended_at DOUBLE PRECISION,
+        focus_min INTEGER NOT NULL DEFAULT 25,
+        break_min INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'running'
+    );
 """
 
 # 照片评论/表情回应（photo_comments / photo_reactions）已按改进建议
@@ -241,7 +251,7 @@ _PG_SCHEMA = """
 # 注意：不再使用，勿把两表加回 _PG_SEQUENCES。
 
 _PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "device_tokens",
-                 "announcements", "todo_lists", "todos")
+                 "announcements", "todo_lists", "todos", "pomodoro_sessions")
 
 
 def pg_setval_sequences(conn: _PgConn):
@@ -534,6 +544,17 @@ def _migrate_v3():
                 tval TEXT NOT NULL,
                 expires_at REAL NOT NULL,
                 PRIMARY KEY(scope, tkey)
+            );
+            -- M2 番茄钟（效率舱最终计划 §3.3）：服务端权威时间戳 + 三态结算
+            CREATE TABLE IF NOT EXISTS pomodoro_sessions(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                todo_id INTEGER REFERENCES todos(id) ON DELETE SET NULL,
+                started_at REAL NOT NULL,
+                ended_at REAL,
+                focus_min INTEGER NOT NULL DEFAULT 25,
+                break_min INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'running'
             );
             -- 照片评论/表情回应两表（photo_comments/photo_reactions）已按
             -- 改进建议 9.6-P2-13 下线，不再建表；存量库中的旧表保留不删
