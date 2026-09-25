@@ -140,6 +140,9 @@ def test_orig_name_derivation():
     assert _orig_name("1790400000000000000_report-final.docx") == "report-final.docx"
     assert _orig_name("1790400000000000000_my_file_v2.txt") == "my_file_v2.txt"
     assert _orig_name("no-underscore.txt") == "no-underscore.txt"
+    # 前缀守卫：短数字/非数字前缀不吞（防误伤手动放入的同形名）
+    assert _orig_name("123_456.jpg") == "123_456.jpg"
+    assert _orig_name("abc_123.txt") == "abc_123.txt"
 
 
 def test_cleanup_stage_order_pins_trash_before_registered():
