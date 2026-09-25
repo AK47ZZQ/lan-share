@@ -2928,7 +2928,7 @@
   },
   "/api/app/entries": {
    "get": {
-    "description": "主/备公网入口 + 证书指纹。地址为 null 表示未配置对应隧道；\nApp 端只展示非空项，主备切换、指纹预校验都以此为准。",
+    "description": "主/备公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置对应隧道；\nApp 端只展示非空项，主备切换、指纹预校验都以此为准。",
     "operationId": "app_entries_api_app_entries_get",
     "responses": {
      "200": {

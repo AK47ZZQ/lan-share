@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import re
+import socket
 import threading
 from pathlib import Path
 
@@ -174,9 +175,43 @@ def _cert_fingerprint() -> str:
 
 @router.get("/api/app/entries")
 def app_entries():
-    """主/备公网入口 + 证书指纹。地址为 null 表示未配置对应隧道；
+    """主/备公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置对应隧道；
     App 端只展示非空项，主备切换、指纹预校验都以此为准。"""
     pub = get_setting(PUBLIC_BASE_URL)
     alt = get_setting(PUBLIC_BASE_URL_ALT)
     return {"public": pub or None, "public_alt": alt or None,
+            "lan": _lan_addresses(),
             "cert_sha256": _cert_fingerprint()}
+
+
+_LAN_PORT = 8765   # 局域网入口端口（Caddy TLS），与 Caddyfile 同源
+
+
+def _lan_addresses() -> list[str]:
+    """本机局域网 IPv4 → https://<ip>:8765 候选（反馈 20260924220138-b8b3）。
+
+    App 的 LAN 候选原本只来自手动添加的地址历史；服务器 DHCP 换址后旧 IP
+    永久失联。经本端点向 App 广播现值，App 在历史候选全失败时自动再发现。
+    安全边界：本端点无认证，内网地址对任何能到达本端点者可见——但均为
+    RFC1918 私网地址（公网不可路由），泄漏价值仅限拓扑形态，有意接受；
+    该字段不能被用于把 App 导向假服务器：App 端探测走 TrustStore TLS
+    握手裁决 + 响应指纹同源复核双门槛，伪造 lan 字段最坏是指向错误地址
+    的 DoS，不构成凭据风险。"""
+    out: list[str] = []
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        return out
+    for info in infos:
+        ip = str(info[4][0])
+        parts = ip.split(".")
+        if len(parts) != 4 or not all(p.isdigit() for p in parts):
+            continue
+        o = [int(p) for p in parts]
+        is_private = (o[0] == 10 or (o[0] == 172 and 16 <= o[1] <= 31)
+                      or (o[0] == 192 and o[1] == 168))
+        if is_private:
+            addr = f"https://{ip}:{_LAN_PORT}"
+            if addr not in out:
+                out.append(addr)
+    return out[:4]

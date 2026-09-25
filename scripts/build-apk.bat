@@ -13,6 +13,12 @@ set SRC=C:\lan-share\mobile
 set DST=C:\lan-share-mobile
 set PYTHON=C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe
 set FLUTTER_BIN=C:\lan-share\env\flutter\bin
+REM 构建必须用仓库自带的 SDK（env/android-sdk 有 gradle 要的 NDK 28.2）：
+REM 机器级 ANDROID_HOME 指向 C:\tools\android-sdk（无 ndk 目录），flutter 每次
+REM 构建按它重写镜像里的 local.properties ⇒ gradle 触发 sdkmanager 装包 →
+REM sdkmanager.bat 崩 0xC0000409（2026-09-25 v1.1.9 出包实录）。脚本层显式覆盖。
+set ANDROID_HOME=C:\lan-share\env\android-sdk
+set ANDROID_SDK_ROOT=C:\lan-share\env\android-sdk
 
 echo === Mirror mobile source to %DST% (ASCII path) ===
 if not exist "%DST%" mkdir "%DST%"

@@ -14,8 +14,13 @@ import 'api/trust.dart';
 class AppEntries {
   final String? pub; // 主公网入口（如 https://your-frp-domain.com:xxxxx），未配置为 null
   final String? pubAlt; // 备用公网入口
+  final List<String> lan; // 服务器广播的局域网地址（https://ip:8765），旧服务端无此字段为空
   final String certSha256; // 冒号格式指纹；无证书/解析失败为空串
-  AppEntries({required this.pub, required this.pubAlt, required this.certSha256});
+  AppEntries(
+      {required this.pub,
+      required this.pubAlt,
+      this.lan = const [],
+      required this.certSha256});
 
   /// 主/备中非空的地址（顺序：主在前）
   List<String> get publicAddresses => [pub, pubAlt].whereType<String>().toList();
@@ -23,6 +28,7 @@ class AppEntries {
   factory AppEntries.fromJson(Map<String, dynamic> j) => AppEntries(
       pub: j['public'] as String?,
       pubAlt: j['public_alt'] as String?,
+      lan: (j['lan'] as List?)?.cast<String>() ?? const [],
       certSha256: j['cert_sha256'] as String? ?? '');
 
   /// 指纹是否与给定指纹同源（忽略大小写与冒号分隔差异）
