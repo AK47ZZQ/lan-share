@@ -75,11 +75,37 @@ def test_finish_abandoned_credits_elapsed(auth):
 
 
 def test_finish_rejects_bad_status_and_backwards_clock(auth):
+    """status 由 FinishBody 的 Literal 在模型层拒绝（422，二轮审查 P2-1）；
+    ended_at 倒挂仍由业务层 400。"""
     sid = _start(auth).json()["id"]
     assert auth.post(f"/api/pomodoro/{sid}/finish",
-                     json={"status": "nonsense"}).status_code == 400
+                     json={"status": "nonsense"}).status_code == 422
     assert auth.post(f"/api/pomodoro/{sid}/finish",
                      json={"status": "focus", "ended_at": 1}).status_code == 400
+
+
+def test_finish_zero_duration_abandoned_is_zero_minutes(make_user):
+    """二轮审查 P3-9：零时长放弃计 0 分钟（E2E"1个·0分钟"口径的单元钉）。"""
+    u = make_user("member")
+    _start(u)                       # 会话 1
+    _start(u)                       # 收束会话 1（abandoned，亚秒间隔）；会话 2 running
+    r = u.get("/api/pomodoro/summary").json()
+    assert r["today"]["count"] == 1        # 只计已收束会话，running 不计
+    assert r["today"]["minutes"] == 0      # 亚秒间隔的 abandoned 不产生分钟
+
+
+def test_start_cannot_attach_others_personal_todo(make_user):
+    """二轮审查 P1-1：成员 B 不能把成员 A 的 personal 待办挂进自己的会话
+    （404 不泄露存在）。"""
+    a = make_user("member")
+    b = make_user("member")
+    # A 建 personal 清单 + 待办
+    lid = a.post("/api/todos/lists", json={"name": "p-list", "kind": "personal"}).json()["id"]
+    tid = a.post("/api/todos", json={"list_id": lid, "title": "a-private"}).json()["id"]
+    r = _start(b, todo_id=tid)
+    assert r.status_code == 404
+    # A 自己挂自己的可以
+    assert _start(a, todo_id=tid).status_code == 200
 
 
 def test_finish_twice_conflicts(auth):

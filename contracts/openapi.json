@@ -353,6 +353,10 @@
       "title": "Ended At"
      },
      "status": {
+      "enum": [
+       "focus",
+       "abandoned"
+      ],
       "title": "Status",
       "type": "string"
      }
