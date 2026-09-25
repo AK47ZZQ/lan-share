@@ -12,6 +12,7 @@ from app.filetools import to_rel
 from app.security import (audit, client_ip, require_admin, require_user,
                           reset_netloc_cache)
 from app.spaces import (visible)
+from app.api.appver import reset_entries_cache
 from app.api.notify import (assert_public_webhook_url, get_webhook_url, webhook_send)
 from app.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
                           PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT,
@@ -50,6 +51,7 @@ def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
     set_setting(PUBLIC_BASE_URL, url)
     set_setting(PUBLIC_BASE_URL_ALT, url_alt)
     reset_netloc_cache()   # 入口判定即时生效
+    reset_entries_cache()   # entries 端点 60s 缓存同样即时失效
     audit("public_url_set", f"{url} | alt={url_alt}", ip=client_ip(request))
     return {"ok": True, "public_base_url": url, "public_base_url_alt": url_alt}
 

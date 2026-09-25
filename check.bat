@@ -28,6 +28,13 @@ echo === pip-audit ===
 if errorlevel 1 exit /b 1
 
 echo.
+echo === pip check (dependency conflicts; gate and runtime share this venv, so a
+echo     conflict here means the production interpreter carries it too — 2026-09-21
+echo     httpx2 silent rollback in the same venv is exactly the failure shape) ===
+"%PYTHON%" -m pip check
+if errorlevel 1 exit /b 1
+
+echo.
 echo === UI layering guard (mobile) ===
 "%PYTHON%" scripts\check-ui-layering.py
 if errorlevel 1 exit /b 1
