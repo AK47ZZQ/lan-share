@@ -11,6 +11,8 @@
 import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
+import 'package:dio/dio.dart';
+
 import '../data/api/todos_api.dart';
 import '../data/local/todo_cache.dart';
 import '../data/api/pomodoros_api.dart';
@@ -104,9 +106,15 @@ class _TodosPageState extends State<TodosPage> {
   }
 
   Future<void> _load() async {
-    // M2 离线补传：联网后把断网期间的勾选按"最后写入胜"回放，再拉取
+    // M2 离线补传：联网后把断网期间的勾选按"最后写入胜"回放，再拉取。
+    // 对抗审查 P1-2：待办在离线期间被删除时 patch 404 —— 视为已达成并
+    // 出队，否则该 op 永久滞留、每次加载都空打一发注定失败的请求
     await TodoCache.replay((id, status) async {
-      await TodosApi.patchTodo(id, status: status);
+      try {
+        await TodosApi.patchTodo(id, status: status);
+      } on DioException catch (e) {
+        if (e.response?.statusCode != 404) rethrow;
+      }
     });
     try {
       final all = await TodosApi.listAll();

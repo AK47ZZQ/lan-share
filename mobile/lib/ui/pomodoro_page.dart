@@ -51,6 +51,9 @@ class _PomodoroPageState extends State<PomodoroPage> {
       final (today, _) = await PomodorosApi.summary();
       if (!mounted) return;
       setState(() {
+        // 对抗审查 P1-1：服务端出现新 running 会话时，本地休息段立即作废
+        // （两者互斥）；正常休息期 run 为 null，休息倒计时不受影响
+        if (run != null) _breakRemaining = null;
         _running = run;
         _today = today;
         _loading = false;
@@ -149,7 +152,7 @@ class _PomodoroPageState extends State<PomodoroPage> {
       if (status == 'focus') {
         // M2 常驻通知收尾：撤下 ongoing，按需补完成通知；休息段本地计时
         unawaited(TransferNotifier.I.focusFinished(title: _breakTitle(s)));
-        if ((s.breakMin) > 0 && mounted) {
+        if (s.breakMin > 0 && mounted) {
           setState(() => _breakRemaining = s.breakMin * 60);
           _syncTicker();
         }
