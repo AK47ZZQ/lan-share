@@ -96,6 +96,11 @@ def renew(token: str, expires_at: float) -> None:
     _write("UPDATE shares SET expires_at=? WHERE token=?", (expires_at, token))
 
 
+def set_password_hash(token: str, password_hash: str) -> None:
+    """提取码哈希惰性升级（api/share.py 校验成功时把旧 sha256 行改写为 scrypt）。"""
+    _write("UPDATE shares SET password_hash=? WHERE token=?", (password_hash, token))
+
+
 def set_max_downloads(token: str, max_downloads: int) -> None:
     """编辑：改/设下载上限。"""
     _write("UPDATE shares SET max_downloads=? WHERE token=?", (max_downloads, token))

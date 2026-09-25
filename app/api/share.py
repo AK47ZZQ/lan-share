@@ -22,7 +22,7 @@ from app.db import _db
 from app.roles import ADMIN
 from app.api.deps import ensure_share_owner, get_share_or_404, preview_viewer
 from app.security import (audit, client_ip, get_bearer_user, get_session_user,
-                          require_user)
+                          hash_password, require_user, verify_password)
 from app.filetools import human_size, safe_path, to_rel
 from app.settings import PUBLIC_BASE_URL, get_setting
 from app.api.qr import qr_svg_response
@@ -75,10 +75,9 @@ async def create_share(request: Request, path: str = Form(...), expires_hours: i
         target_username = trow["username"]
 
     token = secrets.token_urlsafe(16)
-    pwd_hash = None
-    if password:
-        salt = secrets.token_bytes(16)
-        pwd_hash = salt.hex() + "$" + hashlib.sha256(salt + password.encode()).hexdigest()
+    # 提取码与登录口令同源 scrypt（sha256 单轮在库表泄漏时可离线穷举 4–6 位
+    # 数字码，15-路线图 P3）；存量旧行由校验侧在首次校验成功时惰性升级
+    pwd_hash = hash_password(password) if password else None
     await run_in_threadpool(_insert_share, _ShareRow(
         token=token, rel=to_rel(target_path), name=target_path.name,
         size=target_path.stat().st_size if target_path.is_file() else None,
@@ -190,9 +189,24 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
                             detail=f"提取码错误次数过多，请 {remaining // 60 + 1} 分钟后重试")
     if not password:
         raise HTTPException(status_code=401, detail="Password required")
-    salt_hex, h_hex = s["password_hash"].split("$", 1)
-    calc = hashlib.sha256(bytes.fromhex(salt_hex) + password.encode()).hexdigest()
-    if not hmac.compare_digest(calc, h_hex):
+    stored = s["password_hash"]
+    # 双格式校验：scrypt$（新，security.py 单源）/ 旧 <salt_hex>$<sha256>。
+    # share_prepare 为 sync def，本就运行在线程池内，同步 scrypt 不阻塞事件循环
+    if stored.startswith("scrypt$"):
+        ok = verify_password(password, stored)
+    else:
+        try:
+            salt_hex, h_hex = stored.split("$", 1)
+            calc = hashlib.sha256(
+                bytes.fromhex(salt_hex) + password.encode()).hexdigest()
+            ok = hmac.compare_digest(calc, h_hex)
+        except ValueError:
+            ok = False   # 畸形哈希 fail-closed 为 403 而非 500
+        if ok:
+            # 存量行惰性升级：无需迁移脚本，存量分享链接保持可用；触发前提是
+            # 已给出正确密码，公开端点不因此新增写入原语
+            shares_store.set_password_hash(token, hash_password(password))
+    if not ok:
         _record_share_fail(token)
         audit("share_badpwd", s["name"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="Wrong password")
