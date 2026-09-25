@@ -85,3 +85,43 @@ def test_healthreport_surfaces_audit():
 def test_sweep_registered():
     from app.services.cleanup import _sweeps
     assert any(n == "trash_orphan_audit" for n, _ in _sweeps)
+
+
+def test_rescue_registers_midage_orphan():
+    """v3.67 救援：7~29 天的无主文件自动登记回回收站（可还原），报告计数归零。"""
+    f = _mk_trash_file("555555_orphan-mid.txt", age_days=15)
+    try:
+        r = trash_audit.audit_trash_orphans()
+        assert r["rescued"] == 1 and r["count"] == 0
+        assert f.name in trash_store.referenced_trash_names()
+        row = _db().execute("SELECT * FROM trash WHERE trash_path=?",
+                            (f".trash/{f.name}",)).fetchone()
+        assert row is not None
+        assert row["orig_path"].startswith("（对账救援")
+        assert row["name"] == "orphan-mid.txt"       # 去掉 time_ns 前缀
+        # deleted_at 与文件 mtime 对齐（行与文件同寿命）
+        assert abs(row["deleted_at"] - f.stat().st_mtime) < 1
+    finally:
+        f.unlink(missing_ok=True)
+        _db().execute("DELETE FROM trash WHERE trash_path=?",
+                      (f".trash/{f.name}",))
+        _db().commit()
+
+
+def test_29day_orphan_not_rescued_report_only():
+    """≥29 天：与小时级清理有竞态，只报告不登记（避免有行无文件的坏条目）。"""
+    f = _mk_trash_file("444444_orphan-old.txt", age_days=29.5)
+    try:
+        r = trash_audit.audit_trash_orphans()
+        assert r["rescued"] == 0 and r["count"] == 1
+        assert f.name not in trash_store.referenced_trash_names()
+    finally:
+        f.unlink(missing_ok=True)
+
+
+def test_orig_name_derivation():
+    from app.services.trash_audit import _orig_name
+    # 落盘名 = {time_ns()}_{原名}；原名可含下划线，只切第一个
+    assert _orig_name("1790400000000000000_report-final.docx") == "report-final.docx"
+    assert _orig_name("1790400000000000000_my_file_v2.txt") == "my_file_v2.txt"
+    assert _orig_name("no-underscore.txt") == "no-underscore.txt"

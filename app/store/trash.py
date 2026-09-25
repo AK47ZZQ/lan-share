@@ -27,6 +27,15 @@ def referenced_trash_names() -> set[str]:
     return {r["trash_path"].rsplit("/", 1)[-1] for r in rows if r["trash_path"]}
 
 
+def register_rescued(orig_path: str, trash_path: str, name: str,
+                     size: int | None, deleted_at: float) -> None:
+    """对账救援：把"有文件无索引"的残留登记回回收站（trash_audit 专用）。
+    deleted_at 必须传文件 mtime——与 _cleanup_trash 的按 mtime 清理对齐，
+    行与文件同寿命；登记后家人可在回收站看到/还原。"""
+    _write("INSERT INTO trash(orig_path, trash_path, name, size, deleted_at) "
+           "VALUES(?,?,?,?,?)", (orig_path, trash_path, name, size, deleted_at))
+
+
 def overview_stats() -> tuple[int, int]:
     """(条数, 总字节)（管理端概览统计）。"""
     total = _db().execute("SELECT COUNT(*) AS v FROM trash").fetchone()["v"]

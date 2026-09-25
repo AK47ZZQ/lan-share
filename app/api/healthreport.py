@@ -234,10 +234,14 @@ def format_report(d: dict) -> tuple[str, bool]:
 
     # .trash 无主残留（v3.66）：只读对账的可见性出口——日报是它的唯一播报面
     to = d.get("trash_orphans")
-    if to and to.get("count"):
-        warn = True
-        lines.append(f"🗑️ .trash 无主残留 {to['count']} 个"
-                     f"（共 {to.get('total_bytes', 0)} 字节）⚠️ 物理处置待人工")
+    if to and (to.get("count") or to.get("rescued")):
+        if to.get("rescued"):
+            lines.append(f"🛟 .trash 对账救援：本轮登记 {to['rescued']} 个"
+                         "（回收站可见可还原）")
+        if to.get("count"):
+            warn = True
+            lines.append(f"🗑️ .trash 无主残留 {to['count']} 个"
+                         f"（共 {to.get('total_bytes', 0)} 字节）⚠️ 即将按 30 天 TTL 移除")
 
     c = d.get("counts") or {}
     lines.append(f"👥 成员 {c.get('users', '—')} · 照片 {c.get('photos', '—')} · "
