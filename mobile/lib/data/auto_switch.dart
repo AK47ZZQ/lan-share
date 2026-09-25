@@ -142,6 +142,28 @@ class AutoSwitch {
   static String normUrl(String raw) =>
       raw.trim().replaceAll(RegExp(r'/+$'), '');
 
+  /// 服务端广播的局域网候选过滤（b8b3 再发现）：https-only、归一去重、
+  /// 排除当前地址与历史已有项、上限 6。纯函数便于单测；信任裁决**不在此处**
+  /// ——候选仍走 _probeAddress 的 TrustStore 握手 + 指纹同源复核，伪造
+  /// lan 字段无法通过（最坏 DoS）。
+  @visibleForTesting
+  static List<String> advertisedLanCandidates({
+    required List<String> advertised,
+    required String current,
+    required List<String> history,
+  }) {
+    final seen = <String>{};
+    return advertised
+        .map(normUrl)
+        .where((a) =>
+            a.startsWith('https://') &&
+            a != current &&
+            !history.contains(a) &&
+            seen.add(a))
+        .take(6)
+        .toList();
+  }
+
   static Future<String> _sentinelFp() async {
     final sp = await SharedPreferences.getInstance();
     return normFp(sp.getString(_kFpCache) ?? '');
@@ -224,7 +246,22 @@ class AutoSwitch {
     if (currentPublic) {
       // 在公网：探测局域网候选，通则切回（冷却在切换点统一裁决）
       if (DateTime.now().difference(_lastSwitchAt) < _cooldown) return;
-      final lan = await _reachable(await _lanCandidates());
+      final historyCands = await _lanCandidates();
+      var lan = await _reachable(historyCands);
+      // b8b3 再发现：历史候选全失败时，从当前公网通道拉服务端自报的局域网
+      // 现值（DHCP 换址后历史里的旧 IP 永久失联，这正是"公网能连、局域网
+      // 失联"的主因）。探测走与历史候选同一条 _probeAddress 链：TrustStore
+      // TLS 握手裁决 + 响应指纹同源复核，伪造 lan 字段无法通过（最坏 DoS）。
+      if (lan == null && !stale()) {
+        final entries = await _probeAddress(current, trustIfKnown: true);
+        final advertised = advertisedLanCandidates(
+            advertised: entries?.lan ?? const [],
+            current: current,
+            history: historyCands);
+        if (advertised.isNotEmpty && !stale()) {
+          lan = await _reachable(advertised);
+        }
+      }
       if (lan == null || stale()) return;
       await _doSwitch(lan, '已自动切回局域网（${_hostOf(lan)}）',
           currentAtProbeStart: current);

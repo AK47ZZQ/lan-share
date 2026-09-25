@@ -69,3 +69,59 @@ def test_login_still_works_after_alt_set(client):
     r = c.post("/api/login", json={"username": ADMIN_USER, "password": ADMIN_PASS},
                headers={"Host": LAN_HOST})
     assert r.status_code == 200 and r.json()["ok"] is True
+
+
+def test_entries_lan_advertised(client, auth):
+    """b8b3：entries 下发本机局域网地址现值——App 历史候选全失败时的
+    自动再发现来源。只允许 RFC1918 私网 + 8765 端口 + 去重 + 上限 4。"""
+    _set_public(auth, f"https://{PRIMARY_HOST}", f"https://{ALT_HOST}")
+    r = client.get("/api/app/entries", headers={"Host": LAN_HOST})
+    assert r.status_code == 200
+    # 本文件末尾的用例须把 settings 清回空（沿用 test_entries_null_when_unset
+    # 的"文件级清场"约定：后续文件的用例依赖 netlocs 为空的兜底分支）
+    _set_public(auth, "", "")
+    r = client.get("/api/app/entries", headers={"Host": LAN_HOST})
+    data = r.json()
+    assert data["public"] is None
+    assert isinstance(data["lan"], list)
+    assert len(data["lan"]) <= 4
+    assert len(set(data["lan"])) == len(data["lan"])
+    for a in data["lan"]:
+        assert a.startswith("https://") and a.endswith(":8765")
+        parts = a[len("https://"):-len(":8765")].split(".")
+        assert len(parts) == 4 and all(p.isdigit() for p in parts)
+        o = [int(p) for p in parts]
+        assert o[0] == 10 or (o[0] == 172 and 16 <= o[1] <= 31)             or (o[0] == 192 and o[1] == 168), a
+
+
+def test_lan_addresses_filter(monkeypatch):
+    """过滤逻辑单测（注入固定 getaddrinfo，双引擎行为一致）：只留 RFC1918、
+    去重、保持顺序、上限 4。"""
+    import socket as _socket
+    from app.api import appver
+
+    def fake_getaddrinfo(host, port, family):
+        rows = [("eth", (), None, "", ("192.168.1.100", 0)),
+                ("eth", (), None, "", ("192.168.1.100", 0)),   # 重复
+                ("wl", (), None, "", ("169.254.9.9", 0)),      # 链路本地
+                ("eth", (), None, "", ("8.8.8.8", 0)),         # 公网
+                ("eth", (), None, "", ("10.0.0.5", 0)),
+                ("eth", (), None, "", ("172.20.1.1", 0)),
+                ("eth", (), None, "", ("fe80::1", 0)),         # 非 IPv4 结构
+                ("v", (), None, "", ("172.32.0.1", 0))]        # 172 越界
+        return rows
+
+    monkeypatch.setattr(appver.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(appver.socket, "AF_INET", _socket.AF_INET)
+    got = appver._lan_addresses()
+    assert got == ["https://192.168.1.100:8765", "https://10.0.0.5:8765",
+                   "https://172.20.1.1:8765"]
+
+
+def test_lan_addresses_getaddrinfo_oserror(monkeypatch):
+    from app.api import appver
+
+    def boom(*a, **k):
+        raise OSError("no net")
+    monkeypatch.setattr(appver.socket, "getaddrinfo", boom)
+    assert appver._lan_addresses() == []
