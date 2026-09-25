@@ -70,3 +70,62 @@ extension InboxNotifier on TransferNotifier {
     }
   }
 }
+
+/// 番茄钟专注中的常驻通知（M2，App v1.1.12）：会话进行期间挂 ongoing 通知，
+/// 每 30s 更新剩余时间；完成/放弃时撤下并按需补一条结果通知。
+/// 约束：通知更新只在 App 存活期间发生（无前台服务）——杀 App 后由服务端
+/// 惰性结算兜底，时长不丢；MIUI/Android14 真机表现仍待验证（计划 M2 硬门槛）。
+const int _kFocusNotifyId = 20260925;
+
+extension FocusNotifier on TransferNotifier {
+  Future<void> focusOngoing(
+      {required String title, required int remainingSec}) async {
+    final m = remainingSec ~/ 60;
+    final s = remainingSec % 60;
+    try {
+      await _ensure();
+      await _plugin.show(
+          _kFocusNotifyId,
+          '专注中 · $title',
+          '剩余 ${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}',
+          const NotificationDetails(
+              android: AndroidNotificationDetails(
+                  'focus_running', '专注进行中',
+                  channelDescription: '番茄钟专注会话的常驻计时',
+                  importance: Importance.low,
+                  priority: Priority.low,
+                  ongoing: true,
+                  onlyAlertOnce: true,
+                  icon: 'ic_notification',
+                  color: Color(0xFF5B6CFF))));
+    } catch (_) {
+      // 通知失败不影响计时本身
+    }
+  }
+
+  Future<void> focusFinished({required String title}) async {
+    try {
+      await _ensure();
+      await _plugin.cancel(_kFocusNotifyId);
+      await _plugin.show(
+          _kFocusNotifyId + 1,
+          '专注完成 🎉',
+          title,
+          const NotificationDetails(
+              android: AndroidNotificationDetails(
+                  'focus_done', '专注结果',
+                  channelDescription: '番茄会话完成提醒',
+                  importance: Importance.defaultImportance,
+                  priority: Priority.defaultPriority,
+                  icon: 'ic_notification',
+                  color: Color(0xFF5B6CFF))));
+    } catch (_) {}
+  }
+
+  Future<void> focusDismissed() async {
+    try {
+      await _ensure();
+      await _plugin.cancel(_kFocusNotifyId);
+    } catch (_) {}
+  }
+}

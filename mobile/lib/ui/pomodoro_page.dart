@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/pomodoros_api.dart';
+import '../data/local/notify.dart';
 import 'theme/design_tokens.dart';
 import 'widgets/kit.dart';
 
@@ -28,6 +29,7 @@ class _PomodoroPageState extends State<PomodoroPage> {
   bool _loading = true;
   bool _busy = false;
   bool _settling = false;   // 二轮审查 P2-5：到期自动结算与手点完成的防重入闸
+  int? _breakRemaining;     // 休息倒计时（秒）；null=不在休息。本地计时，不落服务端
   Timer? _ticker;
 
   @override
@@ -54,6 +56,11 @@ class _PomodoroPageState extends State<PomodoroPage> {
         _loading = false;
       });
       _syncTicker();
+      if (run != null) {
+        // 恢复的会话重新挂常驻通知
+        TransferNotifier.I.focusOngoing(
+            title: widget.todoTitle ?? '专注', remainingSec: _remainingSec(run));
+      }
       // 恢复的会话若已在页外到期：到点即按正常结束收束（本地推算）
       if (run != null && _remainingSec(run) <= 0) {
         await _finish('focus',
@@ -72,10 +79,29 @@ class _PomodoroPageState extends State<PomodoroPage> {
     if (_running == null) return;
     _ticker = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) return t.cancel();
+      if (_breakRemaining != null) {
+        // 休息段（本地计时）：到点轻提示，跳过/到点均回空闲态
+        if (_breakRemaining! <= 1) {
+          t.cancel();
+          if (mounted) {
+            setState(() => _breakRemaining = null);
+            showToast('休息结束，开始下一段吧');
+          }
+          return;
+        }
+        if (mounted) setState(() => _breakRemaining = _breakRemaining! - 1);
+        return;
+      }
       if (_remainingSec(_running!) <= 0) {
         t.cancel();
         _finish('focus', endedAt: _running!.startedAt + _running!.focusMin * 60);
       } else {
+        if (_remainingSec(_running!) % 30 == 0) {
+          // 常驻通知 30s 一更（App 存活期间；杀 App 由服务端惰性结算兜底）
+          TransferNotifier.I.focusOngoing(
+              title: widget.todoTitle ?? '专注',
+              remainingSec: _remainingSec(_running!));
+        }
         setState(() {});   // 纯驱动文本刷新；轻量，一分钟 60 次
       }
     });
@@ -96,6 +122,8 @@ class _PomodoroPageState extends State<PomodoroPage> {
       if (!mounted) return;
       setState(() => _running = s);
       _syncTicker();
+      TransferNotifier.I.focusOngoing(
+          title: widget.todoTitle ?? '专注', remainingSec: _remainingSec(s!));
     } catch (e) {
       if (mounted) showToast('开始失败：${errDetail(e)}');
     } finally {
@@ -118,6 +146,16 @@ class _PomodoroPageState extends State<PomodoroPage> {
       if (mounted) showToast('结算失败：${errDetail(e)}');
     } finally {
       _ticker?.cancel();
+      if (status == 'focus') {
+        // M2 常驻通知收尾：撤下 ongoing，按需补完成通知；休息段本地计时
+        unawaited(TransferNotifier.I.focusFinished(title: _breakTitle(s)));
+        if ((s.breakMin) > 0 && mounted) {
+          setState(() => _breakRemaining = s.breakMin * 60);
+          _syncTicker();
+        }
+      } else {
+        unawaited(TransferNotifier.I.focusDismissed());
+      }
       _settling = false;
       if (mounted) {
         setState(() {
@@ -130,6 +168,9 @@ class _PomodoroPageState extends State<PomodoroPage> {
       if (refresh) await _reload();
     }
   }
+
+  String _breakTitle(PomodoroSession? s) =>
+      widget.todoTitle ?? (s?.todoId != null ? '待办专注' : '专注');
 
   String _fmt(int totalSec) {
     final m = totalSec ~/ 60;
@@ -159,7 +200,9 @@ class _PomodoroPageState extends State<PomodoroPage> {
                       const SizedBox(height: Gap.sm),
                     ],
                     Text(
-                      _running == null ? '开始专注' : _fmt(remaining),
+                      _breakRemaining != null
+                          ? '休息 ${_fmt(_breakRemaining!)}'
+                          : (_running == null ? '开始专注' : _fmt(remaining)),
                       textAlign: TextAlign.center,
                       style: Theme.of(context)
                           .textTheme
@@ -168,23 +211,33 @@ class _PomodoroPageState extends State<PomodoroPage> {
                     ),
                     const SizedBox(height: Gap.lg),
                     if (_running == null) ...[
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        spacing: Gap.xs,
-                        children: [for (final m in const [15, 25, 45])
-                          ChoiceChip(
-                            label: Text('$m 分钟'),
-                            selected: _focusMin == m,
-                            onSelected: (_) => setState(() => _focusMin = m),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: Gap.md),
-                      FilledButton.icon(
-                        onPressed: _busy ? null : _start,
-                        icon: const Icon(Icons.play_arrow),
-                        label: const Text('开始'),
-                      ),
+                      if (_breakRemaining != null) ...[
+                        TextButton.icon(
+                          onPressed: () =>
+                              setState(() => _breakRemaining = null),
+                          icon: const Icon(Icons.skip_next),
+                          label: const Text('跳过休息'),
+                        ),
+                      ] else ...[
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          spacing: Gap.xs,
+                          children: [for (final m in const [15, 25, 45])
+                            ChoiceChip(
+                              label: Text('$m 分钟'),
+                              selected: _focusMin == m,
+                              onSelected: (_) =>
+                                  setState(() => _focusMin = m),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: Gap.md),
+                        FilledButton.icon(
+                          onPressed: _busy ? null : _start,
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('开始'),
+                        ),
+                      ],
                     ] else ...[
                       const SizedBox(height: Gap.xl),
                       FilledButton.icon(
