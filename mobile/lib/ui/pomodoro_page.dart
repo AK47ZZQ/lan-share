@@ -79,7 +79,9 @@ class _PomodoroPageState extends State<PomodoroPage> {
   /// 倒计时只在 running 且未到期时走表；到期即自动正常结束。
   void _syncTicker() {
     _ticker?.cancel();
-    if (_running == null) return;
+    // 二轮审查 P1：休息段（_running 已清、_breakRemaining 在计）也必须有
+    // 活着的计时器——否则 _reload 后休息倒计时冻结
+    if (_running == null && _breakRemaining == null) return;
     _ticker = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) return t.cancel();
       if (_breakRemaining != null) {
