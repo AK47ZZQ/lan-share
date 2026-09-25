@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
 import '../data/api/todos_api.dart';
+import 'pomodoro_page.dart';
 import 'theme/design_tokens.dart';
 import 'theme/responsive.dart';
 import 'widgets/kit.dart';
@@ -321,6 +322,14 @@ class _TodosPageState extends State<TodosPage> {
       appBar: AppBar(
         title: const Text('待办'),
         actions: [
+          IconButton(
+              tooltip: '专注',
+              icon: const Icon(Icons.timer_outlined),
+              onPressed: () async {
+                await Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const PomodoroPage()));
+                if (mounted) await _load();   // 回来刷新今日统计口径下的勾选态
+              }),
           IconButton(
               tooltip: _showCal ? '列表视图' : '日历视图',
               icon: Icon(_showCal
