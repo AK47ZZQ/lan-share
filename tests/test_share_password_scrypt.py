@@ -119,3 +119,15 @@ def test_cas_write_requires_matching_expect(client):
     n = shares_store.set_password_hash_if(token, "scrypt$Y", legacy)
     assert n == 1
     assert _stored_hash(token) == "scrypt$Y"
+
+
+def test_share_fails_empty_key_recycled(monkeypatch):
+    """15-路线图 P3：锁定窗口滑出后的空队列键即时回收（防 token 维度只增不减）。"""
+    import time as _time
+
+    from app.api import share as sh
+    tok = f"t-{secrets.token_hex(4)}"
+    sh._share_fails[tok] = [_time.time() - 10**6]
+    monkeypatch.setattr(sh, "LOGIN_LOCK_SECONDS", 0)
+    assert sh._share_locked_remaining(tok) == 0
+    assert tok not in sh._share_fails

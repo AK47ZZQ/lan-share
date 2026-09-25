@@ -168,6 +168,11 @@ def _share_locked_remaining(token: str) -> int:
         q = _share_fails.get(token, [])
         while q and q[0] <= now - LOGIN_LOCK_SECONDS:
             q.pop(0)
+        if not q:
+            # 空队列即回收键（15-路线图 P3）：不然键随分享数只增不减，
+            # 量级无害但没必要留
+            _share_fails.pop(token, None)
+            return 0
         if len(q) >= LOGIN_MAX_FAILS:
             return int(q[0] + LOGIN_LOCK_SECONDS - now) + 1
         return 0
