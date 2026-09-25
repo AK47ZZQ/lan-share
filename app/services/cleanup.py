@@ -37,14 +37,14 @@ def run_registered() -> None:
             fn()
 
 
+
 async def startup() -> None:
     """先跑一轮再起周期循环（由 app.main lifespan 统一调度）。"""
 
     def _run_all():
         # 四段各自隔离（同上）：全树 rglob 的 tmp/trash 清理最容易因竞态抛
         # OSError，段间不隔离则一次竞态 = 本轮 DB 过期行全部不清
-        for name, fn in (("tmp", _cleanup_tmp), ("trash", _cleanup_trash),
-                         ("registered", run_registered), ("db", _cleanup_db)):
+        for name, fn in _STAGES:
             with loop_health.watched_sync(f"cleanup:{name}"):
                 fn()
 
@@ -136,3 +136,10 @@ def _cleanup_db():
     # v3.57 外置票据的过期回收（配对码/zip 票据与在途位/分享取件票据）：
     # 与其它"行级过期"同类，放这里而不是另开 sweep——少一个"忘了注册"的机会
     ttl_state.sweep_expired(now)
+
+
+# 段顺序有语义约束（v3.67 对抗审查 P1）：**trash 段必须在 registered 之前**——
+# trash_orphan_audit 的 29 天救援上限依赖"先按 mtime 清理、后对账登记"的次序；
+# 顺序颠倒会让登记立即被清理吃掉（家人看到条目秒生秒灭）。测试钉住次序。
+_STAGES = (("tmp", _cleanup_tmp), ("trash", _cleanup_trash),
+           ("registered", run_registered), ("db", _cleanup_db))

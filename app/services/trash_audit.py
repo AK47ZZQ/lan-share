@@ -15,6 +15,7 @@
 
 只登记、从不删除；判定口径防误报优先（7 天宽限 >> 亚秒级竞态窗口）。
 """
+import datetime
 import json
 import logging
 import time
@@ -33,8 +34,13 @@ _MAX_ITEMS_IN_REPORT = 20
 
 def _orig_name(file_name: str) -> str:
     """`.trash` 落盘名 = `{time_ns()}_{原名}`（filetools._move_to_trash_locked）。
-    原名可含下划线 ⇒ 只按第一个下划线切分；不符合命名约定的残留整名保留。"""
-    return file_name.split("_", 1)[1] if "_" in file_name else file_name
+    原名可含下划线 ⇒ 只按第一个下划线切分；前缀必须是数字且 ≥15 位
+    （time_ns 现为 19 位）才视为时间戳——手动放进来的 `123_456.jpg` 之类
+    不吞前缀（对抗审查 P2）。不符合命名约定的残留整名保留。"""
+    head, sep, rest = file_name.partition("_")
+    if sep and head.isdigit() and len(head) >= 15:
+        return rest
+    return file_name
 
 
 def audit_trash_orphans(now: float | None = None) -> dict:
@@ -57,11 +63,17 @@ def audit_trash_orphans(now: float | None = None) -> dict:
             if age_days < GRACE_DAYS:
                 continue
             if age_days < RESCUE_MAX_DAYS:
-                # 救援窗口（7~29 天）：登记进回收站，家人可见可还原；
-                # deleted_at 取 mtime ⇒ 行与文件同寿命（见模块 docstring）
+                # 救援窗口（7~29 天）：登记进回收站，deleted_at 取 mtime ⇒
+                # 行与文件同寿命（见模块 docstring）。
+                # orig_path 用 private vpath（对抗审查 P0 修复）：此类行按
+                # _trash_rel_parts 的约定仅 admin 可见/可操作，还原时
+                # resolve 落入**还原者私人空间**的对账救援目录——内容归属
+                # 未知，绝不落共享区；private:<名> 无用户段，还原天然按人。
+                ymd = datetime.date.fromtimestamp(now).isoformat()
                 trash_store.register_rescued(
-                    "（对账救援·原路径未知）", f".trash/{f.name}",
-                    _orig_name(f.name), st.st_size, st.st_mtime)
+                    f"private:对账救援-{ymd}/{_orig_name(f.name)}",
+                    f".trash/{f.name}", _orig_name(f.name),
+                    st.st_size, st.st_mtime)
                 referenced.add(f.name)
                 rescued += 1
                 continue

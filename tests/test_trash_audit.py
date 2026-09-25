@@ -99,7 +99,8 @@ def test_sweep_registered():
 
 def test_rescue_registers_midage_orphan():
     """v3.67 救援：7~29 天的无主文件自动登记回回收站（可还原），报告计数归零。"""
-    f = _mk_trash_file("555555_orphan-mid.txt", age_days=15)
+    # 文件名用真实 time_ns 形态（19 位数字前缀）
+    f = _mk_trash_file("1790400000000000000_orphan-mid.txt", age_days=15)
     try:
         r = trash_audit.audit_trash_orphans()
         assert r["rescued"] == 1 and r["count"] == 0
@@ -107,7 +108,11 @@ def test_rescue_registers_midage_orphan():
         row = _db().execute("SELECT * FROM trash WHERE trash_path=?",
                             (f".trash/{f.name}",)).fetchone()
         assert row is not None
-        assert row["orig_path"].startswith("（对账救援")
+        # v3.67 P0 修复后：orig_path 为 admin 专属 private vpath（还原落
+        # 还原者私人空间的对账救援目录，内容归属未知不落共享区）
+        assert row["orig_path"].startswith("private:对账救援-")
+        assert row["orig_path"].endswith("/orphan-mid.txt")
+        assert row["name"] == "orphan-mid.txt"
         assert row["name"] == "orphan-mid.txt"       # 去掉 time_ns 前缀
         # deleted_at 与文件 mtime 对齐（行与文件同寿命）
         assert abs(row["deleted_at"] - f.stat().st_mtime) < 1
@@ -135,3 +140,11 @@ def test_orig_name_derivation():
     assert _orig_name("1790400000000000000_report-final.docx") == "report-final.docx"
     assert _orig_name("1790400000000000000_my_file_v2.txt") == "my_file_v2.txt"
     assert _orig_name("no-underscore.txt") == "no-underscore.txt"
+
+
+def test_cleanup_stage_order_pins_trash_before_registered():
+    """对抗审查 P1：救援的 29 天上限依赖"先按 mtime 清理、后对账登记"的次序，
+    钉住 _STAGES 顺序，防止未来重排静默破坏不变量。"""
+    from app.services import cleanup
+    names = [n for n, _ in cleanup._STAGES]
+    assert names.index("trash") < names.index("registered")

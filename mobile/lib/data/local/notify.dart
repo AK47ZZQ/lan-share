@@ -11,7 +11,7 @@ class TransferNotifier {
 
   final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
   bool _ready = false;
-  int _seq = 1;
+  int _seq = 20260926;   // 起始值抬到 _kFocusNotifyId 之上，杜绝 id 空间撞车（审查 P2-5）
 
   Future<void> _ensure() async {
     if (_ready) return;

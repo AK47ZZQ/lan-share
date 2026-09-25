@@ -12,7 +12,7 @@ import 'package:sqflite/sqflite.dart';
 class TodoCache {
   TodoCache._();
   static Database? _db;
-  static const int _kVersion = 1;
+  static const int _kVersion = 2;
 
   static Future<Database> _open() async =>
       _db ??= await openDatabase('todo_cache.db',
@@ -28,8 +28,8 @@ class TodoCache {
     await db.execute('CREATE TABLE todos('
         'id INTEGER PRIMARY KEY, list_id INTEGER NOT NULL, title TEXT NOT NULL,'
         'notes TEXT, due_at REAL, priority INTEGER, assignee_id INTEGER,'
-        'status TEXT NOT NULL, done_at REAL, list_kind TEXT, list_name TEXT,'
-        'list_owner_id INTEGER, saved_at REAL NOT NULL)');
+        'status TEXT NOT NULL, done_at REAL, done_by INTEGER, list_kind TEXT,'
+        'list_name TEXT, list_owner_id INTEGER, saved_at REAL NOT NULL)');
     await db.execute('CREATE TABLE pending_ops('
         'todo_id INTEGER PRIMARY KEY, status TEXT NOT NULL, ts REAL NOT NULL)');
   }
@@ -55,6 +55,7 @@ class TodoCache {
           'assignee_id': (m['assignee_id'] as num?)?.toInt(),
           'status': (m['status'] as String?) ?? 'todo',
           'done_at': (m['done_at'] as num?)?.toDouble(),
+          'done_by': (m['done_by'] as num?)?.toInt(),
           'list_kind': (m['list_kind'] as String?) ?? 'personal',
           'list_name': (m['list_name'] as String?) ?? '',
           'list_owner_id': (m['list_owner_id'] as num?)?.toInt(),
