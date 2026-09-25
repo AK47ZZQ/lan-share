@@ -211,6 +211,13 @@ def format_report(d: dict) -> tuple[str, bool]:
         if first_err:
             lines.append(f"　最近错误：{first_err}")
 
+    # .trash 无主残留（v3.66）：只读对账的可见性出口——日报是它的唯一播报面
+    to = d.get("trash_orphans")
+    if to and to.get("count"):
+        warn = True
+        lines.append(f"🗑️ .trash 无主残留 {to['count']} 个"
+                     f"（共 {to.get('total_bytes', 0)} 字节）⚠️ 物理处置待人工")
+
     c = d.get("counts") or {}
     lines.append(f"👥 成员 {c.get('users', '—')} · 照片 {c.get('photos', '—')} · "
                  f"在架分享 {c.get('shares', '—')} · 设备 {c.get('devices', '—')}")

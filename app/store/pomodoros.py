@@ -30,7 +30,7 @@ def list_since(user_id: int, since: float) -> list:
     """统计出口：只做 started_at 区间过滤（§3.5：聚合在 Python 侧）。"""
     return _db().execute(
         "SELECT * FROM pomodoro_sessions WHERE user_id=? AND started_at>=? "
-        "ORDER BY started_at DESC LIMIT 500", (user_id, since)).fetchall()
+        "ORDER BY started_at DESC LIMIT 1000", (user_id, since)).fetchall()
 
 
 # ─── 写 ───────────────────────────────────────────────────
@@ -65,7 +65,10 @@ def finish_running_for_user(user_id: int, status: str, ended_at: float) -> int:
 def auto_close_stale(now: float) -> list[int]:
     """惰性结算（sweep 兜底 + 各写路径前置）：started_at + 计划时长 < now 的
     running 按计划时长收尾并标 auto_closed。RETURNING 保证双引擎都被真执行
-    （store_readers_smoke 纪律），返回被结算的 id 列表供 loop_health 观测。"""
+    （store_readers_smoke 纪律），返回被结算的 id 列表供 loop_health 观测。
+    二轮审查 P2-7：RETURNING+fetchall 语义依赖锁内独立事务，禁止在
+    db.transaction() 上下文里调用。"""
+    assert not _dbmod.in_transaction(), "auto_close_stale 需在事务外调用"
     with _db_lock:
         cur = _db().execute(
             "UPDATE pomodoro_sessions SET status='auto_closed', "

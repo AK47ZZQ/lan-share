@@ -20,14 +20,15 @@
 """
 import datetime
 import time
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.security import require_user
 from app.services import cleanup                     # 清理循环调度（底部注册 sweep）
+from app.api.todos import _visible_todo_or_404
 from app.store import pomodoros as pomodoros_store
-from app.store import todos as todos_store
 
 router = APIRouter()
 
@@ -35,7 +36,6 @@ _MAX_FOCUS_MIN = 180
 _MAX_BREAK_MIN = 60
 _MAX_DAYS = 30
 _RUNNING = "running"
-_END_STATUSES = ("focus", "abandoned")
 
 
 class StartBody(BaseModel):
@@ -45,7 +45,8 @@ class StartBody(BaseModel):
 
 
 class FinishBody(BaseModel):
-    status: str          # focus | abandoned
+    # Literal 进 OpenAPI 契约（二轮审查 P2-1）：客户端可自描述合法值
+    status: Literal["focus", "abandoned"]
     ended_at: float | None = None   # 客户端上报的权威结束时刻；缺省服务端 now
 
 
@@ -81,8 +82,11 @@ def start_pomodoro(body: StartBody, user=Depends(require_user)):
     # （用户没说放弃），未超时的按 abandoned 到当前时刻（不惩罚也不多记）
     pomodoros_store.auto_close_stale(now)
     pomodoros_store.finish_running_for_user(user["user_id"], "abandoned", now)
-    if body.todo_id is not None and todos_store.get_todo(body.todo_id) is None:
-        raise HTTPException(status_code=404, detail="待办不存在")
+    if body.todo_id is not None:
+        # 二轮审查 P1-1：归属收口——personal 待办仅本人、family 对 member 开放
+        # （404 不泄露存在）；此前只查存在性，可越权把他人 personal 待办挂进
+        # 自己的会话（存在性 oracle + 关联泄露）
+        _visible_todo_or_404(body.todo_id, user)
     sid = pomodoros_store.create(user["user_id"], body.todo_id, now,
                                  body.focus_min, body.break_min)
     return {"ok": True, "id": sid, "started_at": now,
@@ -92,8 +96,6 @@ def start_pomodoro(body: StartBody, user=Depends(require_user)):
 @router.post("/api/pomodoro/{sid}/finish")
 def finish_pomodoro(sid: int, body: FinishBody, user=Depends(require_user)):
     _require_member(user)
-    if body.status not in _END_STATUSES:
-        raise HTTPException(status_code=400, detail="status 需为 focus|abandoned")
     row = _own_session_or_404(sid, user)
     if row["status"] != _RUNNING:
         raise HTTPException(status_code=409, detail="会话已结束")
@@ -131,6 +133,10 @@ def pomodoro_summary(days: int = 7, user=Depends(require_user)):
     buckets: dict[str, dict[str, int]] = {
         _today(): {"count": 0, "minutes": 0}}
     for row in pomodoros_store.list_since(user["user_id"], since):
+        # 只计已收束会话：running 尚未"挣到"，按计划时长计入会虚增统计
+        # （二轮审查后自测发现；running 行由 auto_close/finish 后续进入统计）
+        if row["status"] == _RUNNING:
+            continue
         day = datetime.datetime.fromtimestamp(row["started_at"]).strftime("%Y-%m-%d")
         b = buckets.setdefault(day, {"count": 0, "minutes": 0})
         b["count"] += 1

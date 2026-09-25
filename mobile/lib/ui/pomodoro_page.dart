@@ -27,6 +27,7 @@ class _PomodoroPageState extends State<PomodoroPage> {
   int _focusMin = 25;
   bool _loading = true;
   bool _busy = false;
+  bool _settling = false;   // 二轮审查 P2-5：到期自动结算与手点完成的防重入闸
   Timer? _ticker;
 
   @override
@@ -55,7 +56,8 @@ class _PomodoroPageState extends State<PomodoroPage> {
       _syncTicker();
       // 恢复的会话若已在页外到期：到点即按正常结束收束（本地推算）
       if (run != null && _remainingSec(run) <= 0) {
-        await _finish('focus', endedAt: run.startedAt + run.focusMin * 60);
+        await _finish('focus',
+            endedAt: run.startedAt + run.focusMin * 60, refresh: false);
       }
     } catch (e) {
       if (!mounted) return;
@@ -101,9 +103,10 @@ class _PomodoroPageState extends State<PomodoroPage> {
     }
   }
 
-  Future<void> _finish(String status, {double? endedAt}) async {
+  Future<void> _finish(String status, {double? endedAt, bool refresh = true}) async {
     final s = _running;
-    if (s == null) return;
+    if (s == null || _settling) return;   // 已在结算中：吞掉并发触发（含 ticker）
+    _settling = true;
     setState(() => _busy = true);
     try {
       await PomodorosApi.finish(s.id, status, endedAt: endedAt);
@@ -115,13 +118,16 @@ class _PomodoroPageState extends State<PomodoroPage> {
       if (mounted) showToast('结算失败：${errDetail(e)}');
     } finally {
       _ticker?.cancel();
+      _settling = false;
       if (mounted) {
         setState(() {
           _running = null;
           _busy = false;
         });
       }
-      await _reload();
+      // P3-8：恢复链路（_reload → 到期自动结算）的调用方传 refresh=false
+      // 免嵌套双请求；其余路径结算后刷新统计
+      if (refresh) await _reload();
     }
   }
 
