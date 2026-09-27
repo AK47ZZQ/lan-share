@@ -67,10 +67,31 @@ IMG_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"}
 VID_EXTS = {".mp4", ".mov", ".m4v", ".3gp", ".webm", ".avi", ".mkv"}
 
 
+_83_ALIAS_RE = re.compile(r"~[0-9a-f]{1,4}(?:$|\.)", re.I)
+
+
+def ensure_disk_room(needed: int = 0) -> None:
+    """写盘前余量预检（v3.67.4 移植自分叉批 P1-⑦）：数据盘与 PG 同盘，DAV PUT
+    （20GB 级）/ 分片收块把盘写满的瞬间会连带打挂生产库。余量低于
+    MIN_FREE_BYTES（或低于本次写入需求）→ 507，客户端稍后重试。TOCTOU 窗口
+    仍在（预检后他人写入），但封住"单请求吃满盘"的主向量。"""
+    from app.config import MIN_FREE_BYTES, SHARE_ROOT
+    free = shutil.disk_usage(str(SHARE_ROOT)).free
+    if free < MIN_FREE_BYTES + max(0, needed):
+        raise HTTPException(status_code=507, detail="Insufficient disk space")
+
+
 def safe_path(rel: str) -> Path:
-    """防目录穿越 + 禁止访问点前缀隐藏路径（.trash/.meta.db 等）。"""
+    """防目录穿越 + 禁止访问点前缀隐藏路径（.trash/.meta.db 等）+ 8.3 短名别名。
+
+    8.3 别名（P0，2026-09-27 自主审查真机实证）：本卷启用了短名生成，
+    `.meta.db`→`META~1.DB`、`.trash`→`TRASH~1`、`.backups`→`BACKUP~1`——
+    短名不以点开头，只拦点前缀时成员可经 `GET /api/files/META~1.DB`
+    下载元数据库（口令哈希+会话令牌=全账号接管）。凡含 `~1`~`~ffff`
+    形态后缀的段一律 403；副作用：正常文件名含 `name~1.ext` 形态也被拒
+    （家庭 NAS 里可接受，比关卷级 8.3 生成温和）。"""
     parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
-    if any(p == ".." or p.startswith(".") for p in parts):
+    if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):
         raise HTTPException(status_code=403, detail="Forbidden")
     target = SHARE_ROOT.joinpath(*parts) if parts else SHARE_ROOT
     root = os.path.normcase(str(SHARE_ROOT.absolute()))

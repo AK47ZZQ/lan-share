@@ -174,15 +174,28 @@ async def feedback_create(request: Request,
 
     fid = time.strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
     now = _now_str()
+    limit = FEEDBACK_MAX_ATTACHMENT_MB * 1024 * 1024
     for i, up in enumerate(files, 1):
         ext = Path(up.filename or "s.jpg").suffix.lower()
         if ext not in ATTACH_EXTS:
             ext = ".jpg"   # 白名单外回落按截图存（原行为）；txt/md 保留原后缀
-        data = await up.read()
-        if len(data) > FEEDBACK_MAX_ATTACHMENT_MB * 1024 * 1024:
-            raise HTTPException(status_code=422,
-                                detail=f"单个附件不能超过 {FEEDBACK_MAX_ATTACHMENT_MB}MB")
-        (_img_dir() / f"{fid}-{i}{ext}").write_bytes(data)
+        # 边读边写（v3.67.4 移植自分叉批 P1-⑤）：原 `await up.read()` 把整个
+        # 附件读进内存后才校验 25MB 上限——上限形同虚设，登录态请求可用
+        # 巨型附件把进程内存打爆。分块读、超限即断、清掉半截文件
+        tmp_path = _img_dir() / f"{fid}-{i}{ext}"
+        size = 0
+        try:
+            with tmp_path.open("wb") as out:
+                while chunk := await up.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > limit:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"单个附件不能超过 {FEEDBACK_MAX_ATTACHMENT_MB}MB")
+                    out.write(chunk)
+        except HTTPException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     md = (
         "---\n"

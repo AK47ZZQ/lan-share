@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = SHARE_ROOT / ".meta.db"
 
 MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024   # 数据盘写前余量闸（PG 同盘，写满=打挂库）
 TMP_MAX_AGE_DAYS = 7
 CLEANUP_INTERVAL = 3600  # 1 hour
 

@@ -27,8 +27,8 @@ from fastapi import HTTPException
 
 from app.config import SHARE_ROOT
 from app.db import _db, _db_lock
+from app.filetools import _83_ALIAS_RE, safe_path
 from app.roles import ADMIN, GUEST, MEMBER
-from app.filetools import safe_path
 
 # 邀请建号拒绝的用户名（避免与空间保留段/系统目录冲突）
 RESERVED_USERNAMES = {"shared", "private", "incoming", "tmp",
@@ -49,9 +49,11 @@ def _normcase_eq(a: str, b: str) -> bool:
 
 
 def _clean_parts(rest: str) -> list[str]:
-    """分隔符归一 + 段级清洗（E13 反斜杠、E1 穿越、点前缀隐藏目录）。"""
+    """分隔符归一 + 段级清洗（E13 反斜杠、E1 穿越、点前缀隐藏目录、8.3 别名）。"""
     parts = [p for p in rest.replace("\\", "/").split("/") if p not in ("", ".")]
-    if any(p == ".." or p.startswith(".") for p in parts):
+    # 8.3 别名（P0，2026-09-27）：本卷短名生成未关，.meta.db→META~1.DB、
+    # .trash→TRASH~1——短名不以点开头，只拦点前缀挡不住。safe_path 同步拦截
+    if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):
         raise HTTPException(status_code=403, detail="Forbidden")
     return parts
 
