@@ -8,6 +8,7 @@
   存全集 JSON），此后可撤回（删未读站内行）、提醒未读（再推站外）、
   草稿/定时发送（startup 周期任务扫描到期 scheduled）。
 """
+import asyncio
 import json
 import time
 
@@ -272,8 +273,13 @@ async def startup():
     async def _sleep(sec: float):
         import asyncio
         await asyncio.sleep(sec)
-    import asyncio
-    asyncio.create_task(loop())
+    # 持引用防 GC（v3.67.5，R2-P3-8 同款）：未保存引用的 create_task 可能被
+    # GC 回收——定时广播循环静默停摆
+    global _notify_task
+    _notify_task = asyncio.create_task(loop())
+
+
+_notify_task = None
 
 
 async def _fire_due_once():
