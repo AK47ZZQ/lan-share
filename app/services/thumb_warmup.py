@@ -100,4 +100,10 @@ async def startup() -> None:
                 await asyncio.to_thread(_tick)
             await asyncio.sleep(_TICK_SECONDS)
 
-    asyncio.create_task(loop())
+    # 持引用防 GC（v3.67.5，R2-P3-8 同款）：main.py 注释声称"自持"与事实不符，
+    # create_task 未保存引用的任务可能被 GC 回收——预热循环静默停摆
+    global _warmup_task
+    _warmup_task = asyncio.create_task(loop())
+
+
+_warmup_task: asyncio.Task | None = None

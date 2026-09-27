@@ -28,6 +28,13 @@ _sweeps: list[tuple[str, Callable[[], None]]] = []
 
 
 def register_sweep(name: str, fn: Callable[[], None]) -> None:
+    # 按名去重（v3.67.5，分叉批 P2-8 同款）：模块被二次加载/import 环绕行时
+    # 无条件 append 会让同一 sweep 每轮跑两遍——metrics/backup 的幂等声明
+    # 与实现就此分叉
+    for i, (n, _) in enumerate(_sweeps):
+        if n == name:
+            _sweeps[i] = (name, fn)
+            return
     _sweeps.append((name, fn))
 
 
@@ -61,7 +68,13 @@ async def startup() -> None:
 
     async with loop_health.watched("cleanup"):
         await asyncio.to_thread(_run_all)
-    asyncio.create_task(cleanup_loop())
+    # 持引用防 GC（v3.67.5，R2-P3-8 同款，与 healthreport 一致）：create_task
+    # 未保存引用的任务可能被 GC 回收——清理循环静默停摆，所有 sweep 连带失效
+    global _cleanup_task
+    _cleanup_task = asyncio.create_task(cleanup_loop())
+
+
+_cleanup_task: asyncio.Task | None = None
 
 
 def _cleanup_tmp():
