@@ -173,8 +173,8 @@ MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
      'return os.path.normcase(s).replace("\\\\", "/")', 'return os.path.normcase(s)',
      "Windows normcase 混入反斜杠后 startswith 永不命中，前缀授权形同虚设"),
     ("M3", "虚拟路径段级穿越清洗（E1）", "app/spaces.py",
-     'if any(p == ".." or p.startswith(".") for p in parts):',
-     'if any(p.startswith(".") for p in parts):',
+     'if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):',
+     'if any(p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):',
      "等价变异：`\"..\"` 本身以 `.` 开头，点前缀支已覆盖，删它零行为变化"),
     ("M4", "grant 到期即失效", "app/spaces.py",
      'if r["expires_at"] and r["expires_at"] < now:', 'if False:',
@@ -221,6 +221,12 @@ MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
      "    if RESERVED_NAME.match(n):", "    if False and RESERVED_NAME.match(n):",
      "实测（2026-09-20）：open('con.txt','wb')+write 不报错、字节进控制台设备，"
      "os.replace 抛 FileExistsError → 失效后果是\"上传成功但文件不存在\"的静默丢数据"),
+    ("M16", "8.3 短名别名拦截（v3.67.4 P0）", "app/filetools.py",
+     'if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):',
+     'if any(p == ".." or p.startswith(".") for p in parts):',
+     "本卷 8.3 短名未关：META~1.DB/TRASH~1/BACKUP~1 绕过点前缀闸，成员可下载"
+     "库备份=全账号接管（2026-09-27 真机实证）。锚点在 safe_path；_clean_parts"
+     "的同名闸在 spaces.py——本消融只打 filetools 一侧"),
 ]
 
 
