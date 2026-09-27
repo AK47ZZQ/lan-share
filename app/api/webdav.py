@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from app.config import MAX_WEBDAV_SIZE, SHARE_ROOT
+from app.config import DAV_VERIFY_PER_MIN, MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail)
 from app.filetools import RESERVED_NAME, clean_filename, human_size, to_rel
@@ -65,6 +65,14 @@ async def _dav_auth(request: Request):
     if row and not row["is_active"]:
         audit("login_disabled", username, ip=client_ip(request))
         raise HTTPException(status_code=401, detail="Unauthorized",
+                            headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
+    # KDF 前每 IP 校验预算（v3.67.2 移植自分叉批 P1）：scrypt ~377ms/次，
+    # 无预算时匿名者持续发合法格式的 Basic 头即可长期占满线程池。预算在
+    # stored 哈希读取与哑/真校验**之前**扣减——超限 429 时一次 KDF 都不跑。
+    # 会话 Cookie 路径在上面已返回，正常浏览器流量不受影响；DAV 客户端
+    # 每 60s 最多 120 次校验（>2 次/秒的持续同步已远超桌面客户端常态）
+    if not allow_rate(f"davtry:{client_ip(request)}", DAV_VERIFY_PER_MIN, 60):
+        raise HTTPException(status_code=429, detail="Too many attempts",
                             headers={"WWW-Authenticate": 'Basic realm="LAN Share"'})
     # 独立密码启用后 WebDAV 只认它（与登录密码隔离：泄露面独立、可单独轮换）；
     # 未设置时回退登录密码。TOTP 对 Basic Auth 不可用（协议无第二步，见 SECURITY.md）

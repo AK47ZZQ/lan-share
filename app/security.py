@@ -12,7 +12,8 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
-from app.config import (AUDIT_KEEP, COOKIE_NAME, DEVICE_TOKEN_TTL, LOGIN_LOCK_SECONDS,
+from app.config import (AUDIT_KEEP, AUDIT_SECURITY_KEEP, COOKIE_NAME,
+                        DEVICE_TOKEN_TTL, LOGIN_LOCK_SECONDS,
                         LOGIN_MAX_FAILS, SESSION_RENEW_AFTER, SESSION_TTL)
 from app.db import _db, _db_lock
 from app.roles import ADMIN
@@ -29,14 +30,32 @@ def set_audit_user(username: str):
     _audit_user.set(username or "")
 
 
+# 安全类审计动作（v3.67.2 移植自分叉批 P2-4）：取证记录（爆破尝试/取件/登录失败）
+# 与普通动态流共用一个 10k 环时，匿名失败流量（login_fail / davfail 级别的失败
+# 动作）约 4 小时即可把它们全部挤出环外——攻击者可主动冲掉自己留下的证据。
+# 安全类独立按 AUDIT_SECURITY_KEEP 保留
+_AUDIT_SECURITY_ACTIONS = frozenset({
+    "login", "login_fail", "login_locked", "login_disabled", "logout",
+    "totp_fail", "share_badpwd", "share_download", "share_locked",
+    "invite_redeem_fail", "pair_claim_fail", "export", "preview_as",
+})
+
+
 def audit(action: str, target: str = "", detail: str = "", ip: str = ""):
     with _db_lock:
         try:
             _db().execute(
                 "INSERT INTO audit_log(ts, ip, action, target, detail, username) VALUES(?,?,?,?,?,?)",
                 (time.time(), ip, action, target, detail, _audit_user.get()))
+            marks = ",".join("?" * len(_AUDIT_SECURITY_ACTIONS))
             _db().execute(
-                "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ?", (AUDIT_KEEP,))
+                "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ? "
+                f"AND action NOT IN ({marks})",
+                (AUDIT_KEEP, *_AUDIT_SECURITY_ACTIONS))
+            _db().execute(
+                "DELETE FROM audit_log WHERE id <= (SELECT MAX(id) FROM audit_log) - ? "
+                f"AND action IN ({marks})",
+                (AUDIT_SECURITY_KEEP, *_AUDIT_SECURITY_ACTIONS))
             _db().commit()
         except Exception:
             # 失败时回滚（R2-P2-4）：锁内带着未决写事务逸出会锁死该连接上的

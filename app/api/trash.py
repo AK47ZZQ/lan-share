@@ -7,19 +7,47 @@ import re
 import shutil
 import time
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 
 from app.config import SHARE_ROOT, TRASH_DAYS
+from app.filetools import TRASH_OPS_LOCK, human_size, to_rel
 from app.roles import ADMIN
 from app.security import audit, client_ip, require_admin, require_user
 from app.store import trash as trash_store
-from app.filetools import human_size, to_rel
 from app.spaces import resolve, visible
 
 # 路由挂到本模块 router；app 对象在 app.asgi，由 app.main 统一组装
 router = APIRouter()
+
+
+def _trash_fs_path(rel: str) -> Path:
+    """行里的 trash_path → 物理路径，带 .trash 根 containment 校验（v3.67.2
+    移植自分叉批 P3-7）：行被篡改成 ../x 时这里必须是 403 而非任意路径
+    unlink/rmtree。.trash 自身带点前缀，safe_path 不适用，单独收口。"""
+    p = (SHARE_ROOT / rel).resolve()
+    root = (SHARE_ROOT / ".trash").resolve()
+    if p != root and root not in p.parents:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return p
+
+
+def _move_out_locked(src, dest) -> None:
+    """恢复搬移（持 .trash 全操作锁，见 filetools.TRASH_OPS_LOCK）。"""
+    with TRASH_OPS_LOCK:
+        shutil.move(str(src), str(dest))
+
+
+def _rmtree_locked(p) -> None:
+    with TRASH_OPS_LOCK:
+        shutil.rmtree(p, True)
+
+
+def _unlink_locked(p) -> None:
+    with TRASH_OPS_LOCK:
+        p.unlink(missing_ok=True)
 
 
 _VPATH_RE = re.compile(r"^(shared|private):(.*)$", re.I)
@@ -111,7 +139,7 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
     if not claimed:
         raise HTTPException(status_code=404,
                             detail="该条目已被恢复（刚被另一个请求取走）")
-    trash_path = SHARE_ROOT / claimed["trash_path"]
+    trash_path = _trash_fs_path(claimed["trash_path"])
     if not trash_path.exists():
         # 坏行（索引在、文件不在）：认领已顺手把它从索引里摘掉，
         # 不再"挂在列表里点一次错一次"。
@@ -134,7 +162,10 @@ async def restore_trash(request: Request, trash_id: int, _user=Depends(require_u
             n += 1
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        await run_in_threadpool(shutil.move, str(trash_path), str(dest))
+        # 搬出 .trash 期间持全操作锁（v3.67.2 P2-6）：否则 admin 清空回收站的
+        # rmtree 与本 move 交错，Windows 下 rename 失败退化成 copytree，
+        # 会把被删掉一半的目录树"恢复成功"（静默截断）
+        await run_in_threadpool(_move_out_locked, trash_path, dest)
     except FileNotFoundError:
         # 文件被不走索引的旁路搬走了：行已由本次认领清掉，不会再留僵尸行。
         # 竞态不该冒 500（R1-P2-2 口径）。
@@ -157,12 +188,13 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
     _ensure_can_touch(_user, row)
-    trash_path = SHARE_ROOT / row["trash_path"]
-    # rmtree 大目录（数万文件）可达分钟级，进线程池防冻结事件循环（R1-P2-8）
+    trash_path = _trash_fs_path(row["trash_path"])
+    # rmtree 大目录（数万文件）可达分钟级，进线程池防冻结事件循环（R1-P2-8）；
+    # 持 .trash 全操作锁防止与 restore/清空/定时清理交错（v3.67.2 P2-6）
     if trash_path.is_dir():
-        await run_in_threadpool(shutil.rmtree, trash_path, True)
+        await run_in_threadpool(_rmtree_locked, trash_path)
     else:
-        await run_in_threadpool(trash_path.unlink, True)
+        await run_in_threadpool(_unlink_locked, trash_path)
     await run_in_threadpool(_drop_trash_row, trash_id)
     audit("trash_delete", row["name"], ip=client_ip(request))
     return {"ok": True}
@@ -172,8 +204,8 @@ async def delete_trash_item(request: Request, trash_id: int, _user=Depends(requi
 async def empty_trash(request: Request, _admin=Depends(require_admin)):
     trash_root = SHARE_ROOT / ".trash"
     if trash_root.exists():
-        # 同 delete_trash_item：rmtree 进线程池（R1-P2-8）
-        await run_in_threadpool(shutil.rmtree, trash_root, True)
+        # 同 delete_trash_item：rmtree 进线程池（R1-P2-8）+ 全操作锁
+        await run_in_threadpool(_rmtree_locked, trash_root)
     await run_in_threadpool(_clear_trash)
     audit("trash_empty", ip=client_ip(request))
     return {"ok": True}
