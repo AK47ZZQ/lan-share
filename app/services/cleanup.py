@@ -112,9 +112,20 @@ def _cleanup_trash():
     if not trash_root.exists():
         return
     cutoff = time.time() - TRASH_DAYS * 86400
+    # 保留期时钟 = 行侧 deleted_at（回收站界面展示的也是它）：文件 mtime 是
+    # 原始修改时间且 os.replace/shutil.move 原样保留——删一个 400 天前的老
+    # 照片，按 mtime 判"已在回收站 30 天"会在下一小时内把它物理销毁，而
+    # deleted_at 才刚起算："30 天可恢复"在生产上是假的（2026-09-27 自主审查
+    # P0）。行不在的孤儿文件（对账救援的候选）仍按 mtime 判期，救援条目的
+    # 行侧 deleted_at 也对齐 mtime（register_rescued），故"先清理后登记"的
+    # 段序约束与本判据相容：被救援条目的寿命仍由 mtime 决定。
+    rows = {r["trash_path"]: r["deleted_at"] for r in trash_store.list_all()}
     for f in trash_root.iterdir():
         try:
-            if f.stat().st_mtime >= cutoff:
+            clock = rows.get(f".trash/{f.name}")
+            if clock is None:
+                clock = f.stat().st_mtime
+            if clock >= cutoff:
                 continue
         except OSError:
             continue   # 与用户"清空回收站"并发：条目已消失，下轮自然收敛
