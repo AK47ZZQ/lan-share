@@ -2,6 +2,15 @@
 > 见 [CHANGELOG-archive-v0.4-v0.20.md](docs/archive/CHANGELOG-archive-v0.4-v0.20.md)；
 > 里程碑视角浓缩史见 README「演进」与 docs/项目记忆/02-里程碑。
 
+## 2026-09-27 — 服务端 v3.67.3：访问日志迁出共享数据区（隐私修复）
+
+- **修复"成员可整卷下载访问日志"**：Caddy 隧道访问日志原落 `data/logs/access/`
+  （共享数据区内、非点前缀），任何登录成员经 /files 的"shared 默认可读"分支
+  即可下载——日志含完整 URI（share token、`?tkt=` 能力 URL）与 Referer。
+  现迁至仓库根 `logs/access/`（数据区之外），存量日志已迁移，流量仪表
+  （traffic.py）同步改读新路径，E2E 实证成员侧 `logs/...` 全部 404。
+- `caddy validate` 通过 + caddy/api 重启核验，healthz 双端点 ok。
+
 ## 2026-09-27 — 服务端 v3.67.2：回收站加固 + 审计取证保留 + dav/media 限速（安全收口）
 
 - **可用性**：WebDAV 与缩略图/预览/下载补独立限速桶（此前"未列举即不限速"，
