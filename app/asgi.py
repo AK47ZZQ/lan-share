@@ -13,8 +13,9 @@ from urllib.parse import urlsplit
 import time
 
 from app.config import (API_RATE_LIMIT, API_RATE_LIMIT_PUB, AUTHCHECK_RATE_LIMIT,
-                        LOGIN_RATE_LIMIT, LOGIN_RATE_LIMIT_PUB, SHARE_RATE_LIMIT,
-                        UPLOAD_RATE_LIMIT)
+                        DAV_RATE_LIMIT, DAV_RATE_LIMIT_PUB, LOGIN_RATE_LIMIT,
+                        LOGIN_RATE_LIMIT_PUB, MEDIA_RATE_LIMIT,
+                        MEDIA_RATE_LIMIT_PUB, SHARE_RATE_LIMIT, UPLOAD_RATE_LIMIT)
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, public_netlocs, set_audit_user)
 from app.services import metrics as _metrics
@@ -122,6 +123,19 @@ async def security_middleware(request: Request, call_next):
         limit, bucket = UPLOAD_RATE_LIMIT, ("upload:pub" if is_public_entry(request) else "upload:lan")
     elif path.startswith("/api/share/") or path == "/api/share":
         limit, bucket = SHARE_RATE_LIMIT, "share"
+    elif path.startswith("/dav"):
+        # dav 桶（v3.67.2 移植自分叉批 P1）：原落"未列举即不限速"分支——
+        # Basic 校验的 scrypt ~377ms/次，匿名洪泛可长期占满线程池。桶在
+        # 认证**之前**计频，429 先于 KDF 发生
+        pub = is_public_entry(request)
+        limit = DAV_RATE_LIMIT_PUB if pub else DAV_RATE_LIMIT
+        bucket = "dav:pub" if pub else "dav"
+    elif (path.startswith("/thumb/") or path.startswith("/preview/")
+          or path.startswith("/files/")):
+        # media 桶（v3.67.2 同上）：批量冷缩略图/预览渲染可占满线程池与 CPU
+        pub = is_public_entry(request)
+        limit = MEDIA_RATE_LIMIT_PUB if pub else MEDIA_RATE_LIMIT
+        bucket = "media:pub" if pub else "media:lan"
     elif path.startswith("/api/") or path == "/authcheck":
         # authcheck 是 Caddy forward_auth 子请求，跟随 /files 静态请求高频出现，
         # 单独桶；但外部客户端也能直打该未认证 DB 往返端点，必须节流（R1-P2-2）

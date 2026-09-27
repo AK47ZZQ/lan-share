@@ -33,6 +33,10 @@ SESSION_TTL = 30 * 86400          # 30 天
 SESSION_RENEW_AFTER = 86400       # 滑动续期：距上次刷新超过 24h 才写库
 COOKIE_NAME = "ls_session"
 AUDIT_KEEP = 10_000
+# 安全类审计动作独立保留（v3.67.2 移植自分叉批 P2-4）：登录失败/取件/爆破尝试
+# 是取证记录，与普通动态流同环时匿名失败流量约 4h 可把它们全部挤出环外——
+# 攻击者可主动冲掉自己留下的证据
+AUDIT_SECURITY_KEEP = 50_000
 DEVICE_TOKEN_TTL = 90 * 86400     # App 设备 Token：90 天滑动过期（APP-DESIGN §3）
 DEVICE_TOKEN_MAX = 20             # 单账号在用设备上限
 API_RATE_LIMIT = 120              # /api/* 每分钟每 IP（交互类：浏览/列表/缩略图）
@@ -53,6 +57,15 @@ TICKET_TTL = 10 * 60              # 分下载票据有效期（秒）
 LOGIN_RATE_LIMIT_PUB = 30         # /api/login 公网侧每分钟
 API_RATE_LIMIT_PUB = 600          # /api/* 公网侧每分钟
 AUTHCHECK_RATE_LIMIT = 600        # /authcheck（forward_auth 子请求 + 外部直打）每分钟
+# dav/media 桶（v3.67.2 移植自分叉批 P1）：原"未列举即不限速"分支——/dav 的
+# scrypt Basic 校验 ~377ms/次，匿名 ~13 req/s 即可长期占满线程池；批量冷缩略图
+# 可占满渲染。DAV 客户端每请求都带 Basic，LAN 取宽值；公网出口恒 127.0.0.1
+# 全体共享一个桶，洪泛被 cap 在每分钟 DAV_RATE_LIMIT_PUB 次
+DAV_RATE_LIMIT = 300              # /dav 每分钟每 IP
+DAV_RATE_LIMIT_PUB = 600          # /dav 公网侧每分钟
+DAV_VERIFY_PER_MIN = 120          # /dav Basic 认证 KDF 前的每 IP 校验预算（第二层）
+MEDIA_RATE_LIMIT = 240            # /thumb /preview /files 每分钟每 IP
+MEDIA_RATE_LIMIT_PUB = 1200       # 同上 公网侧（公网省流依赖缩略图，取宽值）
 
 # ── 大文件上传（v3.6）────────────────────────────────────
 MAX_WEBDAV_SIZE = 20 * 1024 * 1024 * 1024   # WebDAV PUT 上限 20GB（流式写盘，PC 互传挂盘用）

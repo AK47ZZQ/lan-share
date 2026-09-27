@@ -15,6 +15,7 @@ from typing import Callable
 
 from app.config import CLEANUP_INTERVAL, SHARE_ROOT, TMP_MAX_AGE_DAYS, TRASH_DAYS
 from app.db import _db, _db_lock
+from app.filetools import TRASH_OPS_LOCK
 from app.services import loop_health
 from app.store import devices as devices_store
 from app.store import notifications as notifications_store
@@ -119,21 +120,24 @@ def _cleanup_trash():
     # P0）。行不在的孤儿文件（对账救援的候选）仍按 mtime 判期，救援条目的
     # 行侧 deleted_at 也对齐 mtime（register_rescued），故"先清理后登记"的
     # 段序约束与本判据相容：被救援条目的寿命仍由 mtime 决定。
-    rows = {r["trash_path"]: r["deleted_at"] for r in trash_store.list_all()}
-    for f in trash_root.iterdir():
-        try:
-            clock = rows.get(f".trash/{f.name}")
-            if clock is None:
-                clock = f.stat().st_mtime
-            if clock >= cutoff:
-                continue
-        except OSError:
-            continue   # 与用户"清空回收站"并发：条目已消失，下轮自然收敛
-        if f.is_dir():
-            shutil.rmtree(f, ignore_errors=True)
-        else:
-            f.unlink(missing_ok=True)
-    trash_store.delete_before(cutoff)
+    # 与恢复/清空共用全操作锁（filetools.TRASH_OPS_LOCK，v3.67.2 P2-6）：
+    # rmtree 整树与成员 restore 的 shutil.move 交错，会把恢复中的目录搬出半截
+    with TRASH_OPS_LOCK:
+        rows = {r["trash_path"]: r["deleted_at"] for r in trash_store.list_all()}
+        for f in trash_root.iterdir():
+            try:
+                clock = rows.get(f".trash/{f.name}")
+                if clock is None:
+                    clock = f.stat().st_mtime
+                if clock >= cutoff:
+                    continue
+            except OSError:
+                continue   # 与用户"清空回收站"并发：条目已消失，下轮自然收敛
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink(missing_ok=True)
+        trash_store.delete_before(cutoff)
 
 
 def _cleanup_db():

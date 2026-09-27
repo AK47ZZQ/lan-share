@@ -141,6 +141,14 @@ def dir_tree(path: Path) -> dict:
 # 不随路径数增长、无需清理；用 RLock 是为了同线程重入（上传覆盖内部会再调一次）不死锁。
 _TRASH_STRIPES = tuple(threading.RLock() for _ in range(32))
 
+# .trash 树的全操作锁（v3.67.2 移植自分叉批 P2-6）：_TRASH_STRIPES 只串行
+# "源路径→.trash"方向；恢复/单条删除/清空/定时清理（api/trash 与 cleanup）
+# 此前**完全不持锁**地动 .trash——admin 清空（rmtree 整树）与成员恢复的
+# shutil.move 交错，Windows 下 rename 失败退化成 copytree，会把被删掉一半的
+# 目录树"恢复成功"（静默截断）。凡"从 .trash 里取东西/删东西"一律持本锁；
+# 单进程部署（AGENTS.md §2），进程内 RLock 足够。
+TRASH_OPS_LOCK = threading.RLock()
+
 
 def _trash_stripe(target: Path) -> threading.RLock:
     return _TRASH_STRIPES[hash(os.path.normcase(str(target))) % len(_TRASH_STRIPES)]
@@ -151,9 +159,11 @@ def move_to_trash(target: Path, orig_path: str):
 
     按源路径串行（见 _TRASH_STRIPES）：rename 与登记必须是一个不可分割的单位，
     否则并发同名删除会互相把对方的成功当成自己的失败。
+    锁序固定：TRASH_OPS_LOCK 外层、条带锁内层（RLock 同线程重入安全）。
     """
-    with _trash_stripe(target):
-        _move_to_trash_locked(target, orig_path)
+    with TRASH_OPS_LOCK:
+        with _trash_stripe(target):
+            _move_to_trash_locked(target, orig_path)
 
 
 def _move_to_trash_locked(target: Path, orig_path: str) -> None:
