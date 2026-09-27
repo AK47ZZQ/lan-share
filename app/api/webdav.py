@@ -20,7 +20,8 @@ from fastapi.responses import FileResponse
 from app.config import DAV_VERIFY_PER_MIN, MAX_WEBDAV_SIZE, SHARE_ROOT
 from app.security import (audit, allow_rate, client_ip, get_session_user, is_public_entry,
                           login_locked_remaining, record_login_fail)
-from app.filetools import RESERVED_NAME, clean_filename, human_size, to_rel
+from app.filetools import (RESERVED_NAME, clean_filename, ensure_disk_room,
+                           human_size, to_rel)
 from app.spaces import enforce_quota, resolve, sync_grants_on_move
 from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy
 from app.filetools import move_to_trash
@@ -267,6 +268,9 @@ async def _dav_put(request: Request, user, target: Path, exists: bool) -> Respon
     if not parent.exists():
         raise HTTPException(status_code=409, detail="Parent collection missing")
     created = not exists
+    # 写前余量预检（v3.67.4）：数据盘与 PG 同盘，20GB 级 PUT 写满盘的瞬间
+    # 连带打挂生产库
+    await run_in_threadpool(ensure_disk_room)
     tmp = target.with_name(f"{target.name}.dav-uploading-{os.getpid()}-{time.time_ns()}")
     size = 0
     try:

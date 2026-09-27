@@ -22,7 +22,8 @@ from app.services import cleanup
 from app.db import _db, _db_lock
 from app.roles import ADMIN
 from app.security import audit, client_ip, require_user
-from app.filetools import clean_filename, human_size, move_to_trash, save_upload, to_rel
+from app.filetools import (clean_filename, ensure_disk_room, human_size,
+                           move_to_trash, save_upload, to_rel)
 from app.spaces import enforce_quota, resolve, sample_readable
 from app.store import users as users_store
 from app.api.photos import photos_scan_bump
@@ -242,6 +243,8 @@ async def upload_chunk(request: Request, sid: str, index: int = Query(...),
     total = (row["total_size"] + cs - 1) // cs
     if index < 0 or index >= total:
         raise HTTPException(status_code=400, detail="Chunk index out of range")
+    # 写前余量预检（v3.67.4）：块 ≤64MB，但整会话可达 64GB，数据盘与 PG 同盘
+    await run_in_threadpool(ensure_disk_room)
     part = _chunk_dir(sid) / f"part-{index:06d}"
     # 原子写：客户端中断（暂停/断网）时只留下 _tmp_*（不匹配 part-*，续传不会误信半截分片）；
     # 临时名带唯一后缀，同分片并发重试不会交错写坏

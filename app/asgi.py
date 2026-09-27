@@ -13,9 +13,10 @@ from urllib.parse import urlsplit
 import time
 
 from app.config import (API_RATE_LIMIT, API_RATE_LIMIT_PUB, AUTHCHECK_RATE_LIMIT,
-                        DAV_RATE_LIMIT, DAV_RATE_LIMIT_PUB, LOGIN_RATE_LIMIT,
-                        LOGIN_RATE_LIMIT_PUB, MEDIA_RATE_LIMIT,
-                        MEDIA_RATE_LIMIT_PUB, SHARE_RATE_LIMIT, UPLOAD_RATE_LIMIT)
+                        DAV_RATE_LIMIT, DAV_RATE_LIMIT_PUB, FEEDBACK_MAX_ATTACHMENT_MB,
+                        LOGIN_RATE_LIMIT, LOGIN_RATE_LIMIT_PUB, MAX_CHUNK_SIZE,
+                        MAX_UPLOAD_SIZE, MEDIA_RATE_LIMIT, MEDIA_RATE_LIMIT_PUB,
+                        SHARE_RATE_LIMIT, UPLOAD_RATE_LIMIT)
 from app.security import (allow_rate, client_ip, get_bearer_user, get_session_user,
                           is_public_entry, public_netlocs, set_audit_user)
 from app.services import metrics as _metrics
@@ -94,6 +95,27 @@ async def security_middleware(request: Request, call_next):
         if not big_body and path.startswith("/api/upload/"):
             first = path[len("/api/upload/"):].split("/", 1)[0]
             big_body = first not in ("init", "state", "finish")
+        if big_body and path != "/api/auth/avatar":
+            # 大 body 白名单只豁免 1MB 通用闸，**不免除上限预检**（v3.67.4
+            # 移植自分叉批 P1-①）：FastAPI 先收完 body 才做依赖鉴权，无上限
+            # 的白名单让匿名请求把任意体积灌进 TEMP（实测匿名 POST
+            # /api/feedback 挂起 = 服务器在等完整 body）。按各端点真实上限
+            # + multipart/分片开销收口，chunked / 缺 CL 一律拒
+            if path.startswith("/api/upload/chunk/"):
+                cap = MAX_CHUNK_SIZE + 8 * 1024 * 1024
+            elif path == "/api/feedback":
+                # 3 件附件 × 25MB + multipart 开销（件数耦合 feedback
+                # _MAX_ATTACHMENTS=3，改件数须同步这里）
+                cap = FEEDBACK_MAX_ATTACHMENT_MB * 3 * 1024 * 1024 + 16 * 1024 * 1024
+            else:
+                cap = MAX_UPLOAD_SIZE + 64 * 1024 * 1024
+            if request.headers.get("transfer-encoding"):
+                return JSONResponse({"detail": "Transfer-Encoding not allowed"},
+                                    status_code=413)
+            cl = request.headers.get("content-length")
+            if not cl or not cl.isdigit() or int(cl) > cap:
+                return JSONResponse({"detail": "Payload too large"},
+                                    status_code=413)
         if not big_body:
             # chunked 请求无 Content-Length（R3-P1）：正常 JSON API 客户端从不
             # 使用，直接拒绝，堵住"缺 CL 头绕过 1MB 检查"的口子
