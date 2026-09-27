@@ -18,9 +18,14 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from app.config import SHARE_ROOT
+from app.config import PROJECT_ROOT
 
-LOG_DIR = SHARE_ROOT / "logs" / "access"   # SHARE_ROOT 即仓库 data/，别再拼一层
+# 日志落 PROJECT_ROOT/logs（仓库根，**SHARE_ROOT=data/ 之外**）：data/ 里的
+# 非点前缀目录默认全员可读（resolve 的 shared 默认可读分支），访问日志含
+# 完整 URI（share token、?tkt= 能力 URL）与 Referer，等于把取件链接发给
+# 全体登录成员——2026-09-27 实证 resolve(member,"logs/access/access.log")
+# 可达后迁出（v3.67.3）
+LOG_DIR = PROJECT_ROOT / "logs" / "access"
 FREE_TIER_BYTES = 5 * 1024 ** 3   # 樱花FRP 免费档月流量（对照预警用）
 DEFAULT_DAYS = 14
 

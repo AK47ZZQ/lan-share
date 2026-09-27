@@ -81,9 +81,12 @@
 # 隧道入口访问日志（F4 流量仪表）：只挂隧道/备用块——"有日志 ≡ 走隧道 ≡
 # 消耗樱花FRP 配额"，判别零歧义；LAN 直连 :8765 不产生日志。
 # 解析方 app/services/traffic.py 只读 glob access.log*；roll 5×10MiB 封顶 50MiB。
+# 落点在 PROJECT_ROOT/logs（data/=SHARE_ROOT 之外）：data/ 里非点前缀目录走
+# resolve 的 shared 默认可读分支，全员可下载含 share token/?tkt= 的访问日志
+# （2026-09-27 实证后迁出，v3.67.3）
 (tunnel_log) {
 	log {
-		output file C:/lan-share/data/logs/access/access.log {
+		output file C:/lan-share/logs/access/access.log {
 			roll_size 10MiB
 			roll_keep 5
 		}
