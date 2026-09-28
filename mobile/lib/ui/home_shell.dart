@@ -23,6 +23,7 @@ import '../state/session.dart';
 import '../state/settings.dart';
 import 'files_page.dart';
 import 'home_page.dart';
+import 'home_tabs.dart';
 import 'notes_page.dart';
 import 'me_page.dart';
 import 'photos_page.dart';
@@ -34,6 +35,11 @@ import 'widgets/kit.dart';
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
+  /// 当前底栏页签（全局可读：挂在 IndexedStack 里不重建的页面用它做
+  /// "页签可见性"闸——照片墙的轮询在非当前页签时静默跳过，省请求；
+  /// 15 号挂账 P2，2026-09-28 收编）。写点全部经 _HomeShellState._go。
+  static final ValueNotifier<int> tabIndex = ValueNotifier<int>(0);
+
   @override
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
@@ -43,6 +49,12 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
   bool _consuming = false; // 分享消费互斥（incoming 推送与 initState 拉取并发）
   // 双击返回退出（20260914042923-b7c1）：首页 2 秒内二次返回才真退出
   DateTime _lastBackAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// 底栏页签唯一写点：setState 与 homeTabIndex 通知器同步（照片墙页签闸的数据源）
+  void _go(int i) {
+    homeTabIndex.value = i;
+    if (_tab != i) setState(() => _tab = i);
+  }
 
   /// 传输页（v0.25 起不再是底栏页签）：统一从这里 push，
   /// 首页传输卡/文件页传输入口/"我的"页宫格三处共用。
@@ -63,6 +75,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    homeTabIndex.value = _tab; // 重登录新壳：通知器回正（防上壳残留值）
     ShareBridge.wire();
     ShareBridge.onIncoming = _consumeShares;
     // 冷启动经分享面板进入：登录壳就绪后拉一次（Kotlin 侧 pending 一直留着）
@@ -194,10 +207,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
             selectedIcon: Icon(Icons.home),
             label: '首页'),
         HomePage(
-            onGoPhotos: () => setState(() => _tab = 1),
+            onGoPhotos: () => _go(1),
             onGoFiles: _openFiles,
             onGoTransfers: _openTransfers,
-            onGoMe: () => setState(() => _tab = _destCount - 1))
+            onGoMe: () => _go(_destCount - 1))
       ),
       (
         const NavigationDestination(
@@ -212,7 +225,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
               icon: Icon(Icons.checklist_outlined),
               selectedIcon: Icon(Icons.checklist),
               label: '效率'),
-          const TodosPage()
+          TodosPage(userId: ref.read(sessionProvider).userId)
         ),
       (
         const NavigationDestination(
@@ -230,7 +243,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
       ),
     ];
     final destCount = dests.length; // 成员 5 / 访客 4
-    if (_tab >= destCount) _tab = 0; // 角色切换后防越界
+    if (_tab >= destCount) {
+      _tab = 0;
+      homeTabIndex.value = 0; // 角色切换后防越界（同步页签闸）
+    }
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
@@ -240,7 +256,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
           return;
         }
         if (_tab != 0) {
-          setState(() => _tab = 0);
+          _go(0);
           return;
         }
         final now = DateTime.now();
@@ -260,7 +276,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with WidgetsBindingObserv
           children: [for (final d in dests) d.$2]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
+        onDestinationSelected: _go,
         destinations: [for (final d in dests) d.$1],
       ),
       ),
