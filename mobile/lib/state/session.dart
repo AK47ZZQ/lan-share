@@ -21,6 +21,7 @@ class SessionState {
   final String? nickname; // 显示层昵称（v0.17）：登录/路径仍用 username
   final String? avatarPath; // 服务端相对路径（.avatars/<uid>.jpg），空=无头像
   final String? role;
+  final int? userId; // /api/auth/me 的 id（v1.1.13）：乐观更新 done_by 用
   /// 昵称优先显示：各界面展示身份时统一走这里
   String? get displayName =>
       ((nickname ?? '').trim().isNotEmpty ? nickname : username);
@@ -29,7 +30,7 @@ class SessionState {
   final TrustRequiredError? trustIssue; // 自签证书待确认
   const SessionState(
       {this.checking = false, this.loggedIn = false, this.username,
-      this.nickname, this.avatarPath, this.role, this.error,
+      this.nickname, this.avatarPath, this.role, this.userId, this.error,
       this.needTotp = false, this.trustIssue});
 }
 
@@ -57,7 +58,8 @@ class SessionController extends StateNotifier<SessionState> {
           username: name,
           nickname: r.data['nickname'] as String?,
           avatarPath: r.data['avatar_path'] as String?,
-          role: r.data['role'] as String?);
+          role: r.data['role'] as String?,
+          userId: (r.data['id'] as num?)?.toInt());
     } on DioException catch (e) {
       if (e.response?.statusCode != 401) {
         // 非凭据问题（服务器不可达等）：不假装登出，给出提示
@@ -145,7 +147,8 @@ class SessionController extends StateNotifier<SessionState> {
           username: name,
           nickname: me.data['nickname'] as String?,
           avatarPath: me.data['avatar_path'] as String?,
-          role: me.data['role'] as String?);
+          role: me.data['role'] as String?,
+          userId: (me.data['id'] as num?)?.toInt());
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
     } catch (e) {
@@ -172,7 +175,8 @@ class SessionController extends StateNotifier<SessionState> {
           username: name,
           nickname: me.data['nickname'] as String?,
           avatarPath: me.data['avatar_path'] as String?,
-          role: me.data['role'] as String?);
+          role: me.data['role'] as String?,
+          userId: (me.data['id'] as num?)?.toInt());
     } finally {
       // Token 换取结束即清内存明文密码（R2-P3-7 + 9.9 复审 P1-4）：成功自不必
       // 说，失败路径也不残留。TOTP 二步重试语义只存在于进入本函数之前，
@@ -190,7 +194,8 @@ class SessionController extends StateNotifier<SessionState> {
         username: state.username,
         nickname: nick,
         avatarPath: state.avatarPath,
-        role: state.role);
+        role: state.role,
+        userId: state.userId);
   }
 
   /// 头像上传后重取 /me：同步 avatarPath（昵称/角色一起以服务端为准）
@@ -203,7 +208,8 @@ class SessionController extends StateNotifier<SessionState> {
         username: me.data['username'] as String?,
         nickname: me.data['nickname'] as String?,
         avatarPath: me.data['avatar_path'] as String?,
-        role: me.data['role'] as String?);
+        role: me.data['role'] as String?,
+        userId: (me.data['id'] as num?)?.toInt());
   }
 
   static TrustRequiredError? _trustOf(DioException e) {

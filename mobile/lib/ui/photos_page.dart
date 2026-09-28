@@ -39,6 +39,7 @@ import '../state/session.dart';
 import '../transfer/transfer_engine.dart';
 import '../transfer/transfer_task.dart';
 import 'album_detail_page.dart';
+import 'home_tabs.dart';
 import 'photo_models.dart';
 import 'photo_viewer.dart';
 import 'share_create_sheet.dart';
@@ -221,6 +222,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _pulseCheck() async {
     // 生命周期闸门（R1-P2-2，对齐 AutoSwitch）：退后台/锁屏后不再打网络
     if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    // 页签闸门（v1.1.13，15 号挂账 P2 收编）：本页挂 IndexedStack 常驻，
+    // 非当前页签时探测与服务端 refresh=1 都是无谓开销——静默跳过，
+    // 回到页签时由 _tabChanged 立即补查一次
+    if (homeTabIndex.value != kPhotosTabIndex) return;
     if (!mounted || _loading) return;
     try {
       final snap = await PhotosApi.probe();
@@ -239,6 +244,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _checkBackupDone() async {
     // 生命周期闸门（R1-P2-2）：退后台不轮询
     if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    // 页签闸门（v1.1.13，15 号挂账 P2 收编）：本页挂 IndexedStack 常驻，
+    // 非当前页签时不打网络（prefs.reload 也是真实 IO）
+    if (homeTabIndex.value != kPhotosTabIndex) return;
     if (!mounted || _loading) return;
     final sp = await SharedPreferences.getInstance();
     // 引擎在独立 headless isolate 写 prefs，UI isolate 的插件缓存不 reload

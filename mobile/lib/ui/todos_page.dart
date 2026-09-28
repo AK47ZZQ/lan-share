@@ -11,7 +11,6 @@
 import 'package:flutter/material.dart';
 
 import '../data/api/errors.dart';
-import 'package:dio/dio.dart';
 
 import '../data/api/todos_api.dart';
 import '../data/local/todo_cache.dart';
@@ -22,7 +21,10 @@ import 'theme/responsive.dart';
 import 'widgets/kit.dart';
 
 class TodosPage extends StatefulWidget {
-  const TodosPage({super.key});
+  /// 当前用户 id（v1.1.13）：_toggle 乐观回填 done_by 用；由 HomeShell 从
+  /// sessionProvider 传入（本页自己不依赖 riverpod，保持轻）
+  final int? userId;
+  const TodosPage({super.key, this.userId});
 
   @override
   State<TodosPage> createState() => _TodosPageState();
@@ -60,13 +62,17 @@ class _Todo {
 
   bool get done => status == 'done';
 
-  _Todo copyWith({String? status, num? doneAt, int? doneBy}) => _Todo({
+  /// clearDone：取消完成时显式清掉 done_at/done_by（旧 ?? 链会保留旧值，
+  /// 乐观态与服务端漂移到下次 _load——v1.1.13 修）
+  _Todo copyWith({String? status, num? doneAt, int? doneBy,
+                  bool clearDone = false}) => _Todo({
         'id': id, 'list_id': listId, 'list_name': listName,
         'list_kind': listKind, 'list_owner_id': listOwnerId,
         'title': title, 'notes': notes, 'due_at': dueAt,
         'priority': priority, 'assignee_id': assigneeId,
-        'status': status ?? this.status, 'done_at': doneAt ?? this.doneAt,
-        'done_by': doneBy ?? this.doneBy,
+        'status': status ?? this.status,
+        'done_at': clearDone ? null : (doneAt ?? this.doneAt),
+        'done_by': clearDone ? null : (doneBy ?? this.doneBy),
       });
 }
 
@@ -112,8 +118,8 @@ class _TodosPageState extends State<TodosPage> {
     await TodoCache.replay((id, status) async {
       try {
         await TodosApi.patchTodo(id, status: status);
-      } on DioException catch (e) {
-        if (e.response?.statusCode != 404) rethrow;
+      } catch (e) {
+        if (!isNotFound(e)) rethrow;
       }
     });
     try {
@@ -189,10 +195,13 @@ class _TodosPageState extends State<TodosPage> {
     final target = t.done ? 'todo' : 'done';
     final updated = t.copyWith(
         status: target,
+        clearDone: target == 'todo',
         doneAt: target == 'done'
             ? DateTime.now().millisecondsSinceEpoch / 1000
             : null,
-        doneBy: target == 'done' ? null : null);
+        // v1.1.13：勾选人乐观回填真 userId（此前两分支恒 null，日历/列表
+        // "谁完成"显示为空直到下次 _load）
+        doneBy: target == 'done' ? widget.userId : null);
     setState(() {
       _todos = [for (final x in _todos) x.id == t.id ? updated : x];
     });
