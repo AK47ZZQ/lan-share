@@ -267,6 +267,8 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
     except archive.SlotCap:
         # 打包票据上限（9.9 复审 P2）：开工前拒绝，不留孤儿 zip 文件
         raise HTTPException(status_code=429, detail="打包任务过多，请稍后再试")
+    total_in = 0      # 预计打包量（sizing 累加）
+    reserved = 0      # 实际入账的预留量（0=未预留；审查 P1-1：finally 只释放自己的）
     try:
         targets = [resolve(_user, p, "read") for p in body.paths]
         for t in targets:
@@ -282,7 +284,6 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
 
         # 磁盘余量预计价（红队 P2-2）：打包是整树复制且 .zips 不在配额视野内，
         # 串行循环可把磁盘打满；拒绝"预计打包量 > 剩余空间 - 5GB 余量"的请求
-        total_in = 0
         for t in targets:
             if t.is_dir():
                 for f in t.rglob("*"):
@@ -292,11 +293,15 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
                     except OSError:
                         continue
             else:
-                total_in += t.stat().st_size
-        free = shutil.disk_usage(str(SHARE_ROOT)).free
-        if total_in > free - 5 * 1024 ** 3:
-            raise HTTPException(status_code=507,
-                                detail="磁盘剩余空间不足，无法打包（需为系统保留 5GB 余量）")
+                try:
+                    total_in += t.stat().st_size
+                except OSError:
+                    continue   # sizing 与写入间目标被并发移走：按其余目标打包
+        # 字节预留制（v3.68，分叉批 P2-5）：替换"只看 free"的 check-then-act——
+        # 两路并发打包各自看到同样的 free，合计可越过 5GB 余量。预留成功才
+        # 记账（reserved 标志），reserve 抛 507 时 finally 不得冲销他人在途量
+        archive.reserve_bytes(total_in)
+        reserved = total_in   # 只有成功才入账（审查 P1-1：507 路径不得冲销台账）
 
         zdir = SHARE_ROOT / ".zips"
         zdir.mkdir(exist_ok=True)
@@ -322,6 +327,8 @@ def create_zip(request: Request, body: ZipBody, _user=Depends(require_user)):
         return {"ok": True, "url": f"/api/zip/{token}",
                 "name": f"lan-share-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"}
     finally:
+        if reserved > 0:
+            archive.release_bytes(reserved)
         archive.release_slot(_user["username"])
 
 

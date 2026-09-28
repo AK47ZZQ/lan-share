@@ -130,7 +130,8 @@ def test_added_at_backfill_is_portable(warmup_set):
 def test_tick_runs_end_to_end(warmup_set, monkeypatch):
     """整轮 _tick 必须**不抛异常**地跑完——这一条就是 v3.56 rowid 事故的探测器。
 
-    generate_thumb 换成打桩（真生成要 PIL/ffmpeg，测试环境不该依赖），
+    _render_thumb_slot 换成打桩（真生成要 PIL/ffmpeg，测试环境不该依赖；
+    v3.68 起 warmup 经信号量槽调渲染，桩打在槽上连带双检/上限一起被绕开），
     张间小睡清零；DB 读、行归一化、键计算、文件存在性判断全部走真实代码。
     """
     prefix, rels = warmup_set
@@ -142,7 +143,7 @@ def test_tick_runs_end_to_end(warmup_set, monkeypatch):
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(b"jpeg")
 
-    monkeypatch.setattr(thumb_warmup, "generate_thumb", fake_thumb)
+    monkeypatch.setattr(thumb_warmup, "_render_job", fake_thumb)
     monkeypatch.setattr(thumb_warmup, "_PER_ITEM_SLEEP", 0)
     made = thumb_warmup._tick()                      # 曾在此抛 UndefinedColumn: rowid
     assert made >= 3, f"本轮应补齐 3 张，实际 {made}"

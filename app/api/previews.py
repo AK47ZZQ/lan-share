@@ -3,18 +3,19 @@
 /preview（含 ?w= 中图档量化）、/thumb（PIL/ffmpeg，ETag 协商缓存）、
 像素炸弹拦截。媒体扩展名集合引用 filetools 单一事实源。
 """
+import asyncio
 import hashlib
 import mimetypes
 import os
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from app.config import SHARE_ROOT
+from app.config import MEDIA_SEM_SIZE, SHARE_ROOT
 from app.api.deps import ensure_exists
 from app.security import require_user
 from app.filetools import IMG_EXTS, VID_EXTS, ensure_heif_support
@@ -79,6 +80,8 @@ async def preview_file(path: str, w: int | None = Query(default=None),
             # PIL 解码/EXIF 矫正/缩放是 CPU 密集同步操作，大图会跑数秒，
             # 必须进线程池，否则照片墙冷缓存时冻结整个事件循环
             def _render_thumb() -> None:
+                if cached.exists():
+                    return
                 from PIL import Image, ImageOps
                 tmp = cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg"
                 try:
@@ -94,12 +97,28 @@ async def preview_file(path: str, w: int | None = Query(default=None),
                 except Exception:
                     tmp.unlink(missing_ok=True)
                     raise HTTPException(status_code=500, detail="Preview error")
-            await run_in_threadpool(_render_thumb)
+            await asyncio.get_running_loop().run_in_executor(
+                _RENDER_EXECUTOR, _render_thumb)
         return FileResponse(cached, media_type="image/jpeg")
     return FileResponse(target, media_type=mime or "application/octet-stream",
                         filename=target.name)
 # ─── 缩略图 ───────────────────────────────────────────────
 # IMG_EXTS/VID_EXTS 单一事实源在 filetools（07 审查 §5.1-3），与照片时间线共用
+
+
+# 渲染专用执行器（v3.68，分叉批 P1 收尾；审查 P2-1 修订）：冷缓存风暴可把
+# 线程池与 ffmpeg/PIL 长期占满——渲染并发上限 = 本池线程数 MEDIA_SEM_SIZE，
+# 等待者排进本池自带的无界队列。**不共享线程**：既不占请求线程池（40 线程），
+# 也不占事件循环默认执行器（仅 ~12 线程且与 cleanup/warmup 的 to_thread 同池，
+# 冷缓存风暴会饿死后台循环）。双检防排队期重复渲染
+_RENDER_EXECUTOR = ThreadPoolExecutor(max_workers=MEDIA_SEM_SIZE,
+                                      thread_name_prefix="render")
+
+
+def _render_job(target: Path, cached: Path, ext: str) -> None:
+    if cached.exists():
+        return
+    generate_thumb(target, cached, ext)
 
 
 def generate_thumb(target: Path, cached: Path, ext: str) -> None:
@@ -140,8 +159,9 @@ def generate_thumb(target: Path, cached: Path, ext: str) -> None:
 
 
 @router.get("/thumb/{path:path}")
-def thumb_file(request: Request, path: str, _user=Depends(require_user)):
-    """缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。
+async def thumb_file(request: Request, path: str, _user=Depends(require_user)):
+    """缩略图（async 端点：渲染提交专用执行器，上限 MEDIA_SEM_SIZE）。
+    图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。
     ETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存
     自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。"""
     target = resolve(_user, path, "read")
@@ -165,11 +185,12 @@ def thumb_file(request: Request, path: str, _user=Depends(require_user)):
         return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)
 
     try:
-        generate_thumb(target, cached, ext)
+        # 渲染走专用执行器（审查 P2-1）：排队不占请求线程池，也不饿死与
+        # cleanup/warmup 共享的默认执行器；generate_thumb 内部自清 tmp
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_RENDER_EXECUTOR, _render_job, target, cached, ext)
     except HTTPException:
         raise
     except Exception:
-        (cache_dir / f".tmp-{os.getpid()}-{threading.get_ident()}-{key}.jpg").unlink(
-            missing_ok=True)
         raise HTTPException(status_code=500, detail="Thumbnail error")
     return FileResponse(cached, media_type="image/jpeg", headers=resp_headers)

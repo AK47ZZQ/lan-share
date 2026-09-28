@@ -179,7 +179,8 @@ async def me(request: Request):
         rc_left = len(json.loads(user["totp_rc"])) if user["totp_rc"] else 0
     except (TypeError, ValueError):
         rc_left = 0
-    return {"username": user["username"], "role": user["role"],
+    return {"id": uid(user),
+            "username": user["username"], "role": user["role"],
             "quota_bytes": user["quota_bytes"],
             "nickname": nick,
             "avatar_path": avatar,

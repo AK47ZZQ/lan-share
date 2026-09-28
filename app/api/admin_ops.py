@@ -186,35 +186,51 @@ def admin_export(body: ExportBody, request: Request, _admin=Depends(require_admi
     zdir = SHARE_ROOT / ".zips"
     zdir.mkdir(exist_ok=True)
     zpath = zdir / f"export-{secrets.token_urlsafe(8)}.zip"
+    # 打包字节预留（v3.68，分叉批 P2-5 同款）：admin 导出此前连 free 检查都没有，
+    # 大成员 + 大包可把盘写满。预走一遍算量 → 预留 → 构建 → finally 释放
+    export_bytes = 0
+    for _label, root in roots:
+        if not root.exists():
+            continue
+        for f in root.rglob("*"):
+            try:
+                if f.is_file():
+                    export_bytes += f.stat().st_size
+            except OSError:
+                continue
+    archive.reserve_bytes(export_bytes)
     file_count = 0
     file_bytes = 0
-    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
-        for _label, root in roots:
-            if not root.exists():
-                continue
-            for f in root.rglob("*"):
-                if not f.is_file():
+    try:
+        with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+            for _label, root in roots:
+                if not root.exists():
                     continue
-                # arcname 保留 private/incoming 前缀（相对 SHARE_ROOT），恢复时按空间原样落位
-                z.write(f, to_rel(f))
-                file_count += 1
-                file_bytes += f.stat().st_size
-        shares = shares_store.list_brief_by_owner(row["id"])
-        devices = devices_store.list_brief_by_user(row["id"])
-        manifest = {
-            "kind": "lan-share-member-export",
-            "generated_at": datetime.now().isoformat(),
-            "member": {"username": username, "role": row["role"],
-                       "created_at": row["created_at"]},
-            "scope": ["private/<用户名>/", "incoming/<用户名>/"],
-            "scope_note": "共享空间文件无逐文件归属元数据，不在此包内",
-            "stats": {"files": file_count, "bytes": file_bytes,
-                      "shares": len(shares), "devices": len(devices)},
-            "shares": [dict(s) for s in shares],
-            "devices": [dict(d) for d in devices],
-        }
-        z.writestr("manifest.json",
-                   json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
+                for f in root.rglob("*"):
+                    if not f.is_file():
+                        continue
+                    # arcname 保留 private/incoming 前缀（相对 SHARE_ROOT），恢复时按空间原样落位
+                    z.write(f, to_rel(f))
+                    file_count += 1
+                    file_bytes += f.stat().st_size
+            shares = shares_store.list_brief_by_owner(row["id"])
+            devices = devices_store.list_brief_by_user(row["id"])
+            manifest = {
+                "kind": "lan-share-member-export",
+                "generated_at": datetime.now().isoformat(),
+                "member": {"username": username, "role": row["role"],
+                           "created_at": row["created_at"]},
+                "scope": ["private/<用户名>/", "incoming/<用户名>/"],
+                "scope_note": "共享空间文件无逐文件归属元数据，不在此包内",
+                "stats": {"files": file_count, "bytes": file_bytes,
+                          "shares": len(shares), "devices": len(devices)},
+                "shares": [dict(s) for s in shares],
+                "devices": [dict(d) for d in devices],
+            }
+            z.writestr("manifest.json",
+                       json.dumps(manifest, ensure_ascii=False, indent=2, default=str))
+    finally:
+        archive.release_bytes(export_bytes)
 
     token = archive.issue_ticket(zpath)
     audit("export", f"{username} files={file_count} bytes={file_bytes}",
