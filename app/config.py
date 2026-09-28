@@ -67,10 +67,12 @@ DAV_RATE_LIMIT_PUB = 600          # /dav 公网侧每分钟
 DAV_VERIFY_PER_MIN = 120          # /dav Basic 认证 KDF 前的每 IP 校验预算（第二层）
 MEDIA_RATE_LIMIT = 240            # /thumb /preview /files 每分钟每 IP
 MEDIA_RATE_LIMIT_PUB = 1200       # 同上 公网侧（公网省流依赖缩略图，取宽值）
+MEDIA_SEM_SIZE = 4                # 同时在跑的缩略图/预览渲染（PIL/ffmpeg）上限
 
 # ── 大文件上传（v3.6）────────────────────────────────────
 MAX_WEBDAV_SIZE = 20 * 1024 * 1024 * 1024   # WebDAV PUT 上限 20GB（流式写盘，PC 互传挂盘用）
 MAX_CHUNKED_SIZE = 64 * 1024 * 1024 * 1024  # 分片上传总大小硬上限 64GB
+CHUNKS_TOTAL_CAP = 128 * 1024 * 1024 * 1024  # 全家在途分片总量上限（数据盘与 PG 同盘）
 _GB = 1024 * 1024 * 1024
 
 # 分片协议上限——单一事实源（07 审查 P0）：服务端 chunk_size_for 的输出、

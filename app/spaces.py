@@ -184,6 +184,12 @@ def resolve(user, path: str, need: str = "read") -> Path:
         own.mkdir(parents=True, exist_ok=True)  # 私人空间永远可进入
         return safe_path("/".join(_own_private_rel(username, parts[1:])))
 
+    if parts and _normcase_eq(parts[0], "tmp"):
+        # 运维目录收口（v3.68）：data/tmp 是清理循环的作业目录，写入方已迁
+        # .chunks/.uploading（现为遗迹）——非点前缀使其落"shared 默认可读"
+        # 分支（logs 同因已于 v3.67.3 迁出），显式 403 防未来写入方复活暴露面
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     if parts and _normcase_eq(parts[0], "incoming"):
         sub = parts[1:]
         if need == "write":
@@ -279,6 +285,10 @@ def sync_grants_on_move(old_rel: str, new_rel: str):
 
 
 def visible(user, rel_parts) -> bool:
+    # 运维目录收口（v3.68，与 resolve 的 tmp 403 同口）：/api/search 与
+    # /api/recent 走 SHARE_ROOT.rglob + 本判定，不拦会把 tmp 作业文件列出来
+    if rel_parts and _normcase_eq(rel_parts[0], "tmp"):
+        return False
     """给定相对 SHARE_ROOT 的路径段元组，判断是否对 user 可见（搜索/最近/照片/回收站过滤）。"""
     parts = [p for p in rel_parts]
     if any(p.startswith(".") for p in parts):

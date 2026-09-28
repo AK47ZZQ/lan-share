@@ -19,7 +19,7 @@ import logging
 import time
 from pathlib import Path
 
-from app.api.previews import generate_thumb
+from app.api.previews import _render_job
 from app.config import SHARE_ROOT
 from app.filetools import IMG_EXTS, VID_EXTS
 from app.services import loop_health
@@ -77,7 +77,7 @@ def _tick() -> int:
         if not f.exists():
             continue
         try:
-            generate_thumb(f, cached, f.suffix.lower())
+            _render_job(f, cached, f.suffix.lower())
             made += 1
         except Exception:
             # 损坏媒体/缺解码器：跳过，下轮不再挑中（键含 mtime+size，

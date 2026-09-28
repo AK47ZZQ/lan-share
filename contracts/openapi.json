@@ -7250,7 +7250,7 @@
   },
   "/thumb/{path}": {
    "get": {
-    "description": "缩略图（同步端点，跑线程池）。图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。\nETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存\n自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。",
+    "description": "缩略图（async 端点：渲染提交专用执行器，上限 MEDIA_SEM_SIZE）。\n图片用 Pillow，视频用 ffmpeg 抽帧，缓存于 .thumbs/。\nETag 协商缓存：缓存键含 mtime+size ⇒ 内容寻址，文件被覆盖后浏览器缓存\n自然失效（Caddy 对 /thumb/* 放开 no-store 才能让浏览器吃到 304）。",
     "operationId": "thumb_file_thumb__path__get",
     "parameters": [
      {

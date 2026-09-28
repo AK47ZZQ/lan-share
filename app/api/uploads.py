@@ -16,8 +16,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from app.config import (MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE, SHARE_ROOT, UPLOAD_SESSION_TTL,
-                        chunk_size_for)
+from app.config import (CHUNKS_TOTAL_CAP, MAX_CHUNK_SIZE, MAX_CHUNKED_SIZE,
+                        SHARE_ROOT, UPLOAD_SESSION_TTL, chunk_size_for)
 from app.services import cleanup
 from app.db import _db, _db_lock
 from app.roles import ADMIN
@@ -89,6 +89,12 @@ def _session_usage(user_id: int):
     return _db().execute(
         "SELECT COUNT(*) AS n, COALESCE(SUM(total_size),0) AS total "
         "FROM upload_sessions WHERE user_id=?", (user_id,)).fetchone()
+
+
+def _session_usage_all():
+    """全家在途分片总量（.chunks 落数据盘，与 PG 同盘——全局闸防叠加灌盘）。"""
+    return _db().execute(
+        "SELECT COALESCE(SUM(total_size),0) AS total FROM upload_sessions").fetchone()
 
 
 def _get_session(sid: str):
@@ -211,6 +217,15 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                     import logging
                     logging.warning("instant upload hardlink failed: %s", e)
 
+    # 全局在途总量闸（v3.68）：MAX_CHUNKED_SIZE 是单用户上限，全家并发叠加
+    # 仍可逼近 CHUNKS_TOTAL_CAP——放在秒传早退之后（硬链接不占新字节，不该被
+    # 拦），detail 带在途量便于自查（存量会话 sweep TTL 自愈，上界 3 天）
+    row_all = await run_in_threadpool(_session_usage_all)
+    if row_all["total"] + body.size > CHUNKS_TOTAL_CAP:
+        raise HTTPException(status_code=507,
+                            detail=f"服务端在途上传总量已达上限"
+                                   f"（在途 {human_size(row_all['total'])}，"
+                                   f"上限 {human_size(CHUNKS_TOTAL_CAP)}），请稍后再试")
     sid = secrets.token_urlsafe(16)
     await run_in_threadpool(_chunk_dir(sid).mkdir, parents=True, exist_ok=True)
     await run_in_threadpool(_create_session, sid, body.dest_dir, dest.name,
