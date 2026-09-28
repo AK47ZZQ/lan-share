@@ -237,11 +237,19 @@ class TransferEngine extends ChangeNotifier {
 
   void removeTask(TransferTask t) {
     final running = _running.contains(t.id);
+    final sid = t.sid;
     tasks.remove(t);
     _speed.remove(t.id);
     _schedulePersist();
     notifyListeners();
     if (running) _cancelTokens[t.id]?.cancel();
+    // 永久移除 = 会话级取消（v1.1.14）：服务端同刻释放会话+分片，否则弃单
+    // 会话占全家在途总量直到 3 天 TTL。尽力而为，失败由 TTL 兜底。
+    if (sid != null) {
+      ApiClient.I.dio()
+          .then((d) => d.delete('/api/upload/sessions/$sid'))
+          .ignore();   // 尽力而为：失败由服务端 3 天 TTL 兜底
+    }
   }
 
   void clearFinished() {

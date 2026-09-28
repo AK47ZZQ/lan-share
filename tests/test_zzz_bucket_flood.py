@@ -51,3 +51,24 @@ def test_dav_bucket_flood_429(client):
             seen = i
             break
     assert seen is not None, "dav 桶应在 300/min 处 429"
+
+
+def test_rate_rejects_counter_durable(client, monkeypatch):
+    """观测收口钉（v3.68 不自信点①）：桶 429 必须进 metrics.rate_rejects
+    （进程启动累计，不随 1h 窗口滑动）——否则阈值误伤与否事后无从查。
+    消融锚：摘掉 asgi 的 record_rate_reject 调用 → delta 为 0 → 红。"""
+    import app.asgi as asgi_mod
+    from app.services import metrics as _m
+
+    before = _m.snapshot()["rate_rejects"].get("media:lan", 0)
+    monkeypatch.setattr(asgi_mod, "MEDIA_RATE_LIMIT", 2)
+    got429 = False
+    for _ in range(5):
+        r = client.get("/thumb/nonexist.jpg", headers={"Host": "lan.local:8765"})
+        if r.status_code == 429:
+            got429 = True
+            break
+    assert got429, "应触发 429"
+    snap = _m.snapshot()
+    assert snap["rate_rejects"].get("media:lan", 0) > before, "429 未计入 rate_rejects"
+    assert isinstance(snap["uptime_seconds"], (int, float))

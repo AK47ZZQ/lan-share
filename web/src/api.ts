@@ -17,7 +17,7 @@ export { notifyApi } from './api/notify'
 export { photosApi } from './api/photos'
 export { publicApi, sharesApi, type PublicShareApi } from './api/shares'
 // 上传引擎原在 api.ts，随拆分原样保留导出（实现移居 api/upload.ts）
-export { CHUNK, confirmLargeUpload, isLanAccess, uploadResumable, type UploadHooks } from './api/upload'
+export { CHUNK, confirmLargeUpload, deleteUploadSession, isLanAccess, uploadResumable, type UploadHooks } from './api/upload'
 
 export const api = {
   ...authApi,
