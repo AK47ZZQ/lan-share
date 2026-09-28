@@ -18,7 +18,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/setup` | 🔓* | `{username, password}` 创建管理员；*仅用户表为空时可用，创建后永久关闭 |
 | POST | `/api/login` | 🔓 | `{username, password}`；失败 5 次锁账号 15 分钟；10 次/分/IP |
 | POST | `/api/logout` | 🔓 | 吊销当前会话 |
-| GET | `/api/auth/me` | 🔑 | `{username, role, quota_bytes, nickname, avatar_path}`；401=未登录（前端以此为登录态探测） |
+| GET | `/api/auth/me` | 🔑 | `{id, username, role, quota_bytes, nickname, avatar_path}`（`id`=用户数字 id，v3.69 起：App 乐观回填待办 done_by 用）；401=未登录（前端以此为登录态探测） |
 | POST | `/api/auth/password` | 🔑 | `{old_password, new_password}`；改密吊销全部会话并重签当前 |
 | PATCH | `/api/auth/profile` | 🔑 | `{nickname}` 改显示昵称（≤32 字符、去控制字符；空=清空恢复显示用户名）。昵称只是显示层，登录/路径/权限仍用 username |
 | POST | `/api/auth/avatar` | 🔑 | multipart `file` 上传/替换头像：PIL 解码（60MP 钳制）→ 中心裁方 → 512px JPEG 存 `data/.avatars/<uid>.jpg`；≤8MB，限速 6 次/分 |
@@ -49,6 +49,7 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 | POST | `/api/upload/{path}` | 🔑 | multipart 单请求上传（≤2GB）；`?on_dup=` 控制同名覆盖行为（v3.31：`trash`=旧版本进回收站【默认】，`overwrite`=直接覆盖不留版本——笔记编辑器就地保存专用）；返回 `{sha256, deduped, ...}` |
 | POST | `/api/upload/init` | 🔑 | `{dest_dir, filename, size, sha256?}` → 命中指纹 `{instant:true,...}` 秒传硬链接；否则 `{session, chunk_size, received:[]}`。分片大小自适应（≤2GB→5MB / ≤5GB→16MB / ≤10GB→32MB / 更大→64MB）；总大小硬上限 64GB |
 | GET | `/api/upload/state/{sid}` | 🔑 | `{received:[块序号]}`（断点续传，chunk_size 与 init 一致） |
+| DELETE | `/api/upload/sessions/{sid}` | 🔑 | 取消在途分片会话（v3.69）：摘会话行 + 删 `.chunks/<sid>` 分片——个人/全局在途计数立即回落（弃单不再占 3 天 TTL）。owner-only（他人 403，与 state/chunk 口径一致）；无会话 404 幂等 |
 | POST | `/api/upload/chunk/{sid}?index=N` | 🔑 | 原始字节流写第 N 块（不受常规限速）；原子落盘，字节数不符整块即拒（中断不留半截分片） |
 | POST | `/api/upload/finish/{sid}` | 🔑 | 合并 + SHA256/大小校验 → 入库去重；同名覆盖时旧版本进回收站；`{path, size, sha256, deduped}` |
 | POST | `/api/mkdir/{path}` | 🔑 | 逐段清洗后创建目录 |
@@ -297,7 +298,7 @@ Web 站长工作台供数层；全部 ⚙️。状态流转约定：反馈由 Ag
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | GET | `/api/admin/overview` | ⚙️ | 总览聚合：users/photos/shares/trash/blobs/sessions/devices 计数 + 磁盘 + `app_latest` + `traffic`（公网隧道流量：今日/本月字节 + 近 14 天序列，Caddy 隧道入口访问日志聚合，见 app/services/traffic.py）+ server_time |
-| GET | `/api/metrics` | ⚙️ | 运行指标快照（v3.52）：近 1h 请求 `by_status` 计数与 `latency_ms{p50,p95,avg}`（asgi 中间件逐请求采集，环形缓冲 2048）+ `disk_used_pct` + `backup`（进程内每日兜底备份编排最近一轮状态，`services/backup.py`；外部计划任务备份另见 healthreport `backup` 块） |
+| GET | `/api/metrics` | ⚙️ | 运行指标快照（v3.52）：近 1h 请求 `by_status` 计数与 `latency_ms{p50,p95,avg}`（asgi 中间件逐请求采集，环形缓冲 2048）+ `disk_used_pct` + `backup`（进程内每日兜底备份编排最近一轮状态，`services/backup.py`；外部计划任务备份另见 healthreport `backup` 块）+ `requests.rate_rejects`（桶级限速拒绝**进程启动累计**计数，不随 1h 窗口滑动）与 `requests.uptime_seconds`（v3.69：限速阈值是否误伤家人可事后追溯） |
 | GET | `/api/admin/large-files?limit=` | ⚙️ | 全库大文件 TOP（跳过隐藏目录），`{items:[{path,size,mtime}], total_files, total_size}` |
 | GET | `/api/admin/duplicates?min_size=&limit=` | ⚙️ | 疑似重复（同尺寸聚类，不做全盘哈希）：`{groups:[{size,paths,wasted}], group_count}` |
 | GET | `/api/admin/audit?limit=&action=` | ⚙️ | 审计日志近况（新→旧）；`action` 非空按前缀筛选（如 `login`→login/login_fail）；响应带 `actions`（现存 DISTINCT 动作全集，供下拉） |
