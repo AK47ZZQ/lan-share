@@ -42,6 +42,14 @@ powershell Restart-Service lan-share-api
 `powershell Get-Service SakuraFrpService` + 查看 `C:\ProgramData\SakuraFrpService\Logs\`
 最新日志尾部；恢复后按 settings 表 `notify_webhook_url` 的 {title}/{body} 模板发告警。
 
+**限速观测**（v3.69）：`/api/metrics` 的 `requests.rate_rejects` 是桶级限速拒绝的
+**进程启动累计**计数（配 `uptime_seconds` 解读，不随 1h 窗口滑动）——家人报"某功能
+突然加载失败"时先看这里：对应桶有读数即为限速命中，据此调 `app/config.py` 桶阈值。
+
+**8.3 短名（2026-09-28 已执行治本）**：`fsutil 8dot3name query C:` 应显示"卷状态 1
+（已禁用）"；回滚 `fsutil 8dot3name set C: 0`。应用层另有别名段拦截（safe_path/
+_clean_parts 双闸），存量别名（TRASH~1 等）留在盘上但不可经 API 寻址。
+
 **运行指标**（v3.52）：`/api/metrics`（admin）给近 1h 请求状态码分布与
 p50/p95/avg 延迟（asgi 中间件逐请求采集，环形缓冲 2048）、磁盘已用百分比、
 兜底备份最近一轮状态。磁盘已用 ≥85%（`DISK_WATERMARK_PCT`）自动 webhook
@@ -239,6 +247,8 @@ ALTER ROLE lanshare CREATEDB;            -- 一次性
 ## 7. 存储治理
 
 - 回收站 `.trash`：App/网页可清空（admin 可清全员）；服务端有清理循环
+  （判期权威 = 行侧 `deleted_at`，v3.67.1 P0 起——文件 mtime 保留原始值不改写，
+  分片会话可用 `DELETE /api/upload/sessions/{sid}` 立即释放）
   （`cleanup_loop`，异常容错 + 每轮 try/except）。
 - `.chunks`（分片暂存）、`.zips`（打包临时）：服务端定期清理；
   若发现异常膨胀先查 `logs/` 再手工清。
