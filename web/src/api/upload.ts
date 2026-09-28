@@ -72,6 +72,13 @@ function xhrSendChunk(url: string, blob: Blob, signal: AbortSignal | undefined,
   })
 }
 
+/** 取消在途分片会话（v3.68/v3.69）：服务端摘会话行+删分片，个人/全局在途
+ *  计数立即回落。尽力而为——失败由服务端 3 天 TTL 兜底，不阻塞 UI。 */
+export function deleteUploadSession(sid: string): void {
+  fetch(`/api/upload/sessions/${encodeURIComponent(sid)}`, { method: 'DELETE' })
+    .catch(() => { /* 网络失败静默：TTL 兜底 */ })
+}
+
 export interface UploadHooks {
   signal?: AbortSignal
   resumeSid?: string                       // 断点续传：复用既有会话（跨刷新）

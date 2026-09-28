@@ -28,6 +28,13 @@ from app.settings import get_setting, set_setting
 
 _window: deque = deque(maxlen=2048)   # (ts, status, dur_ms)
 _mu = threading.Lock()
+_started = time.time()
+
+# 限速拒绝计数（2026-09-28，不自信点①收口）：by_status 只留 1h 窗口、
+# 桶 429 又不进任何日志——阈值是否误伤家人全靠事后无从查。桶级累计计数
+# 自进程启动起持久（单 worker 进程内即全量），配 uptime_seconds 解读；
+# 观察一周后据此定夺 dav/media 阈值，不再依赖"公网日志恰好 0 个 429"单点证据
+_rate_rejects: dict[str, int] = {}
 
 ALERT_TS_KEY = "disk_alert_last_ts"
 
@@ -35,6 +42,11 @@ ALERT_TS_KEY = "disk_alert_last_ts"
 def record(status: int, dur_ms: float) -> None:
     with _mu:
         _window.append((time.time(), status, dur_ms))
+
+
+def record_rate_reject(bucket: str) -> None:
+    with _mu:
+        _rate_rejects[bucket] = _rate_rejects.get(bucket, 0) + 1
 
 
 def snapshot(window_seconds: float = 3600) -> dict:
@@ -49,12 +61,17 @@ def snapshot(window_seconds: float = 3600) -> dict:
         by_status[k] = by_status.get(k, 0) + 1
     def _pct(p: float) -> float:
         return round(durs[min(len(durs) - 1, int(len(durs) * p))], 1) if durs else 0.0
+    with _mu:
+        rejects = dict(sorted(_rate_rejects.items()))
     return {
         "window_seconds": window_seconds,
         "total": len(rows),
         "by_status": by_status,
         "latency_ms": {"p50": _pct(0.5), "p95": _pct(0.95),
                        "avg": round(sum(durs) / len(durs), 1) if durs else 0.0},
+        # 进程启动以来的桶级限速拒绝累计（不随窗口滑动）+ 启动时长供解读
+        "rate_rejects": rejects,
+        "uptime_seconds": round(time.time() - _started),
     }
 
 

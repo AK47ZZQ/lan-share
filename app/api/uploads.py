@@ -247,6 +247,21 @@ async def upload_state(sid: str, _user=Depends(require_user)):
             "max_chunk_size": MAX_CHUNK_SIZE, "received": received}
 
 
+@router.delete("/api/upload/sessions/{sid}")
+async def upload_cancel(sid: str, _user=Depends(require_user)):
+    """取消在途分片会话（v3.68 不自信点④收口）：摘会话行（个人/全局在途
+    计数立即回落）+ 删 .chunks 分片目录。owner-only（他人 404 不泄露存在性）；
+    无会话 404 幂等。分片删失败由 sweep_sessions 的孤儿目录清理兜底。
+    此前客户端只能本地放弃，弃单会话占 CHUNKS_TOTAL_CAP 直到 3 天 TTL。"""
+    row = await run_in_threadpool(_get_session, sid)
+    if not row:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    _session_owner_guard(row, _user)
+    await run_in_threadpool(_drop_session, sid)
+    await run_in_threadpool(shutil.rmtree, _chunk_dir(sid), True)
+    return {"ok": True}
+
+
 @router.post("/api/upload/chunk/{sid}")
 async def upload_chunk(request: Request, sid: str, index: int = Query(...),
                        _user=Depends(require_user)):

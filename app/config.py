@@ -67,7 +67,7 @@ DAV_RATE_LIMIT_PUB = 600          # /dav 公网侧每分钟
 DAV_VERIFY_PER_MIN = 120          # /dav Basic 认证 KDF 前的每 IP 校验预算（第二层）
 MEDIA_RATE_LIMIT = 240            # /thumb /preview /files 每分钟每 IP
 MEDIA_RATE_LIMIT_PUB = 1200       # 同上 公网侧（公网省流依赖缩略图，取宽值）
-MEDIA_SEM_SIZE = 4                # 同时在跑的缩略图/预览渲染（PIL/ffmpeg）上限
+MEDIA_SEM_SIZE = 4                # 渲染专用池线程数（2026-09-28 实测定标：全库最大 12 张 363MB 样本，4 线程 0.88s≈13.6 图/s，8 线程 0.66s 仅 +33% 而内存/争用翻倍——4 保留 ~75% 峰值吞吐且近线性至 4，留余量给在线服务）
 
 # ── 大文件上传（v3.6）────────────────────────────────────
 MAX_WEBDAV_SIZE = 20 * 1024 * 1024 * 1024   # WebDAV PUT 上限 20GB（流式写盘，PC 互传挂盘用）

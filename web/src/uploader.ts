@@ -2,7 +2,7 @@
 // 状态队列、取消、暂停/恢复、跨刷新断点续传（localStorage 存会话号）、
 // 速度采样（sparkline 用）、系统级完成通知
 import { computed, reactive, ref } from 'vue'
-import { confirmLargeUpload, uploadResumable } from './api'
+import { confirmLargeUpload, deleteUploadSession, uploadResumable } from './api'
 import { confirmDlg } from './ui'
 
 export interface UplItem {
@@ -234,8 +234,7 @@ async function runItem(item: UplItem) {
         item.stage = '已暂停 · 可续传'
       } else {
         item.status = 'cancel'; item.stage = '已取消'
-        const m = loadSidMap()
-        if (m[item.key]) { delete m[item.key]; saveSidMap(m) }
+        dropSidEntry(item, true)   // 取消（非暂停）：服务端同步释放会话+分片
       }
     } else {
       item.status = 'fail'; item.stage = '失败：' + (e as Error).message
@@ -268,9 +267,12 @@ export function resumeItem(item: UplItem) {
   return pumpAll()
 }
 
-function dropSidEntry(item: UplItem) {
+function dropSidEntry(item: UplItem, notifyServer = false) {
   const m = loadSidMap()
-  if (m[item.key]) { delete m[item.key]; saveSidMap(m) }
+  if (m[item.key]) {
+    if (notifyServer) deleteUploadSession(m[item.key].sid)   // 会话级取消：服务端同刻释放
+    delete m[item.key]; saveSidMap(m)
+  }
 }
 
 export function pauseItem(item: UplItem) {
@@ -285,7 +287,7 @@ export function cancelItem(item: UplItem) {
   const wasPaused = item.status === 'paused'
   item.status = 'cancel'
   item.ctrl?.abort()
-  if (wasPaused) dropSidEntry(item)   // 暂停项被取消：清持久化会话（runItem 已返回，无人再清）
+  if (wasPaused) dropSidEntry(item, true)   // 暂停项被取消：清会话 + 通知服务端释放（runItem 已返回）
 }
 
 export function cancelAll() {

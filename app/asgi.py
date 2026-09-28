@@ -173,6 +173,9 @@ async def security_middleware(request: Request, call_next):
     else:
         limit, bucket = 0, None
     if limit and bucket and not allow_rate(f"{ip}:{bucket}", limit):
+        # 桶级累计（v3.68 观测收口）：429 不进访问日志/审计——计数进 metrics
+        # 才能事后回答"阈值有没有误伤家人"
+        _metrics.record_rate_reject(bucket)
         return JSONResponse({"detail": "Too many requests"}, status_code=429,
                             headers={"Retry-After": "30"})
     _t0 = time.monotonic()   # B5：只记真正到达路由的请求（早退的安全拒绝不计）
