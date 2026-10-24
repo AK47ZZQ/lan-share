@@ -45,7 +45,10 @@ check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑�
 - ffmpeg（可选）：仅视频缩略图用，缺失时视频缩略图返回 404，不影响其它功能
 
 ```bash
-# 开发实例（不碰线上服务）
+# 预发全栈（v3.70，推荐）：临时 PG(5534) + 隔离数据目录 + API(9766)，
+# 起栈自带 healthz 自检、失败自动清场；E2E 先打这里，别弹主人手机
+python scripts/dev_stack.py start     # 停栈清场：python scripts/dev_stack.py stop
+# 手动单进程（轻量调试仍可用，不碰线上服务）：
 SHARE_ROOT=C:/somewhere/sandbox python -m uvicorn server:app --host 127.0.0.1 --port 8768
 # 或连 PG 调：DATABASE_URL=postgresql://lanshare:<密码>@127.0.0.1:5433/lanshare ...
 
@@ -58,7 +61,8 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
 
 ## 手机 App（mobile/，Flutter）
 
-- Flutter 3.47 stable 在 `C:\flutter\flutter`（**不在 PATH**）；Android SDK 在
+- Flutter 3.47 stable 在 `C:\lan-share\env\flutter`（**不在 PATH**；2026-09-21
+  迁入项目）；Android SDK 在
   `C:\tools\android-sdk`（许可已接受）；JDK17（RedHat）供 Gradle 用
 - **出包必须用 `scripts\build-apk.bat [debug|release]`**：仓库真实路径含中文，
   NDK/CMake 在中文路径下编不出 `libdartjni.so`——脚本会把 mobile/ 镜像到

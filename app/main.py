@@ -49,6 +49,8 @@ metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发�
 # main 是唯一同时持有全部路由模块的地方，故在组装根收口而非散回各模块。
 @asynccontextmanager
 async def _lifespan(_app):
+    metrics_svc.load_persisted_rejects()  # v3.70：限速累计基线跨重启存活（服务每日随开关机重启）
+    metrics_svc.note_boot()               # v3.70：启动史（此前 10 月停机 15 天只能靠 PG 日志考古）
     await system.startup()          # 清理五件套 + 注册式 sweep 周期循环
     await notify.startup()          # 定时广播扫描循环
     await thumb_warmup.startup()    # 缩略图预热循环（asyncio.create_task 自持）

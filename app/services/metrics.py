@@ -18,7 +18,11 @@
 
 - 采集零落盘、零阻塞：record 只是内存 append；watchdog 注册进 cleanup
   sweep（每小时一轮），磁盘 du 的一次 syscall 在线程池里执行。
+- 例外（v3.70）：限速拒绝累计与启动史**持久化**到 settings——本机服务随
+  开关机每天重启，纯进程内计数等于每天清零，"限速有没有误伤家人"的观测
+  仪器必须在重启间存活（每小时 sweep 落盘，崩溃最多丢最后 <1h 增量）。
 """
+import json
 import threading
 import time
 from collections import deque
@@ -32,9 +36,55 @@ _started = time.time()
 
 # 限速拒绝计数（2026-09-28，不自信点①收口）：by_status 只留 1h 窗口、
 # 桶 429 又不进任何日志——阈值是否误伤家人全靠事后无从查。桶级累计计数
-# 自进程启动起持久（单 worker 进程内即全量），配 uptime_seconds 解读；
-# 观察一周后据此定夺 dav/media 阈值，不再依赖"公网日志恰好 0 个 429"单点证据
+# 自进程启动起累计（单 worker 进程内即全量），配 uptime_seconds 解读；
+# 观察一周后据此定夺 dav/media 阈值，不再依赖“公网日志恰好 0 个 429”单点证据
 _rate_rejects: dict[str, int] = {}
+
+# ── 跨重启持久化（v3.70）：基线（历史累计）落 settings，进程内增量叠加，
+# snapshot 输出合并值；每小时 sweep 落盘。启动史同理（环形 200 条）——
+# 机器常整段关机，此前开关机史无处可查（10 月停机 15 天靠 PG 日志考古还原）。
+REJECTS_PERSIST_KEY = "metrics_rate_rejects_total"
+BOOT_HISTORY_KEY = "boot_history"
+_BOOT_HISTORY_CAP = 200
+_rejects_baseline: dict[str, int] = {}
+
+
+def _merged_rejects() -> dict[str, int]:
+    out = dict(_rejects_baseline)
+    for k, v in _rate_rejects.items():
+        out[k] = out.get(k, 0) + v
+    return out
+
+
+def load_persisted_rejects() -> None:
+    """进程启动时载入历史累计（幂等；坏数据按空基线处理，不炸主流程）。"""
+    global _rejects_baseline
+    raw = get_setting(REJECTS_PERSIST_KEY, "")
+    try:
+        data = json.loads(raw) if raw else {}
+        _rejects_baseline = {str(k): int(v) for k, v in data.items()}
+    except (ValueError, TypeError):
+        _rejects_baseline = {}
+
+
+def persist_rejects() -> None:
+    """合并总数写回 settings（cleanup sweep 每小时一轮；测试与 admin 也可直呼）。"""
+    with _mu:
+        merged = dict(_merged_rejects())
+    set_setting(REJECTS_PERSIST_KEY, json.dumps(merged, ensure_ascii=False))
+
+
+def note_boot() -> None:
+    """记录一次进程启动（环形封顶）。巡检与排障据此还原开关机史。"""
+    raw = get_setting(BOOT_HISTORY_KEY, "")
+    try:
+        boots = json.loads(raw) if raw else []
+        boots = boots if isinstance(boots, list) else []
+    except (ValueError, TypeError):
+        boots = []
+    boots.append({"ts": round(time.time(), 3)})
+    set_setting(BOOT_HISTORY_KEY, json.dumps(boots[-_BOOT_HISTORY_CAP:]))
+
 
 ALERT_TS_KEY = "disk_alert_last_ts"
 
@@ -62,14 +112,14 @@ def snapshot(window_seconds: float = 3600) -> dict:
     def _pct(p: float) -> float:
         return round(durs[min(len(durs) - 1, int(len(durs) * p))], 1) if durs else 0.0
     with _mu:
-        rejects = dict(sorted(_rate_rejects.items()))
+        rejects = dict(sorted(_merged_rejects().items()))
     return {
         "window_seconds": window_seconds,
         "total": len(rows),
         "by_status": by_status,
         "latency_ms": {"p50": _pct(0.5), "p95": _pct(0.95),
                        "avg": round(sum(durs) / len(durs), 1) if durs else 0.0},
-        # 进程启动以来的桶级限速拒绝累计（不随窗口滑动）+ 启动时长供解读
+        # 桶级限速拒绝累计（不随窗口滑动、跨重启存活）+ 本次进程启动时长供解读
         "rate_rejects": rejects,
         "uptime_seconds": round(time.time() - _started),
     }
@@ -86,6 +136,7 @@ def ensure_scheduled() -> None:
         disk_watchdog()   # 返回值弃用：告警成功与否见 settings 的 alert 时间戳
 
     cleanup.register_sweep("disk_watermark", _tick)
+    cleanup.register_sweep("metrics_persist", persist_rejects)  # v3.70：限速累计每小时落盘
 
 
 

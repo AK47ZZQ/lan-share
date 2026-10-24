@@ -78,6 +78,12 @@ curl -k https://192.168.1.100:8765/healthz
   `C:\lan-share\env\pginstall\pgpass.conf`（2026-09-21 迁入项目 env/，gitignored，
   不在任何仓库文件里）。
 - 数据目录：`C:\lan-share\env\pginstall\data`（2026-09-21 迁入项目）。
+- **版本错配备忘（2026-10-24 实证）**：服务器是 zonky 的 **PG 16.4**
+  （`env\pginstall\zonky\bin`，服务端最小集——无 psql/pg_restore），
+  客户端工具集（`env\pgsql-bin`）是 **17.4**。dump 由 17.4 的 pg_dump 产出、
+  恢复进 16.x 会报一条 `transaction_timeout` 未知参数——可忽略，数据完整。
+  上面的手工备份/恢复命令里 `C:\env\pgsql\bin` 是**迁移前旧路径**，
+  现一律用 `C:\lan-share\env\pgsql-bin`。
 - 注意：`postgresql.conf` 的 `log_directory` 必须用**新绝对路径**
   `C:/lan-share/env/pginstall/logs`——曾因沿旧路径 `C:/pginstall/logs` 导致服务起不来。
 - 手工备份：
