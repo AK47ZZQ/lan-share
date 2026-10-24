@@ -32,13 +32,16 @@ def test_dav_kdf_budget_429(client, monkeypatch):
 
 
 def test_media_bucket_flood_429_and_api_bucket_unaffected(client):
+    from app.config import MEDIA_RATE_LIMIT
     seen = None
-    for i in range(260):          # MEDIA 240/min，多打确保触发
+    # 阈值随 config 走（2026-10-24 由 240 上调 600，反馈 2305 误伤实证），
+    # 多打 20 次确保触发——钉的是"桶存在且在阈值处 429"，不是具体数字
+    for i in range(MEDIA_RATE_LIMIT + 20):
         r = client.get("/thumb/nonexist.jpg", headers={"Host": LAN_HOST})
         if r.status_code == 429:
             seen = i
             break
-    assert seen is not None, "media 桶应在 240/min 处 429"
+    assert seen is not None, f"media 桶应在 {MEDIA_RATE_LIMIT}/min 处 429"
     r = client.get("/api/auth/me", headers={"Host": LAN_HOST})
     assert r.status_code in (200, 401), "media 桶洪泛不得误伤 api 桶"
 

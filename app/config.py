@@ -65,7 +65,13 @@ AUTHCHECK_RATE_LIMIT = 600        # /authcheck（forward_auth 子请求 + 外部
 DAV_RATE_LIMIT = 300              # /dav 每分钟每 IP
 DAV_RATE_LIMIT_PUB = 600          # /dav 公网侧每分钟
 DAV_VERIFY_PER_MIN = 120          # /dav Basic 认证 KDF 前的每 IP 校验预算（第二层）
-MEDIA_RATE_LIMIT = 240            # /thumb /preview /files 每分钟每 IP
+# media 桶 LAN 侧 240→600（2026-10-24，反馈 2305「公网照片详情正常、局域网
+# 失败」定位为误伤）：Caddy 反代后 LAN 全家共享 127.0.0.1 一个桶，照片墙每批
+# 120 张（photos_page._limit），两批缩略图+详情 /preview 高清即触顶 240，App
+# AuthImage 落到 errorBuilder「加载失败」；公网批量减半且桶宽 1200 故无感。
+# 600≈5 批余量；渲染真瓶颈由 MEDIA_SEM_SIZE 专用池兜底。部署后按 15 号挂账
+# 观察项用 /api/metrics 的 rate_rejects（media:lan）读数复核，仍非零再上调。
+MEDIA_RATE_LIMIT = 600            # /thumb /preview /files 每分钟每 IP（LAN，全家共享桶）
 MEDIA_RATE_LIMIT_PUB = 1200       # 同上 公网侧（公网省流依赖缩略图，取宽值）
 MEDIA_SEM_SIZE = 4                # 渲染专用池线程数（2026-09-28 实测定标：全库最大 12 张 363MB 样本，4 线程 0.88s≈13.6 图/s，8 线程 0.66s 仅 +33% 而内存/争用翻倍——4 保留 ~75% 峰值吞吐且近线性至 4，留余量给在线服务）
 

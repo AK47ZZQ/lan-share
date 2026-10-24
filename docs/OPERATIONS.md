@@ -34,7 +34,9 @@ powershell Restart-Service lan-share-api
 
 ## 2. 健康与水位
 
-公网入口手工探活（每日 01:00 巡检自动化已内置，见 ZCode 定时任务；手工排查用）：
+公网入口手工探活（**每日 12:00 只读巡检** ZCode 定时任务，2026-10-24 重建——
+原 01:00 cron 巡检 09-19 起静默停摆已废弃；新巡检不 import app/、不锁文件，
+异常落 `logs/patrol/ALERT-*.md`；以下为手工排查用）：
 主隧道 `curl -sk -o /dev/null -w "%{http_code}" https://your-frp-domain.com:xxxxx/healthz`
 **期望 404**（healthz 对公网收敛是设计行为，404=隧道通且 Host 匹配生效）；
 备用隧道 `https://your-frp-domain.com:xxxxx/healthz` 同判；局域网基线
@@ -197,6 +199,17 @@ ALTER ROLE lanshare CREATEDB;            -- 一次性
 > **16 张表**齐全、manifest 基线 7454 文件 / 20,147,257,165 字节）。
 > 另注：dump 中仍含已下线的 `photo_comments` / `photo_reactions` 两表
 > （v0.21 下线但存量表未 DROP），可在下次大版本迁移时清理。
+>
+> **2026-10-24 首次执行 Tier 2（临时集群法，未开 CREATEDB）**：
+> `env\pginstall\zonky\bin\initdb.exe` 起一次性集群（`-U lanshare --auth=trust`
+> 仅绑 127.0.0.1:5434，存活约 6 分钟）→ `env\pgsql-bin\createdb/pg_restore`
+> 恢复当日 dump → 行数与生产逐项一致（users=3/photos=5352/settings=10/
+> 22 表）→ `pg_ctl stop` + 删目录 + 端口/生产库复核。此法额外证明「dump
+> 能在全新实例拉起」，可作月度演练默认路径。两条噪音/坑：① pg_dump 17.4
+> 产的 dump 恢复进 16.4 报 1 条 `transaction_timeout` 未知参数（可忽略，
+> 数据完整）；② 交互式 Git Bash 下 `pg_ctl -w start` 可能不返回（服务器
+> 其实已起）——免 `-w` 启动后按端口轮询判断；后台任务被强杀会把"分离的"
+> postgres 一并带走，演练请用一次性前台脚本跑完。
 
 - 异地/第二块盘备份：**仍挂账**（第二块盘到位后连同 Tier 2 一起落地）。
 
