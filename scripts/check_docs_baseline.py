@@ -12,6 +12,7 @@
 退出码：全一致 0；任何漂移 1（打印 AGENTS 写的值 vs 实际值）。
 """
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -50,8 +51,18 @@ def main() -> int:
     m = re.search(r"LANSHARE_FLUTTER_BIN=(\S+)", envbat)
     if not m:
         problems.append("env.bat 缺 LANSHARE_FLUTTER_BIN")
-    elif not Path(m.group(1).strip().strip('"')).is_dir():
-        problems.append(f"LANSHARE_FLUTTER_BIN 指向不存在的目录：{m.group(1)}")
+    else:
+        # env.bat 的默认值基于 %LANSHARE_ROOT%（脚本自身位置），这样仓库可以克隆到任意
+        # 路径。静态检查时按仓库根把它展开；若展开后仍残留其它 %VAR%，说明该路径依赖
+        # 外部环境，此时跳过存在性检查——不能把「无法静态判定」误报成「基线漂移」。
+        raw = m.group(1).strip().strip('"')
+        # 用 lambda 做替换：替换串里含 C:\Users\ 这类路径，直接当 repl 会被 re 当成
+        # 转义序列（bad escape \U）。
+        raw = re.sub(r"%LANSHARE_ROOT%", lambda _: str(ROOT) + os.sep, raw, flags=re.IGNORECASE)
+        if "%" in raw:
+            print(f"跳过 Flutter 路径检查：{raw} 含未展开的环境变量")
+        elif not Path(raw).is_dir():
+            problems.append(f"LANSHARE_FLUTTER_BIN 指向不存在的目录：{raw}")
 
     if problems:
         print("基线漂移（改完代码/文档后两边都要动）：")
