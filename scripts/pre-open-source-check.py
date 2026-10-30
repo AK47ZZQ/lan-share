@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SECRETS = [
     ("real e-mail",        r"[A-Za-z0-9._%+-]+@(?:qq|163|126)\.com"),
     ("tunnel domain",      r"frp-any\.com|ngrok\.io|natapp\.cn"),
-    ("private LAN IP",     r"192\.168\.1\.(?!1$|99$|100$|101$)\d+"),
+    ("private LAN IP",     r"192\.168\.1\.(?!(?:1|99|100|101)\b)\d+"),
     ("tailscale identity", r"tailf[0-9a-f]{6,}|100\.(?:8[0-9]|9[0-9])\.[0-9]{1,3}\.[0-9]{1,3}"),
     ("credentials",        r"(?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[=:]\s*[\"'](?!JBSWY3DP)[A-Za-z0-9_\-]{20,}"),
     ("home dir path",      r"C:\\Users\\[A-Za-z0-9]+\\"),
