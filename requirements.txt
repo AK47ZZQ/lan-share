@@ -11,18 +11,18 @@
 # ── 运行时 ────────────────────────────────────────────────
 fastapi==0.162.0
 opentelemetry-api==1.45.1    # fastapi 0.162 传递依赖（2026-10-24 起）
-starlette==1.3.1            # fastapi 底层，版本敏感，一并钉住
-pydantic==2.13.4
-annotated-types==0.7.0      # pydantic 传递
-uvicorn==0.41.0
+starlette==1.10.0            # fastapi 底层，版本敏感，一并钉住
+pydantic==2.14.1
+annotated-types==0.8.0      # pydantic 传递
+uvicorn==0.54.0
 h11==0.16.0                 # uvicorn 传递
-click==8.4.2                # uvicorn 传递
-anyio==4.14.2               # starlette 传递（4.14.2 起修 TLSStream IDNA 主机名编码 CVE）
+click==8.5.0                # uvicorn 传递
+anyio==4.15.1               # starlette 传递（4.14.2 起修 TLSStream IDNA 主机名编码 CVE）
 sniffio==1.3.1              # anyio 传递
 aiofiles==25.1.0            # DAV PUT / 分片上传的异步写盘
-psycopg[binary]==3.3.4      # PG 驱动（psycopg3；_pg_sql 的 %% 转义语义依赖它）
+psycopg[binary]==3.3.6      # PG 驱动（psycopg3；_pg_sql 的 %% 转义语义依赖它）
 pillow==13.0.0               # 缩略图/EXIF 矫正（13.0.0：12.3.0 三条 CVE 修复）
-pillow-heif==1.6.0          # HEIC 缩略图（缺失时 filetools.ensure_heif_support 静默降级）
+pillow-heif==1.8.1          # HEIC 缩略图（缺失时 filetools.ensure_heif_support 静默降级）
 pyotp==2.10.0               # TOTP（_totp_match_step ±1 窗口语义）
 qrcode==7.4.2               # 分享二维码（服务端动态生成）
 python-multipart==0.0.32    # FastAPI 文件上传解析
@@ -31,6 +31,6 @@ tzdata==2026.5
 # ── 开发/门禁（check.bat 四段）─────────────────────────────
 pytest==9.1.1
 httpx==0.28.1               # fastapi.testclient 传递
-ruff==0.16.6
-mypy==2.3.1
+ruff==0.17.3
+mypy==2.4.0
 pip-audit==2.10.1
