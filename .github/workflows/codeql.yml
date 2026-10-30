@@ -4,6 +4,14 @@ name: codeql
 # 只在 push 到 main 和每周定时跑，不在 PR 上跑——PR 上已有 ci.yml 的门禁，
 # 再叠一遍 CodeQL 会让每次 PR 多等几分钟，收益不成比例。
 
+# 连续推 main 时取消上一次还在跑的扫描。
+# 这里用 true 而不是判断 event_name：本工作流不在 PR 上跑（只有 push main /
+# schedule / 手动），所以没有"PR 要省资源"的诉求；而 CodeQL 一次跑几分钟，
+# 推送快的时候旧的那次没意义。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main]
