@@ -84,3 +84,8 @@ mobile/android/keys/
 
 # ZCode 会话本地产物（计划草稿等），不入库
 .zcode/
+
+# ---- uv 版本锁（2026-10-30）----
+# 项目依赖用 requirements.txt 管（见 AGENTS.md §3），uv.lock 是本地跑 uv 时的产物，
+# 只含 version/revision/requires-python 三行，入库会与 requirements.txt 形成两套真相
+uv.lock
