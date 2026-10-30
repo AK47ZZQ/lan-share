@@ -6,6 +6,11 @@ import { fmtTs, human } from '../ui'
 
 const err = ref('')
 const health = ref<{ status: string; db: boolean; data_dir: boolean; disk_free_gb: number; disk_total_gb: number; disk_used_pct: number } | null>(null)
+// 探针可能拿不到：公网入口按安全设计不暴露 /healthz（Caddy 8767 直接 404）。
+// 必须区分「还没读完」「公网不可用」「真降级」，否则 404 的 detail 会被当成
+// 健康数据渲染成「降级/失败/不可写/空磁盘」——那是假警报。
+const healthBlocked = ref(false)
+const healthLoaded = ref(false)
 const ov = ref<ConsoleOverview | null>(null)
 const metrics = ref<MetricsSnapshot | null>(null)
 const audits = ref<AuditItem[]>([])
@@ -16,8 +21,24 @@ const auditActions = ref<string[]>([])
 
 async function loadAll() {
   try { ov.value = await api.adminOverview() } catch (e) { err.value = (e as Error).message }
-  // healthz 是免认证探针，这里仅作展示复用
-  try { health.value = await fetch('/healthz').then(r => r.json()) } catch { /* */ }
+  // healthz 是免认证探针，这里仅作展示复用。但公网入口（Caddy :8767）按安全
+  // 设计不暴露它，会返回 404 的 {"detail":"Not Found"}——必须校验响应码与结构，
+  // 否则字段全 undefined，面板会假报「降级 / 数据库失败 / 目录不可写 / 磁盘空」。
+  try {
+    const r = await fetch('/healthz')
+    if (!r.ok) {
+      healthBlocked.value = true
+    } else {
+      const j = await r.json()
+      const valid = j && typeof j.status === 'string' && typeof j.db === 'boolean' && 'data_dir' in j
+      if (valid) health.value = j
+      else healthBlocked.value = true
+    }
+  } catch {
+    healthBlocked.value = true
+  } finally {
+    healthLoaded.value = true
+  }
   // 备份卡读取失败不挡其他卡（admin 专属端点，越权场景静默）
   try { metrics.value = await api.getMetrics() } catch { /* */ }
 }
@@ -58,7 +79,13 @@ onMounted(loadAll)
         <div class="status-item">数据目录：<span class="badge" :class="health.data_dir ? '' : 'danger'">{{ health.data_dir ? '可写' : '不可写' }}</span></div>
         <div class="status-item">磁盘：{{ health.disk_used_pct }}% · 剩 {{ health.disk_free_gb }} GB / {{ health.disk_total_gb }} GB</div>
       </div>
-      <div v-else class="empty">读取中…</div>
+      <div v-else-if="!healthLoaded" class="empty">读取中…</div>
+      <div v-else-if="healthBlocked" class="empty" style="line-height:1.7">
+        健康探针 <code>/healthz</code> 仅在局域网可达。<br>
+        公网入口按安全设计不暴露该接口，因此这里无法读取——<b>这不是故障</b>。<br>
+        需要查看时请在同一局域网内打开本页。
+      </div>
+      <div v-else class="empty">探针返回了无法识别的数据</div>
     </div>
 
     <div class="card" style="padding:14px 16px;margin-top:12px;display:grid;gap:8px">
