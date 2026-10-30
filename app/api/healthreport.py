@@ -34,8 +34,9 @@ from app.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
 # 备份产物目录：backup.bat（Task Scheduler 03:30 独立跑）的落点，服务端只读状态
 BACKUP_DEST = Path(os.environ.get("BACKUP_DEST", "C:/lan-share-backup"))
 
-# 免费隧道突然挂掉是"全家公网失联"的前兆，日报兜底探活（host:port，env 可换）
-PUBLIC_PROBE = "your-frp-domain.com:xxxxx"
+# 免费隧道突然挂掉是"全家公网失联"的前兆，日报兜底探活。
+# 用 LANSHARE_PUBLIC_PROBE 环境变量配置 host:port；不配置则不探活。
+PUBLIC_PROBE = os.environ.get("LANSHARE_PUBLIC_PROBE", "").strip()
 
 _DEFAULT_TIME = "09:00"
 _last_sent_date = None   # 内存态：进程级按日去重（重启后补发当天的，无重复风险）

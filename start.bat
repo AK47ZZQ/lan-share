@@ -25,7 +25,7 @@ timeout /t 1 /nobreak >nul
 echo.
 echo ===================================
 echo   LAN Share is running!
-echo   LAN:    https://192.168.1.100:8765
+echo   LAN:    https://<本机IP>:8765
 echo   Local:  https://localhost:8765
 echo ===================================
 echo.

@@ -43,7 +43,7 @@ class Prefs {
   static Future<List<String>> addresses() async {
     final sp = await SharedPreferences.getInstance();
     final list = sp.getStringList(_kAddresses) ?? [];
-    if (list.isEmpty) list.add('https://192.168.1.100:8765');
+    if (list.isEmpty) list.add('https://192.168.1.100:8765'); // 示例地址，首次使用请改成自己的
     return list;
   }
 

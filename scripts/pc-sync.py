@@ -17,6 +17,7 @@ WebDAV 端点 /dav/，落位到 照片/PC备份/<本机名>/ 下；已备份过�
   schtasks /Create /TN "lan-share-pc-sync" /SC DAILY /ST 12:00
     /TR "python C:\\lan-share\\scripts\\pc-sync.py"
 """
+import os
 import argparse
 import base64
 import datetime
@@ -28,7 +29,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # ── CONFIG：按需修改 ──────────────────────────────────────
-SERVER = "https://192.168.1.100:8765"          # 局域网地址（公网亦可，注意流量配额）
+SERVER = os.environ.get("LANSHARE_SERVER", "https://192.168.1.100:8765")  # 用 LANSHARE_SERVER 指定，默认示例地址
 USERNAME = os.environ.get("USERNAME", "pc-user")   # LAN Share 账号名
 DAV_PASS = os.environ.get("LANSHARE_DAV_PASS", "")  # WebDAV 独立密码
 SOURCE = Path(os.path.expanduser("~/Pictures"))     # 要备份的本机目录
