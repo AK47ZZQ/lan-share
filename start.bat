@@ -18,7 +18,7 @@ timeout /t 2 /nobreak >nul
 
 REM Start Caddy
 echo [2/2] Starting Caddy on :%LANSHARE_LAN_PORT% ...
-start /B caddy.exe run --config Caddyfile --adapter caddyfile > logs\caddy.log 2>&1
+start /B bin\caddy.exe run --config Caddyfile --adapter caddyfile > logs\caddy.log 2>&1
 
 timeout /t 1 /nobreak >nul
 

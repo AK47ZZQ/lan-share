@@ -25,7 +25,8 @@ echo [1/2] Registering lan-share-api ...
 
 REM --- Caddy 服务 ---
 echo [2/2] Registering lan-share-caddy ...
-"%NSSM%" install lan-share-caddy "%PROJECT%\caddy.exe" "run --config Caddyfile --adapter caddyfile"
+"%NSSM%" install lan-share-caddy "%PROJECT%\bin\caddy.exe" "run --config Caddyfile --adapter caddyfile"
+"%NSSM%" set lan-share-caddy AppDirectory "%PROJECT%"
 "%NSSM%" set lan-share-caddy AppDirectory "%PROJECT%"
 "%NSSM%" set lan-share-caddy DisplayName "LAN Share Caddy"
 "%NSSM%" set lan-share-caddy Description "LAN Share Caddy reverse proxy (port 8765)"
