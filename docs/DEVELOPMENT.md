@@ -129,7 +129,7 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
    （含防爆破联动）→WebDAV PROPFIND/PUT→401 未认证探测。
 3. **前端改动**用真实浏览器点一遍主要链路（登录、浏览、上传、预览、弹窗、拖拽），
    注意移动端视口（390×844）。
-4. **调试账号**：接口调试用 `debug` 账号登录（凭据见 `docs/DEBUG-ACCOUNT.md`，不入库），
+4. **调试账号**：接口调试用 `debug` 账号登录（凭据单独保管，不入库），
    审计日志可与管理员操作区分。
 
 ## 代码结构（v0.23 重构后：asgi 底层化 + api 按域 + services 层）
@@ -187,7 +187,7 @@ web/                  Vue3 前端工程（Vite+TS）：src/api.ts 门面（实�
 mobile/               Flutter App（mobile/lib/ 源码 + android/ ios/；build/ 与 .dart_tool/ 已 gitignore）
 certs/                自签证书配置（san.cnf；*.pem 私钥不入库）
 data/                 运行时数据根（不入库：用户文件/.meta.db/.trash/...）
-docs/            API.md / SECURITY.md / DEVELOPMENT.md / STATUS-v3.md / GIT.md / DEBUG-ACCOUNT.md(不入库)
+docs/            API.md / SECURITY.md / DEVELOPMENT.md / GIT.md / OPERATIONS.md / PROJECT-LAYOUT.md
                        DESIGN-v3/ {OVERVIEW,FRONTEND,DATABASE,PERMISSIONS,APP-*}
 ```
 
