@@ -1,4 +1,6 @@
 <div align="center">
+  <sub><a href="README.en.md">English</a> &nbsp;·&nbsp; <b>简体中文</b></sub>
+
   <img src="logo/app-login-brand.svg" height="84" alt="LAN Share">
   <h1>LAN Share</h1>
   <p><b>把家里那台吃灰的 Windows 电脑，变成全家人都能用的私有网盘。</b></p>
