@@ -97,11 +97,19 @@ def _orchestrator_status() -> dict | None:
 
 
 def _probe_public(hostport: str) -> bool:
+    """探测公网入口是否存活。
+
+    hostport 可能为空：PUBLIC_PROBE 默认读环境变量，自托管部署常常不配置。
+    空串走 rsplit 只得到 1 个元素，直接解包会抛 ValueError——必须在这里拦住，
+    否则采集健康数据时会把它当成后台循环失败记进 loop_health，日报凭空告警。
+    """
+    if not hostport or ":" not in hostport:
+        return False
     try:
         host, port = hostport.rsplit(":", 1)
         with socket.create_connection((host, int(port)), timeout=4):
             return True
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 

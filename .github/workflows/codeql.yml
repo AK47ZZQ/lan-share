@@ -1,0 +1,51 @@
+name: codeql
+
+# 静态安全分析（CodeQL）。public 仓库免费。
+# 只在 push 到 main 和每周定时跑，不在 PR 上跑——PR 上已有 ci.yml 的门禁，
+# 再叠一遍 CodeQL 会让每次 PR 多等几分钟，收益不成比例。
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 每周一 03:00 UTC（北京 11:00）
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    permissions:
+      # 上传 SARIF 结果必需
+      security-events: write
+      # 读取仓库内容
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: init codeql
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended 比默认多查一批规则，误报略多但覆盖更广
+          queries: security-extended
+
+      - name: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
