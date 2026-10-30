@@ -1,54 +1,132 @@
-<img src="logo/app-login-brand.svg" height="72" alt="LAN Share">
+<div align="center">
+  <img src="logo/app-login-brand.svg" height="84" alt="LAN Share">
+  <h1>LAN Share</h1>
+  <p><b>把家里那台吃灰的 Windows 电脑，变成全家人都能用的私有网盘。</b></p>
+  <p>不需要公网 IP，不需要买 NAS，不需要把照片交到任何云厂商手上。</p>
 
-# LAN Share
+  [![CI](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml/badge.svg)](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml)
+  ![server](https://img.shields.io/badge/server-v3.70-2563eb)
+  ![app](https://img.shields.io/badge/app-v1.1.15%2B122-2563eb)
+  ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
+  ![tests](https://img.shields.io/badge/tests-560%20passed-16a34a)
+</div>
 
-[![CI](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml/badge.svg)](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml)
-![server](https://img.shields.io/badge/server-v3.70-2563eb)
-![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
+---
 
-**家用小团队网盘（2–20 人）。App 是家的内容入口，Web 是站长管理工作台。**
-Windows 自托管，局域网与公网（樱花 FRP）功能完全对等，认证全在应用层。
+## 为什么会有这个项目
+
+**商业网盘在收紧。** 免费额度一降再降，下载限速，会员年年涨，说不准哪天就关停。更要紧的是——你的家庭照片、证件扫描件、十年备份，物理上存在别人的机房里。
+
+**自建看起来很美，门槛卡在公网 IP。** 家里宽带在 NAT 后面的大内网里，光猫拨号也拿不到独立 IP。DDNS 指不到你家，域名解析到运营商网关。大多数「自建网盘教程」讲到这一步就没下文了。
+
+**但你家里有一台闲置电脑。** 旧台式、退役笔记本、或者一台小主机——常年插电、24 小时待机、几 T 硬盘，实际上在吃灰。
+
+LAN Share 把这三件事连起来：
+
+> 一台闲置电脑 + 一条内网穿透隧道 = 一个你完全拥有、随时随地能打开的网盘。
+
+数据在你自己的硬盘上，服务在你自己的机器上跑。不续费、不限速、不被扫描，想改什么改什么。
+
+## 它解决什么
+
+不是「把文件夹共享出来」——那个 SMB 就够了。这个项目要解决的是**一家人合用的日常**：
+
+- 手机拍的照片自动备份到家，不用每月插线导出
+- 每个人有独立账号和私人空间，互不可见；共享盘按目录授权
+- 客厅平板、父母手机、自己的电脑，各有各的登录，各看各的
+- 发给亲戚的分享链接设了有效期和提取码，到期自动失效
+- 不在家也能访问——局域网和公网功能完全一致，不是阉割版
 
 ![站长工作台 · 总览](docs/screenshots/overview.png)
 
 ## 快速开始
 
 ```bash
-# 1. 起服务（NSSM 注册的 Windows 服务，开机自启）
+# 1. 起服务（NSSM 注册为 Windows 服务，开机自启）
 net start lan-share-postgresql
 net start lan-share-api
 
-# 2. 前端（改了 web/ 才需要；产物 web/dist 即时生效，不用重启）
+# 2. 构建前端（改了 web/ 才需要；产物 web/dist 即时生效，不用重启）
 cd web && npm install && npm run build
 
-# 3. 开发调试（后端，不碰生产数据）
+# 3. 本地调试后端（不碰生产数据）
 SHARE_ROOT=D:/test-data python server.py
 ```
 
-访问 `https://<本机 IP>:8765`。自签证书首次访问点「继续访问」。首启会引导创建管理员账号，其他成员由管理员发邀请码自助注册。
+浏览器打开 `https://<本机 IP>:8765`。自签证书首次访问点「继续访问」，首启会引导创建管理员账号，其余成员由管理员发邀请码自助注册。
 
 | 入口 | 地址 | 认证 |
 |---|---|---|
-| Web 全站（Vue） | `https://<IP>:8765` | 应用层登录 |
-| 公网（樱花 FRP） | `https://your-frp-domain:port` | 同上，与局域网功能对等 |
-| 健康探针 | `/healthz` | 免认证，仅局域网可达 |
+| Web 全站（Vue 3） | `https://<IP>:8765` | 应用层登录 |
+| 公网（隧道） | `https://<你的隧道域名>:<端口>` | 同上，功能完全对等 |
 | WebDAV | `https://<IP>:8765/dav/` | Basic（成员账号） |
+| 健康探针 | `/healthz` | 免认证，仅局域网可达 |
 
-## 功能
+> 公网入口靠隧道打通，细节见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。探针刻意不暴露给公网——那是内部状态，不该让外面探测到。
 
-| 领域 | 能力 |
+## 能力
+
+| 领域 | 有什么 |
 |---|---|
-| **多用户与权限** | admin / member / guest 三角色；私人 + 共享双空间；目录授权批量矩阵（成员×目录，带有效期）；邀请制建号；私人空间配额；停用即全端踢出 |
-| **文件与预览** | 网格/列表双视图、搜索、最近文件、多选批量；统一预览器（图片缩放旋转、文本/Markdown/CSV/docx/xlsx/pptx 渲染、音视频、HEIC/HEIF + EXIF 矫正） |
-| **上传与传输** | 自适应分片（≤2GB→5MB … >10GB→64MB）、断点续传、秒传、并发 3 路、队列可暂停/恢复、拖拽/粘贴/整批入队 |
-| **分享与协作** | 外链 + 二维码（有效期/提取码/下载次数上限）、定向分享、目录打包下载 |
-| **照片** | 时间线（EXIF 优先）、缩略图懒加载、相册精选 |
-| **笔记** | 分类体系 + 摘要聚合端点 |
-| **通知与动态** | 站内通知中心、家庭动态流、SSE 实时推送、Webhook 事件推送（ntfy/Bark/Telegram）、公告栏 + 反馈通道 |
-| **安全** | 应用层认证、可选 TOTP 两步验证、会话与设备治理、审计日志 |
-| **客户端** | Vue3 Web（PWA 可离线）、Flutter 原生 App（相册自动备份 / 系统分享 / 通知中心） |
+| **多用户** | admin / member / guest 三角色；私人 + 共享双空间；目录授权矩阵（成员 × 目录，带有效期）；邀请制建号；私人空间配额；停用即全端踢出 |
+| **文件** | 网格 / 列表双视图、搜索、最近文件、多选批量；统一预览器（图片缩放旋转、文本 / Markdown / CSV / docx / xlsx / pptx、音视频、HEIC / HEIF + EXIF 矫正） |
+| **传输** | 自适应分片（≤2 GB → 5 MB … >10 GB → 64 MB）、断点续传、指纹秒传、并发 3 路、队列暂停恢复、拖拽粘贴批量入队 |
+| **分享** | 外链 + 二维码（有效期 / 提取码 / 下载次数上限）、定向分享、目录打包下载 |
+| **照片** | 时间线（EXIF 优先）、缩略图懒加载、相册精选、手机端自动备份 |
+| **笔记待办** | 分类笔记体系、待办清单、日历视图 |
+| **通知** | 站内通知中心、家庭动态流、SSE 实时推送、Webhook（ntfy / Bark / Telegram） |
+| **安全** | 应用层认证、可选 TOTP 两步验证、会话与设备治理、审计日志、按入口分账的防爆破 |
+| **客户端** | Vue 3 Web（PWA 可离线安装）、Flutter 原生 App（相册自动备份 / 系统分享 / 通知中心） |
 
-> 完整能力清单与逐版变更见 [CHANGELOG.md](CHANGELOG.md)（130 KB，按版本倒序）。
+完整能力与逐版变更见 [CHANGELOG.md](CHANGELOG.md)（130 KB，按版本倒序）。
+
+## 和其他方案比
+
+|  | LAN Share | Nextcloud | 群晖 DSM | 商业网盘 |
+|---|---|---|---|---|
+| 需要公网 IP | 否，走隧道 | 建议有 | 需要 | — |
+| 额外硬件成本 | 0（用现成电脑） | 0 | 3000 元起 | — |
+| Windows 原生 | 是 | 勉强 | 是 | — |
+| 代码量 | 可通读 | 百万行级 | 闭源 | 闭源 |
+| 数据归属 | 完全自己 | 自己 | 自己 | 厂商 |
+
+**把取舍说清楚**：Nextcloud 功能多得多，是成熟产品，跟着它走没有错。这个项目只为「一台 Windows 机器 + 一家人」这个场景优化，砍掉企业级特性，把代码量压到能自己读懂、能自己改的程度。你要能随手改的自留地，还是开箱即用的全家桶——自己判断。
+
+## 架构
+
+```
+                         ┌───────────────────────────────┐
+外网设备 ──隧道 :8767──▶ │  Caddy v2（TLS / 反代 / 鉴权） │
+内网设备 ──局域网 :8765─▶│  剥离入站 XFF，注入入口标记     │
+                         └───────────────┬───────────────┘
+                                         │
+        ┌────────────────────────────────┼────────────────────────────┐
+        ▼                                ▼                            ▼
+  /files/* 先 forward_auth         /api/* /dav/* /s/*           /assets/* →
+  再交后端判权下载                /up /preview/* /thumb/*      web/dist
+  （不 file_server 直挂，          ──▶ FastAPI :8766           （Vue 3 SPA
+   否则越权读他人 private/）            │                       + 深链回退）
+                                        ├─ PostgreSQL 16 :5433
+                                        ├─ data/ 数据目录
+                                        ├─ 限速 / CSRF / 防爆破 / 审计
+                                        └─ SSE 实时事件
+```
+
+**后端** FastAPI + uvicorn · **网关** Caddy v2（原生无插件）· **数据库** PostgreSQL 16 + psycopg（生产）/ SQLite（测试）
+**前端** Vue 3 + Vite + TypeScript · **App** Flutter（Dio + Riverpod + sqflite + secure_storage）
+**图像** Pillow + pillow-heif（HEIC / EXIF）· **其他** pyotp（TOTP）、qrcode、ffmpeg（可选）
+
+## 项目规模
+
+```
+后端 app/       12,628 行      68 个模块（api 29 · services 14 · store 11）
+Web  src/        6,789 行      Vue 3 + TypeScript
+App  lib/       29,172 行      Flutter
+测试 tests/     10,571 行      65 个文件 · 560 项
+API 契约        143 路径 / 167 操作   （contracts/openapi.json）
+```
+
+同一套测试可在 SQLite 与 PostgreSQL 上跑（临时 schema 隔离）。本地门禁 `check.bat` 八段：pytest 基线 + ruff + mypy + pip-audit + UI 分层守卫 + SQLite 方言守卫 + 文档基线守卫 + 安全消融。
 
 ## 文档
 
@@ -56,108 +134,45 @@ SHARE_ROOT=D:/test-data python server.py
 |---|---|
 | 完整 API | [docs/API.md](docs/API.md) |
 | 安全模型 | [docs/SECURITY.md](docs/SECURITY.md) |
-| 运维（服务/备份/证书/故障） | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
+| 运维（服务 / 备份 / 证书 / 故障） | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | 开发环境与命令 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | 目录结构 | [docs/PROJECT-LAYOUT.md](docs/PROJECT-LAYOUT.md) |
-| 版本历史 | [CHANGELOG.md](CHANGELOG.md) |
 | App 视觉规范 | [docs/DESIGN-v3/APP-VISUAL-SPEC.md](docs/DESIGN-v3/APP-VISUAL-SPEC.md) |
-| 历史归档 | `docs/DESIGN-v3/archive/` |
+| 版本历史 | [CHANGELOG.md](CHANGELOG.md) |
 
-## 架构
-
-```
-外网设备 ──樱花FRP──▶ Caddy :8767 (HTTPS, 剥离入站XFF)
-内网设备 ──局域网──▶ Caddy :8765/:443 (HTTPS; :80 跳转 HTTPS)
-                        │
-                        ├─ /files/*  → forward_auth(/authcheck) 后反代到
-                        │               后端判权下载（不得 file_server 直挂，
-                        │               会越权读他人 private/；大文件走 FileResponse）
-                        ├─ /api/* /dav/* /s/* /up /preview/* /thumb/*
-                        │             → FastAPI :8766 (127.0.0.1)
-                        │                ├─ PostgreSQL 16（127.0.0.1:5433，
-                        │                │  NSSM 服务 lan-share-postgresql；
-                        │                │  用户/会话/授权/分享/审计/指纹/
-                        │                │  照片/设置/device_tokens），
-                        │                │  不设 DATABASE_URL 时回退 SQLite
-                        │                │  （仅测试，data/.meta.db）
-                        │                ├─ 数据目录 data/（private/<用户>/、
-                        │                │  incoming、共享、.trash .thumbs
-                        │                │  .chunks .zips）
-                        │                ├─ 应用层限速 / CSRF / 防爆破（按入口
-                        │                │  分账）/ 审计 / X-As-User 成员视角预览
-                        │                ├─ SSE /api/events（实时通知，轮询兜底）
-                        │                └─ Bearer 设备 Token（90d 滑动/吊销审计）
-                        └─ /assets/* / → FastAPI 挂载 web/dist（Vue3 SPA + 深链回退）
-```
-
-**技术栈**：FastAPI + uvicorn、Caddy v2（原生无插件）、PostgreSQL 16 +
-psycopg（生产）/ SQLite（测试）、Vue 3 + Vite + TypeScript（web/ 工程）、
-Pillow + pillow-heif、qrcode、pyotp、ffmpeg（可选）。
-**Flutter App**：mobile/（Dio + flutter_riverpod + sqflite + flutter_secure_storage
-+ flutter_cache_manager；完整依赖见 `mobile/pubspec.yaml`）。
-
-## 目录结构
-
-```
-lan-share/                     C:\lan-share 是指向本仓库根的 junction（改这里=改线上）
-├── server.py                  兼容 shim（NSSM 入口 server:app 不变）
-├── app/                       后端包（≈10.3K 行）
-│   ├── asgi.py                持 app + 中间件（大包体积守卫等）
-│   ├── api/                   28 个按域 APIRouter 模块
-│   ├── services/              11 个业务模块（archive/cleanup/backup/metrics/…）
-│   ├── store/                 9 个表主人模块（users/photos/shares/…）+ schema.py
-│   ├── spaces.py              ⭐ resolve() = 安全核心，所有文件入口必经
-│   └── db.py                  双引擎连接（PG 生产 / SQLite 测试）
-├── web/                       Vue3 前端工程（构建产物 web/dist 由 FastAPI 挂载）
-├── mobile/                    Flutter 原生 App（Dart ≈25.8K 行；见 mobile/README.md）
-├── Caddyfile                  反代/TLS/forward_auth/:80跳转
-├── certs/                     自签证书配置（san.cnf；*.pem 私钥不入库）
-├── scripts/                   构建/运维/契约导出工具（build-apk.bat、export-openapi.py…）
-├── tests/                     38 个测试文件（pytest 344 项；设 LANSHARE_TEST_PG_URL
-│                              即同一套用例改跑 PostgreSQL——临时 schema 隔离）
-├── contracts/openapi.json     OpenAPI 契约快照（131 路径/155 操作）
-├── docs/                      API·SECURITY·OPERATIONS·DEVELOPMENT·STATUS-v3·GIT…
-│   ├── 项目记忆/               ⭐ 经验与教训（架构/里程碑/踩坑/发版SOP/路线图）
-│   │   └── archive/           09-10 审查批 + 09-11 运行日志
-│   ├── archive/               旧规划/快照/过程记录
-│   └── DESIGN-v3/             App 设计与视觉规范（archive/ 为立项期设计稿）
-├── data/                      运行时数据根（不入库：用户文件/.trash/.chunks/…）
-│   └── 反馈/                  反馈看板（目录即状态：待处理/进行中/已完成）
-├── CHANGELOG.md               版本历史（v0.20 及以前见 docs/archive/）
-├── env.bat                    部署单源（路径/端口/解释器全在这里）
-├── backup.bat                 每日备份
-├── check.bat                  本地质量门禁（pytest+ruff+mypy+pip-audit+UI分层）
-└── logs/                      服务日志（NSSM 轮转）
-```
-
-## 常用运维
+## 开发与运维
 
 ```bash
-# 改了后端（app/ 或 server.py）——Git Bash 下 sc 静默失败，用 PowerShell
+# 改了后端（app/ 或 server.py）—— Git Bash 下 sc 会静默失败，用 PowerShell
 powershell Restart-Service lan-share-api
+
 # 改了 Caddyfile
 powershell Restart-Service lan-share-caddy
-# 前端改动无需重启：cd web && npm run build
+
+# 前端改动不用重启：cd web && npm run build
 
 # 质量门禁（改后端必跑）
 check.bat
 
-# 查日志
+# 看日志
 tail -f logs/api-stderr.log logs/caddy-stderr.log
 ```
 
-### 常见问题
+<details>
+<summary><b>常见问题</b></summary>
 
 | 问题 | 处理 |
-|------|------|
-| 证书不受信任 | 自签证书所致，点"继续访问"；或把 `certs/cert.pem` 导入系统根证书 |
-| 忘记管理员密码 | 生产库为 PostgreSQL：清空 users 表后用 `/api/setup` 重建（仅空表开放，首用户即 admin），成员账号由管理员邀请重建；删 `data/.meta.db` 仅对未设 DATABASE_URL 的 SQLite 实例有效 |
-| 成员如何加入 | 管理 → 邀请 → 生成邀请码 → 对方在登录页"使用邀请码加入" |
-| 公网分享打不开 | 确认复制的是 🌐 公网链接（管理面板先配置公网访问地址）；FRP 隧道需在线 |
-| 5G 下载 apk 被提示次数上限 | v3 已修（按票据去重计数）；旧分享撤销重建即可 |
-| Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive/WinSCP |
-| 改了前端没生效 | Ctrl+F5 强刷一次；之后资产文件名哈希自动更新 |
+|---|---|
+| 证书不受信任 | 自签证书所致，点「继续访问」；或把 `certs/cert.pem` 导入系统根证书 |
+| 忘记管理员密码 | 清空 users 表后用 `/api/setup` 重建（仅空表开放，首用户即 admin），成员账号由管理员邀请重建 |
+| 成员如何加入 | 管理 → 邀请 → 生成邀请码 → 对方在登录页「使用邀请码加入」 |
+| 公网分享打不开 | 确认复制的是公网链接（管理面板需先配置公网访问地址），隧道要在线 |
+| Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive / WinSCP |
+| 改了前端没生效 | Ctrl+F5 强刷一次；之后资产文件名带哈希自动更新 |
+| 公网看不到健康探针 | 设计如此——探针仅局域网可达，不在公网暴露内部状态 |
+
+</details>
 
 ## 许可
 
-私有项目，未开源。`data/`、`env/`、`.venv/`、凭据与证书均不入库（见 `.gitignore`）。
+开源协议待定。`data/`、`env/`、`.venv/`、凭据与证书均不入库（见 `.gitignore`）。
