@@ -98,9 +98,7 @@ uv.lock
 /AGENTS.md
 /HANDOFF.md
 /.backup-audit/
-/docs/项目记忆/
-/docs/archive/
-/docs/STATUS-v3.md
-/docs/主人简报.md
-/docs/效率舱*.md
-/docs/feature-proposal*.md
+/docs/_internal/
+
+# 归档目录与运行时二进制（2026-10-30 项目整理）
+/_archived-*/
