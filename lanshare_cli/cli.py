@@ -232,8 +232,11 @@ def cmd_install(args: argparse.Namespace) -> int:
         else:
             ok(f"{label} 端口 {port} 空闲")
     if conflict:
-        say("\n    换个端口重试，例如：--api-port 8866 --web-port 8865")
-        say("    查看谁占用了：netstat -ano | findstr :8766")
+        # 提示要带上实际冲突的端口，别写死 8766（换端口后提示就对不上了）
+        say(f"\n    换个端口重试，例如：--api-port {api_port + 1} --web-port {web_port + 1}")
+        busy = [str(p) for p, lbl in ((api_port, "API"), (web_port, "Web"))
+                if port_in_use(p)]
+        say(f"    查看谁占用了：netstat -ano | findstr \":{'|:'.join(busy)}\"")
         return 1
 
     # ── 4. 已有服务 ──
