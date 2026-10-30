@@ -40,9 +40,25 @@ updates:
       npm-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      # vite 和 vue 生态一起升级，避免版本互相不兼容
+      # vue 生态一起升，避免版本互相不兼容。
+      # update-types 必须限死 minor+patch：曾经放行主版本，结果一条 PR 里
+      # typescript 5→7、vite 6→8、vue-router 4→5 一起跳，vue-tsc 直接崩
+      # （TS 7 把 ./lib/tsc 从 exports 里删了，vue-tsc 还在找它）。
+      # 主版本单独提，单独验。
       vue-ecosystem:
         patterns: ["vue", "vue-router", "vite", "@vitejs/*", "vue-tsc", "typescript"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # TypeScript 7 是 Go 重写版，改了 exports 布局，vue-tsc 3.x 还没适配。
+      # 等 vue-tsc 明确支持再放开，手动升。
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # vite 主版本涉及配置格式变化，手动升
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      # vue-router 5 有 API 变更，手动升
+      - dependency-name: "vue-router"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - javascript
