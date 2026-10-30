@@ -5,8 +5,8 @@
 <div align="center">
   <img src="logo/app-login-brand.svg" height="84" alt="LAN Share">
   <h1>LAN Share</h1>
-  <p><b>Turn that dusty spare Windows PC into a private cloud your whole family actually uses.</b></p>
-  <p>No public IP. No NAS to buy. No handing your photos to a cloud provider.</p>
+  <p><b>Turn that dusty Windows PC at home into a private cloud drive for the whole family.</b></p>
+  <p>Works without a public IP. No NAS to buy. Your photos never sit in someone else's datacenter.</p>
 
   [![CI](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml/badge.svg)](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml)
   ![server](https://img.shields.io/badge/server-v3.70-2563eb)
@@ -18,37 +18,42 @@
 
 ---
 
-## Why this exists
+## How this started
 
-**Consumer cloud storage keeps getting worse.** Free tiers shrink, downloads get throttled, subscriptions creep up every year, and there's no telling when a service shuts down. Worse: your family photos, scanned documents and decade of backups physically sit on someone else's servers.
+There's a Windows desktop at home that stays plugged in all year. The electricity bill is nothing. The machine does nothing.
 
-**Self-hosting looks great until you hit the public IP wall.** Home broadband lives behind carrier-grade NAT. Dialing from the ONT still doesn't get you a routable address. DDNS can't point at your house, and DNS resolves to the ISP's gateway. Most "build your own cloud" tutorials end right there.
+Meanwhile I was paying for cloud storage, and the free tier kept shrinking.
 
-**But you already own a spare computer.** An old desktop, a retired laptop, a mini PC — plugged in, running 24/7, with terabytes of disk, doing absolutely nothing.
+So I tried to put that box to work. Read a pile of tutorials. They all died at the same place: I don't have a public IP.
 
-LAN Share connects those three facts:
+My connection sits behind carrier NAT. Even dialing PPPoE on the modem doesn't hand out a real address. I pointed DDNS at a domain once and it resolved to a 100.64.x.x — which does not route to my house. Most self-hosting guides quietly assume you have a public IP. The rest say "just request one from your ISP" and stop there, because most residential ISPs won't give you one anymore.
 
-> One idle PC + one tunneling connection = a cloud you fully own and can open from anywhere.
+I got around it with a tunnel. Bring the tunnel up and the service at home is reachable from anywhere. Slower, but fine — nobody's family photos care about two extra seconds.
 
-Your data lives on your disks. The service runs on your machine. No subscriptions, no throttling, no scanning — and you can change whatever you want.
+After that there was no reason to keep renting storage.
 
-## What it actually solves
+Which is also why everything runs on Windows. That machine is Windows. Reinstalling it just for this wasn't worth it.
 
-Not "share a folder" — SMB already does that. This project is about **the daily reality of one household sharing storage**:
+## What it actually does
 
-- Photos taken on any phone back up at home automatically, no monthly cable-and-export ritual
-- Everyone gets their own account and private space, invisible to others; shared folders are granted per directory
-- Links you send to relatives expire on their own, with an access code and download cap
-- Works outside the house too — LAN and public access are feature-identical, not a crippled subset
+Not "share a folder" — SMB already does that, and it wouldn't justify any of this code. This is about the day-to-day of a household.
+
+Photos get backed up the moment you take them. No monthly cable-and-copy ritual, and no panic when a phone goes missing.
+
+Everyone gets their own account and private space, invisible to the others. Shared folders are authorized per directory, with optional expiry.
+
+Links you send to relatives carry an extraction code and an expiration date. When the date passes they stop working, and you don't have to remember to clean up.
+
+It works away from home, with the exact same feature set as on the LAN. That's the part I use most — pulling a scanned document out of the house while travelling.
 
 <p align="center">
-  <img src="docs/screenshots/overview.png" width="560" alt="Admin dashboard overview">
+  <img src="docs/screenshots/overview.png" width="560" alt="Admin dashboard · overview">
 </p>
-<p align="center"><sub>Web · admin dashboard: storage breakdown, members and quotas, activity feed, throttle metrics</sub></p>
+<p align="center"><sub>Web · admin dashboard: storage breakdown, members and quotas, activity feed, live rate observation</sub></p>
 
-## Mobile app
+## The app
 
-The web UI is the admin console; the app is what everyone in the family actually opens. Native Flutter, not a wrapped webview.
+The web UI is where you manage things as the owner. The app is what your family actually opens. Native Flutter, not a webview wrapper.
 
 <p align="center">
   <img src="docs/screenshots/app-home.png" width="182" alt="Home">
@@ -60,168 +65,174 @@ The web UI is the admin console; the app is what everyone in the family actually
   <img src="docs/screenshots/app-me-1.png" width="182" alt="Me">
   <img src="docs/screenshots/app-me-2.png" width="182" alt="Account and security">
 </p>
-<p align="center"><sub>Home · photo timeline · to-do · notes · profile · account & security</sub></p>
+<p align="center"><sub>Home · photo timeline · to-do · notes · me · account and security</sub></p>
 
-- **Automatic photo backup** — shoots straight to your disk; the home screen shows when the last backup finished, so you never have to remember
-- **Photo timeline** — three-column masonry, grouped by month from EXIF capture time, toggle photos/videos, jump via calendar
-- **Account & security in one place** — password, separate WebDAV password, pairing codes, recovery codes, TOTP authenticator, app lock
-- **Same backend, same permissions as the web** — delete a file on the phone and it's gone on the web instantly
+Photo backup is the main draw. It uploads as you shoot, and the home screen tells you when the last backup happened so you don't have to wonder.
 
-## Requirements
+Photos are grouped by month using the EXIF capture date, shown in a three-column waterfall. You can switch between photos and videos, and the calendar in the corner jumps straight to a given month.
+
+Passwords, a separate WebDAV password, pairing codes, recovery codes, authenticator setup and app lock all live on one "account and security" page instead of scattered across menus.
+
+The phone and the web share one backend and one set of permissions. Delete something on the phone and it's gone after a refresh on the web.
+
+## Check these first
 
 | Item | Version | Notes |
 |---|---|---|
-| OS | Windows 10 / 11 | Services registered via NSSM; Linux/macOS needs systemd units instead |
+| OS | Windows 10 / 11 | Services registered via NSSM; on Linux you'll write your own systemd units |
 | Python | 3.11+ | Backend runtime |
-| PostgreSQL | 16 | Production database (tests can fall back to SQLite) |
+| PostgreSQL | 16 | Production; tests can fall back to SQLite |
 | Node.js | 18+ | Only needed to build the frontend |
-| Caddy | v2 | Reverse proxy and TLS, goes in `bin/caddy.exe` |
-| NSSM | 2.24+ | Registers Python and Caddy as Windows services |
+| Caddy | v2 | Reverse proxy and TLS, drop it at `bin/caddy.exe` |
+| NSSM | 2.24+ | Runs Python and Caddy as Windows services |
 
-All paths and ports live in one file, **`env.bat`**. Defaults are derived from the repo's own location, so cloning elsewhere needs no edits.
+Every path and port lives in one file, **`env.bat`**, derived from wherever the repo itself sits. Move the repo and nothing needs editing.
 
-## First-time deployment
+## Install
 
 ```bash
 # 1. Dependencies
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 
-# 2. Database (create it only; tables are built on first start)
+# 2. Database (create it empty; tables are built on first start)
 createdb -h 127.0.0.1 -p 5433 -U postgres lanshare
 
-# 3. Frontend assets (build once; the backend serves web/dist directly)
+# 3. Frontend (build once, the backend serves the output directly)
 cd web && npm install && npm run build && cd ..
 
-# 4. Drop in the binaries: caddy.exe into bin\, nssm.exe onto PATH
-#    Download links are in docs/OPERATIONS.md under "Dependencies"
+# 4. Binaries: caddy.exe into bin\, nssm.exe onto your PATH
+#    Download links are in docs/OPERATIONS.md under "dependencies"
 
-# 5. Register and start (admin PowerShell)
+# 5. Register the services and start them (elevated PowerShell)
 .\install-service.bat
 net start lan-share-postgresql
 net start lan-share-api
 net start lan-share-caddy
 ```
 
-Open `https://<your-ip>:8765`. With the self-signed cert, click through the warning once. First launch walks you through creating the admin account; everyone else joins with an invite code you generate.
+Open `https://<your-ip>:8765`. The self-signed certificate will scare the browser; click through it. First launch walks you through creating the admin account — everyone else joins with an invite code you generate.
 
-### Day-to-day
+### Day to day
 
 ```bash
-powershell Restart-Service lan-share-api     # after backend changes
-powershell Restart-Service lan-share-caddy   # after Caddyfile changes
-cd web && npm run build                      # after frontend changes (no restart needed)
-check.bat                                     # quality gate, required after backend changes
+powershell Restart-Service lan-share-api     # backend changes
+powershell Restart-Service lan-share-caddy   # Caddyfile changes
+cd web && npm run build                      # frontend changes (no restart needed)
+check.bat                                     # run this after touching the backend
 ```
 
-| Entry point | Address | Auth |
+| Entry | Address | Auth |
 |---|---|---|
-| Web UI (Vue 3) | `https://<IP>:8765` | Application-level login |
-| Public (tunnel) | `https://<your-tunnel-domain>:<port>` | Same, fully equivalent |
-| WebDAV | `https://<IP>:8765/dav/` | Basic (member accounts) |
+| Web (Vue 3) | `https://<IP>:8765` | Application login |
+| Public (tunnel) | `https://<your-tunnel-host>:<port>` | Same, full feature parity |
+| WebDAV | `https://<IP>:8765/dav/` | Basic (member account) |
 | Health probe | `/healthz` | Unauthenticated, LAN only |
 
-> Public access is wired up through a tunnel; see [docs/OPERATIONS.md](docs/OPERATIONS.md). The probe is deliberately not exposed publicly — that's internal state, and the internet has no business probing it.
+The probe is deliberately not exposed to the internet. It reports internal state, and internal state isn't something strangers should be able to scan. Tunnel setup is covered in [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-## Features
+## What's in it
 
 | Area | What you get |
 |---|---|
-| **Multi-user** | admin / member / guest roles; private + shared spaces; per-directory permission matrix (member × folder, with expiry); invite-only signup; private space quotas; disabling a user kicks every session immediately |
-| **Files** | Grid and list views, search, recent files, multi-select batch ops; unified previewer (image zoom/rotate, text / Markdown / CSV / docx / xlsx / pptx, audio & video, HEIC / HEIF with EXIF orientation) |
-| **Transfer** | Adaptive chunking (≤2 GB → 5 MB … >10 GB → 64 MB), resumable uploads, fingerprint-based instant upload, 3 concurrent streams, pausable queue, drag-drop and paste batching |
-| **Sharing** | Public links + QR codes (expiry / access code / download cap), targeted shares, folder zip download |
-| **Photos** | Timeline (EXIF-first), lazy-loaded thumbnails, album highlights, automatic mobile backup |
-| **Notes & to-do** | Categorized notes, to-do lists, calendar view |
-| **Notifications** | In-app notification center, family activity feed, SSE push, Webhooks (ntfy / Bark / Telegram) |
-| **Security** | App-level auth, optional TOTP 2FA, session and device management, audit log, per-entry-point brute-force accounting |
-| **Clients** | Vue 3 web (installable PWA), native Flutter app (photo backup / system share / notifications) |
+| **Multi-user** | admin / member / guest roles; separate private and shared spaces; per-directory authorization as a member × directory matrix with optional expiry; invite-only signup; private space quotas; disabling an account kicks every session instantly |
+| **Files** | Grid and list views, search, recent files, multi-select batch actions; a unified previewer handling images (zoom, rotate), text / Markdown / CSV / docx / xlsx / pptx, audio and video, plus HEIC and HEIF with EXIF orientation correction |
+| **Transfer** | Chunk sizes that adapt to file size (5 MB under 2 GB, 64 MB above 10 GB), resumable uploads, instant upload by fingerprint, three concurrent streams, pausable queue, drag-and-drop and paste batching |
+| **Sharing** | Public links with QR codes, expiry dates, extraction codes and download caps; targeted shares to a specific member; directory downloads packed as an archive |
+| **Photos** | Timeline driven by EXIF, lazy-loaded thumbnails, album highlights, automatic mobile backup |
+| **Notes and to-dos** | Categorized notebooks, checklists, calendar view |
+| **Notifications** | In-app notification center, family activity feed, SSE push, webhooks to ntfy / Bark / Telegram |
+| **Security** | Application-level auth, optional TOTP two-factor, session and device management, audit log, per-entry brute-force accounting |
+| **Clients** | Vue 3 web app (PWA, installable offline) and a native Flutter app (photo backup, system share, notification center) |
 
-Full capability list and per-release changes: [CHANGELOG.md](CHANGELOG.md) (130 KB, newest first — written in Chinese).
+Version-by-version history is in [CHANGELOG.md](CHANGELOG.md) — 130 KB, newest first, written in Chinese.
 
-## How it compares
+## Compared to alternatives
 
-|  | LAN Share | Nextcloud | Synology DSM | Consumer clouds |
+|  | LAN Share | Nextcloud | Synology DSM | Commercial cloud |
 |---|---|---|---|---|
-| Needs public IP | No, tunneled | Recommended | Yes | — |
-| Hardware cost | 0 (reuse a PC) | 0 (still need a server) | From ~$400 | — |
-| Windows-native | Yes | Barely | Yes | — |
-| Codebase size | Readable | Millions of lines | Closed | Closed |
-| Data ownership | Fully yours | Yours | Yours | Vendor's |
+| Needs a public IP | No, uses a tunnel | Recommended | Yes | — |
+| Hardware cost | 0 (an old PC) | 0 (you supply the machine) | From 3000 CNY | — |
+| Native on Windows | Yes | Barely | Yes | — |
+| Code size | Readable end to end | Millions of lines | Closed | Closed |
+| Where your data lives | Your disk | Your disk | Your disk | Their datacenter |
 
-**The trade-off, stated plainly**: Nextcloud does far more and is a mature product — following it is a perfectly good choice. This project optimizes for exactly one scenario: *one Windows machine, one household*. Enterprise features were cut so the codebase stays small enough to read and modify yourself. Pick whichever you want: a patch of land you can till, or a turnkey suite.
+Nextcloud does far more than this and is a genuinely mature product; going with it is a reasonable choice. This project optimizes for exactly one scenario — one Windows machine, one household — and cuts every enterprise feature to keep the codebase small enough that I can read it and change it on a whim.
 
-## Who should not use this
+Whether you want a plot of land you can dig in, or a fully furnished house, is your call.
 
-Being honest — skip it if any of these apply:
+## When not to use this
 
-- **You need enterprise features** (LDAP, compliance audit, S3 backend, clustering) → use Nextcloud or MinIO
-- **You want turnkey** — this needs Python, PostgreSQL and Caddy installed, plus comfort with admin PowerShell
-- **You don't have a Windows machine** — the service scripts are `.bat` + NSSM; Linux needs its own systemd units
-- **You need an iOS client** — `mobile/ios/` exists but is unbuilt and unverified; only the Android APK ships
+A few honest reasons to walk away:
+
+- You need LDAP, compliance auditing, S3 backends or multi-node setups. Use Nextcloud or MinIO.
+- You want something that works out of the box. This needs Python, PostgreSQL and Caddy installed, plus an elevated PowerShell.
+- Your machine isn't Windows. The service scripts are `.bat` plus NSSM; on Linux you're writing systemd units.
+- You need an iOS client. `mobile/ios/` has a project but it's never been built or verified; only the Android APK ships.
 
 ## Architecture
 
 ```
                          ┌───────────────────────────────┐
-external devices ──tunnel :8767──▶ │  Caddy v2 (TLS / proxy / auth) │
-LAN devices ──local net :8765─▶    │  strips inbound XFF,           │
-                                   │  injects entry-point marker    │
-                                   └───────────────┬───────────────┘
-                                                   │
-        ┌──────────────────────────────────────────┼──────────────────────────┐
-        ▼                                          ▼                          ▼
-  /files/*  forward_auth first             /api/* /dav/* /s/*         /assets/* →
-  then backend authorizes the            /up /preview/* /thumb/*     web/dist
-  download (never file_server            ──▶ FastAPI :8766           (Vue 3 SPA
-  directly — that leaks other                  │                     + deep-link
-  users' private/)                             ├─ PostgreSQL 16 :5433  fallback)
-                                               ├─ data/ storage root
-                                               ├─ throttle / CSRF / brute-force / audit
-                                               └─ SSE event stream
+Internet ──tunnel :8767─▶│  Caddy v2 (TLS / proxy / auth)│
+LAN      ──local :8765──▶│  strips inbound XFF, tags origin
+                         └───────────────┬───────────────┘
+                                         │
+        ┌────────────────────────────────┼────────────────────────────┐
+        ▼                                ▼                            ▼
+  /files/* → forward_auth          /api/* /dav/* /s/*           /assets/* →
+  then backend decides access      /up /preview/* /thumb/*      web/dist
+  (never file_server directly —    ──▶ FastAPI :8766           (Vue 3 SPA
+   a crafted path would read            │                       + history fallback)
+   someone else's private/)             ├─ PostgreSQL 16 :5433
+                                        ├─ data/ directory
+                                        ├─ rate limit / CSRF / brute force / audit
+                                        └─ SSE events
 ```
 
-**Backend** FastAPI + uvicorn · **Gateway** Caddy v2 (no plugins) · **Database** PostgreSQL 16 + psycopg (prod) / SQLite (test)
-**Frontend** Vue 3 + Vite + TypeScript · **App** Flutter (Dio + Riverpod + sqflite + secure_storage)
-**Imaging** Pillow + pillow-heif (HEIC / EXIF) · **Other** pyotp (TOTP), qrcode, ffmpeg (optional)
+`/files/` goes through `forward_auth` before the backend rules on access because serving it with `file_server` directly lets a crafted path read another user's `private/`. Learned that one the hard way.
 
-## Scale
+**Backend** FastAPI + uvicorn · **Gateway** Caddy v2, stock build · **Database** PostgreSQL 16 + psycopg in production, SQLite for tests
+**Frontend** Vue 3 + Vite + TypeScript · **App** Flutter with Dio, Riverpod, sqflite and secure_storage
+**Imaging** Pillow + pillow-heif for HEIC and EXIF · **Also** pyotp for TOTP, qrcode, optional ffmpeg
+
+## Size
 
 ```
-Backend  app/       12,628 lines    68 modules (api 29 · services 14 · store 11)
-Web      src/        6,789 lines    Vue 3 + TypeScript
-App      lib/       29,172 lines    Flutter
-Tests    tests/     10,571 lines    65 files · 560 cases
-API      143 paths / 167 operations (contracts/openapi.json)
+backend  app/     12,628 lines    68 modules (api 29 · services 14 · store 11)
+web      src/      6,789 lines    Vue 3 + TypeScript
+app      lib/     29,172 lines    Flutter
+tests    tests/   10,571 lines    65 files · 560 tests
+API contract       143 paths / 167 operations   (contracts/openapi.json)
 ```
 
-The same test suite runs against both SQLite and PostgreSQL (isolated temp schema). The local gate `check.bat` has eight stages: pytest baseline + ruff + mypy + pip-audit + UI layering guard + SQLite dialect guard + docs baseline guard + security ablation.
+The same test suite runs against both SQLite and PostgreSQL, isolated in a temporary schema so it never touches your real data. The local gate `check.bat` runs eight stages: pytest baseline, ruff, mypy, pip-audit, a UI layering guard, a SQLite dialect guard, a docs baseline guard and a security ablation pass.
 
 ## Docs
 
-| What you need | Where |
+| What you want | Where |
 |---|---|
-| Full API reference | [docs/API.md](docs/API.md) |
+| Full API | [docs/API.md](docs/API.md) |
 | Security model | [docs/SECURITY.md](docs/SECURITY.md) |
-| Operations (services / backup / certs / failures) | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
+| Operations (services, backups, certificates, failures) | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | Dev environment and commands | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | Directory layout | [docs/PROJECT-LAYOUT.md](docs/PROJECT-LAYOUT.md) |
 | App visual spec | [docs/DESIGN-v3/APP-VISUAL-SPEC.md](docs/DESIGN-v3/APP-VISUAL-SPEC.md) |
-| Release history | [CHANGELOG.md](CHANGELOG.md) |
+| Version history | [CHANGELOG.md](CHANGELOG.md) (Chinese) |
 
 <details>
 <summary><b>FAQ</b></summary>
 
 | Problem | Fix |
 |---|---|
-| Certificate warning | Expected with a self-signed cert — click through, or import `certs/cert.pem` into your root store |
-| Forgot admin password | Truncate the users table and hit `/api/setup` again (only works while empty; first user becomes admin). Re-invite members afterwards |
-| How do members join | Admin → Invite → generate a code → they use "join with invite code" on the login page |
-| Public share won't open | Make sure you copied the public link (configure the public address in the admin panel first) and that the tunnel is up |
-| Mapping a network drive fails on Windows | The native WebClient is picky about self-signed certs — use RaiDrive or WinSCP |
-| Frontend changes don't show up | Hard-refresh once (Ctrl+F5); after that, hashed asset names update automatically |
-| Health probe invisible from outside | By design — it's LAN-only, internal state isn't exposed publicly |
-| `install-service.bat` says nssm not found | Put `nssm.exe` on PATH, or set `LANSHARE_NSSM` to its location |
+| Certificate not trusted | It's self-signed. Click through, or import `certs/cert.pem` into your system trust store |
+| Forgot the admin password | Empty the users table and re-run `/api/setup` — it only opens on an empty table, and the first user becomes admin. Re-invite members after |
+| How do family members join | Admin → Invites → generate a code → they pick "join with invite code" on the login page |
+| A public share link won't open | Check you copied the public link (the admin panel needs the public address configured first), then confirm the tunnel is up |
+| Mapping a network drive on Windows fails | The built-in WebClient is picky about self-signed certificates. Use RaiDrive or WinSCP |
+| Frontend changes don't show up | Hard refresh with Ctrl+F5. Asset filenames are hashed afterwards, so later builds update themselves |
+| The health probe is invisible from the internet | By design. It's LAN-only and never exposes internal state publicly |
+| `install-service.bat` can't find nssm | Put `nssm.exe` on your PATH, or set `LANSHARE_NSSM` to point at it |
 
 </details>
 
@@ -229,6 +240,6 @@ The same test suite runs against both SQLite and PostgreSQL (isolated temp schem
 
 [GNU AGPL-3.0](LICENSE).
 
-Use it, modify it, self-host it, build on it — all fine. The one hard rule: **if you run a modified version as a network service for others, your changes must also be released under AGPL-3.0.** Running it inside your own home or company carries no such obligation.
+Use it, change it, run it yourself — all fine. One hard rule: if you modify it and offer it to others as a network service, your changes have to be released under AGPL-3.0 too. Running it for your own household doesn't trigger that.
 
-`data/`, `env/`, `.venv/`, credentials and certificates are all gitignored (see `.gitignore`).
+`data/`, `env/`, `.venv/`, credentials and certificates are excluded from the repo. See `.gitignore`.

@@ -5,8 +5,8 @@
 <div align="center">
   <img src="logo/app-login-brand.svg" height="84" alt="LAN Share">
   <h1>LAN Share</h1>
-  <p><b>把家里那台吃灰的 Windows 电脑，变成全家人都能用的私有网盘。</b></p>
-  <p>不需要公网 IP，不需要买 NAS，不需要把照片交到任何云厂商手上。</p>
+  <p><b>把家里吃灰的那台 Windows 电脑，变成全家人的私人网盘。</b></p>
+  <p>没有公网 IP 也能用。不用买 NAS。照片不进任何云厂商的机房。</p>
 
   [![CI](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml/badge.svg)](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml)
   ![server](https://img.shields.io/badge/server-v3.70-2563eb)
@@ -18,28 +18,31 @@
 
 ---
 
-## 为什么会有这个项目
+## 起因
 
-**商业网盘在收紧。** 免费额度一降再降，下载限速，会员年年涨，说不准哪天就关停。更要紧的是——你的家庭照片、证件扫描件、十年备份，物理上存在别人的机房里。
+家里那台 Windows 台式机常年插着电，一年电费没多少，但它实际上什么也没干。同一时间我在给网盘续费，免费额度还越缩越小。
 
-**自建看起来很美，门槛卡在公网 IP。** 家里宽带在 NAT 后面的大内网里，光猫拨号也拿不到独立 IP。DDNS 指不到你家，域名解析到运营商网关。大多数「自建网盘教程」讲到这一步就没下文了。
+我想把它用起来。教程看了不少，全卡在同一个地方：我没有公网 IP。
 
-**但你家里有一台闲置电脑。** 旧台式、退役笔记本、或者一台小主机——常年插电、24 小时待机、几 T 硬盘，实际上在吃灰。
+宽带在运营商的大内网里，光猫拨号也拿不到独立地址。DDNS 填了域名，解析出来是 100.64 开头的地址——根本到不了我家。市面上讲自建网盘的教程，八成默认你有公网 IP，剩下两成讲到"申请公网 IP"就没下文了，因为多数家庭宽带现在申请也不给。
 
-LAN Share 把这三件事连起来：
+后来绕过去了，用的是内网穿透。隧道一连，从外网就能打开家里的服务。慢一点，但能用；而且本来也不需要多快——全家人的照片，谁在乎多等两秒。
 
-> 一台闲置电脑 + 一条内网穿透隧道 = 一个你完全拥有、随时随地能打开的网盘。
+那还租网盘干嘛。
 
-数据在你自己的硬盘上，服务在你自己的机器上跑。不续费、不限速、不被扫描，想改什么改什么。
+顺带一提，这也是为什么整个项目跑在 Windows 上。那台机器就是 Windows，为它换个系统不值得。
 
-## 它解决什么
+## 能干的事
 
-不是「把文件夹共享出来」——那个 SMB 就够了。这个项目要解决的是**一家人合用的日常**：
+不是"把文件夹共享出去"——那个 SMB 就够了，用不着写这么一堆。这里要的是一家人日常用的东西。
 
-- 手机拍的照片自动备份到家，不用每月插线导出
-- 每个人独立账号、独立私人空间，互不可见；共享盘按目录授权
-- 分享给亲戚的链接带有效期和提取码，到期自动失效
-- 不在家也能访问——局域网和公网功能完全一致，不是阉割版
+手机拍完照自动传回家。不用每月插线导一次，也不用担心哪天手机丢了照片跟着丢。
+
+每个人有自己的账号和私人空间，别人看不见。共享盘按目录单独授权，可以设有效期。
+
+发给亲戚的链接带提取码和过期时间，到期自动作废，不用惦记着去删。
+
+不在家也能用，公网和局域网功能一模一样。这条我用得最多——出差时找一份家里的扫描件。
 
 <p align="center">
   <img src="docs/screenshots/overview.png" width="560" alt="站长工作台 · 总览">
@@ -48,7 +51,7 @@ LAN Share 把这三件事连起来：
 
 ## 手机端
 
-Web 是站长的工作台，App 是家里每个人日常打开的那个。Flutter 原生，不是套壳网页。
+Web 那套是给自己管东西用的，App 才是家人每天打开的那个。Flutter 原生写的，不是套网页的壳。
 
 <p align="center">
   <img src="docs/screenshots/app-home.png" width="182" alt="首页">
@@ -62,103 +65,108 @@ Web 是站长的工作台，App 是家里每个人日常打开的那个。Flutte
 </p>
 <p align="center"><sub>首页 · 照片时间线 · 待办 · 笔记 · 我的 · 账号与安全</sub></p>
 
-- **相册自动备份**：拍完自动传到家，首页显示上次备份时间，不用记得这件事
-- **照片时间线**：三列瀑布流，按 EXIF 拍摄时间归月，可切「照片 / 视频」，右上角跳日历
-- **账号与安全在一处**：改密码、WebDAV 独立密码、配对码、恢复码、验证器、应用锁
-- **和 Web 完全同源**：同一个后端、同一份权限，手机上删掉的网页端立刻不见
+相册备份是主要的那个。拍完就传，首页能看到上次备份是什么时候，省得老惦记。
 
-## 前置要求
+照片按 EXIF 拍摄时间归月，三列瀑布流，可以切照片和视频，右上角能直接跳日历找某个月。
+
+改密码、WebDAV 独立密码、配对码、恢复码、验证器、应用锁，都堆在"账号与安全"一个页面里，不用到处翻。
+
+手机和 Web 是同一个后端、同一份权限。手机上删的东西，网页刷新就没了。
+
+## 装之前先看看
 
 | 项 | 版本 | 说明 |
 |---|---|---|
-| 系统 | Windows 10 / 11 | 服务通过 NSSM 注册；Linux/macOS 需改用 systemd，见下方说明 |
-| Python | 3.11+ | 后端运行时 |
-| PostgreSQL | 16 | 生产数据库（测试可退回 SQLite） |
-| Node.js | 18+ | 只构建前端时需要 |
-| Caddy | v2 | 反向代理与 TLS，放到 `bin/caddy.exe` |
-| NSSM | 2.24+ | 把 Python / Caddy 注册成 Windows 服务 |
+| 系统 | Windows 10 / 11 | 用 NSSM 注册服务；Linux 得自己写 systemd unit |
+| Python | 3.11+ | 后端 |
+| PostgreSQL | 16 | 生产用；跑测试可以退回 SQLite |
+| Node.js | 18+ | 只在构建前端时需要 |
+| Caddy | v2 | 反代和 TLS，丢进 `bin/caddy.exe` |
+| NSSM | 2.24+ | 把 Python 和 Caddy 挂成 Windows 服务 |
 
-所有路径与端口集中在 **`env.bat`** 一个文件里，默认按仓库自身位置推导；装在别处无需改脚本。
+路径和端口全在 **`env.bat`** 一个文件里，默认按仓库自己所在位置推导。装到别处不用改脚本，挪走就行。
 
-## 首次部署
+## 装起来
 
 ```bash
 # 1. 依赖
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 
-# 2. 数据库（建库即可，首次启动会自动建表）
+# 2. 数据库（建库就行，首次启动自动建表）
 createdb -h 127.0.0.1 -p 5433 -U postgres lanshare
 
-# 3. 前端产物（构建一次即可，产物由后端直接挂载）
+# 3. 前端（构建一次，产物由后端直接挂）
 cd web && npm install && npm run build && cd ..
 
-# 4. 放二进制：caddy.exe 放进 bin\，nssm.exe 放进 PATH
-#    下载地址见 docs/OPERATIONS.md「依赖」
+# 4. 二进制：caddy.exe 放进 bin\，nssm.exe 丢进 PATH
+#    下载地址在 docs/OPERATIONS.md 的「依赖」那节
 
-# 5. 注册并启动（管理员权限 PowerShell）
+# 5. 注册服务并启动（管理员权限 PowerShell）
 .\install-service.bat
 net start lan-share-postgresql
 net start lan-share-api
 net start lan-share-caddy
 ```
 
-浏览器打开 `https://<本机 IP>:8765`。自签证书首次访问点「继续访问」，首启会引导创建管理员账号，其余成员由管理员发邀请码自助注册。
+浏览器开 `https://<本机 IP>:8765`。自签证书会报不安全，点"继续访问"就进去了。首启会引导你建管理员账号，家里其他人由你发邀请码自己注册。
 
-### 日常启停
+### 平时怎么动
 
 ```bash
-powershell Restart-Service lan-share-api     # 改后端后
-powershell Restart-Service lan-share-caddy   # 改 Caddyfile 后
-cd web && npm run build                      # 改前端后（不用重启）
-check.bat                                     # 改后端必跑的质量门禁
+powershell Restart-Service lan-share-api     # 改了后端
+powershell Restart-Service lan-share-caddy   # 改了 Caddyfile
+cd web && npm run build                      # 改了前端（不用重启）
+check.bat                                     # 动了后端，跑一遍
 ```
 
 | 入口 | 地址 | 认证 |
 |---|---|---|
 | Web 全站（Vue 3） | `https://<IP>:8765` | 应用层登录 |
-| 公网（隧道） | `https://<你的隧道域名>:<端口>` | 同上，功能完全对等 |
+| 公网（隧道） | `https://<你的隧道域名>:<端口>` | 一样，功能没有阉割 |
 | WebDAV | `https://<IP>:8765/dav/` | Basic（成员账号） |
-| 健康探针 | `/healthz` | 免认证，仅局域网可达 |
+| 健康探针 | `/healthz` | 免认证，只有局域网能到 |
 
-> 公网入口靠隧道打通，细节见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。探针刻意不暴露给公网——那是内部状态，不该让外面探测到。
+探针故意不暴露到公网。它报的是内部状态，不该让别人扫得到。隧道怎么配见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
 
-## 能力
+## 有什么
 
 | 领域 | 有什么 |
 |---|---|
-| **多用户** | admin / member / guest 三角色；私人 + 共享双空间；目录授权矩阵（成员 × 目录，带有效期）；邀请制建号；私人空间配额；停用即全端踢出 |
-| **文件** | 网格 / 列表双视图、搜索、最近文件、多选批量；统一预览器（图片缩放旋转、文本 / Markdown / CSV / docx / xlsx / pptx、音视频、HEIC / HEIF + EXIF 矫正） |
-| **传输** | 自适应分片（≤2 GB → 5 MB … >10 GB → 64 MB）、断点续传、指纹秒传、并发 3 路、队列暂停恢复、拖拽粘贴批量入队 |
-| **分享** | 外链 + 二维码（有效期 / 提取码 / 下载次数上限）、定向分享、目录打包下载 |
-| **照片** | 时间线（EXIF 优先）、缩略图懒加载、相册精选、手机端自动备份 |
-| **笔记待办** | 分类笔记体系、待办清单、日历视图 |
-| **通知** | 站内通知中心、家庭动态流、SSE 实时推送、Webhook（ntfy / Bark / Telegram） |
-| **安全** | 应用层认证、可选 TOTP 两步验证、会话与设备治理、审计日志、按入口分账的防爆破 |
-| **客户端** | Vue 3 Web（PWA 可离线安装）、Flutter 原生 App（相册自动备份 / 系统分享 / 通知中心） |
+| **多用户** | admin / member / guest 三个角色；私人空间和共享空间分开；目录授权按"成员 × 目录"配，能设有效期；邀请制建号；私人空间配额；停用账号全端立刻踢下线 |
+| **文件** | 网格和列表两种视图、搜索、最近文件、多选批量；预览器统一处理图片（缩放旋转）、文本 / Markdown / CSV / docx / xlsx / pptx、音视频，HEIC 和 HEIF 也能开（含 EXIF 方向矫正） |
+| **传输** | 分片按文件大小自适应（2 GB 以内 5 MB，10 GB 以上 64 MB）、断点续传、指纹秒传、三路并发、队列能暂停恢复、拖拽粘贴批量入队 |
+| **分享** | 外链加二维码，能设有效期、提取码、下载次数上限；也能定向分享给某个成员；目录可打包下载 |
+| **照片** | 时间线（优先读 EXIF）、缩略图懒加载、相册精选、手机端自动备份 |
+| **笔记待办** | 分类笔记、待办清单、日历视图 |
+| **通知** | 站内通知中心、家庭动态流、SSE 实时推、Webhook 接 ntfy / Bark / Telegram |
+| **安全** | 应用层认证、可选 TOTP 两步验证、会话和设备治理、审计日志、按入口分开记账的防爆破 |
+| **客户端** | Vue 3 Web（PWA，能离线装）、Flutter 原生 App（相册备份 / 系统分享 / 通知中心） |
 
-完整能力与逐版变更见 [CHANGELOG.md](CHANGELOG.md)（130 KB，按版本倒序）。
+逐版改了什么看 [CHANGELOG.md](CHANGELOG.md)，130 KB，按版本倒着排。
 
-## 和其他方案比
+## 跟别人比
 
 |  | LAN Share | Nextcloud | 群晖 DSM | 商业网盘 |
 |---|---|---|---|---|
-| 需要公网 IP | 否，走隧道 | 建议有 | 需要 | — |
-| 硬件成本 | 0（旧电脑即可） | 0（需自备服务器/旧电脑） | 3000 元起 | — |
+| 需要公网 IP | 不用，走隧道 | 建议有 | 需要 | — |
+| 硬件成本 | 0（旧电脑） | 0（得自备机器） | 3000 起 | — |
 | Windows 原生 | 是 | 勉强 | 是 | — |
-| 代码量 | 可通读 | 百万行级 | 闭源 | 闭源 |
-| 数据归属 | 完全自己 | 自己 | 自己 | 厂商 |
+| 代码量 | 能通读 | 百万行级 | 闭源 | 闭源 |
+| 数据在哪 | 自己硬盘 | 自己硬盘 | 自己硬盘 | 厂商机房 |
 
-**把取舍说清楚**：Nextcloud 功能多得多，是成熟产品，跟着它走没有错。这个项目只为「一台 Windows 机器 + 一家人」这个场景优化，砍掉企业级特性，把代码量压到能自己读懂、能自己改的程度。你要能随手改的自留地，还是开箱即用的全家桶——自己判断。
+Nextcloud 功能比这儿多得多，是正经成熟产品，跟着它走不会错。这个项目只盯着"一台 Windows 机器 + 一家人"这一个场景，企业级那套全砍了，代码量压到我自己能读懂、能随手改的程度。
 
-## 不适合谁
+你要一个能随便改的自留地，还是要开箱即用的全家桶，自己判断。
 
-诚实一点，这几种情况别用：
+## 什么情况别用
 
-- **要企业级能力**（LDAP / 合规审计 / S3 后端 / 多节点）—— 用 Nextcloud 或 MinIO
-- **要开箱即用**——这套要自己装 Python、PostgreSQL、Caddy，还得会用管理员 PowerShell
-- **没有 Windows 机器**——服务脚本是 `.bat` + NSSM，Linux 上要自己写 systemd unit
-- **要 iOS 客户端**——`mobile/ios/` 有工程但未构建验证，目前只发布 Android APK
+说几条劝退的：
+
+- 要 LDAP、合规审计、S3 后端、多节点的，用 Nextcloud 或 MinIO
+- 想开箱即用的，这套得自己装 Python、PostgreSQL、Caddy，还得会用管理员 PowerShell
+- 机器不是 Windows 的，服务脚本全是 `.bat` 加 NSSM，Linux 上要自己写 systemd unit
+- 要 iOS 客户端的，`mobile/ios/` 有工程但没构建验证过，目前只发 Android APK
 
 ## 架构
 
@@ -180,11 +188,13 @@ check.bat                                     # 改后端必跑的质量门禁
                                         └─ SSE 实时事件
 ```
 
-**后端** FastAPI + uvicorn · **网关** Caddy v2（原生无插件）· **数据库** PostgreSQL 16 + psycopg（生产）/ SQLite（测试）
+`/files/` 先走 forward_auth 再交给后端判权，是因为直接 file_server 挂出去的话，路径一拼就能读到别人的 private 目录。这个坑踩过。
+
+**后端** FastAPI + uvicorn · **网关** Caddy v2（原生，没装插件）· **数据库** PostgreSQL 16 + psycopg（生产）/ SQLite（测试）
 **前端** Vue 3 + Vite + TypeScript · **App** Flutter（Dio + Riverpod + sqflite + secure_storage）
 **图像** Pillow + pillow-heif（HEIC / EXIF）· **其他** pyotp（TOTP）、qrcode、ffmpeg（可选）
 
-## 项目规模
+## 多大
 
 ```
 后端 app/       12,628 行      68 个模块（api 29 · services 14 · store 11）
@@ -194,7 +204,7 @@ App  lib/       29,172 行      Flutter
 API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 ```
 
-同一套测试可在 SQLite 与 PostgreSQL 上跑（临时 schema 隔离）。本地门禁 `check.bat` 八段：pytest 基线 + ruff + mypy + pip-audit + UI 分层守卫 + SQLite 方言守卫 + 文档基线守卫 + 安全消融。
+同一套测试能在 SQLite 和 PostgreSQL 上都跑（临时 schema 隔离，不脏库）。本地门禁 `check.bat` 跑八段：pytest 基线、ruff、mypy、pip-audit、UI 分层守卫、SQLite 方言守卫、文档基线守卫、安全消融。
 
 ## 文档
 
@@ -213,14 +223,14 @@ API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 
 | 问题 | 处理 |
 |---|---|
-| 证书不受信任 | 自签证书所致，点「继续访问」；或把 `certs/cert.pem` 导入系统根证书 |
-| 忘记管理员密码 | 清空 users 表后用 `/api/setup` 重建（仅空表开放，首用户即 admin），成员账号由管理员邀请重建 |
-| 成员如何加入 | 管理 → 邀请 → 生成邀请码 → 对方在登录页「使用邀请码加入」 |
-| 公网分享打不开 | 确认复制的是公网链接（管理面板需先配置公网访问地址），隧道要在线 |
-| Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive / WinSCP |
-| 改了前端没生效 | Ctrl+F5 强刷一次；之后资产文件名带哈希自动更新 |
-| 公网看不到健康探针 | 设计如此——探针仅局域网可达，不在公网暴露内部状态 |
-| `install-service.bat` 报找不到 nssm | 把 `nssm.exe` 放进 PATH，或设置环境变量 `LANSHARE_NSSM` 指向它 |
+| 证书不受信任 | 自签证书，点"继续访问"；或者把 `certs/cert.pem` 导进系统根证书 |
+| 忘了管理员密码 | 清空 users 表，再用 `/api/setup` 重建（只有空表才开放，第一个用户就是 admin）。成员账号由管理员重新邀请 |
+| 家人怎么加进来 | 管理 → 邀请 → 生成邀请码 → 对方在登录页点"使用邀请码加入" |
+| 公网分享打不开 | 先确认复制的是公网链接（管理面板里要先配公网地址），再看隧道在线没 |
+| Windows 映射网络驱动器连不上 | 系统自带 WebClient 对自签证书很挑，换 RaiDrive 或 WinSCP |
+| 改了前端没生效 | Ctrl+F5 强刷。之后文件名带哈希，会自动更新 |
+| 公网看不到健康探针 | 故意的，探针只在局域网可达，不往公网暴露内部状态 |
+| `install-service.bat` 说找不到 nssm | 把 `nssm.exe` 放 PATH，或者设环境变量 `LANSHARE_NSSM` 指过去 |
 
 </details>
 
@@ -228,6 +238,6 @@ API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 
 [GNU AGPL-3.0](LICENSE)。
 
-你可以自由地使用、修改、自建部署，也可以基于它做自己的东西。唯一的硬约束：**如果你把它改造后作为网络服务提供给他人使用，你的修改也必须以 AGPL-3.0 开源。** 自己家里用、内部用，不受这条约束。
+拿去用、拿去改、自己搭，都行。只有一条硬规矩：你要是改完了挂到网上给别人当服务用，你的改动也得按 AGPL-3.0 开源。自己家里用不算。
 
-`data/`、`env/`、`.venv/`、凭据与证书均不入库（见 `.gitignore`）。
+`data/`、`env/`、`.venv/`、凭据和证书都不入库，`.gitignore` 里写着。
