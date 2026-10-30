@@ -32,7 +32,7 @@ dependencies:
   open_filex: ^4.7.0             # 已下载文件"用其他应用打开"（自带 FileProvider，免清单配置）
   sqflite: ^2.4.1                # 备份账本 SQLite（M-A3；设计选 SQLite，ORM 层 drift→裸 SQL
                                  #  省掉 build_runner 代码链，单表场景类型安全由模型类保证）
-  local_auth: ^2.3.0             # 登录页生物识别一键登录（指纹/面部门禁已存凭据）
+  local_auth: ^3.0.2             # 登录页生物识别一键登录（指纹/面部门禁已存凭据）
   mobile_scanner: ^5.2.3         # 登录页扫码填服务器地址（Web 端账号设置出地址二维码）
   # ── v0.6.0 全功能大批次（每项理由）─────────────────────────
   video_player: ^2.9.2           # 照片墙视频播放（ExoPlayer；自签 HTTPS 经本地媒体代理
