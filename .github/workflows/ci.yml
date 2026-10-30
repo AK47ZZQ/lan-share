@@ -48,6 +48,12 @@ jobs:
       # healthreport 的证书天数与 entries 的指纹测试才能贴近生产路径
       - name: 生成测试用自签证书（certs/）
         run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 3650 -nodes -config certs/san.cnf
+
+      # 占位前端产物：app/main.py 在 web/dist/index.html 缺失时会对页面路由回
+      # 503 维护页，而 test_adversarial_v1 的两个 SPA 深链回退测试只断言
+      # 「200 + text/html」，不需要真实构建产物。真构建要多 1-2 分钟且受 npm 网络影响。
+      - name: 占位前端产物（SPA 回退测试用）
+        run: mkdir -p web/dist && printf '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>test</title></head><body></body></html>' > web/dist/index.html
       - name: pytest（SQLite · 默认引擎）
         run: python -m pytest tests/ -q
 
@@ -86,6 +92,12 @@ jobs:
       # healthreport 的证书天数与 entries 的指纹测试才能贴近生产路径
       - name: 生成测试用自签证书（certs/）
         run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 3650 -nodes -config certs/san.cnf
+
+      # 占位前端产物：app/main.py 在 web/dist/index.html 缺失时会对页面路由回
+      # 503 维护页，而 test_adversarial_v1 的两个 SPA 深链回退测试只断言
+      # 「200 + text/html」，不需要真实构建产物。真构建要多 1-2 分钟且受 npm 网络影响。
+      - name: 占位前端产物（SPA 回退测试用）
+        run: mkdir -p web/dist && printf '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>test</title></head><body></body></html>' > web/dist/index.html
       - name: pytest（PostgreSQL · 临时 schema 隔离）
         env:
           LANSHARE_TEST_PG_URL: postgresql://lanshare:lanshare@127.0.0.1:5432/lanshare
