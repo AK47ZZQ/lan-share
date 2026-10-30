@@ -30,7 +30,7 @@ SHARE_ROOT=D:/test-data python server.py
 | 入口 | 地址 | 认证 |
 |---|---|---|
 | Web 全站（Vue） | `https://<IP>:8765` | 应用层登录 |
-| 公网（樱花 FRP） | `https://your-frp-domain.com:xxxxx` | 同上，与局域网功能对等 |
+| 公网（樱花 FRP） | `https://your-frp-domain:port` | 同上，与局域网功能对等 |
 | 健康探针 | `/healthz` | 免认证，仅局域网可达 |
 | WebDAV | `https://<IP>:8765/dav/` | Basic（成员账号） |
 
