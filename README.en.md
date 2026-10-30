@@ -86,9 +86,41 @@ The phone and the web share one backend and one set of permissions. Delete somet
 | Caddy | v2 | Reverse proxy and TLS, drop it at `bin/caddy.exe` |
 | NSSM | 2.24+ | Runs Python and Caddy as Windows services |
 
+**With the installer, none of the table above applies** — runtime, frontend build, and binaries are all bundled.
+
 Every path and port lives in one file, **`env.bat`**, derived from wherever the repo itself sits. Move the repo and nothing needs editing.
 
 ## Install
+
+### One-click installer (recommended)
+
+Download `LANShare-Setup-x.y.z.exe` and double-click. **No Python, no database, no Node required.**
+
+```
+Double-click → pick a data folder → done → browser opens
+```
+
+The 34 MB package bundles embedded Python 3.11 with dependencies, Caddy, NSSM, and the
+built frontend. You get a tray icon:
+
+- **Green** = healthy, **Yellow** = responding abnormally, **Red** = not running
+- Double-click opens the web UI; right-click for "copy LAN address", "open data folder",
+  "open logs", "restart services"
+
+The installer build uses **SQLite** — PostgreSQL is optional. Data defaults to
+`C:\ProgramData\LANShare\data` and can be moved during setup. Uninstall asks before
+touching your data.
+
+A CLI is available for troubleshooting or custom ports:
+
+```bash
+python -m lanshare_cli doctor            # read-only environment check
+python -m lanshare_cli status            # service state + health probes
+python -m lanshare_cli install --dry-run # check without changing anything
+python -m lanshare_cli install --api-port 8866 --web-port 8865
+```
+
+### Manual install (development / PostgreSQL)
 
 ```bash
 # 1. Dependencies
@@ -199,12 +231,15 @@ LAN      ──local :8765──▶│  strips inbound XFF, tags origin
 ## Size
 
 ```
-backend  app/     12,628 lines    68 modules (api 29 · services 14 · store 11)
-web      src/      6,789 lines    Vue 3 + TypeScript
-app      lib/     29,172 lines    Flutter
-tests    tests/   10,571 lines    65 files · 560 tests
-API contract       143 paths / 167 operations   (contracts/openapi.json)
+backend   app/     12,628 lines    68 modules (api 29 · services 14 · store 11)
+web       src/      6,789 lines    Vue 3 + TypeScript
+app       lib/     29,172 lines    Flutter
+installer/          2,157 lines    installer/ 1,142 · lanshare_cli/ 1,015
+tests     tests/   11,025 lines    67 files · 594 tests
+API contract        143 paths / 167 operations   (contracts/openapi.json)
 ```
+
+The installer is **34 MB** (LZMA2; 136 MB unpacked: embedded Python 82 MB + Caddy 48 MB + the rest).
 
 The same test suite runs against both SQLite and PostgreSQL, isolated in a temporary schema so it never touches your real data. The local gate `check.bat` runs eight stages: pytest baseline, ruff, mypy, pip-audit, a UI layering guard, a SQLite dialect guard, a docs baseline guard and a security ablation pass.
 

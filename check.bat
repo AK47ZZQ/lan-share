@@ -1,6 +1,6 @@
 @echo off
 REM M0 local quality gate (no git remote yet; portable to CI later).
-REM 六段门禁：pytest 基线 + ruff 静态检查 + mypy 类型 + pip-audit 依赖漏洞
+REM 八段门禁：pytest 基线 + ruff 静态检查 + mypy 类型 + pip-audit 依赖漏洞
 REM   + UI 分层守卫（mobile/lib/ui 不得直连 dio；纯静态扫描，不需 Dart 工具链）
 REM   + SQLite 专有语法守卫（业务层 SQL 出现 PG 不认的 SQLite 方言即红，v3.56 双引擎盲区）。
 REM 规则集见 pyproject.toml（风格类豁免说明在同处）；pip-audit 依赖网络，
@@ -14,12 +14,12 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo === ruff ===
-"%PYTHON%" -m ruff check app tests server.py
+"%PYTHON%" -m ruff check app tests server.py lanshare_cli
 if errorlevel 1 exit /b 1
 
 echo.
 echo === mypy ===
-"%PYTHON%" -m mypy app
+"%PYTHON%" -m mypy app lanshare_cli
 if errorlevel 1 exit /b 1
 
 echo.

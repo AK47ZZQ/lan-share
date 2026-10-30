@@ -15,6 +15,12 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# ── PowerShell 脚本：必须 CRLF ────────────────────────────
+# PS 5.1 解析器对纯 LF 通常能跑，但含中文时一旦 BOM 也丢了就会按 GBK 读、
+# 进而语法崩（"新脚本第一次必失败"的真实成因）。行尾钉死 CRLF 减少变量。
+# 注意 git 不处理 BOM —— 含中文的 .ps1 必须自带 UTF-8 BOM，靠人/脚本保证。
+*.ps1 text eol=crlf
+
 # ── 源码与文档：一律 LF ───────────────────────────────────
 *.py    text eol=lf
 *.pyi   text eol=lf

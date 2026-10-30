@@ -4,6 +4,87 @@
 > 架构背景见 [项目记忆/01-架构与现状.md](_internal/项目记忆/01-架构与现状.md)；
 > 命令速查见根目录 [README.md](../README.md) 的快速开始一节。
 
+## 0. 安装与卸载（一键安装器）
+
+### 装
+
+下载 `LANShare-Setup-x.y.z.exe` 双击，或者静默装：
+
+```powershell
+.\LANShare-Setup-3.70.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+安装器只做三件事：解压文件、调 `lanshare_cli install`、开浏览器。**所有服务编排
+逻辑在 Python 里**，所以出错能给出人话提示，也能单独跑。
+
+### 服务名：两套，别搞混
+
+| 部署方式 | API 服务 | Web 服务 | 端口 |
+|---|---|---|---|
+| **安装器**（新版） | `lanshare-api` | `lanshare-caddy` | 8766 / 8765 |
+| **手工**（env.bat） | `lan-share-api` | `lan-share-caddy` | 8766 / 8765 |
+
+⚠️ **Windows 服务名比较不区分大小写**，但 `lanshare` 和 `lan-share` 差一个连字符，
+是**不同**的服务。两套可以并存，但会抢同一组端口。
+
+### CLI（改端口、排查、卸载都靠它）
+
+```powershell
+cd "C:\Program Files\LAN Share"
+
+.\runtime\python.exe -m lanshare_cli doctor      # 环境自检，只读
+.\runtime\python.exe -m lanshare_cli status      # 服务状态 + HTTP 探针
+.\runtime\python.exe -m lanshare_cli install --dry-run    # 只检查不执行
+
+# 换端口重装（会先卸旧服务，数据不动）
+.\runtime\python.exe -m lanshare_cli install --api-port 8866 --web-port 8865 --force
+
+# 隔离测试（服务名 e2etest-*、端口 9911/9912，绝不碰生产）
+.\runtime\python.exe -m lanshare_cli install --service-prefix e2etest --api-port 9911 --web-port 9912
+```
+
+### 卸
+
+```powershell
+# 走卸载程序（会调 CLI 停服务删服务，数据保留）
+"C:\Program Files\LAN Share\unins000.exe" /VERYSILENT
+
+# 只删服务、保留安装文件
+.\runtime\python.exe -m lanshare_cli uninstall
+
+# 连数据一起删（会二次确认，输入 yes）
+.\runtime\python.exe -m lanshare_cli uninstall --purge-data
+```
+
+卸载**默认保留**数据目录（`C:\ProgramData\LANShare\data`，或安装时选的路径）。
+
+### 托盘
+
+安装后常驻通知区：绿=正常，黄=响应异常，红=服务没跑。双击开网盘，右键有复制局域网
+地址、打开数据/日志文件夹、重启服务（UAC 提权）。
+
+托盘日志在 `{安装目录}\logs\tray.log`，只在状态变化时写，超 1MB 轮转。
+**退出托盘不会停服务**，服务是独立的 Windows 服务。
+
+### 装失败怎么查
+
+```powershell
+# 1. 先看环境够不够（缺什么它会直说）
+.\runtime\python.exe -m lanshare_cli doctor
+
+# 2. 日志
+Get-Content "C:\Program Files\LAN Share\logs\api-stderr.log" -Tail 30
+Get-Content "C:\Program Files\LAN Share\logs\caddy-stderr.log" -Tail 30
+
+# 3. 服务状态
+Get-Service lanshare-*
+```
+
+常见原因：端口被占（`netstat -ano | findstr :8765`）、数据目录没写权限、
+杀软拦了服务注册。
+
+---
+
 ## 1. 服务管理（NSSM 三服务）
 
 | 服务名 | 内容 | 监听 |
@@ -62,7 +143,7 @@ p50/p95/avg 延迟（asgi 中间件逐请求采集，环形缓冲 2048）、磁�
 API 限速（api:lan 120 / api:pub 240）全部按 Host 分账；改公网地址走管理面板
 「公网访问地址」主/备两栏，`reset_netloc_cache()` 即时生效。
 
-## 2. 健康与水位
+### 本机健康探测
 
 ```bash
 curl -k https://192.168.1.100:8765/healthz
