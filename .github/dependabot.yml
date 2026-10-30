@@ -74,6 +74,22 @@ updates:
       time: "09:00"
       timezone: Asia/Shanghai
     open-pull-requests-limit: 2
+    groups:
+      pub-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Flutter 包的 semver 跳跃频繁，主版本基本都带 breaking change，而 CI
+      # 只跑 Python 和 web，跑不到 flutter analyze / test。这类必须本地验，
+      # 所以不让它自动提，改成手动升。
+      - dependency-name: "local_auth"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "flutter_secure_storage"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "package_info_plus"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "archive"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - dart
@@ -87,6 +103,22 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 2
+    # actions 的主版本跳级跟依赖库一样会断：checkout 4→7 / setup-node 4→7
+    # 背后是 Node runtime 换代，行为可能有变。只自动吃 minor+patch，
+    # 主版本单独提、单独看 changelog。
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "actions/checkout"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "actions/setup-node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "actions/setup-python"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "actions/upload-artifact"
+        update-types: ["version-update:semver-major"]
     labels:
       - dependencies
       - ci
