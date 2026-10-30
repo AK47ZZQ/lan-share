@@ -108,3 +108,12 @@ uv.lock
 
 # 改文件前的本地备份（2026-10-30）
 *.bak-*
+
+# 安装包构建产物（installer/build.ps1 生成，含 82MB 运行时，绝不入库）
+build/
+
+# 安装器端到端测试脚本（由 lanshare.iss 派生，改个端口/服务名/目录用于隔离验证）
+installer/lanshare-e2e.iss
+
+# 托盘程序编译产物（installer/tray/build-tray.ps1 生成，csc.exe 几秒钟就能重建）
+installer/tray/bin/

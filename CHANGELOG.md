@@ -1,3 +1,94 @@
+## 2026-10-31 — Windows 一键安装器：让程序自己装自己
+
+### 为什么推翻重来
+
+第一版是「Inno Setup 直接拼 nssm 命令」：`[Run]` 段 14 条
+`nssm install / set AppDirectory / set AppEnvironmentExtra`，每条都是一次字符串进出。
+踩了 9 个坑，其中 7 个是引号和转义：
+
+- `nssm install` 不带 exe 参数会弹 GUI 配置窗口，安装器的 `waituntilterminated`
+  就一直等下去（实测卡死 271 秒）
+- `C:\Program Files\...` 在 AppParameters 里被空格切断成 `C:\Program`
+- 多个环境变量拼成一个字符串，NSSM 当成单个变量，Caddy 永远读到默认端口
+
+单个都能修，但每加一个配置项就是一次新的引号风险，而且**没法单测、没法调试，
+出错只能翻安装日志猜**。所以换路线。
+
+### 新架构：三层
+
+```
+安装器（Inno，264 行）   解压文件 → 调 CLI → 开浏览器
+lanshare_cli（1,015 行）   服务注册 / Caddyfile 生成 / 端口检查 / 健康检查 / 回滚
+托盘（C# 503 行）        状态指示灯 + 常用操作
+```
+
+核心是把「指挥外部命令」从脚本搬进 Python：参数以 **list** 传给 subprocess，
+Windows 自己处理转义，引号问题从根上消失；而且能 `--dry-run`、能单测。
+
+### lanshare_cli
+
+```bash
+python -m lanshare_cli install     # 8 步，每步 OK/FAIL，失败自动回滚
+python -m lanshare_cli uninstall   # 停服务删服务，数据保留
+python -m lanshare_cli status      # 服务状态 + HTTP 探针
+python -m lanshare_cli doctor      # 环境自检，只读
+
+# 常用开关
+--dry-run   只检查不执行
+--api-port / --web-port / --data-dir / --python / --service-prefix
+```
+
+`--service-prefix` 是做隔离测试用的：装成 `e2etest-api` / 端口 9911，跟生产互不影响。
+
+34 个单测，锁死三个历史坑：环境变量必须是独立参数、`install` 必须带 exe、
+带空格路径要走 `list2cmdline`。
+
+`NssmService.install()` 失败时会自己清理半成品服务 —— 服务条目建了但后续 `set`
+失败，不留垃圾。对上层保证「要么完整成功，要么不留痕迹」。
+
+### 托盘
+
+C# WinForms，用 Win10 自带的 `csc.exe` 编译成 **16 KB** 单文件，不需要 Visual
+Studio 或 .NET SDK。三色状态灯（绿=正常/黄=异常/红=没跑），双击开网盘，右键有
+复制局域网地址、打开数据/日志文件夹、重启服务（UAC 提权）。
+
+状态用 **HTTP 探针**而不是查服务状态 —— 实测见过服务显示 PAUSED 但端口没监听，
+只有真请求 `/healthz` 才算数。5 秒一轮，状态变化才写日志（超 1MB 轮转）。
+
+### 三个「只在别人机器上炸」的坑
+
+**embeddable Python 的 `_pth` 少了 `..`** → `No module named lanshare_cli`。
+`_pth` 是隔离模式，不读 PYTHONPATH、不读 cwd，`.` 指 runtime 目录而非安装根。
+**这个坑在开发机上永远测不出来**（开发机用 venv，没有 `_pth`）。
+
+**`AppParameters` 用 `" ".join()`** → `can't open file 'C:\Program'`。
+NSSM 把整串当命令行喂给程序，不加引号就被空格切。改用 `subprocess.list2cmdline()`。
+
+**默认服务名 `LANShare-api` 会撞生产 `lan-share-api`** —— Windows 服务名比较
+**不区分大小写**。默认值改成 `lanshare`，代码里写了注释说明不能改回去。
+
+### 验证
+
+隔离环境完整跑通（服务名 `e2etest`、端口 9911/9912、目录 `LANShareE2E`）：
+
+```
+装      exit 0 → 2/2 服务 Running → 探针 200 → 首页 307
+托盘    Unknown → Healthy → Down → Healthy（停服务 19 秒后抓到，恢复自动回来）
+卸      exit 0 → 服务清除 → 目录删净 → 数据保留
+生产    lan-share-api/caddy/postgresql 全程零影响
+```
+
+安装包 **34 MB**（LZMA2 压缩，未压缩 136 MB）。门禁 594 项全过。
+
+### 已知限制
+
+- **纯 HTTP，不走 TLS。** Caddy 的 `tls internal` 对无主机名站点（`:端口` 写法）
+  无法签证书，客户端握手一律 `TLSV1_ALERT_INTERNAL_ERROR`（实测）。家用内网
+  HTTP 够用，也不用点「继续访问」。要 HTTPS 得有域名或固定证书文件。
+- 还没在**没有 Python / 没有 .NET 4.8** 的干净机器上验证过。
+- 托盘开机自启（HKA Run 注册表项）没做重启验证。
+- 安装向导页（数据目录选择等）只在静默模式下跑过，图形界面没点过。
+
 ## 2026-10-30 — App v1.1.17+124：双更新源 + 登录页不再预填地址
 
 ### 检查更新改成双源（服务端 + GitHub）

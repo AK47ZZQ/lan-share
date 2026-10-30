@@ -84,9 +84,39 @@ Web 那套是给自己管东西用的，App 才是家人每天打开的那个。
 | Caddy | v2 | 反代和 TLS，丢进 `bin/caddy.exe` |
 | NSSM | 2.24+ | 把 Python 和 Caddy 挂成 Windows 服务 |
 
+**用一键安装的话，上面这一整张表都不需要**——运行时、前端产物、二进制全在安装包里。
+
 路径和端口全在 **`env.bat`** 一个文件里，默认按仓库自己所在位置推导。装到别处不用改脚本，挪走就行。
 
 ## 装起来
+
+### 一键安装（推荐）
+
+下载 `LANShare-Setup-x.y.z.exe`，双击。**不用装 Python、不用装数据库、不用装 Node。**
+
+```
+双击 → 选数据目录 → 完成 → 浏览器自动打开
+```
+
+安装包自带 embeddable Python 3.11 + 依赖、Caddy、NSSM、构建好的前端产物，一共 34 MB。
+装完通知区会多一个托盘图标：
+
+- **绿** = 服务正常，**黄** = 响应异常，**红** = 服务没跑
+- 双击打开网盘；右键有「复制局域网地址」「打开数据文件夹」「打开日志」「重启服务」
+
+安装器版用 **SQLite**，不需要 PostgreSQL。数据默认在 `C:\ProgramData\LANShare\data`，
+安装时可以改到别的盘。卸载会问你是否删数据，默认保留。
+
+命令行也能用（手动排查或改端口时）：
+
+```bash
+python -m lanshare_cli doctor            # 环境自检，只读
+python -m lanshare_cli status            # 服务状态 + 探针
+python -m lanshare_cli install --dry-run # 只检查不执行
+python -m lanshare_cli install --api-port 8866 --web-port 8865   # 换端口
+```
+
+### 手动安装（开发 / 想用 PostgreSQL）
 
 ```bash
 # 1. 依赖
@@ -200,9 +230,12 @@ Nextcloud 功能比这儿多得多，是正经成熟产品，跟着它走不会�
 后端 app/       12,628 行      68 个模块（api 29 · services 14 · store 11）
 Web  src/        6,789 行      Vue 3 + TypeScript
 App  lib/       29,172 行      Flutter
-测试 tests/     10,571 行      65 个文件 · 560 项
+安装部署         2,157 行      installer/ 1,142 · lanshare_cli/ 1,015
+测试 tests/     11,025 行      67 个文件 · 594 项
 API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 ```
+
+安装包 **34 MB**（LZMA2 压缩，解压后 136 MB：embeddable Python 82 MB + Caddy 48 MB + 其余）。
 
 同一套测试能在 SQLite 和 PostgreSQL 上都跑（临时 schema 隔离，不脏库）。本地门禁 `check.bat` 跑八段：pytest 基线、ruff、mypy、pip-audit、UI 分层守卫、SQLite 方言守卫、文档基线守卫、安全消融。
 
