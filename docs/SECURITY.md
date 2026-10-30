@@ -181,7 +181,7 @@
 ## 调试账号
 
 - 存在第二账号 `debug`（与管理员同表同权限），供 AI Agent 调试接口使用；凭据在
-  `docs/DEBUG-ACCOUNT.md`（已 gitignore，不入库）。
+  调试账号的凭据文件（已 gitignore，不入库）。
 - 审计日志中 `debug` 的操作与主人天然可区分；`debug_account_created` 事件记录在案。
 - 停用/轮换方法见该文档。若怀疑凭据泄露：直接删除该账号行并清其 sessions。
 

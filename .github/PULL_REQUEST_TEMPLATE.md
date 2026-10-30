@@ -20,7 +20,7 @@
 ## 文档同步（批次收尾第 4 件）
 
 - [ ] `CHANGELOG.md`
-- [ ] `docs/STATUS-v3.md` 顶部批次段 + 测试基线数字
+- [ ] `CHANGELOG.md` 顶部批次段 + 测试基线数字
 - [ ] `CHANGELOG.md`（本次变更的用户可见影响）
 - [ ] `README.md` 版本号（若对外可见）
 
