@@ -168,6 +168,9 @@ class _LoginPageState extends ConsumerState<LoginPage>
   }
 
   String _probeLabel() {
+    // 首次安装时地址框是空的（不再预填示例地址），这时说「未检测」会让人
+    // 以为在等什么，直接告诉他还没设置服务器。
+    if (_server.text.trim().isEmpty) return '未设置';
     switch (_probe) {
       case _Probe.probing:
         return '正在检测连接…';
@@ -311,10 +314,17 @@ class _LoginPageState extends ConsumerState<LoginPage>
               _probeDot(context),
               const SizedBox(width: 10),
               Expanded(
-                  child: Text(_shortHost(_server.text.trim()),
+                  child: Text(
+                      _server.text.trim().isEmpty
+                          ? '点击设置服务器地址'
+                          : _shortHost(_server.text.trim()),
                       maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600))),
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: _server.text.trim().isEmpty
+                              ? cs.onSurfaceVariant
+                              : null))),
               Text(_probeLabel(),
                   style: Theme.of(context)
                       .textTheme

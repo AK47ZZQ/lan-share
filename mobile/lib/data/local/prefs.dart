@@ -39,19 +39,30 @@ class Prefs {
     await sp.setString(_kUsername, v);
   }
 
-  /// 已保存的服务器地址（最近使用在前）。首用预填局域网地址。
+  /// 已保存的服务器地址（最近使用在前）。
+  ///
+  /// **首用不再预填任何地址。** 早期版本在这里塞了一个
+  /// `https://192.168.1.100:8765` 当示例，问题是：装作"已经连上了"，
+  /// 新手看不出这是占位符，直接点登录然后困惑于连不上；而 App 是公开分发的，
+  /// 任何预设地址都会被当成"作者家的服务器"。
+  /// 现在的约定是登录页地址框留空，由使用者自己填自己那台机器的地址。
   static Future<List<String>> addresses() async {
     final sp = await SharedPreferences.getInstance();
-    final list = sp.getStringList(_kAddresses) ?? [];
-    if (list.isEmpty) list.add('https://192.168.1.100:8765'); // 示例地址，首次使用请改成自己的
-    return list;
+    return sp.getStringList(_kAddresses) ?? const [];
   }
 
+  /// 上次使用的地址；从未用过时返回空串（不是 null，调用方按空串处理）。
+  ///
+  /// 空串只可能出现在「装了从没登录过」这一种情况——登录成功必然 rememberAddress。
+  /// 已登录路径（api_client / transfer / backup / about）读到的都是有值的历史地址。
   static Future<String> lastAddress() async {
     final list = await addresses();
     final sp = await SharedPreferences.getInstance();
-    final a = sp.getString(_kLast) ?? list.first;
-    if (addressNotifier.value != a) addressNotifier.value = a;
+    final stored = sp.getString(_kLast);
+    final a = (stored == null || stored.isEmpty)
+        ? (list.isEmpty ? '' : list.first)
+        : stored;
+    if (a.isNotEmpty && addressNotifier.value != a) addressNotifier.value = a;
     return a;
   }
 
