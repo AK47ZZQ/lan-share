@@ -32,12 +32,14 @@ LAN Share 把这三件事连起来：
 不是「把文件夹共享出来」——那个 SMB 就够了。这个项目要解决的是**一家人合用的日常**：
 
 - 手机拍的照片自动备份到家，不用每月插线导出
-- 每个人有独立账号和私人空间，互不可见；共享盘按目录授权
-- 客厅平板、父母手机、自己的电脑，各有各的登录，各看各的
-- 发给亲戚的分享链接设了有效期和提取码，到期自动失效
+- 每个人独立账号、独立私人空间，互不可见；共享盘按目录授权
+- 分享给亲戚的链接带有效期和提取码，到期自动失效
 - 不在家也能访问——局域网和公网功能完全一致，不是阉割版
 
-![站长工作台 · 总览](docs/screenshots/overview.png)
+<p align="center">
+  <img src="docs/screenshots/overview.png" width="560" alt="站长工作台 · 总览">
+</p>
+<p align="center"><sub>Web 端 · 站长工作台：存储构成、成员与配额、动态流、限速观测</sub></p>
 
 ## 手机端
 
@@ -49,33 +51,58 @@ Web 是站长的工作台，App 是家里每个人日常打开的那个。Flutte
   <img src="docs/screenshots/app-todo.png" width="200" alt="待办">
   <img src="docs/screenshots/app-notes.png" width="200" alt="笔记">
 </p>
+<p align="center"><sub>首页（存储 · 动态 · 备份状态） · 照片时间线 · 待办 · 笔记</sub></p>
 
-<p align="center">
-  <sub>首页（存储 · 动态 · 自动备份状态） · 照片时间线 · 待办 · 笔记</sub>
-</p>
+- **相册自动备份**：拍完自动传到家，首页显示上次备份时间，不用记得这件事
+- **照片时间线**：三列瀑布流，按 EXIF 拍摄时间归月，可切「照片 / 视频」，右上角跳日历
+- **和 Web 完全同源**：同一个后端、同一份权限，手机上删掉的网页端立刻不见
 
-几个手机端才有的体验：
+## 前置要求
 
-- **相册自动备份**：拍完照自动传到家，首页直接显示上次备份时间，不用记得这件事
-- **照片时间线**：三列瀑布流，按 EXIF 拍摄时间归月，可切「照片 / 视频」，右上角能跳日历
-- **首页一眼看全**：剩余空间、最近上传、谁在什么时候传了什么、备份开没开
-- **和 Web 完全同源**：同一个后端、同一份权限，手机上删掉的文件网页端立刻不见
+| 项 | 版本 | 说明 |
+|---|---|---|
+| 系统 | Windows 10 / 11 | 服务通过 NSSM 注册；Linux/macOS 需改用 systemd，见下方说明 |
+| Python | 3.11+ | 后端运行时 |
+| PostgreSQL | 16 | 生产数据库（测试可退回 SQLite） |
+| Node.js | 18+ | 只构建前端时需要 |
+| Caddy | v2 | 反向代理与 TLS，放到 `bin/caddy.exe` |
+| NSSM | 2.24+ | 把 Python / Caddy 注册成 Windows 服务 |
 
-## 快速开始
+所有路径与端口集中在 **`env.bat`** 一个文件里，默认按仓库自身位置推导；装在别处无需改脚本。
+
+## 首次部署
 
 ```bash
-# 1. 起服务（NSSM 注册为 Windows 服务，开机自启）
+# 1. 依赖
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+
+# 2. 数据库（建库即可，首次启动会自动建表）
+createdb -h 127.0.0.1 -p 5433 -U postgres lanshare
+
+# 3. 前端产物（构建一次即可，产物由后端直接挂载）
+cd web && npm install && npm run build && cd ..
+
+# 4. 放二进制：caddy.exe 放进 bin\，nssm.exe 放进 PATH
+#    下载地址见 docs/OPERATIONS.md「依赖」
+
+# 5. 注册并启动（管理员权限 PowerShell）
+.\install-service.bat
 net start lan-share-postgresql
 net start lan-share-api
-
-# 2. 构建前端（改了 web/ 才需要；产物 web/dist 即时生效，不用重启）
-cd web && npm install && npm run build
-
-# 3. 本地调试后端（不碰生产数据）
-SHARE_ROOT=D:/test-data python server.py
+net start lan-share-caddy
 ```
 
 浏览器打开 `https://<本机 IP>:8765`。自签证书首次访问点「继续访问」，首启会引导创建管理员账号，其余成员由管理员发邀请码自助注册。
+
+### 日常启停
+
+```bash
+powershell Restart-Service lan-share-api     # 改后端后
+powershell Restart-Service lan-share-caddy   # 改 Caddyfile 后
+cd web && npm run build                      # 改前端后（不用重启）
+check.bat                                     # 改后端必跑的质量门禁
+```
 
 | 入口 | 地址 | 认证 |
 |---|---|---|
@@ -107,12 +134,21 @@ SHARE_ROOT=D:/test-data python server.py
 |  | LAN Share | Nextcloud | 群晖 DSM | 商业网盘 |
 |---|---|---|---|---|
 | 需要公网 IP | 否，走隧道 | 建议有 | 需要 | — |
-| 额外硬件成本 | 0（用现成电脑） | 0 | 3000 元起 | — |
+| 硬件成本 | 0（旧电脑即可） | 0（需自备服务器/旧电脑） | 3000 元起 | — |
 | Windows 原生 | 是 | 勉强 | 是 | — |
 | 代码量 | 可通读 | 百万行级 | 闭源 | 闭源 |
 | 数据归属 | 完全自己 | 自己 | 自己 | 厂商 |
 
 **把取舍说清楚**：Nextcloud 功能多得多，是成熟产品，跟着它走没有错。这个项目只为「一台 Windows 机器 + 一家人」这个场景优化，砍掉企业级特性，把代码量压到能自己读懂、能自己改的程度。你要能随手改的自留地，还是开箱即用的全家桶——自己判断。
+
+## 不适合谁
+
+诚实一点，这几种情况别用：
+
+- **要企业级能力**（LDAP / 合规审计 / S3 后端 / 多节点）—— 用 Nextcloud 或 MinIO
+- **要开箱即用**——这套要自己装 Python、PostgreSQL、Caddy，还得会用管理员 PowerShell
+- **没有 Windows 机器**——服务脚本是 `.bat` + NSSM，Linux 上要自己写 systemd unit
+- **要 iOS 客户端**——`mobile/ios/` 有工程但未构建验证，目前只发布 Android APK
 
 ## 架构
 
@@ -162,24 +198,6 @@ API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 | App 视觉规范 | [docs/DESIGN-v3/APP-VISUAL-SPEC.md](docs/DESIGN-v3/APP-VISUAL-SPEC.md) |
 | 版本历史 | [CHANGELOG.md](CHANGELOG.md) |
 
-## 开发与运维
-
-```bash
-# 改了后端（app/ 或 server.py）—— Git Bash 下 sc 会静默失败，用 PowerShell
-powershell Restart-Service lan-share-api
-
-# 改了 Caddyfile
-powershell Restart-Service lan-share-caddy
-
-# 前端改动不用重启：cd web && npm run build
-
-# 质量门禁（改后端必跑）
-check.bat
-
-# 看日志
-tail -f logs/api-stderr.log logs/caddy-stderr.log
-```
-
 <details>
 <summary><b>常见问题</b></summary>
 
@@ -192,6 +210,7 @@ tail -f logs/api-stderr.log logs/caddy-stderr.log
 | Windows 映射网络驱动器失败 | 原生 WebClient 对自签证书苛刻，改用 RaiDrive / WinSCP |
 | 改了前端没生效 | Ctrl+F5 强刷一次；之后资产文件名带哈希自动更新 |
 | 公网看不到健康探针 | 设计如此——探针仅局域网可达，不在公网暴露内部状态 |
+| `install-service.bat` 报找不到 nssm | 把 `nssm.exe` 放进 PATH，或设置环境变量 `LANSHARE_NSSM` 指向它 |
 
 </details>
 
