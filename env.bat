@@ -11,6 +11,10 @@ REM define the same-named environment variable beforehand.
 REM ============================================================
 
 set "LANSHARE_ROOT=%~dp0"
+REM %~dp0 always ends with a backslash. Putting "%LANSHARE_ROOT%" in quotes
+REM yields C:\path\" where the trailing \ escapes the quote and corrupts the
+REM argument. LANSHARE_HOME is the same path without the trailing backslash.
+if "%LANSHARE_ROOT:~-1%"=="\" (set "LANSHARE_HOME=%LANSHARE_ROOT:~0,-1%") else (set "LANSHARE_HOME=%LANSHARE_ROOT%")
 
 if not defined LANSHARE_PYTHON       set "LANSHARE_PYTHON=%LANSHARE_ROOT%.venv\Scripts\python.exe"
 if not defined LANSHARE_API_PORT     set "LANSHARE_API_PORT=8766"
