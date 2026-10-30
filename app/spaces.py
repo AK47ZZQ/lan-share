@@ -17,7 +17,6 @@
     grant 不递归取消语义：按路径段前缀命中（"shared/photos" 命中其全部子树）
 """
 
-import os
 import re
 import threading
 import time
@@ -37,11 +36,21 @@ RESERVED_USERNAMES = {"shared", "private", "incoming", "tmp",
 
 
 def _normcase(s: str) -> str:
-    # Windows 的 os.path.normcase 会把 "/" 归一成 "\\"——授权前缀命中与
-    # 移动同步都靠 `gp + "/"` 拼接段边界，混入反斜杠后 startswith 永不命中，
-    # 子目录授权形同虚设（review 2026-09-03 P1：存量测试只覆盖精确路径，
-    # 前缀方向常年未暴露）。这里统一回正斜杠做规范化比较键。
-    return os.path.normcase(s).replace("\\", "/")
+    # 语义必须是「**跨平台确定性**的大小写 + 分隔符规范化」。
+    #
+    # 不能用 os.path.normcase：它在 POSIX（Linux/macOS）上是 no-op，直接返回
+    # 原串、**不转小写**；只有 Windows 才转小写。于是同一段安全判定出现
+    # 三种行为：
+    #   Windows   Private → private   → visible() 拦住  ✓
+    #   Linux     Private → Private   → visible() 放行  ✗（CI 红、Linux 部署会真漏）
+    # SQLite 的 LIKE 对 ASCII 不区分大小写，下推阶段就排除了 Private/，
+    # 掩盖了 visible() 失效；PG 的 LIKE 区分大小写，下推放行后完全依赖
+    # visible()，于是 Linux + PG 的组合把越权暴露出来（2026-10-30 CI pg job）。
+    #
+    # 文件系统的语义：Windows 不区分大小写，Linux 区分。安全判定取「不区分」
+    # 是 fail-closed 方向（宁可多拦），且与 Windows 生产环境既有行为完全一致。
+    # 分隔符归一仍然保留：授权前缀靠 `gp + "/"` 拼段边界，混入反斜杠会永不命中。
+    return s.replace("\\", "/").lower()
 
 
 def _normcase_eq(a: str, b: str) -> bool:
