@@ -19,8 +19,17 @@ class UpdateInfo {
   final String? sha256;
   final bool available;
   final int? size;
+
+  /// 直链下载地址。null = 走服务端 /api/app/download（自家分发）；
+  /// 有值 = 第三方分发（GitHub Release asset 的 browser_download_url）。
+  final String? url;
+
+  /// 来源标记：'server' | 'github'。UI 上用来告诉用户这版从哪查到的。
+  final String source;
+
   UpdateInfo({required this.version, required this.build, required this.notes,
-      required this.sha256, required this.available, required this.size});
+      required this.sha256, required this.available, required this.size,
+      this.url, this.source = 'server'});
 
   factory UpdateInfo.fromJson(Map<String, dynamic> j) => UpdateInfo(
       version: j['version'] as String? ?? '',
@@ -28,7 +37,65 @@ class UpdateInfo {
       notes: j['notes'] as String? ?? '',
       sha256: j['sha256'] as String?,
       available: j['available'] as bool? ?? false,
-      size: (j['size'] as num?)?.toInt());
+      size: (j['size'] as num?)?.toInt(),
+      source: 'server');
+
+  /// 从 GitHub Release 的 JSON 构造。
+  ///
+  /// 三个字段来源不同，都要解析：
+  ///   tag_name              "app-v1.1.16"        → version = 1.1.16
+  ///   assets[].name         "lanshare-v1.1.16+123.apk"
+  ///                                                → build = 123（tag 里没有 build 号）
+  ///   assets[].digest       "sha256:abcd…"       → sha256
+  ///   assets[].browser_download_url               → url
+  ///
+  /// 找不到 apk asset、或 digest 不是 sha256 格式，一律当作「这个源没有新版」
+  /// ——客户端是 fail-closed 的，没有校验值就不该提示用户去装。
+  static UpdateInfo? fromGitHub(Map<String, dynamic> j) {
+    final tag = (j['tag_name'] as String? ?? '').trim();
+    if (tag.isEmpty) return null;
+
+    // tag 形如 app-v1.1.16 / v1.1.16 / 1.1.16
+    final verMatch = RegExp(r'(\d+\.\d+\.\d+)').firstMatch(tag);
+    if (verMatch == null) return null;
+    final version = verMatch.group(1)!;
+
+    final assets = (j['assets'] as List?) ?? const [];
+    Map<String, dynamic>? apk;
+    for (final a in assets) {
+      if (a is Map && '${a['name']}'.toLowerCase().endsWith('.apk')) {
+        apk = Map<String, dynamic>.from(a);
+        break;
+      }
+    }
+    if (apk == null) return null;
+
+    // build 号只能从 asset 文件名里拿：lanshare-v1.1.16+123.apk
+    final name = '${apk['name']}';
+    final buildMatch = RegExp(r'\+(\d+)').firstMatch(name);
+    if (buildMatch == null) return null;
+    final build = int.tryParse(buildMatch.group(1)!) ?? 0;
+    if (build <= 0) return null;
+
+    final digest = '${apk['digest'] ?? ''}';
+    final sha = digest.startsWith('sha256:')
+        ? digest.substring('sha256:'.length).trim()
+        : '';
+
+    final url = '${apk['browser_download_url'] ?? ''}';
+    if (url.isEmpty) return null;
+
+    return UpdateInfo(
+      version: version,
+      build: build,
+      notes: '${j['body'] ?? ''}'.trim(),
+      sha256: sha.isEmpty ? null : sha,
+      available: true,
+      size: (apk['size'] as num?)?.toInt(),
+      url: url,
+      source: 'github',
+    );
+  }
 }
 
 /// 更新历史条目（/api/app/history，服务端 App安装包/versions.json）
@@ -51,14 +118,43 @@ class UpdateHistoryItem {
 class UpdateService {
   UpdateService._();
 
-  /// 服务端最新版本；服务端未配置时返回 null
+  /// 查最新版本：服务端和 GitHub 两路并发，取 build 号大的那个。
+  ///
+  /// 为什么要双源：服务端读 `App安装包/version.json`，靠人工在发版时同步，
+  /// 忘了就永远推不出新版（发 1.1.16 时真踩过）。GitHub Release 是发布
+  /// 动作本身，不会漏。反过来，GitHub 在部分网络环境下不可达，那就回落到
+  /// 服务端——两个源互为兜底，任一可用就不会让「检查更新」整体失效。
+  ///
+  /// 都不通时返回 null，UI 显示「已是新版」而不是报错——检查更新失败不该
+  /// 变成一个红色错误吓唬人。
   static Future<UpdateInfo?> check() async {
+    final results = await Future.wait<UpdateInfo?>([
+      _checkServer(),
+      _checkGitHub(),
+    ]);
+    final candidates = results.whereType<UpdateInfo>().toList()
+      ..sort((a, b) => b.build.compareTo(a.build));
+    return candidates.isEmpty ? null : candidates.first;
+  }
+
+  /// 服务端源：未配置（404）或网络失败都返回 null
+  static Future<UpdateInfo?> _checkServer() async {
     try {
       final r = await AppverApi.latest();
       return UpdateInfo.fromJson(Map<String, dynamic>.from(r.data as Map));
-    } on DioException catch (e) {
-      if (e.response?.statusCode == 404) return null;
-      rethrow;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// GitHub 源：任何异常都返回 null（静默降级到服务端）
+  static Future<UpdateInfo?> _checkGitHub() async {
+    try {
+      final r = await AppverApi.githubLatest();
+      if (r == null || r.data is! Map) return null;
+      return UpdateInfo.fromGitHub(Map<String, dynamic>.from(r.data as Map));
+    } catch (_) {
+      return null;
     }
   }
 
@@ -102,10 +198,21 @@ class UpdateService {
     // 版本号消毒：只留白名单字符，防 path 拼接注入（version 来自服务端 JSON）
     final safeVer = info.version.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
     final path = '${dir.path}/lanshare-$safeVer.apk';
-    final dio = await ApiClient.I.dio();
-    await dio.download('/api/app/download', path,
-        onReceiveProgress: onProgress,
-        options: Options(receiveTimeout: const Duration(minutes: 30)));
+    if (info.url != null && info.url!.isNotEmpty) {
+      // 第三方源（GitHub Release asset）：直链下载，不带自家会话凭据。
+      // 独立 Dio——不要为了图省事复用 ApiClient，那会把 Bearer token 一并
+      // 发到 github.com，等于把登录凭据交给第三方。
+      final raw = Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(minutes: 30),
+      ));
+      await raw.download(info.url!, path, onReceiveProgress: onProgress);
+    } else {
+      final dio = await ApiClient.I.dio();
+      await dio.download('/api/app/download', path,
+          onReceiveProgress: onProgress,
+          options: Options(receiveTimeout: const Duration(minutes: 30)));
+    }
     final f = File(path);
     // 红队 P2：sha256 与 size 同信道可整段伪造，size 校验只防意外损坏。
     // sha256 缺失即拒装（fail closed）——服务端 /api/app/latest 已改为

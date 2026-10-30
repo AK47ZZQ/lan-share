@@ -126,7 +126,10 @@ Future<void> showServerPicker(
           controller: controller,
           decoration: const InputDecoration(
               labelText: '手动输入地址',
-              hintText: 'https://192.168.1.100:8765',
+              // 用占位符写法而不是具体 IP：这是给公开分发的 App，
+              // 任何写死的地址都会被当成「作者的服务器」。
+              hintText: 'https://你的服务器IP:8765',
+              helperText: '局域网和公网都用 8765 端口，填哪个都行',
               isDense: true),
           keyboardType: TextInputType.url,
           autocorrect: false,

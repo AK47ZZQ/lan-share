@@ -1,3 +1,56 @@
+## 2026-10-30 — App v1.1.17+124：双更新源 + 登录页不再预填地址
+
+### 检查更新改成双源（服务端 + GitHub）
+
+原实现只查 `/api/app/latest`，读的是服务端 `App安装包/version.json`——**靠人工
+在发版时同步**。发 1.1.16 时就漏了这步：GitHub Release 传了，服务端目录还是
+1.1.15，用户在 App 里点检查更新永远看不到新版。
+
+现在两路并发，取 build 号大的那个：
+
+- **服务端源** `/api/app/latest` —— 自家分发，完全不依赖外网
+- **GitHub 源** `api.github.com/repos/AK47ZZQ/lan-share/releases/latest`
+
+任一失败静默跳过，两个都不通才返回 null（UI 说「已是新版」而不是抛红字错误）。
+GitHub 挂了回落服务端，服务端忘了同步还有 GitHub 兜着。
+
+三个解析细节：
+- `tag_name` 是 `app-v1.1.16`，**没有 build 号**，得从 asset 文件名
+  `lanshare-v1.1.16+123.apk` 里抠出 123 来比大小
+- `assets[].digest` 是 `sha256:...` 格式，剥掉前缀留 hex，与服务端下发的
+  sha256 对得上（实测同一个包，值完全一致）
+- 用 `api.github.com` 而不是 `raw.githubusercontent.com`：后者国内常被污染，
+  且只有 API 才给 digest 字段——而客户端是 sha256 缺失即拒装的 fail-closed 策略
+
+**下载路径分两种**：GitHub 源用 `browser_download_url` 直链，走独立 Dio；
+**绝不复用 ApiClient**，否则会把 Bearer token 一并发给 github.com，等于把
+登录凭据交出去。
+
+### 登录页不再预填服务器地址
+
+`Prefs.addresses()` 首用时会塞 `https://192.168.1.100:8765` 当示例。问题：
+App 是公开分发的，任何写死的地址都会被当成「作者家的服务器」，而且装作
+「已经连上了」，新手看不出是占位符。
+
+现在：首用地址框**留空**，服务器条显示「点击设置服务器地址」，状态标签显示
+「未设置」，占位提示改成 `https://你的服务器IP:8765` + 一句「局域网和公网都用
+8765 端口」。
+
+`lastAddress()` 相应允许返回空串——只在「装了从没登录过」出现，已登录路径
+（api_client / transfer / backup / about）读到的都是有值的历史地址。
+
+### 验证新装行为
+
+**覆盖安装看不到这个变化**：`SharedPreferences` 里存着上次用的地址
+（`server_addresses` / `server_last`），会照常预填。要验默认行为得卸载重装
+或清 App 数据。
+
+### 顺带
+
+- 新增 `test/update_github_test.dart` 14 项：正常解析 + 六种边界返回 null +
+  digest 缺失的降级处理 + isNewer 比较
+- `flutter analyze` 0 issue / `flutter test` 254 项（原 240 + 新 14）
+
 ## 2026-10-30 — App v1.1.16+123：依赖维护版（零功能改动）
 
 - 本版**没有功能变更**，起因是仓库转 public 后开启了 Dependabot。它十分钟内
