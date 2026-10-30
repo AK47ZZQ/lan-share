@@ -107,7 +107,7 @@ net stop lan-share-caddy && net start lan-share-caddy # Caddyfile 变更
   `scripts\build-apk.bat release` 出正式签名包。密钥库
   `mobile/android/keys/lanshare-release.jks`（alias `lanshare`，10000 天，
   证书指纹 `CF:31:1C:B4:…:07:78`），凭据在 `mobile/android/key.properties`——
-  两者均 gitignore，**异地备份在 `<仓库外的私有备份位置>\`，
+  两者均 gitignore，**异地备份在 `C:\Users\<你的用户名>\lanshare-keystore-backup\`，
   丢了就无法覆盖安装**（全家都得卸载重装）。gradle 侧 `key.properties` 的
   `storeFile` 相对 **android/ 根**（rootProject）解析，别按 `app/` 相对路径写。
   ⚠️ **R8 已关（`android/gradle.properties` → `shrink=false`）**：Flutter 插件

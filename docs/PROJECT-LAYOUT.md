@@ -6,7 +6,7 @@
 
 | 路径 | 性质 | 说明 |
 |---|---|---|
-| `C:\Users\<你的用户名>\Desktop\AI Agent 共享空间\协作产物\lan-share` | **本仓库（真源）** | 服务端 + web/ + mobile/ + 文档，git 仓库 |
+| `<仓库根>` | **本仓库（真源）** | 服务端 + web/ + mobile/ + 文档，git 仓库 |
 | `C:\lan-share` | junction → 本仓库 | NSSM 三服务（api/caddy/postgresql）的实际运行入口：`server.py`、`Caddyfile`、`data/`。在资源管理器或命令行访问它 = 访问本仓库 |
 | `C:\lan-share-mobile` | git 镜像（同 commit） | **ASCII 路径构建镜像**：Dart 分析器/部分 gradle 步骤在中文路径下会崩（见 [DEVELOPMENT.md](DEVELOPMENT.md) 的构建说明），APK 构建与分析从这里跑。发版前 `git fetch + reset --hard` 同步到目标 commit |
 | `C:\lan-share-backup` | 数据备份（⚠️ 当前暂停） | 2026-09-13 主人决策**暂停外部备份**：`files/`（20.1GB 旧快照）已删、计划任务已禁用，仅留 `db/` 与 manifest。**恢复条件与命令见 [HANDOFF.md](../HANDOFF.md) §4**——等第二块 SSD 到位后做真异地备份 |

@@ -37,7 +37,7 @@ void main() {
   group('AutoSwitch.advertisedLanCandidates：再发现候选过滤', () {
     test('https-only：http 候选被剔除（红队口径延续）', () {
       final got = AutoSwitch.advertisedLanCandidates(
-        advertised: ['https://192.168.1.100:8765', 'http://192.168.1.13:8765'],
+        advertised: ['https://192.168.1.100:8765', 'http://192.168.1.101:8765'],
         current: 'https://your-frp-domain.com:xxxxx',
         history: const [],
       );
