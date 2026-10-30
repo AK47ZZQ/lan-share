@@ -9,6 +9,7 @@
   ![app](https://img.shields.io/badge/app-v1.1.15%2B122-2563eb)
   ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
   ![tests](https://img.shields.io/badge/tests-560%20passed-16a34a)
+  ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 </div>
 
 ---
@@ -46,15 +47,20 @@ LAN Share 把这三件事连起来：
 Web 是站长的工作台，App 是家里每个人日常打开的那个。Flutter 原生，不是套壳网页。
 
 <p align="center">
-  <img src="docs/screenshots/app-home.png" width="200" alt="首页">
-  <img src="docs/screenshots/app-photos-blur.png" width="200" alt="照片时间线">
-  <img src="docs/screenshots/app-todo.png" width="200" alt="待办">
-  <img src="docs/screenshots/app-notes.png" width="200" alt="笔记">
+  <img src="docs/screenshots/app-home.png" width="182" alt="首页">
+  <img src="docs/screenshots/app-photos.png" width="182" alt="照片">
+  <img src="docs/screenshots/app-todo.png" width="182" alt="待办">
 </p>
-<p align="center"><sub>首页（存储 · 动态 · 备份状态） · 照片时间线 · 待办 · 笔记</sub></p>
+<p align="center">
+  <img src="docs/screenshots/app-notes.png" width="182" alt="笔记">
+  <img src="docs/screenshots/app-me-1.png" width="182" alt="我的">
+  <img src="docs/screenshots/app-me-2.png" width="182" alt="账号与安全">
+</p>
+<p align="center"><sub>首页 · 照片时间线 · 待办 · 笔记 · 我的 · 账号与安全</sub></p>
 
 - **相册自动备份**：拍完自动传到家，首页显示上次备份时间，不用记得这件事
 - **照片时间线**：三列瀑布流，按 EXIF 拍摄时间归月，可切「照片 / 视频」，右上角跳日历
+- **账号与安全在一处**：改密码、WebDAV 独立密码、配对码、恢复码、验证器、应用锁
 - **和 Web 完全同源**：同一个后端、同一份权限，手机上删掉的网页端立刻不见
 
 ## 前置要求
@@ -216,4 +222,8 @@ API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 
 ## 许可
 
-开源协议待定。`data/`、`env/`、`.venv/`、凭据与证书均不入库（见 `.gitignore`）。
+[GNU AGPL-3.0](LICENSE)。
+
+你可以自由地使用、修改、自建部署，也可以基于它做自己的东西。唯一的硬约束：**如果你把它改造后作为网络服务提供给他人使用，你的修改也必须以 AGPL-3.0 开源。** 自己家里用、内部用，不受这条约束。
+
+`data/`、`env/`、`.venv/`、凭据与证书均不入库（见 `.gitignore`）。
