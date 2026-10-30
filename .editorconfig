@@ -1,0 +1,41 @@
+# 编辑器配置（2026-10-30 立）—— 让 IDE 与 .gitattributes 保持一致
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Windows 批处理：CRLF（与 .gitattributes 一致）
+[*.{bat,cmd}]
+end_of_line = crlf
+indent_size = 2
+
+# Python
+[*.{py,pyi}]
+indent_size = 4
+max_line_length = 100
+
+# 前端（Vue/TS/JS/CSS）
+[*.{ts,tsx,js,mjs,vue,css,scss,json,yml,yaml}]
+indent_size = 2
+
+# Dart / Flutter
+[*.dart]
+indent_size = 2
+
+# 文档
+[*.md]
+trim_trailing_whitespace = false   # Markdown 行尾双空格是硬换行，不能删
+indent_size = 2
+
+# Makefile / Dockerfile 用 tab
+[{Makefile,Dockerfile}]
+indent_style = tab
+
+# 生成物不强求行尾
+[*.{lock,min.js,min.css}]
+insert_final_newline = false
