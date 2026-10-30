@@ -54,15 +54,14 @@ SHARE_ROOT=D:/test-data python server.py
 
 | 你要什么 | 读哪 |
 |---|---|
-| **改代码前必读**（命令 / 红线 / 踩坑） | [AGENTS.md](AGENTS.md) · [03-踩坑清单](docs/项目记忆/03-踩坑清单.md) |
-| 接手项目（半天上手路径 + 风险） | [HANDOFF.md](HANDOFF.md) |
 | 完整 API | [docs/API.md](docs/API.md) |
 | 安全模型 | [docs/SECURITY.md](docs/SECURITY.md) |
 | 运维（服务/备份/证书/故障） | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
-| 架构与现状 | [docs/项目记忆/01-架构与现状.md](docs/项目记忆/01-架构与现状.md) |
+| 开发环境与命令 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
+| 目录结构 | [docs/PROJECT-LAYOUT.md](docs/PROJECT-LAYOUT.md) |
 | 版本历史 | [CHANGELOG.md](CHANGELOG.md) |
 | App 视觉规范 | [docs/DESIGN-v3/APP-VISUAL-SPEC.md](docs/DESIGN-v3/APP-VISUAL-SPEC.md) |
-| 历史归档 | `docs/archive/` · `docs/DESIGN-v3/archive/` · `docs/项目记忆/archive/` |
+| 历史归档 | `docs/DESIGN-v3/archive/` |
 
 ## 架构
 
@@ -124,11 +123,9 @@ lan-share/                     C:\lan-share 是指向本仓库根的 junction（
 │   └── DESIGN-v3/             App 设计与视觉规范（archive/ 为立项期设计稿）
 ├── data/                      运行时数据根（不入库：用户文件/.trash/.chunks/…）
 │   └── 反馈/                  反馈看板（目录即状态：待处理/进行中/已完成）
-├── AGENTS.md                  🔴 AI 代理操作手册（命令/红线/工作流纪律）
-├── HANDOFF.md                 交接手册（半天上手路径/凭据/风险/决策记录）
 ├── CHANGELOG.md               版本历史（v0.20 及以前见 docs/archive/）
 ├── env.bat                    部署单源（路径/端口/解释器全在这里）
-├── backup.bat                 每日备份（**当前暂停**，见 HANDOFF.md §4）
+├── backup.bat                 每日备份
 ├── check.bat                  本地质量门禁（pytest+ruff+mypy+pip-audit+UI分层）
 └── logs/                      服务日志（NSSM 轮转）
 ```

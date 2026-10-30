@@ -158,7 +158,7 @@ def dir_tree(path: Path) -> dict:
 # PermissionError（Windows 上源要稍后才消失）、判"源还在"而退化成 shutil.move
 # 复制路径 —— 结果同一份内容登记出多行，且有的行指向不存在的文件
 #（D5 删除侧，实测 [404,200,200,404,404] 与坏行）。
-# 本服务是单进程多线程（AGENTS.md §2），条带锁足以封死该窗口；固定 32 条带
+# 本服务是单进程多线程，条带锁足以封死该窗口；固定 32 条带
 # 不随路径数增长、无需清理；用 RLock 是为了同线程重入（上传覆盖内部会再调一次）不死锁。
 _TRASH_STRIPES = tuple(threading.RLock() for _ in range(32))
 
@@ -167,7 +167,7 @@ _TRASH_STRIPES = tuple(threading.RLock() for _ in range(32))
 # 此前**完全不持锁**地动 .trash——admin 清空（rmtree 整树）与成员恢复的
 # shutil.move 交错，Windows 下 rename 失败退化成 copytree，会把被删掉一半的
 # 目录树"恢复成功"（静默截断）。凡"从 .trash 里取东西/删东西"一律持本锁；
-# 单进程部署（AGENTS.md §2），进程内 RLock 足够。
+# 单进程部署，进程内 RLock 足够。
 TRASH_OPS_LOCK = threading.RLock()
 
 

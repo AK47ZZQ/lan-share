@@ -8,7 +8,7 @@
 |---|---|---|
 | `C:\Users\<你的用户名>\Desktop\AI Agent 共享空间\协作产物\lan-share` | **本仓库（真源）** | 服务端 + web/ + mobile/ + 文档，git 仓库 |
 | `C:\lan-share` | junction → 本仓库 | NSSM 三服务（api/caddy/postgresql）的实际运行入口：`server.py`、`Caddyfile`、`data/`。在资源管理器或命令行访问它 = 访问本仓库 |
-| `C:\lan-share-mobile` | git 镜像（同 commit） | **ASCII 路径构建镜像**：Dart 分析器/部分 gradle 步骤在中文路径下会崩（见 `docs/项目记忆/03-踩坑清单.md`），APK 构建与分析从这里跑。发版前 `git fetch + reset --hard` 同步到目标 commit |
+| `C:\lan-share-mobile` | git 镜像（同 commit） | **ASCII 路径构建镜像**：Dart 分析器/部分 gradle 步骤在中文路径下会崩（见 [DEVELOPMENT.md](DEVELOPMENT.md) 的构建说明），APK 构建与分析从这里跑。发版前 `git fetch + reset --hard` 同步到目标 commit |
 | `C:\lan-share-backup` | 数据备份（⚠️ 当前暂停） | 2026-09-13 主人决策**暂停外部备份**：`files/`（20.1GB 旧快照）已删、计划任务已禁用，仅留 `db/` 与 manifest。**恢复条件与命令见 [HANDOFF.md](../HANDOFF.md) §4**——等第二块 SSD 到位后做真异地备份 |
 | `C:\lan-share\env\pginstall\pgpass.conf` | 环境文件（项目内） | PG16@5433 口令，backup.bat 依赖，不入库（2026-09-21 自包含迁移：PG 数据/客户端/ffmpeg/flutter/android-sdk 全部收编项目 `env/`，gitignored） |
 
@@ -21,7 +21,7 @@
 
 1. 改代码（本仓库）→ pytest + web build + dart analyze 全绿
 2. APK：在 `C:\lan-share-mobile` 同步镜像后构建（scripts/build-apk.bat）
-3. 分发三件套：APK + version.json + versions.json（发版纪律见 `docs/项目记忆/04-发版SOP.md`）
+3. 分发三件套：APK + version.json + versions.json（发版流程见 [CHANGELOG.md](../CHANGELOG.md) 对应版本条目）
 4. 生产 API 重启：`powershell Restart-Service lan-share-api`（Git Bash 下 `sc` 会静默失败）
 
 ## v0.21 新增的落点
