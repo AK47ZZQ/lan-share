@@ -1,6 +1,8 @@
-<div align="center">
+<div align="right">
   <sub><b>English</b> &nbsp;·&nbsp; <a href="README.md">简体中文</a></sub>
+</div>
 
+<div align="center">
   <img src="logo/app-login-brand.svg" height="84" alt="LAN Share">
   <h1>LAN Share</h1>
   <p><b>Turn that dusty spare Windows PC into a private cloud your whole family actually uses.</b></p>
