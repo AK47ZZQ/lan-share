@@ -54,7 +54,7 @@ def main():
 
     total = sum(m[3] for m in mine)
     print(f"MATCHED {len(mine)} entries, {total/1073741824:.2f} GB (original under {PREFIX})")
-    for i, r, orig, size, ts in sorted(mine, key=lambda m: -m[3])[:12]:
+    for _, _, orig, size, ts in sorted(mine, key=lambda m: -m[3])[:12]:
         print(f"  {size/1073741824:8.3f} GB  {ts:%m-%d %H:%M}  {orig}")
     if len(mine) > 12:
         print(f"  ... and {len(mine)-12} more")
@@ -65,7 +65,7 @@ def main():
 
     ok = fail = 0
     freed = 0
-    for i, r, orig, size, ts in mine:
+    for _, r, orig, size, _ts in mine:
         try:
             if r.is_dir():
                 import shutil

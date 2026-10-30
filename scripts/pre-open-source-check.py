@@ -10,7 +10,6 @@ Exit 0 = all clear, 1 = blockers found.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys

@@ -21,7 +21,6 @@ import os
 import argparse
 import base64
 import datetime
-import os
 import sys
 import urllib.error
 import urllib.request
