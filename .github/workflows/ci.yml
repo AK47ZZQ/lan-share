@@ -4,6 +4,13 @@ name: ci
 # 此前质量门禁只靠人记得跑 check.bat，且测试只跑 SQLite、生产跑 PostgreSQL。
 # 本工作流把"门禁"变成"push 即强制"，并让同一套测试在**两条引擎**上各跑一遍。
 
+# 同一分支连续推送时，取消上一次还在跑的旧 run。
+# PR 上一定取消：今天 9 个 Dependabot PR 同时跑，把 main 的 CI 挤到排队 5 分钟。
+# main 上不取消：每次推送都留完整的验证记录，历史里不会出现「cancelled」被误读成失败。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 on:
   push:
     branches: [main]
