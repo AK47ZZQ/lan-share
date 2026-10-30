@@ -39,7 +39,7 @@ dependencies:
                                  #  media_proxy 绕开——插件不暴露证书回调）
   qr_flutter: ^4.1.0             # 分享二维码本机渲染（qr 纯 Dart 绘制，免拉服务端 SVG）
   share_plus: ^10.1.2            # 分享链接经系统分享面板直发微信/QQ（official flutter.dev）
-  package_info_plus: ^8.1.1      # 关于页/检查更新读取自身 version+build（official）
+  package_info_plus: ^9.0.1      # 关于页/检查更新读取自身 version+build（official）
   flutter_local_notifications: ^18.0.1  # 传输完成系统通知（备份通知走 Kotlin 自有通道，
                                  #  App 内传输完成复用系统能力需本插件）
   # ── v0.8.5 主题引擎 ────────────────────────────────────────
