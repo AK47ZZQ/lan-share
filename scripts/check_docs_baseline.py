@@ -24,7 +24,11 @@ def _count_py(d: Path) -> int:
 
 
 def main() -> int:
-    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    agents_path = ROOT / "AGENTS.md"
+    if not agents_path.exists():
+        print("AGENTS.md 不在本版本中（内部规范未随开源发布），跳过基线守卫")
+        raise SystemExit(0)
+    agents = agents_path.read_text(encoding="utf-8")
     problems: list[str] = []
 
     def check(pattern: str, actual: int, what: str) -> None:

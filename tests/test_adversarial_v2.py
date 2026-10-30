@@ -4,7 +4,7 @@
 直接拿 SHARE_ROOT 当 target（app/api/webdav.py::dav_handler）。
 
 第一性原理：权限模型的不可约契约是「任何文件入口必经 spaces.resolve()」
-（AGENTS.md §6），guest 的语义是「shared 无默认权限，一切凭 grant」
+，guest 的语义是「shared 无默认权限，一切凭 grant」
 （spaces.py 模块 docstring / PERMISSIONS.md E4）。根集合也是集合，
 不存在"读根不需要授权"的例外——所以 guest PROPFIND /dav/ 的正确答案是 403，
 不是 207。

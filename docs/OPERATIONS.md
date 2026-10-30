@@ -2,7 +2,7 @@
 
 > 面向日常维护：服务管理、数据库、备份恢复、证书、网络、常见故障。
 > 架构背景见 [项目记忆/01-架构与现状.md](项目记忆/01-架构与现状.md)；
-> 命令速查与红线见根目录 [AGENTS.md](../AGENTS.md)；交接视角见 [HANDOFF.md](../HANDOFF.md)。
+> 命令速查见根目录 [README.md](../README.md) 的快速开始一节。
 
 ## 1. 服务管理（NSSM 三服务）
 
@@ -116,8 +116,7 @@ curl -k https://192.168.1.100:8765/healthz
 > C:\Users\<你的用户名>\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe ^
 >   C:\lan-share\scripts\_ops_toggle_backup_task.py enable
 > ```
-> 任务定义备份在仓库 `.backup-audit/lan-share-backup.task.xml.bak`；
-> 删除前完整文件清单（可追溯）在 `.backup-audit/files-inventory-before-delete.json`。
+> 任务定义与删除前的完整文件清单保存在部署本地的审计目录（未随仓库发布）。
 >
 > ⚠️ **停机期间无异地备份**（知情决策）。另注意 `db\lanshare-20260911.dump` 是
 > **0 字节空档**，最新有效 dump 为 `lanshare-20260912.dump`。
@@ -290,6 +289,6 @@ ALTER ROLE lanshare CREATEDB;            -- 一次性
 
 ## 9. 升级发布节奏（引用）
 
-- App / Web / 服务端发版细节：`docs/项目记忆/04-发版SOP.md`。
-- 每次发版后：`CHANGELOG.md` + `docs/STATUS-v3.md` 基线数字 + `docs/项目记忆/`
+- App / Web / 服务端发版细节：见 [CHANGELOG.md](../CHANGELOG.md) 对应版本条目。
+- 每次发版后：更新 `CHANGELOG.md` 与本文档基线数字
   同步（三件套之外的第 4 件：文档）。
