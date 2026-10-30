@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/AK47ZZQ/lan-share/security/advisories/new
+    about: 安全问题请走私密报告，不要开公开 issue
+  - name: 部署和使用问题
+    url: https://github.com/AK47ZZQ/lan-share/blob/main/docs/OPERATIONS.md
+    about: 装不起来、服务起不来，先看运维文档

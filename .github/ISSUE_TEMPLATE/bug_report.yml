@@ -1,0 +1,89 @@
+name: Bug 报告
+description: 报告一个可以复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先搜一下有没有重复的。
+        安全问题不要在这里提，走 [私密漏洞报告](../security/advisories/new)。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 说清楚现象。报错信息直接贴原文，别只写"报错了"。
+      placeholder: |
+        点开照片时间线时白屏，控制台报 xxx。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你预期会发生什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 越具体越好。能稳定复现的 bug 才有修复的可能。
+      placeholder: |
+        1. 用 admin 登录
+        2. 进入 照片 → 时间线
+        3. 往下滚到 2026 年 9 月
+        4. 白屏
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 服务端版本看 `docs/` 或 Release，App 版本在「我的 → 关于」里
+      placeholder: "server v3.70 / app v1.1.15+122"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 涉及哪部分
+      options:
+        - Web 前端（Vue）
+        - 手机 App（Flutter）
+        - 后端 API
+        - WebDAV
+        - 部署脚本 / 服务注册
+        - 文档
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境
+      description: |
+        系统版本、Python / Node / PostgreSQL 版本，用的是什么浏览器或手机。
+        **不要贴真实 IP、域名、邮箱、路径里有你名字的部分。** 脱敏之后再贴。
+      placeholder: |
+        Windows 11 23H2
+        Python 3.11.15 / PostgreSQL 16.4 / Node 20
+        Chrome 130 / 红米 Note 12 (Android 13)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: |
+        后端日志在 `data/logs/`，浏览器报错在 F12 控制台。
+        贴之前把 IP、域名、路径里的用户名删掉。
+      render: shell
+    validations:
+      required: false

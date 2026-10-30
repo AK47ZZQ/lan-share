@@ -1,0 +1,48 @@
+name: 功能建议
+description: 提一个想加的功能
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先看一眼 README 的「什么情况别用」那节，说不定已经写清楚这个项目不打算做。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的是什么问题
+      description: |
+        先说问题，别先说方案。"我希望有个 XXX 按钮"不如"我每次导照片都要手动分文件夹，很烦"。
+      placeholder: |
+        从手机导照片回家以后，全部堆在一个目录里，按日期分文件夹要手动做。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你觉得该怎么解决
+      description: 有具体想法就写，没有也行，光说问题也有价值。
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你现在怎么绕过去的
+      description: 用什么替代方案、别的软件怎么做的，都有参考价值。
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 这个功能大概多大
+      options:
+        - 改几行就行
+        - 要动一个模块
+        - 要动数据库结构
+        - 不太清楚
+    validations:
+      required: true
