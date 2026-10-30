@@ -19,7 +19,7 @@ dependencies:
   # 依赖原则（沿 PLAN-v3 §6）：每新增一项在此记录理由（详见 CHANGELOG）。
   dio: ^5.7.0                    # 网络：Bearer 拦截器/401 统一处理/上传进度与取消
   flutter_riverpod: ^2.6.1       # 状态管理（APP-DESIGN §1 选型定稿）
-  flutter_secure_storage: ^9.2.2 # 设备 Token 安全存储（Keystore/Keychain）
+  flutter_secure_storage: ^10.3.4 # 设备 Token 安全存储（Keystore/Keychain）
   shared_preferences: ^2.3.3     # 非敏感设置（服务器地址列表等）
   http: ^1.2.0                    # flutter_cache_manager FileService 的 http 客户端载体
   flutter_cache_manager: ^3.4.2
