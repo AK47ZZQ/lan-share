@@ -89,3 +89,18 @@ mobile/android/keys/
 # 项目依赖用 requirements.txt 管（见 AGENTS.md §3），uv.lock 是本地跑 uv 时的产物，
 # 只含 version/revision/requires-python 三行，入库会与 requirements.txt 形成两套真相
 uv.lock
+
+# ---- 开源前排除：内部记忆 / 教训 / 交接文档（2026-10-30）----
+# 这些路径含：真实事故复盘、本机绝对路径（C:\lan-share）、真实邮箱、
+# 个人协作偏好与心理状态、调试凭据引用、历史文件清单快照。
+# 产品价值（架构决策、接口契约、为什么这么设计）已体现在代码与 README 中；
+# 内部复盘保留在私有副本，不进公开历史。
+/AGENTS.md
+/HANDOFF.md
+/.backup-audit/
+/docs/项目记忆/
+/docs/archive/
+/docs/STATUS-v3.md
+/docs/主人简报.md
+/docs/效率舱*.md
+/docs/feature-proposal*.md
