@@ -24,7 +24,7 @@ psycopg[binary]==3.3.6      # PG 驱动（psycopg3；_pg_sql 的 %% 转义语义
 pillow==13.0.0               # 缩略图/EXIF 矫正（13.0.0：12.3.0 三条 CVE 修复）
 pillow-heif==1.8.1          # HEIC 缩略图（缺失时 filetools.ensure_heif_support 静默降级）
 pyotp==2.10.0               # TOTP（_totp_match_step ±1 窗口语义）
-qrcode==7.4.2               # 分享二维码（服务端动态生成）
+qrcode==8.2               # 分享二维码（服务端动态生成）
 python-multipart==0.0.32    # FastAPI 文件上传解析
 tzdata==2026.5
 
