@@ -172,7 +172,7 @@ scripts\build-apk.bat debug|release
 ## 签名与发布（v0.4.0+4 起 release 为正式签名）
 
 - 密钥库 `android/keys/lanshare-release.jks` + 凭据 `android/key.properties`
-  （均 gitignore；**异地备份** `<仓库外的私有备份位置>\`，
+  （均 gitignore；**异地备份**到仓库外的私有位置，
   丢失即无法覆盖安装）。gradle 从 `key.properties` 读签名，缺文件时回退
   debug 签名（保证无密钥环境 `flutter run --release` 可用）
 - `storeFile` 路径相对 **android/ 根**（rootProject）解析——写 `keys/xxx.jks`
