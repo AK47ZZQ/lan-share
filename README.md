@@ -39,6 +39,28 @@ LAN Share 把这三件事连起来：
 
 ![站长工作台 · 总览](docs/screenshots/overview.png)
 
+## 手机端
+
+Web 是站长的工作台，App 是家里每个人日常打开的那个。Flutter 原生，不是套壳网页。
+
+<p align="center">
+  <img src="docs/screenshots/app-home.png" width="200" alt="首页">
+  <img src="docs/screenshots/app-photos-blur.png" width="200" alt="照片时间线">
+  <img src="docs/screenshots/app-todo.png" width="200" alt="待办">
+  <img src="docs/screenshots/app-notes.png" width="200" alt="笔记">
+</p>
+
+<p align="center">
+  <sub>首页（存储 · 动态 · 自动备份状态） · 照片时间线 · 待办 · 笔记</sub>
+</p>
+
+几个手机端才有的体验：
+
+- **相册自动备份**：拍完照自动传到家，首页直接显示上次备份时间，不用记得这件事
+- **照片时间线**：三列瀑布流，按 EXIF 拍摄时间归月，可切「照片 / 视频」，右上角能跳日历
+- **首页一眼看全**：剩余空间、最近上传、谁在什么时候传了什么、备份开没开
+- **和 Web 完全同源**：同一个后端、同一份权限，手机上删掉的文件网页端立刻不见
+
 ## 快速开始
 
 ```bash
