@@ -139,3 +139,33 @@ jobs:
       - name: 构建（vue-tsc 类型检查 + vite build）
         working-directory: web
         run: npm run build
+
+  mobile:
+    name: Flutter 静态分析 + 测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本钉死：Flutter 的小版本之间 Dart 分析器和 lint 规则会变，
+      # 让 CI 用和本机相同的 3.47.1，否则本机能过 CI 能红。
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.1"
+          channel: stable
+          cache: true
+
+      # 不用 --enforce-lockfile：pubspec.lock 里有 Windows 专属的
+      # 条件依赖，Linux 上严格模式会报 lock 不匹配。pub get 本身就会
+      # 优先遵循 lock，只有版本冲突时才动。
+      - name: pub get
+        working-directory: mobile
+        run: flutter pub get
+
+      - name: analyze（0 issue 才算过）
+        working-directory: mobile
+        run: flutter analyze
+
+      - name: test
+        working-directory: mobile
+        run: flutter test
