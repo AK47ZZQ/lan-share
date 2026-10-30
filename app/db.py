@@ -275,7 +275,15 @@ def _db():
             now = time.monotonic()
     if conn is None:
         if USE_PG:
-            _reap_pg_conns()
+            # force_close_oldest=True 是 _PG_MAX_CONN 生效的唯一开关：
+            # _reap_pg_conns 默认只清「空闲超 TTL / 线程已死」的连接，
+            # 不传 True 时"超上限就回收最久未用"那段永不执行 —— 实战后果
+            # 是 registry 只增不减，一路涨到 PG 的 max_connections=100，
+            # 后续建连全部 FATAL: sorry, too many clients already
+            # （2026-10-30 CI pg job 连爆，本地测试跑不到的路径）。
+            # 被强关的连接在别的线程里 next 次 _db() 会命中第 259 行的
+            # closed/broken 检测并重建，不会留下死连接。
+            _reap_pg_conns(force_close_oldest=True)
             conn = _PgConn(DATABASE_URL)
         else:
             conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
