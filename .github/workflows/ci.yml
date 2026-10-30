@@ -104,13 +104,31 @@ jobs:
         run: python -m pytest tests/ -q
 
   web-tests:
-    name: web 单元测试（node:test，零依赖）
+    name: web 单元测试 + 构建
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # 单元测试本身零依赖（node:test + 内置 TS 剥离），不需要装 node_modules。
+      # 放在 npm ci 之前跑，快 20 秒。
       - name: node --test
         working-directory: web
         run: npm test
+
+      # 构建是必须的：依赖升级时 vue-tsc 的类型检查、vite 的打包都可能崩，
+      # 而 node:test 那 19 个用例完全不碰这两条链。
+      # 曾经因此合并过一个跑不起来的前端（typescript 7 + vue-tsc 3 不兼容，
+      # 报 ERR_PACKAGE_PATH_NOT_EXPORTED: './lib/tsc'），PR 上 CI 全绿。
+      # 多花 1-2 分钟换这个保障，值。
+      - name: 安装依赖
+        working-directory: web
+        run: npm ci
+
+      - name: 构建（vue-tsc 类型检查 + vite build）
+        working-directory: web
+        run: npm run build
