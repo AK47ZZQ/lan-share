@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """反馈流转：4 条待处理 → 已完成（改 frontmatter 状态/备注/更新）。"""
-import shutil
 from datetime import datetime
 from pathlib import Path
 

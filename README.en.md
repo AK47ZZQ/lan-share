@@ -10,7 +10,7 @@
 
   [![CI](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml/badge.svg)](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml)
   ![server](https://img.shields.io/badge/server-v3.70-2563eb)
-  ![app](https://img.shields.io/badge/app-v1.1.15%2B122-2563eb)
+  ![app](https://img.shields.io/badge/app-v1.1.16%2B123-2563eb)
   ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
   ![tests](https://img.shields.io/badge/tests-560%20passed-16a34a)
   ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)

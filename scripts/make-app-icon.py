@@ -209,7 +209,7 @@ def gradient(size: int) -> Image.Image:
     col = Image.new("RGB", (1, size))
     for y in range(size):
         t = y / (size - 1)
-        col.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(top, bot)))
+        col.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(top, bot, strict=True)))
     return col.resize((size, size))
 
 

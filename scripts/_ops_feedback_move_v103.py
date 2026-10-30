@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """反馈 31cd 流转：进行中 → 已完成（已修复）+ 用户视角备注。"""
-import shutil
 from pathlib import Path
 
 REPO = Path(r"C:\lan-share")

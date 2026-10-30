@@ -1,3 +1,43 @@
+## 2026-10-30 — App v1.1.16+123：依赖维护版（零功能改动）
+
+- 本版**没有功能变更**，起因是仓库转 public 后开启了 Dependabot。它十分钟内
+  扫出 **14 个漏洞（2 critical / 3 high / 5 medium / 4 low）**，全部修完：
+  - `dompurify 3.4.14 → 3.4.17`（critical）：`SAFE_FOR_TEMPLATES` 绕过，
+    影响前端 Markdown 的 XSS 净化面。
+  - `anyio 4.12.1 → 4.14.2`（critical）：TLSStream 用 IDNA 2003 编码主机名，
+    可能导致 TLS 证书校验被绕过。starlette 的传递依赖。
+  - 前端：`vite 6.4.x → 8.3.5`、`vue 3.5.44`、`vue-router 5.4.0`、
+    `source-map-js 1.2.2`、`brace-expansion 2.1.7`
+  - 服务端：`qrcode 7.4.2 → 8.2`、`tzdata 2025.3 → 2026.5`、pip 侧 10 个包
+  - App：`package_info_plus 8.3.1 → 9.0.1`、`archive 4.2.0 → 4.5.2`
+- **TypeScript 停在 5.9.3**：Dependabot 一条 PR 里把 `typescript 5.7 → 7.0`、
+  `vite 6 → 8`、`vue-router 4 → 5` 一起提。TS 7 是 Go 重写版、把 `lib/tsc`
+  从 `exports` 移除，`vue-tsc 3.3.13` 尽管 peerDeps 声明 `>=5.0.0` 却直接
+  `ERR_PACKAGE_PATH_NOT_EXPORTED`。已回退 TS，其余主版本实测可用。
+- **CI 三处补强**（本轮真正的收尾）：
+  - `web-tests` 增加 `npm ci` + `npm run build`：此前只跑 `node:test`，
+    完全不碰 `vue-tsc` / `vite`，所以 TS 7 那个 PR 上 CI 全绿、合并后才炸。
+  - 新增 `mobile` job：`flutter 3.47.1` 钉死 + `analyze`（0 issue）+ `test`。
+    此前 `mobile/` 一行都不测，`local_auth 2.3 → 3.0` 那种破坏性升级
+    （`AuthenticationOptions` 类被移除，analyze 报 7 个 error）在 PR 上显示为绿。
+  - `concurrency`：PR 上取消旧 run，main 上保留完整记录。
+- **Dependabot 常规版本 PR 已停**：删除 `dependabot.yml`，只留仓库级
+  `security updates`（有 CVE 才提）。版本锁定不受影响——`requirements.txt`
+  23 项全 `==`，`package-lock.json` 与 `pubspec.lock` 都在，CI 用 `npm ci`。
+- 验证：pytest 560 项、`flutter analyze` 0 issue、`flutter test` 240 项、
+  `npm run build` + 19 项前端单测、APK 签名构建通过。
+- **已知上游风险**：Flutter 3.47.1 编译时报
+
+  ```
+  WARNING: plugins that apply Kotlin Gradle Plugin (KGP):
+    file_picker, mobile_scanner, package_info_plus, share_plus
+  Future versions of Flutter will fail to build if your app uses plugins that apply KGP.
+  ```
+
+  这四个插件还没迁到 Built-in Kotlin。当前 3.47.1 能正常编译（APK 已产出），
+  但未来升 Flutter 会直接失败。属于上游生态问题，本地无法修，只能等插件作者
+  更新。这也是 CI 把 Flutter 版本钉死在 3.47.1 的另一个理由。
+
 ## 2026-10-24（晚·发版）— App v1.1.15+122：复测基线版（零功能改动）
 
 - 本版无功能变更：照片详情「局域网失败」的修复在服务端（v3.69.1 限速

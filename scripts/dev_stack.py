@@ -128,7 +128,7 @@ def start(keep: bool) -> int:
                 f"http://127.0.0.1:{API_PORT}/healthz", timeout=5) as resp:
             body = json.loads(resp.read().decode())
         assert body.get("status") == "ok", body
-    except Exception as e:  # noqa: BLE001 —— 自检失败统一走回滚
+    except Exception as e:
         print("healthz 自检失败：", e)
         return _cleanup_fail()
     print(f"预发栈就绪：API http://127.0.0.1:{API_PORT} "
