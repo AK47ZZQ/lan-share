@@ -822,6 +822,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-port", type=int, default=DEFAULT_API_PORT)
     parser.add_argument("--web-port", type=int, default=DEFAULT_WEB_PORT)
     parser.add_argument(
+        "--pg-port",
+        type=int,
+        default=PG_DEFAULT_PORT,
+        help=f"PostgreSQL 端口（默认 {PG_DEFAULT_PORT}，选默认值是为了跟本机自装的 PG 错开）",
+    )
+    parser.add_argument(
         "--service-prefix",
         default=None,
         help=f"Windows 服务名前缀（默认自动探测，探测不到用 {DEFAULT_SERVICE_PREFIX}）",
@@ -837,6 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--python", default=argparse.SUPPRESS)
     common.add_argument("--api-port", type=int, default=argparse.SUPPRESS)
     common.add_argument("--web-port", type=int, default=argparse.SUPPRESS)
+    common.add_argument("--pg-port", type=int, default=argparse.SUPPRESS)
     common.add_argument("--service-prefix", default=argparse.SUPPRESS)
 
     sub = parser.add_subparsers(dest="command", required=True)
