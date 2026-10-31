@@ -140,8 +140,14 @@ namespace LanShare
 
         private string _pythonPath;
 
-        public string WebUrl { get { return "http://127.0.0.1:" + WebPort + "/"; } }
-        public string HealthUrl { get { return "http://127.0.0.1:" + WebPort + "/healthz"; } }
+        // 3.72 起 Caddy 只监听 HTTPS（tls internal 自签证书）。
+        // 这里拼 http 的话，「打开网盘」按钮点了没反应 —— 浏览器连
+        // 8765 的明文端口，Caddy 直接不接。和 CLI 自检探针是同一个坑。
+        public string WebUrl { get { return "https://127.0.0.1:" + WebPort + "/"; } }
+        // 3.72 起 Caddy 只监听 HTTPS。拼 http 的话探针每次都连不上，
+        // 托盘永远显示「服务未运行」，而且还要白等一个超时才切到 https ——
+        // 这就是「点开界面时检测感觉特别慢」的真正原因。
+        public string HealthUrl { get { return "https://127.0.0.1:" + WebPort + "/healthz"; } }
         public string LogFolder { get { return Path.Combine(InstallFolder, "logs"); } }
         public string ApiServiceName { get { return ServicePrefix + "-api"; } }
         public string CaddyServiceName { get { return ServicePrefix + "-caddy"; } }
@@ -285,6 +291,87 @@ namespace LanShare
         }
 
         public static string RestartOnePublic(string name) { return RestartOne(name); }
+
+        /// <summary>
+        /// 确保三个服务都在跑，没跑的就拉起来。返回启动了几个；失败返回 -1。
+        ///
+        /// 为什么需要这个：服务是独立的 Windows 服务，跟托盘进程没有父子关系 ——
+        /// 托盘退出不会停服务，服务也不会因为托盘起来就自动启动。
+        /// 用户点快捷方式时如果服务是停的（比如刚装完还没启、或被人手动停了），
+        /// 应该直接帮他拉起来，而不是让他自己去找「服务」管理器。
+        /// </summary>
+        public static int EnsureRunning(InstallConfig cfg)
+        {
+            int started = 0;
+            // PG 必须先起 —— api 启动就连库，库不在会直接崩
+            string[] order = { cfg.DbServiceName, cfg.ApiServiceName, cfg.CaddyServiceName };
+            foreach (var name in order)
+            {
+                try
+                {
+                    using (var sc = new ServiceController(name))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Running) continue;
+                        if (sc.Status == ServiceControllerStatus.StartPending) continue;
+                        sc.Start();
+                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(25));
+                        started++;
+                    }
+                }
+                catch (Exception)
+                {
+                    // 服务不存在（还没装）或没权限 —— 都不是致命问题，
+                    // 后续 Probe 会把真实状态反映到界面上，不在这里打断
+                }
+            }
+            return started;
+        }
+
+        /// <summary>停止三个服务（保留注册，随时能再起）。返回 null 成功，否则错误说明。</summary>
+        public static string StopAll(InstallConfig cfg)
+        {
+            var errors = new List<string>();
+            // 逆序停：先断入口（caddy），再停 api，最后停库
+            foreach (var name in new[] { cfg.CaddyServiceName, cfg.ApiServiceName, cfg.DbServiceName })
+            {
+                try
+                {
+                    using (var sc = new ServiceController(name))
+                    {
+                        if (sc.Status == ServiceControllerStatus.Stopped) continue;
+                        sc.Stop();
+                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(25));
+                    }
+                }
+                catch (InvalidOperationException ex)
+                {
+                    errors.Add(name + "：" + ex.Message);
+                }
+                catch (System.ServiceProcess.TimeoutException)
+                {
+                    errors.Add(name + "：停止超时");
+                }
+                catch (Exception) { /* 服务不存在就跳过 */ }
+            }
+            return errors.Count == 0 ? null : string.Join(Environment.NewLine, errors.ToArray());
+        }
+
+        /// <summary>三个服务是不是全都 Running。</summary>
+        public static bool AllRunning(InstallConfig cfg)
+        {
+            foreach (var name in new[] { cfg.DbServiceName, cfg.ApiServiceName, cfg.CaddyServiceName })
+            {
+                try
+                {
+                    using (var sc = new ServiceController(name))
+                    {
+                        if (sc.Status != ServiceControllerStatus.Running) return false;
+                    }
+                }
+                catch (Exception) { return false; }
+            }
+            return true;
+        }
 
         private static string RestartOne(string name)
         {

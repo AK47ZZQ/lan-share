@@ -275,7 +275,9 @@ namespace LanShare
         private readonly Label _dataLabel;
         private readonly Button _btnOpenWeb;
         private readonly Button _btnRestart;
+        private readonly Button _btnStopAll;
         private readonly Button _btnLogs;
+        private readonly PictureBox _brandIcon;
 
         // 公网访问区
         private readonly Panel _wanBox;
@@ -342,11 +344,38 @@ namespace LanShare
             const int Inner = Theme.CardPad; // 卡片内边距 16
 
             // ───────── 顶部：标题 + 服务状态 ─────────
+            // 品牌图标：顶栏左侧做视觉锚点。
+            // 之前只有一行文字标题，窗口看着像临时脚本的控制台；
+            // 放上和桌面/手机同一套的品牌标之后，一眼能认出是哪个程序。
+            _brandIcon = new PictureBox
+            {
+                Location = new Point(P, 14),
+                Size = new Size(44, 44),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.Transparent,
+            };
+            try
+            {
+                using (var st = typeof(LanSharePanel).Assembly
+                           .GetManifestResourceStream("LanShareTray.lanshare.ico"))
+                {
+                    if (st != null)
+                    {
+                        // Icon 也要 using —— new Icon(...).ToBitmap() 里的 Icon
+                        // 不释放会占着一个 GDI 句柄，直到进程退出
+                        using (var ico = new Icon(st, new Size(44, 44)))
+                            _brandIcon.Image = ico.ToBitmap();
+                    }
+                }
+            }
+            catch (Exception) { /* 取不到就不显示，不影响功能 */ }
+            _content.Controls.Add(_brandIcon);
+
             var title = new Label
             {
                 Text = "LAN Share",
                 Font = Theme.H1,
-                Location = new Point(P, 16),
+                Location = new Point(P + 56, 14),
                 AutoSize = true,
                 ForeColor = Theme.TextStrong,
             };
@@ -356,7 +385,7 @@ namespace LanShare
             {
                 Text = "检查中…",
                 Font = Theme.Status,
-                Location = new Point(P, 50),
+                Location = new Point(P + 56, 52),
                 AutoSize = true,
                 ForeColor = Theme.Gray,
             };
@@ -368,7 +397,7 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 78),
+                Location = new Point(P + 56, 78),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.TextMuted,
             };
@@ -382,7 +411,7 @@ namespace LanShare
             // ───────── 服务卡片 ─────────
             // 生产环境跑三个服务：api / caddy / postgresql。
             // 不显示 PG 的话，数据库挂了用户完全看不出来。
-            _svcBox = new Card(P, 100, CW, 140);
+            _svcBox = new Card(P, 100, CW, 166);
             _content.Controls.Add(_svcBox);
 
             var svcTitle = new Label
@@ -398,7 +427,7 @@ namespace LanShare
             string[] svcKeys = { "API", "Caddy", "数据库" };
             for (int i = 0; i < 3; i++)
             {
-                int rowY = 38 + i * 32;
+                int rowY = 40 + i * 38;
 
                 _svcName[i] = new Label
                 {
@@ -451,7 +480,7 @@ namespace LanShare
                 Text = "读取中…",
                 Font = Theme.Status,
                 Location = new Point(Inner, 42),
-                Size = new Size(CW - Inner * 2 - 84, 26),   // 右边让出复制按钮的位置
+                Size = new Size(CW - Inner * 2 - 92, 26),   // 右边让出复制按钮(76) + 8px 间距 + 8px 余量
                 ForeColor = Theme.Gray,
             };
             _lanBox.Controls.Add(_lanState);
@@ -507,7 +536,7 @@ namespace LanShare
             _lanBox.Controls.Add(_lanToggle);
 
             // ───────── 公网卡片 ─────────
-            _wanBox = new Card(P, 254, CW, 150);
+            _wanBox = new Card(P, 282, CW, 150);
             _content.Controls.Add(_wanBox);
 
             var wanTitle = new Label
@@ -532,7 +561,7 @@ namespace LanShare
                 Text = "读取中…",
                 Font = Theme.Status,
                 Location = new Point(Inner, 42),
-                Size = new Size(CW - Inner * 2 - 84, 26),   // 右边让出复制按钮的位置
+                Size = new Size(CW - Inner * 2 - 92, 26),   // 右边让出复制按钮(76) + 8px 间距 + 8px 余量
                 ForeColor = Theme.Gray,
             };
             _wanBox.Controls.Add(_wanState);
@@ -562,7 +591,7 @@ namespace LanShare
             _wanInput = new TextBox
             {
                 Location = new Point(Inner, 118),
-                Size = new Size(CW - Inner * 2 - 84, 28),
+                Size = new Size(CW - Inner * 2 - 92, 28),
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = Theme.Mono9,
                 BackColor = Theme.FieldBg,
@@ -610,7 +639,14 @@ namespace LanShare
 
             // 「数据目录」按钮删了：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」。按钮位置重排成三个。
-            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 488, 100, 34);
+            // 关闭服务：把三个服务停掉但不注销，随时能再起。
+            // 和「退出托盘」区分开 —— 退出托盘只是收掉遥控器，服务照跑；
+            // 这个按钮是真的把服务停下来。
+            _btnStopAll = Btn.Make("关闭服务", ButtonKind.Danger, P + 240, 488, 112, 34);
+            _btnStopAll.Click += delegate { StopAllServices(); };
+            _content.Controls.Add(_btnStopAll);
+
+            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 360, 488, 100, 34);
             _btnLogs.Click += delegate { OpenFolder(_cfg.LogFolder); };
             _content.Controls.Add(_btnLogs);
 
@@ -665,7 +701,14 @@ namespace LanShare
                 RefreshStateAsync(quiet: false);
                 RefreshWanAsync();
             };
-            FormClosed += delegate { _refreshTimer.Stop(); _qrBox.Image = null; };
+            FormClosed += delegate
+            {
+                _refreshTimer.Stop();
+                // 换图/关窗时必须 Dispose 旧图。只置 null 的话，
+                // 那个 Bitmap 还挂在 GDI 上，开到第 N 次面板就攒 N 张
+                if (_qrBox.Image != null) { _qrBox.Image.Dispose(); _qrBox.Image = null; }
+                if (_brandIcon.Image != null) { _brandIcon.Image.Dispose(); _brandIcon.Image = null; }
+            };
         }
 
 
@@ -776,7 +819,9 @@ namespace LanShare
                 var first = addrs[0] as Dictionary<string, object>;
                 if (first != null)
                 {
-                    url = "http://" + Str(first, "ip") + ":" + Int(dict, "web_port") + "/";
+                    // 3.72 起 Web 走 HTTPS（Caddy tls internal）。拼 http 的话用户复制这个
+                    // 地址到浏览器打不开，扫码也一样。
+                    url = "https://" + Str(first, "ip") + ":" + Int(dict, "web_port") + "/";
                 }
             }
 
@@ -810,7 +855,7 @@ namespace LanShare
             _qrBox.Visible = showOn;
             _qrHint.Visible = showOn;
 
-            // 按钮始终可见：未开启时是「启动局域网服务」，开启后是「关闭局域网」。
+            // 按钮始终可见：未开启时是「启动局域网服务」，开启后是「关闭局域网服务」。
             // 曾经把它设成 !showOn，结果开了之后没有关闭入口 —— 开了就关不掉。
             _lanToggle.Visible = true;
 
@@ -822,11 +867,11 @@ namespace LanShare
 
                 // 开着的时候这个按钮是「关闭」——破坏性操作，换成红色并缩小占位，
                 // 别让它跟「打开网盘」那样抢主视觉
-                _lanToggle.Text = "关闭局域网";
+                _lanToggle.Text = "关闭局域网服务";
                 // 右对齐到卡片内容右边缘（和上面「复制」按钮共用一条右基线 456），
                 // 二维码在左、关闭在右，整行留白才算均匀
-                _lanToggle.Location = new Point(472 - Theme.CardPad - 130, 200);
-                _lanToggle.Size = new Size(130, 32);
+                _lanToggle.Location = new Point(_lanBox.Width - Theme.CardPad - 150, 200);
+                _lanToggle.Size = new Size(150, 32);
                 Btn.Restyle(_lanToggle, ButtonKind.Danger);
 
                 LoadQrAsync(url, quiet && wasOn);
@@ -839,7 +884,7 @@ namespace LanShare
                 _lanToggle.Size = new Size(180, 34);
                 Btn.Restyle(_lanToggle, ButtonKind.Primary);
 
-                _qrBox.Image = null;
+                if (_qrBox.Image != null) { _qrBox.Image.Dispose(); _qrBox.Image = null; }
             }
         }
 
@@ -872,7 +917,7 @@ namespace LanShare
                 _qrBox.Image = img;
                 _qrBox.Visible = true;
                 _qrHint.Text = "手机扫码直接连";
-                if (old != null) old.Dispose();
+                if (old != null && !ReferenceEquals(old, img)) old.Dispose();
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
@@ -1528,6 +1573,43 @@ namespace LanShare
             }
 
             MessageBox.Show(this, sb.ToString(), "LAN Share", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        /// <summary>停止全部服务（不注销，随时可再启动）。</summary>
+        private void StopAllServices()
+        {
+            var NL = Environment.NewLine;
+            var r = MessageBox.Show(
+                "确定要关闭网盘服务吗？" + NL + NL +
+                "• 三个服务会停止，局域网和公网都访问不了" + NL +
+                "• 数据不会丢，服务只是停了" + NL +
+                "• 重新打开托盘或点「重启服务」就能恢复",
+                "关闭服务",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            if (r != DialogResult.OK) return;
+
+            SetBusy(true, "正在关闭服务…");
+            try
+            {
+                string err = ServiceControl.StopAll(_cfg);
+                if (err == null)
+                {
+                    SetBusy(false, "服务已关闭");
+                    RefreshStateAsync(true);   // 立刻刷新一次，别等下一个 5 秒轮询
+                }
+                else
+                {
+                    SetBusy(false, "");
+                    MessageBox.Show("部分服务没能停掉：" + Environment.NewLine + Environment.NewLine + err, "关闭服务",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                SetBusy(false, "");
+                MessageBox.Show("关闭服务失败：" + ex.Message, "LAN Share",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void RestartServices()

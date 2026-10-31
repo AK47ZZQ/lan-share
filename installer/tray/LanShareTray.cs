@@ -297,6 +297,27 @@ namespace LanShare
                 + " ApiPort=" + _cfg.ApiPort
                 + " Health=" + _cfg.HealthUrl);
 
+            // 服务是独立的 Windows 服务，不会因为托盘起来就自动启动。
+            // 用户点快捷方式（或开机自启托盘）时如果服务是停的，这里直接
+            // 帮他拉起来 —— 否则打开界面看到「服务未运行」，还得自己去
+            // 服务管理器里点启动，太反直觉。
+            //
+            // 放到后台线程：启动 PG 可能要几秒，不能卡住托盘图标出现。
+            if (_cfg.Installed)
+            {
+                var bootThread = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        int n = ServiceControl.EnsureRunning(_cfg);
+                        if (n > 0) Log("托盘启动时自动拉起了 " + n + " 个服务");
+                    }
+                    catch (Exception ex) { Log("自动拉起服务失败: " + ex.Message); }
+                })
+                { IsBackground = true, Name = "ServiceBoot" };
+                bootThread.Start();
+            }
+
             _statusItem = new ToolStripMenuItem("正在检查状态…") { Enabled = false };
 
             var menu = new ContextMenuStrip();
@@ -354,29 +375,32 @@ namespace LanShare
             string result = null;
             var state = AppState.Down;
 
-            // 协议自适应：老部署用自签 HTTPS，新安装包是纯 HTTP。
-            // 硬编码任一个都会在另一半环境里误报「服务挂了」。
-            // 先试 HTTP（新装默认），400/失败再试 HTTPS。
+            // 协议自适应，但**先 HTTPS**。
+            //
+            // 3.72 起新装一律是 HTTPS（Caddy tls internal），老部署可能是纯 HTTP。
+            // 之前的顺序是先 HTTP 再 HTTPS：新装环境下 HTTP 那一步必然要等满
+            // 4 秒超时，然后才切 HTTPS 成功 —— 每 5 秒一次的轮询白烧 4 秒，
+            // 用户点开界面看到的就是「转半天才显示状态」。
+            // 反过来之后，新版一次命中，老部署才多付一次超时。
             state = TryProbe(_cfg.HealthUrl, out result);
-            Log("探测 HTTP " + _cfg.HealthUrl + " → " + state + " | " + result);
+            Log("探测 HTTPS " + _cfg.HealthUrl + " → " + state + " | " + result);
 
             if (state != AppState.Healthy)
             {
-                string httpsUrl = "https://127.0.0.1:" + _cfg.WebPort + "/healthz";
-                string httpsResult;
-                var httpsState = TryProbe(httpsUrl, out httpsResult);
-                Log("探测 HTTPS " + httpsUrl + " → " + httpsState + " | " + httpsResult);
+                string httpUrl = "http://127.0.0.1:" + _cfg.WebPort + "/healthz";
+                string httpResult;
+                var httpState = TryProbe(httpUrl, out httpResult);
+                Log("探测 HTTP（老部署兼容）" + httpUrl + " → " + httpState + " | " + httpResult);
 
-                if (httpsState == AppState.Healthy)
+                if (httpState == AppState.Healthy)
                 {
-                    state = httpsState;
-                    result = httpsResult;
+                    state = httpState;
+                    result = httpResult;
                 }
-                else if (httpsState == AppState.Unhealthy)
+                else if (httpState == AppState.Unhealthy && state != AppState.Unhealthy)
                 {
-                    // 两者都不健康时，HTTPS 的那个更有意义（说明端口确实在听）
-                    state = httpsState;
-                    result = httpsResult;
+                    state = httpState;
+                    result = httpResult;
                 }
             }
 
@@ -401,8 +425,8 @@ namespace LanShare
             try
             {
                 var req = (HttpWebRequest)WebRequest.Create(url);
-                req.Timeout = 4000;
-                req.ReadWriteTimeout = 4000;
+                req.Timeout = 2500;
+                req.ReadWriteTimeout = 2500;
                 req.Proxy = null;          // 本机地址不要走系统代理
                 req.UserAgent = "LanShareTray";
 
@@ -454,7 +478,15 @@ namespace LanShare
                 default: label = "正在检查…"; break;
             }
 
-            _statusItem.Text = "状态：" + label + (string.IsNullOrEmpty(detail) ? "" : "（" + Trim(detail, 40) + "）");
+            // 右键菜单里只给人话，技术细节塞进 tooltip。
+            //
+            // 之前是「状态：响应异常（HTTP 502）」「状态：服务未运行（NameResolutionFailure）」
+            // —— 用户看到一堆英文异常名，既看不懂也不知道该干什么。
+            // 菜单项是用来扫一眼判断好坏的，不是用来看日志的。
+            _statusItem.Text = "状态：" + label;
+            _statusItem.ToolTipText = string.IsNullOrEmpty(detail)
+                ? label
+                : ("技术细节：" + Trim(detail, 120));
 
             var icon = BuildIcon(state);
             _icon.Icon = icon;
@@ -554,10 +586,13 @@ namespace LanShare
                     if (stream != null)
                     {
                         using (var bmp = new Bitmap(stream))
+                        using (var sized = new Bitmap(bmp, new Size(32, 32)))
                         {
                             // 统一到 32×32：托盘按 DPI 可能向系统要 16/20/24/32，
                             // 给 32 向小缩不会糊，给 16 放大会马赛克。
-                            var sized = new Bitmap(bmp, new Size(32, 32));
+                            //
+                            // ⚠️ sized 必须 using —— 状态每变一次就调一次 BuildIcon，
+                            // 不释放的话每次泄漏一个 32×32 位图 + 一个 GDI 句柄。
                             var icon = IconFromBitmapWithAlpha(sized);
                             if (icon != null) return icon;
                         }
