@@ -29,8 +29,19 @@ class TestSiteBlock:
         """
         assert caddyfile.site_block(caddyfile.BIND_ALL, 8765) == ":8765"
 
-    def test_bind_loopback_renders_explicit_host(self):
-        assert caddyfile.site_block(caddyfile.BIND_LOOPBACK, 8765) == "127.0.0.1:8765"
+    def test_both_modes_render_bare_port(self):
+        """两种模式的站点块首行**必须相同**。
+
+        2026-10-31 实测：曾经让 loopback 模式渲染 `127.0.0.1:8765`，
+        Caddy 把它当「主机名+端口」，监听地址毫无变化 —— 开关完全失效。
+        监听地址只能靠 bind 指令控制。
+        """
+        assert caddyfile.site_block(caddyfile.BIND_ALL, 8765) == ":8765"
+        assert caddyfile.site_block(caddyfile.BIND_LOOPBACK, 8765) == ":8765"
+
+    def test_bind_line_only_for_loopback(self):
+        assert caddyfile.bind_line(caddyfile.BIND_ALL) == ""
+        assert "bind 127.0.0.1" in caddyfile.bind_line(caddyfile.BIND_LOOPBACK)
 
 
 class TestRender:
@@ -39,10 +50,16 @@ class TestRender:
         content = caddyfile.render(api_port=8766, web_port=8765)
         assert ":8765 {" in content
 
-    def test_loopback_render(self):
+    def test_loopback_render_uses_bind_directive(self):
         content = caddyfile.render(8766, 8765, caddyfile.BIND_LOOPBACK)
-        assert "127.0.0.1:8765 {" in content
-        assert ":8765 {" not in content.replace("127.0.0.1:8765 {", "")
+        assert ":8765 {" in content
+        assert "	bind 127.0.0.1" in content
+        # 首行不能变成 127.0.0.1:8765（那样对 Caddy 无效）
+        assert "127.0.0.1:8765 {" not in content
+
+    def test_all_render_has_no_bind(self):
+        content = caddyfile.render(8766, 8765, caddyfile.BIND_ALL)
+        assert "bind " not in content
 
     def test_reverse_proxy_target_unaffected_by_bind(self):
         """绑哪里不影响反代目标 —— 始终指回环上的 API。"""
@@ -61,14 +78,14 @@ class TestDetectBindHost:
     def test_detects_all(self, tmp_path):
         target = tmp_path / "Caddyfile"
         target.write_text(caddyfile.render(8766, 8765, caddyfile.BIND_ALL), encoding="utf-8")
-        assert caddyfile.detect_bind_host(target) == caddyfile.BIND_ALL
+        assert caddyfile.detect_bind_host(target, 8765) == caddyfile.BIND_ALL
 
     def test_detects_loopback(self, tmp_path):
         target = tmp_path / "Caddyfile"
         target.write_text(
             caddyfile.render(8766, 8765, caddyfile.BIND_LOOPBACK), encoding="utf-8"
         )
-        assert caddyfile.detect_bind_host(target) == caddyfile.BIND_LOOPBACK
+        assert caddyfile.detect_bind_host(target, 8765) == caddyfile.BIND_LOOPBACK
 
     def test_missing_file_returns_none(self, tmp_path):
         assert caddyfile.detect_bind_host(tmp_path / "nope") is None
@@ -83,7 +100,7 @@ class TestDetectBindHost:
         target = tmp_path / "Caddyfile"
         for host in (caddyfile.BIND_ALL, caddyfile.BIND_LOOPBACK):
             caddyfile.write(target, 8766, 8765, host)
-            assert caddyfile.detect_bind_host(target) == host
+            assert caddyfile.detect_bind_host(target, 8765) == host
 
 
 # ──────────────────────────────────────────────────────────────
@@ -451,7 +468,7 @@ class TestDisableNeverTouchesFirewall:
         lan.disable_lan(info, dry_run=True)
 
         # dry-run 不该真的改文件，原配置必须原封不动
-        detected = caddyfile.detect_bind_host(tmp_path / "conf" / "Caddyfile")
+        detected = caddyfile.detect_bind_host(tmp_path / "conf" / "Caddyfile", 8765)
         assert detected == caddyfile.BIND_ALL
 
         # 真正执行时才写
@@ -460,7 +477,7 @@ class TestDisableNeverTouchesFirewall:
         monkeypatch.setattr(lan, "probe_lan", lambda *a, **k: (True, "ok", "http://127.0.0.1/healthz"))
         monkeypatch.setattr(network, "listen_addresses", lambda p: ["127.0.0.1"])
         lan.disable_lan(info)
-        assert caddyfile.detect_bind_host(tmp_path / "conf" / "Caddyfile") == caddyfile.BIND_LOOPBACK
+        assert caddyfile.detect_bind_host(tmp_path / "conf" / "Caddyfile", 8765) == caddyfile.BIND_LOOPBACK
 
 
 class TestRollback:
@@ -518,12 +535,13 @@ class TestLoadInstallInfo:
 
     def test_registry_used_when_no_params(self, monkeypatch):
         monkeypatch.setattr(lan, "read_registry", lambda: {
-            "Install": "C:\\Program Files\\LAN Share",
+            "InstallFolder": "C:\\Program Files\\LAN Share",
             "DataFolder": "C:\\ProgramData\\LANShare\\data",
             "ApiPort": "9911",
             "WebPort": "9912",
             "Prefix": "lanshare",
         })
+        monkeypatch.setattr(lan, "_resolve_caddyfile_from_service", lambda n: None)
         info = lan.load_install_info()
         assert info.root == __import__("pathlib").Path("C:\\Program Files\\LAN Share")
         assert info.api_port == 9911

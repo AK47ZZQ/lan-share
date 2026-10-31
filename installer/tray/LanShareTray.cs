@@ -24,15 +24,25 @@ using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
-using Microsoft.Win32;
 
-namespace LanShareTray
+namespace LanShare
 {
     internal static class Program
     {
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
         [STAThread]
-        private static void Main()
+        private static void Main(string[] args)
         {
+            // --panel：启动时直接打开控制面板（调试用，也方便做桌面快捷方式）
+            bool openPanelOnStart = false;
+            foreach (var a in args)
+            {
+                if (string.Equals(a, "--panel", StringComparison.OrdinalIgnoreCase))
+                    openPanelOnStart = true;
+            }
+
             // 单实例：重复双击 exe 不要开出两个托盘图标
             bool createdNew;
             using (var mutex = new System.Threading.Mutex(
@@ -40,72 +50,75 @@ namespace LanShareTray
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show(
-                        "LAN Share 托盘已经在运行了。\n\n" +
-                        "看屏幕右下角的通知区域。",
-                        "LAN Share",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
+                    // 已经在跑：不弹消息框（用户只是想看窗口），
+                    // 通过命名事件通知已有实例把面板显示出来
+                    try
+                    {
+                        using (var ev = System.Threading.EventWaitHandle.OpenExisting(
+                                   @"Global\LanShareShowPanel"))
+                        {
+                            ev.Set();
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        MessageBox.Show(
+                            "LAN Share 托盘已经在运行了。\n\n" +
+                            "看屏幕右下角的通知区域。",
+                            "LAN Share",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+                    }
                     return;
                 }
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new TrayApp());
+
+                // DPI 感知：不加的话在 125%/150% 缩放的屏幕上，
+                // 系统会把整个窗口位图拉伸，文字全部发虚。
+                // 必须在创建任何窗口之前调用。
+                try { SetProcessDPIAware(); } catch (Exception) { }
+
+                // ⚠️ .NET Framework 默认只启用 TLS 1.0，而现代服务器（Caddy 等）
+                // 最低要求 TLS 1.2。不显式开启的话，HTTPS 探测一律报
+                // SecureChannelFailure —— 看起来像"证书不对"，其实是协议版本太低。
+                System.Net.ServicePointManager.SecurityProtocol =
+                    System.Net.SecurityProtocolType.Tls12
+                    | System.Net.SecurityProtocolType.Tls11
+                    | (System.Net.SecurityProtocolType)3072;   // Tls13（枚举里没有，用数值）
+
+                // 自签证书全局放行 —— 只对回环地址生效。
+                //
+                // 为什么必须用 ServicePointManager 而不是 HttpWebRequest
+                // 的实例属性：后者在 .NET Framework 下对某些 TLS 路径不生效，
+                // 表现成 HTTPS 探测永远报证书错误（而 curl 是通的）。
+                //
+                // 安全性：这里只连 127.0.0.1 / ::1，是本机自己的服务；
+                // 而且回调里再判断一次目标地址，非回环一律走正常校验。
+                System.Net.ServicePointManager.ServerCertificateValidationCallback =
+                    delegate(object sender, System.Security.Cryptography.X509Certificates.X509Certificate cert,
+                             System.Security.Cryptography.X509Certificates.X509Chain chain,
+                             System.Net.Security.SslPolicyErrors errors)
+                    {
+                        try
+                        {
+                            var req = sender as System.Net.HttpWebRequest;
+                            if (req != null && req.RequestUri != null)
+                            {
+                                string host = req.RequestUri.Host;
+                                if (host == "127.0.0.1" || host == "::1" || host == "localhost")
+                                    return true;   // 本机自签，放行
+                            }
+                        }
+                        catch (Exception) { }
+                        // 非本机：走系统默认校验，不能因为我们是托盘就放松
+                        return errors == System.Net.Security.SslPolicyErrors.None;
+                    };
+
+                Application.Run(new TrayApp(openPanelOnStart));
             }
         }
-    }
-
-    /// <summary>安装信息，全部来自注册表（安装器写进去的）。</summary>
-    internal sealed class InstallConfig
-    {
-        public string InstallFolder { get; private set; }
-        public string DataFolder { get; private set; }
-        public int WebPort { get; private set; }
-        public int ApiPort { get; private set; }
-        public bool Installed { get; private set; }
-
-        public static InstallConfig Load()
-        {
-            var cfg = new InstallConfig
-            {
-                WebPort = 8765,
-                ApiPort = 8766,
-                InstallFolder = "",
-                DataFolder = "",
-                Installed = false
-            };
-
-            try
-            {
-                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\LANShare"))
-                {
-                    if (key == null) return cfg;
-
-                    cfg.InstallFolder = (key.GetValue("InstallFolder") as string) ?? "";
-                    cfg.DataFolder = (key.GetValue("DataFolder") as string) ?? "";
-                    cfg.WebPort = ParseInt(key.GetValue("WebPort") as string, 8765);
-                    cfg.ApiPort = ParseInt(key.GetValue("ApiPort") as string, 8766);
-                    cfg.Installed = !string.IsNullOrEmpty(cfg.InstallFolder);
-                }
-            }
-            catch (Exception)
-            {
-                // 注册表读不到就当作未安装，托盘仍然能起来并提示
-            }
-
-            return cfg;
-        }
-
-        private static int ParseInt(string s, int fallback)
-        {
-            int v;
-            return int.TryParse(s, out v) && v > 0 && v <= 65535 ? v : fallback;
-        }
-
-        public string WebUrl { get { return "http://127.0.0.1:" + WebPort + "/"; } }
-        public string HealthUrl { get { return "http://127.0.0.1:" + WebPort + "/healthz"; } }
-        public string LogFolder { get { return Path.Combine(InstallFolder, "logs"); } }
     }
 
     /// <summary>应用状态。托盘图标颜色跟着它变。</summary>
@@ -128,6 +141,9 @@ namespace LanShareTray
         private Icon _currentIcon;
         private bool _firstProbeDone;
         private readonly string _logPath;
+        private LanSharePanel _panel;          // 控制面板窗口，懒创建
+        private readonly System.Threading.EventWaitHandle _showPanelEvent;
+        private readonly CliRunner _cli;
 
         /// <summary>写一行日志。托盘出问题时用户在「打开日志文件夹」里能看到。</summary>
         private void Log(string message)
@@ -149,16 +165,46 @@ namespace LanShareTray
             catch (Exception) { /* 日志写不了不能影响托盘本身 */ }
         }
 
-        public TrayApp()
+        public TrayApp(bool openPanelOnStart = false)
         {
             _cfg = InstallConfig.Load();
+
+            // 命名事件：第二个实例通过它通知已有实例弹面板。
+            // 比"再开一个托盘图标"或"弹框说已经在跑"都更符合直觉 ——
+            // 用户双击快捷方式就是想看窗口。
+            _showPanelEvent = new System.Threading.EventWaitHandle(
+                false, System.Threading.EventResetMode.AutoReset, @"Global\LanShareShowPanel");
+
+            // 后台线程不能碰 UI。NotifyIcon 不是 Control，没有 BeginInvoke，
+            // 所以先抓主线程的 SynchronizationContext，回调时 Post 回去。
+            var uiContext = System.Threading.SynchronizationContext.Current;
+            var listenThread = new System.Threading.Thread(() =>
+            {
+                while (true)
+                {
+                    try
+                    {
+                        _showPanelEvent.WaitOne();
+                        if (uiContext != null)
+                        {
+                            uiContext.Post(delegate { ShowPanel(); }, null);
+                        }
+                    }
+                    catch (Exception) { break; }
+                }
+            })
+            { IsBackground = true, Name = "PanelEvent" };
+            listenThread.Start();
 
             // 日志跟服务日志放一起，用户点「打开日志文件夹」能同时看到
             _logPath = string.IsNullOrEmpty(_cfg.LogFolder)
                 ? null
                 : Path.Combine(_cfg.LogFolder, "tray.log");
 
+            _cli = new CliRunner(_cfg.InstallFolder, _cfg.PythonPath, _cfg.ServicePrefix);
+
             Log("托盘启动 | Installed=" + _cfg.Installed
+                + " Prefix=" + _cfg.ServicePrefix
                 + " WebPort=" + _cfg.WebPort
                 + " ApiPort=" + _cfg.ApiPort
                 + " Health=" + _cfg.HealthUrl);
@@ -167,11 +213,12 @@ namespace LanShareTray
 
             var menu = new ContextMenuStrip();
 
-            var openItem = new ToolStripMenuItem("打开网盘", null, (s, e) => OpenBrowser())
+            var panelItem = new ToolStripMenuItem("打开控制面板", null, (s, e) => ShowPanel())
             {
                 Font = new Font(SystemFonts.MenuFont, FontStyle.Bold)
             };
-            menu.Items.Add(openItem);
+            menu.Items.Add(panelItem);
+            menu.Items.Add(new ToolStripMenuItem("打开网盘", null, (s, e) => OpenBrowser()));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_statusItem);
             menu.Items.Add(new ToolStripSeparator());
@@ -190,7 +237,10 @@ namespace LanShareTray
                 Visible = true,
                 Text = "LAN Share"
             };
-            _icon.DoubleClick += (s, e) => OpenBrowser();
+            _icon.MouseClick += (s, e) =>
+            {
+                if (e.Button == MouseButtons.Left) ShowPanel();
+            };
 
             SetState(AppState.Unknown);
 
@@ -199,6 +249,14 @@ namespace LanShareTray
             _timer.Start();
 
             Probe();
+
+            // --panel 启动参数：等托盘初始化完再弹，避免窗口先于图标出现
+            if (openPanelOnStart)
+            {
+                var t = new Timer { Interval = 400 };
+                t.Tick += (s, e) => { t.Stop(); t.Dispose(); ShowPanel(); };
+                t.Start();
+            }
         }
 
         // ── 状态探测 ──────────────────────────────────────────────
@@ -208,44 +266,30 @@ namespace LanShareTray
             string result = null;
             var state = AppState.Down;
 
-            try
-            {
-                var req = (HttpWebRequest)WebRequest.Create(_cfg.HealthUrl);
-                req.Timeout = 4000;
-                req.ReadWriteTimeout = 4000;
-                req.Proxy = null;          // 本机地址不要走系统代理
-                req.UserAgent = "LanShareTray";
+            // 协议自适应：老部署用自签 HTTPS，新安装包是纯 HTTP。
+            // 硬编码任一个都会在另一半环境里误报「服务挂了」。
+            // 先试 HTTP（新装默认），400/失败再试 HTTPS。
+            state = TryProbe(_cfg.HealthUrl, out result);
+            Log("探测 HTTP " + _cfg.HealthUrl + " → " + state + " | " + result);
 
-                using (var resp = (HttpWebResponse)req.GetResponse())
-                {
-                    int code = (int)resp.StatusCode;
-                    using (var reader = new StreamReader(resp.GetResponseStream()))
-                    {
-                        result = reader.ReadToEnd();
-                    }
-                    state = code == 200 ? AppState.Healthy : AppState.Unhealthy;
-                }
-            }
-            catch (WebException wex)
+            if (state != AppState.Healthy)
             {
-                var httpResp = wex.Response as HttpWebResponse;
-                if (httpResp != null)
+                string httpsUrl = "https://127.0.0.1:" + _cfg.WebPort + "/healthz";
+                string httpsResult;
+                var httpsState = TryProbe(httpsUrl, out httpsResult);
+                Log("探测 HTTPS " + httpsUrl + " → " + httpsState + " | " + httpsResult);
+
+                if (httpsState == AppState.Healthy)
                 {
-                    // 有响应但状态码不是 200：端口通，应用有问题
-                    state = AppState.Unhealthy;
-                    result = "HTTP " + (int)httpResp.StatusCode;
-                    httpResp.Close();
+                    state = httpsState;
+                    result = httpsResult;
                 }
-                else
+                else if (httpsState == AppState.Unhealthy)
                 {
-                    state = AppState.Down;
-                    result = wex.Status.ToString();
+                    // 两者都不健康时，HTTPS 的那个更有意义（说明端口确实在听）
+                    state = httpsState;
+                    result = httpsResult;
                 }
-            }
-            catch (Exception ex)
-            {
-                state = AppState.Down;
-                result = ex.GetType().Name;
             }
 
             _failCount = state == AppState.Healthy ? 0 : _failCount + 1;
@@ -260,6 +304,53 @@ namespace LanShareTray
             }
 
             SetState(state, result);
+        }
+
+        /// <summary>探一次 /healthz。自签证书不校验（否则永远失败）。</summary>
+        private static AppState TryProbe(string url, out string detail)
+        {
+            detail = null;
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Timeout = 4000;
+                req.ReadWriteTimeout = 4000;
+                req.Proxy = null;          // 本机地址不要走系统代理
+                req.UserAgent = "LanShareTray";
+
+                // 自签证书：家用 HTTPS 全是这样，不跳过校验就永远连不上
+                if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    req.ServerCertificateValidationCallback = (s, cert, chain, errors) => true;
+                }
+
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                {
+                    using (var reader = new StreamReader(resp.GetResponseStream()))
+                    {
+                        detail = reader.ReadToEnd();
+                    }
+                    return (int)resp.StatusCode == 200 ? AppState.Healthy : AppState.Unhealthy;
+                }
+            }
+            catch (WebException wex)
+            {
+                var httpResp = wex.Response as HttpWebResponse;
+                if (httpResp != null)
+                {
+                    // 有响应但状态码不是 200：端口通，应用或协议有问题
+                    detail = "HTTP " + (int)httpResp.StatusCode;
+                    httpResp.Close();
+                    return AppState.Unhealthy;
+                }
+                detail = wex.Status.ToString();
+                return AppState.Down;
+            }
+            catch (Exception ex)
+            {
+                detail = ex.GetType().Name;
+                return AppState.Down;
+            }
         }
 
         private void SetState(AppState state, string detail = null)
@@ -347,6 +438,42 @@ namespace LanShareTray
         private static extern bool DestroyIcon(IntPtr handle);
 
         // ── 动作 ──────────────────────────────────────────────────
+
+        /// <summary>
+        /// 显示控制面板。已开则激活到前台（不重复创建）。
+        ///
+        /// 窗口生命周期跟托盘一致：关掉窗口只是隐藏，不留后台进程。
+        /// 这样用户点关闭的直觉（"关掉了"）和实际行为一致，
+        /// 而下次点图标能秒开，不用重新初始化。
+        /// </summary>
+        private void ShowPanel()
+        {
+            if (!_cfg.Installed)
+            {
+                MessageBox.Show(
+                    "LAN Share 好像还没安装好（找不到安装目录）。\n" +
+                    "请重新运行安装程序。",
+                    "LAN Share", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_panel == null || _panel.IsDisposed)
+            {
+                _panel = new LanSharePanel(_cfg, _cli);
+                _panel.FormClosed += (s, e) => { };
+            }
+
+            if (_panel.Visible)
+            {
+                if (_panel.WindowState == FormWindowState.Minimized)
+                    _panel.WindowState = FormWindowState.Normal;
+                _panel.Activate();
+                return;
+            }
+
+            _panel.Show();
+            _panel.Activate();
+        }
 
         private void OpenBrowser()
         {

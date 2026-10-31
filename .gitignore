@@ -117,3 +117,7 @@ installer/lanshare-e2e.iss
 
 # 托盘程序编译产物（installer/tray/build-tray.ps1 生成，csc.exe 几秒钟就能重建）
 installer/tray/bin/
+
+# Caddyfile 改写的临时备份（lan enable/disable 时生成，成功后不留）
+Caddyfile.lanbak
+conf/Caddyfile.lanbak

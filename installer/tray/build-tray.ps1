@@ -1,20 +1,36 @@
-﻿# LAN Share 托盘程序构建脚本
+﻿# LAN Share 托盘 + 控制面板构建脚本
 #
 # 用 Windows 自带的 csc.exe（.NET Framework 4.x 编译器）直接编译，
-# 不需要 Visual Studio、不需要 .NET SDK。
+# 不需要 Visual Studio、不需要 .NET SDK、不需要 NuGet。
 #
 # 用法：  powershell -ExecutionPolicy Bypass -File installer\tray\build-tray.ps1
+#
+# 产物：bin\LanShareTray.exe —— 单文件，约 35 KB
+#       Win10/11 自带 .NET Framework 4.8 运行时，无需额外安装任何东西。
+#
+# ⚠️ 本文件必须 UTF-8 BOM + CRLF，否则 PowerShell 5.1 按 GBK 读会语法崩。
 
 [CmdletBinding()]
 param()
 
 $ErrorActionPreference = "Stop"
-$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Src  = Join-Path $Here "LanShareTray.cs"
+$Here   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $OutDir = Join-Path $Here "bin"
-$Out  = Join-Path $OutDir "LanShareTray.exe"
+$Out    = Join-Path $OutDir "LanShareTray.exe"
 
-if (-not (Test-Path $Src)) { Write-Host "找不到源文件: $Src" -ForegroundColor Red; exit 1 }
+# 三个源文件一起编；顺序无所谓
+$Sources = @(
+    (Join-Path $Here "LanShareCore.cs"),
+    (Join-Path $Here "LanSharePanel.cs"),
+    (Join-Path $Here "LanShareTray.cs")
+)
+
+foreach ($s in $Sources) {
+    if (-not (Test-Path $s)) {
+        Write-Host "找不到源文件: $s" -ForegroundColor Red
+        exit 1
+    }
+}
 
 # 找 csc.exe：64 位优先
 $csc = $null
@@ -31,13 +47,21 @@ if (-not $csc) {
 
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
-Write-Host "编译 LanShareTray.cs ..." -ForegroundColor Cyan
+Write-Host "编译 $($Sources.Count) 个源文件 ..." -ForegroundColor Cyan
+
+# 必需的额外引用：
+#   System.ServiceProcess  —— 服务启停（ServiceController）
+#   System.Web.Extensions  —— JavaScriptSerializer（解析 CLI 的 JSON 输出）
 & $csc /target:winexe /out:$Out `
     /reference:System.dll `
+    /reference:System.Core.dll `
     /reference:System.Windows.Forms.dll `
     /reference:System.Drawing.dll `
+    /reference:System.ServiceProcess.dll `
+    /reference:System.Web.Extensions.dll `
     /optimize+ `
-    $Src
+    /warn:4 `
+    $Sources
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "编译失败（exit $LASTEXITCODE）" -ForegroundColor Red

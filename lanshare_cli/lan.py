@@ -61,6 +61,79 @@ class LanState(str, Enum):
 REG_PATH = r"HKLM\SOFTWARE\LANShare"
 
 
+def _resolve_caddyfile_from_service(service_name: str) -> Path | None:
+    """从 Caddy 服务的启动参数里解析出 --config 指向的配置文件。
+
+    NSSM 服务的参数长这样：
+        AppDirectory  = C:\lan-share
+        AppParameters = run --config Caddyfile --adapter caddyfile
+
+    所以配置路径 = AppDirectory / (--config 后面的值)。
+    值可能是相对路径，也可能是绝对路径，两种都要处理。
+
+    返回 None 表示解析不出来（服务不存在、没有 --config 参数等）。
+    """
+    import re as _re
+    import subprocess
+
+    script = rf"""
+$ErrorActionPreference = 'SilentlyContinue'
+$p = 'HKLM:\SYSTEM\CurrentControlSet\Services\{service_name}\Parameters'
+if (Test-Path $p) {{
+    $item = Get-ItemProperty $p
+    Write-Output ("DIR=" + $item.AppDirectory)
+    Write-Output ("ARGS=" + $item.AppParameters)
+}}
+"""
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            timeout=25,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    raw = proc.stdout or b""
+    text = ""
+    for enc in ("utf-8", "gbk", "utf-16-le"):
+        try:
+            text = raw.decode(enc).strip("")
+            break
+        except UnicodeDecodeError:
+            continue
+    if not text:
+        return None
+
+    app_dir = ""
+    args = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("DIR="):
+            app_dir = line[4:].strip()
+        elif line.startswith("ARGS="):
+            args = line[5:].strip()
+
+    if not args:
+        return None
+
+    # 匹配 --config <path> 或 --config=<path>（路径可能带引号，可能没有）
+    m = _re.search(r'--config(?:=|\s+)(?:"([^"]+)"|(\S+))', args)
+    if not m:
+        return None
+    cfg = m.group(1) or m.group(2)
+    if not cfg:
+        return None
+
+    cfg_path = Path(cfg)
+    if not cfg_path.is_absolute():
+        if not app_dir:
+            return None
+        cfg_path = Path(app_dir) / cfg_path
+
+    return cfg_path
+
+
 @dataclass
 class InstallInfo:
     root: Path
@@ -69,9 +142,33 @@ class InstallInfo:
     web_port: int
     service_prefix: str
 
+    # Caddyfile 路径解析结果的缓存（从服务参数读，可能有点慢，只查一次）
+    _caddyfile_cache: Path | None = field(default=None, repr=False, compare=False)
+
     @property
     def caddyfile_path(self) -> Path:
-        return self.root / "conf" / "Caddyfile"
+        """Caddy 实际读的配置文件路径。
+
+        **不能想当然用 root/conf/Caddyfile**：这个项目的老部署把 Caddyfile
+        放在安装根目录，里面还有 FRP 隧道、自签证书等一堆自定义配置。
+        猜错位置的后果不是"改了不生效"那么轻——如果我们按模板重写，
+        会把用户辛苦维护的整份配置**覆盖掉**。
+
+        真相在服务的 AppParameters 里：
+            run --config Caddyfile --adapter caddyfile
+        配合 AppDirectory 拼出绝对路径。
+        """
+        if self._caddyfile_cache is not None:
+            return self._caddyfile_cache
+
+        resolved = _resolve_caddyfile_from_service(self.caddy_service)
+        if resolved is not None:
+            self._caddyfile_cache = resolved
+            return self._caddyfile_cache
+
+        # 服务读不到（未安装 / 测试态）：退回约定位置
+        self._caddyfile_cache = self.root / "conf" / "Caddyfile"
+        return self._caddyfile_cache
 
     @property
     def api_service(self) -> str:
@@ -91,12 +188,14 @@ $ErrorActionPreference = 'SilentlyContinue'
 $k = 'HKLM:\SOFTWARE\LANShare'
 if (Test-Path $k) {{
     $p = Get-ItemProperty $k
+    # InstallFolder 是安装器写的名字；Install 是早期版本/文档里出现过的名字，两者都认
+    $install = if ($p.InstallFolder) {{ $p.InstallFolder }} else {{ $p.Install }}
     [PSCustomObject]@{{
-        Install     = $p.Install
-        DataFolder  = $p.DataFolder
-        ApiPort     = $p.ApiPort
-        WebPort     = $p.WebPort
-        Prefix      = $p.ServicePrefix
+        InstallFolder = $install
+        DataFolder    = $p.DataFolder
+        ApiPort       = $p.ApiPort
+        WebPort       = $p.WebPort
+        Prefix        = $p.ServicePrefix
     }} | ConvertTo-Json -Compress
 }}
 """
@@ -192,7 +291,7 @@ def load_install_info(
     """
     reg = read_registry()
 
-    resolved_root = root or reg.get("Install") or Path.cwd()
+    resolved_root = root or reg.get("InstallFolder") or Path.cwd()
 
     # 服务前缀：显式 > 注册表 > 本机实际存在的服务 > 默认
     resolved_prefix = service_prefix or reg.get("Prefix")
@@ -494,6 +593,86 @@ def _restart_service(service_name: str, *, dry_run: bool = False) -> tuple[bool,
     return True, f"服务 {service_name} 已重启"
 
 
+def _is_ours(caddyfile_content: str) -> bool:
+    """判断这份 Caddyfile 是不是 lanshare_cli 生成的。
+
+    我们的模板第一行固定写 `# 由 lanshare_cli 生成`。
+    没有这个标记说明是用户手写/历史遗留的配置 —— 里面可能有
+    FRP 隧道、自签证书、备用端口等一堆我们不知道的东西。
+
+    **绝不能整份重写**：那等于把用户辛苦维护的配置删掉。
+    """
+    for line in caddyfile_content.splitlines()[:3]:
+        if "由 lanshare_cli 生成" in line:
+            return True
+    return False
+
+
+def _rewrite_bind_in_place(content: str, bind_host: str, web_port: int) -> tuple[str, bool]:
+    """只改站点块的监听方式，其他内容原样保留。
+
+    返回 (新内容, 是否成功)。找不到目标站点块就返回 (原内容, False)。
+
+    ⚠️ 用的是 bind 指令，不是改首行 —— 改首行对 Caddy 无效（见 caddyfile.py 说明）。
+
+    三种情况的处理：
+        1. 要绑回环，块内没有 bind  → 在第一行之后插入 bind 127.0.0.1
+        2. 要绑回环，块内已有 bind  → 把地址替换成 127.0.0.1
+        3. 要绑所有接口，块内有 bind 127.0.0.1 → 删掉这一行
+    """
+    import re as _re
+
+    # 找到 :web_port { 的站点块起始位置
+    open_re = _re.compile(r"^[ \t]*:" + str(web_port) + r"\s*\{[^\n]*$", _re.MULTILINE)
+    m = open_re.search(content)
+    if not m:
+        # 也接受 0.0.0.0:web_port { 这种写法（用户自定义配置里可能有）
+        open_re2 = _re.compile(
+            r"^[ \t]*(?:0\.0\.0\.0|127\.0\.0\.1):" + str(web_port) + r"\s*\{[^\n]*$",
+            _re.MULTILINE,
+        )
+        m = open_re2.search(content)
+        if not m:
+            return content, False
+
+    block_start = m.end()      # 站点块首行的行尾
+    # 找匹配的收尾 }（简单起见：从块首往下找第一个行首的 }）
+    rest = content[block_start:]
+    close_m = _re.search(r"^\}[ \t]*$", rest, _re.MULTILINE)
+    if not close_m:
+        return content, False
+    block_body = rest[: close_m.start()]
+
+    # 块内现有的 bind 行
+    bind_re = _re.compile(r"^[ \t]*bind\s+([^\s#]+)[ \t]*$", _re.MULTILINE)
+    existing = bind_re.search(block_body)
+
+    if bind_host == caddyfile.BIND_LOOPBACK:
+        if existing:
+            # 有 bind 就替换地址
+            new_body = bind_re.sub(f"\tbind {caddyfile.BIND_LOOPBACK}", block_body, count=1)
+        else:
+            # 没有就在块首插一行
+            new_body = f"\n\tbind {caddyfile.BIND_LOOPBACK}" + block_body
+    else:
+        if existing and existing.group(1).strip() in ("127.0.0.1", "::1", "localhost"):
+            # 要开放：删掉那条只绑回环的 bind。
+            # ⚠️ 必须连同换行一起删，否则留下一行空行，反复开关会让文件越来越长。
+            new_body = _re.sub(
+                r"^[ \t]*bind\s+" + _re.escape(existing.group(1)) + r"[ \t]*\n?",
+                "",
+                block_body,
+                count=1,
+                flags=_re.MULTILINE,
+            )
+        else:
+            # 本来就是开放的，或 bind 到别的地址（不是我们能判断的），不动
+            new_body = block_body
+
+    new_content = content[:block_start] + new_body + rest[close_m.start():]
+    return new_content, True
+
+
 def _write_caddyfile_and_restart(
     info: InstallInfo,
     bind_host: str,
@@ -501,11 +680,20 @@ def _write_caddyfile_and_restart(
     *,
     dry_run: bool = False,
 ) -> bool:
-    """改 Caddyfile 并重启 Caddy。失败时自动回滚到旧配置。"""
-    target = info.caddyfile_path
-    backup = target.with_suffix(".bak")
+    """改 Caddyfile 并重启 Caddy。失败时自动回滚到旧配置。
 
-    # 备份现有配置（回滚用）
+    两条安全规则（都在 2026-10-31 踩过）：
+
+    1. **不认识的配置不动**。如果现有的 Caddyfile 没有我们的标记，
+       说明是用户手写的（这个项目的老部署里有 FRP 隧道、自签证书等
+       一大坨自定义内容）。整份重写等于把那些配置删掉。
+       这种情况下只改监听地址那一行，其余原样保留。
+
+    2. **改坏了要能回来**。写之前备份，重启失败自动回滚。
+    """
+    target = info.caddyfile_path
+    backup = target.with_suffix(target.suffix + ".lanbak")
+
     old_content: str | None = None
     if target.is_file():
         try:
@@ -516,15 +704,37 @@ def _write_caddyfile_and_restart(
             report.add("备份 Caddyfile", False, str(exc))
             return False
 
-    # 写新配置
+    # 决定怎么写
     try:
-        if not dry_run:
-            caddyfile.write(target, info.api_port, info.web_port, bind_host)
-        report.add(
-            "更新 Caddyfile",
-            True,
-            f"监听地址 → {caddyfile.site_block(bind_host, info.web_port)}",
-        )
+        if old_content is not None and not _is_ours(old_content):
+            # 用户自定义配置：只改监听那一行
+            new_content, ok_flag = _rewrite_bind_in_place(old_content, bind_host, info.web_port)
+            if not ok_flag:
+                report.add(
+                    "更新 Caddyfile",
+                    False,
+                    f"{target} 是自定义配置，且找不到端口 {info.web_port} 的站点块。"
+                    f"为了不改坏它，这里不自动修改 —— 请手动把站点块改成 "
+                    f"{caddyfile.site_block(bind_host, info.web_port)} {{",
+                )
+                return False
+            if not dry_run:
+                target.write_text(new_content, encoding="utf-8", newline="")
+            mode = (
+                f"bind {caddyfile.BIND_LOOPBACK}（仅本机）"
+                if bind_host == caddyfile.BIND_LOOPBACK
+                else "不 bind（所有网卡）"
+            )
+            report.add("更新 Caddyfile", True, f"自定义配置，只改站点块的 bind → {mode}")
+        else:
+            # 我们的配置或全新创建：整份重写
+            if not dry_run:
+                caddyfile.write(target, info.api_port, info.web_port, bind_host)
+            report.add(
+                "更新 Caddyfile",
+                True,
+                f"监听地址 → {caddyfile.site_block(bind_host, info.web_port)}",
+            )
     except (OSError, ValueError) as exc:
         report.add("更新 Caddyfile", False, str(exc))
         return False
