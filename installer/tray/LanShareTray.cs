@@ -66,6 +66,11 @@ namespace LanShare
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
+        // Win10 1703+：Per-Monitor V2。比 SystemAware 强的地方是
+        // 窗口跑到不同 DPI 的显示器上不会被系统按比例位图缩放。
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
         [STAThread]
         private static void Main(string[] args)
         {
@@ -109,10 +114,22 @@ namespace LanShare
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
-                // DPI 感知：不加的话在 125%/150% 缩放的屏幕上，
-                // 系统会把整个窗口位图拉伸，文字全部发虚。
-                // 必须在创建任何窗口之前调用。
-                try { SetProcessDPIAware(); } catch (Exception) { }
+                // DPI 感知。必须在创建任何窗口之前调用。
+                //
+                // 坑：原来只调 SetProcessDPIAware()（= SystemAware），
+                // 在混合 DPI 环境下不够用 —— 进程按主显示器 96 DPI 渲染，
+                // 窗口跑到 144 DPI 的屏幕上会被系统按 96/144 位图缩小，
+                // 结果窗口物理尺寸只有设计的 67.5%，文字发虚、Label 被裁掉半行。
+                //
+                // Per-Monitor V2 让窗口自己按所在显示器的 DPI 渲染，不再被缩放。
+                // 老系统（Win7/8）没有这个 API，回退到 SystemAware。
+                bool dpiOk = false;
+                try { dpiOk = SetProcessDpiAwarenessContext(new IntPtr(-4)); }
+                catch (Exception) { }
+                if (!dpiOk)
+                {
+                    try { SetProcessDPIAware(); } catch (Exception) { }
+                }
 
                 // ⚠️ .NET Framework 默认只启用 TLS 1.0，而现代服务器（Caddy 等）
                 // 最低要求 TLS 1.2。不显式开启的话，HTTPS 探测一律报
@@ -431,7 +448,57 @@ namespace LanShare
         }
 
         // ── 图标绘制 ──────────────────────────────────────────────
-        // 不依赖外部 .ico 文件：代码画一个，省得打包时漏文件。
+        //
+        // 图标由两部分合成：
+        //   底 = 品牌图标（logo/lanshare.ico，编译时以 /resource 嵌入程序集）
+        //   角 = 右下角状态点（绿/黄/红/灰）
+        //
+        // 早期版本是「纯色圆 + 白字母 L」，跟网页端和 App 的品牌完全对不上，
+        // 用户认不出这是同一个产品。改成品牌底图后，托盘、窗口、任务栏三处统一。
+        //
+        // 图标从嵌入资源读，不依赖磁盘上的 .ico —— 安装包漏拷文件也不会变成白板。
+
+        private static Bitmap _brandCache;
+
+        /// <summary>读嵌入的品牌图标位图（32×32）。失败返回 null，调用方回退。</summary>
+        private static Bitmap LoadBrandBitmap()
+        {
+            if (_brandCache != null) return _brandCache;
+
+            try
+            {
+                var asm = typeof(Program).Assembly;
+                using (var stream = asm.GetManifestResourceStream("LanShareTray.lanshare.ico"))
+                {
+                    if (stream != null)
+                    {
+                        // .ico 里是多尺寸，用 32×32 那帧
+                        using (var ico = new Icon(stream, new Size(32, 32)))
+                        {
+                            _brandCache = ico.ToBitmap();
+                            return _brandCache;
+                        }
+                    }
+                }
+            }
+            catch (Exception) { }
+
+            // 回退：直接从 exe 自身的图标提取（/win32icon 也会带这个）
+            try
+            {
+                using (var exeIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath))
+                {
+                    if (exeIcon != null)
+                    {
+                        _brandCache = exeIcon.ToBitmap();
+                        return _brandCache;
+                    }
+                }
+            }
+            catch (Exception) { }
+
+            return null;
+        }
 
         private static Icon BuildIcon(AppState state)
         {
@@ -450,17 +517,29 @@ namespace LanShare
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.Clear(Color.Transparent);
 
-                using (var brush = new SolidBrush(fill))
-                    g.FillEllipse(brush, 1, 1, 30, 30);
-
-                // 白色 L
-                using (var pen = new Pen(Color.White, 3.5f))
+                var brand = LoadBrandBitmap();
+                if (brand != null)
                 {
-                    pen.StartCap = LineCap.Round;
-                    pen.EndCap = LineCap.Round;
-                    g.DrawLine(pen, 11, 9, 11, 21);
-                    g.DrawLine(pen, 11, 21, 21, 21);
+                    g.DrawImage(brand, new Rectangle(0, 0, 32, 32));
                 }
+                else
+                {
+                    // 品牌图读不到时的兜底：还画圆 + L，至少不是白板
+                    using (var brush = new SolidBrush(Color.FromArgb(0x5B, 0x6C, 0xFF)))
+                        g.FillEllipse(brush, 1, 1, 30, 30);
+                    using (var pen = new Pen(Color.White, 3.5f))
+                    {
+                        pen.StartCap = LineCap.Round;
+                        pen.EndCap = LineCap.Round;
+                        g.DrawLine(pen, 11, 9, 11, 21);
+                        g.DrawLine(pen, 11, 21, 21, 21);
+                    }
+                }
+
+                // 右下角状态点：先画白色描边再填色，任何底色上都看得清
+                g.FillEllipse(Brushes.White, 16, 16, 16, 16);
+                using (var brush = new SolidBrush(fill))
+                    g.FillEllipse(brush, 18, 18, 12, 12);
 
                 IntPtr hIcon = bmp.GetHicon();
                 try

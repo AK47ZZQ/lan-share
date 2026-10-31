@@ -18,6 +18,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -282,6 +283,7 @@ namespace LanShare
 
         private bool _busy;
         private string _lastLanState = "";
+        private bool _dpiApplied;
         private int _wanTick;
         private DateTime _lastRefresh = DateTime.MinValue;
 
@@ -294,10 +296,13 @@ namespace LanShare
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
+            // DPI 处理见 OnLoad：这里先按 96 DPI 的设计值设，
+            // 实际尺寸在 OnLoad 里按 DeviceDpi 手动缩放。
+            AutoScaleMode = AutoScaleMode.None;
             ClientSize = new Size(520, 786);
             Font = Theme.Body;
             BackColor = Theme.Bg;
-            Icon = SystemIcons.Application;
+            Icon = Theme.AppIcon;
 
             const int P = Theme.Pad;        // 窗口左右边距 24
             const int CW = 472;             // 卡片宽 = 520 - 2*24
@@ -555,6 +560,9 @@ namespace LanShare
 
             Shown += delegate
             {
+                // Shown 之后 DeviceDpi 才是真实显示器的 DPI。
+                // OnLoad 时它恒为 96，在那儿缩放等于没做。
+                ApplyDpiScale();
                 RefreshStateAsync(quiet: false);
                 RefreshWanAsync();
             };
@@ -1076,6 +1084,69 @@ namespace LanShare
         {
             TryCopy(_wanAddress.Text);
         }
+
+        /// <summary>
+        /// 按显示器实际 DPI 缩放窗口和所有子控件。
+        ///
+        /// 为什么不用 AutoScaleMode：
+        ///   WinForms (.NET Framework 4.8) 对 Per-Monitor V2 支持不完整。
+        ///   声明 PerMonitor 后，ClientSize 仍被当作物理像素，但系统又按
+        ///   (96/显示器DPI) 缩一次 —— 520 变成 351，窗口小一圈、字被位图压糊、
+        ///   Label 高度不够导致绿色状态文字被裁掉半截。
+        ///
+        /// 手动 Scale() + 重设 ClientSize 后：
+        ///   144 DPI 屏上 520 设计单位 → 780 逻辑 → 物理正好 520×786，
+        ///   字体由 GDI 按真实 DPI 渲染，清晰不糊。
+        /// </summary>
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetDpiForWindow(IntPtr h);
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            // OnLoad 阶段 DeviceDpi 还是 96（窗口尚未关联显示器），
+            // 真正的 DPI 要等 Shown。这里只留痕，不做缩放。
+            ApplyDpiScale();
+        }
+
+        /// <summary>按当前显示器 DPI 把窗口撑到设计尺寸（520×786 的物理像素）。</summary>
+        private void ApplyDpiScale()
+        {
+            // 不用 DeviceDpi —— 这个属性在本版本始终返回 96，不可信；
+            // 用系统 API 拿窗口真实 DPI。
+            uint apiDpi = Handle == IntPtr.Zero ? 96u : GetDpiForWindow(Handle);
+            if (apiDpi == 0) apiDpi = 96;
+
+            float k = apiDpi / 96f;
+            if (k <= 1.01f) return;
+            if (_dpiApplied) return;   // 只做一次，避免 Shown 重复触发累积缩放
+            _dpiApplied = true;
+
+            SuspendLayout();
+
+            // 控件坐标是 96 DPI 的逻辑单位，先整体缩放到物理尺度
+            Scale(new SizeF(k, k));
+
+            int wantW = (int)(520 * k);
+            int wantH = (int)(786 * k);
+
+            // WinForms 会把 ClientSize 再按 (96/DPI) 缩回去，
+            // 所以直接用 SetWindowPos 给物理尺寸，绕开它的换算。
+            int borderW = Width - ClientSize.Width;
+            int borderH = Height - ClientSize.Height;
+            ClientSize = new Size(wantW, wantH);
+            SetWindowPos(Handle, IntPtr.Zero, 0, 0,
+                wantW + borderW, wantH + borderH,
+                0x0002 | 0x0004);   // SWP_NOMOVE | SWP_NOZORDER
+
+            ResumeLayout(true);
+
+        }
+
 
         private void CopyAddress()
         {
