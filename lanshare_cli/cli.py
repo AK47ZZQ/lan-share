@@ -394,8 +394,41 @@ def cmd_install(args: argparse.Namespace) -> int:
         say("\n    安装包不完整，无法继续。")
         return 1
 
-    # ── 3. 端口 ──
-    step(3, total, "检查端口占用")
+    # ── 3. 已有服务 ──
+    #
+    # 顺序很重要：先查服务再查端口。
+    # 反过来的话，重装时旧服务还占着 8766/8765/5433，端口检查直接失败，
+    # 而 --force 的覆盖逻辑排在后面根本没机会跑 —— 用户看到的就是
+    # 「数据库 端口 5433 已被占用」，明明是自己上一遍装的。
+    step(3, total, "检查是否已安装")
+    try:
+        nssm = NssmService(layout.nssm)
+    except ServiceError as exc:
+        fail(str(exc))
+        return 1
+
+    existing = [n for n in (layout.api_service, layout.caddy_service) if nssm.exists(n)]
+    if existing:
+        if not args.force:
+            fail(f"服务已存在: {', '.join(existing)}")
+            say("\n    要重装请加 --force（会先停旧服务，数据不删）")
+            return 1
+        warn(f"将覆盖已有服务: {', '.join(existing)}")
+        # 停掉旧的，端口才会释放。数据库服务也要停 —— 它不是 NSSM 管的，
+        # 但同样是服务，sc stop 一样有效。
+        for name in (layout.api_service, layout.caddy_service, layout.pg_service):
+            try:
+                if nssm.exists(name):
+                    nssm.stop(name, timeout=30)
+            except (OSError, ServiceError):
+                pass
+        time.sleep(3)
+        ok("旧服务已停（数据不删）")
+    else:
+        ok("无冲突服务")
+
+    # ── 4. 端口 ──
+    step(4, total, "检查端口占用")
     conflict = False
     for port, label in ((api_port, "API"), (web_port, "Web"), (pg_port, "数据库")):
         if port_in_use(port):
@@ -410,24 +443,6 @@ def cmd_install(args: argparse.Namespace) -> int:
                 if port_in_use(p)]
         say(f"    查看谁占用了：netstat -ano | findstr \":{'|:'.join(busy)}\"")
         return 1
-
-    # ── 4. 已有服务 ──
-    step(4, total, "检查是否已安装")
-    try:
-        nssm = NssmService(layout.nssm)
-    except ServiceError as exc:
-        fail(str(exc))
-        return 1
-
-    existing = [n for n in (layout.api_service, layout.caddy_service) if nssm.exists(n)]
-    if existing:
-        if not args.force:
-            fail(f"服务已存在: {', '.join(existing)}")
-            say("\n    要重装请加 --force（会先卸载旧服务，数据不删）")
-            return 1
-        warn(f"将覆盖已有服务: {', '.join(existing)}")
-    else:
-        ok("无冲突服务")
 
     if dry:
         say("\n  DRY RUN 检查全部通过。实际安装会执行：")

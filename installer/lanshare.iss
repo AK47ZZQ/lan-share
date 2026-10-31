@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.73"
+#define AppVersion     "3.75"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -237,7 +237,9 @@ begin
     Exit;
 
   PyExe := ExpandConstant('{app}\runtime\python.exe');
-  Args := '-m lanshare_cli install'
+  { --force：允许覆盖已有服务（停旧服务、不删数据）。
+    没有它就等于"这机器上曾经装过就再也装不上"，而安装器本来就是干重装的活。 }
+  Args := '-m lanshare_cli install --force'
         + ' --data-dir "' + GetDataDir('') + '"'
         + ' --api-port {#ApiPort}'
         + ' --web-port {#WebPort}';
