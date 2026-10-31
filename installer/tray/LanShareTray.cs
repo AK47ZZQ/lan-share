@@ -27,6 +27,40 @@ using System.Windows.Forms;
 
 namespace LanShare
 {
+    /// <summary>
+    /// 「验证连通性」期间临时信任的 HTTPS 主机。
+    ///
+    /// 为什么需要：公网入口走 FRP 隧道，证书必然是自签的（隧道结构下
+    /// 没法做 Let's Encrypt 的域名验证）。严格校验会让验证按钮永远报
+    /// TrustFailure，用户以为配错了。
+    ///
+    /// 为什么用白名单而不是全局放行：只有在用户主动点「验证」的那一刻、
+    /// 对那一个主机短时间放行。其余请求（包括将来可能加的其他网络功能）
+    /// 仍然走系统默认校验，不会因为装了托盘就整体变松。
+    /// </summary>
+    internal static class TrustedHosts
+    {
+        private static readonly object _gate = new object();
+        private static readonly System.Collections.Generic.HashSet<string> _set =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public static void Add(string host, int seconds)
+        {
+            if (string.IsNullOrEmpty(host)) return;
+            lock (_gate) { _set.Add(host); }
+            // 到点自动摘掉，防止忘记清理留下永久后门
+            var t = new System.Threading.Timer(_ =>
+            {
+                lock (_gate) { _set.Remove(host); }
+            }, null, seconds * 1000, System.Threading.Timeout.Infinite);
+        }
+
+        public static bool IsTrusted(string host)
+        {
+            lock (_gate) { return _set.Contains(host); }
+        }
+    }
+
     internal static class Program
     {
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -109,10 +143,16 @@ namespace LanShare
                                 string host = req.RequestUri.Host;
                                 if (host == "127.0.0.1" || host == "::1" || host == "localhost")
                                     return true;   // 本机自签，放行
+
+                                // 公网地址验证：用户配的 FRP 入口几乎必然是自签证书
+                                // （隧道结构下签不出 Let's Encrypt），严格校验等于
+                                // 永远验证失败。所以「验证连通性」期间临时信任目标主机。
+                                // 用白名单而不是无条件放行：平时的其他 HTTPS 请求仍走严格校验。
+                                if (TrustedHosts.IsTrusted(host))
+                                    return true;
                             }
                         }
                         catch (Exception) { }
-                        // 非本机：走系统默认校验，不能因为我们是托盘就放松
                         return errors == System.Net.Security.SslPolicyErrors.None;
                     };
 
@@ -201,7 +241,7 @@ namespace LanShare
                 ? null
                 : Path.Combine(_cfg.LogFolder, "tray.log");
 
-            _cli = new CliRunner(_cfg.InstallFolder, _cfg.PythonPath, _cfg.ServicePrefix);
+            _cli = new CliRunner(_cfg.InstallFolder, _cfg.PythonPath, _cfg.ServicePrefix, _cfg.ApiPort);
 
             Log("托盘启动 | Installed=" + _cfg.Installed
                 + " Prefix=" + _cfg.ServicePrefix
