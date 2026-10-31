@@ -76,7 +76,8 @@ async def get_public_url(request: Request):
     try:
         primary = settings.get_setting(settings.PUBLIC_BASE_URL)
         alt = settings.get_setting(settings.PUBLIC_BASE_URL_ALT)
-    except Exception as exc:  # noqa: BLE001 - 读不到要说出来，不能装作空配置
+    # 读不到要说出来，不能装作空配置（项目已 ignore BLE001，无需 noqa）
+    except Exception as exc:
         return {
             "url": "",
             "url_alt": "",
@@ -105,7 +106,7 @@ async def set_public_url(request: Request, body: PublicUrlBody):
     try:
         settings.set_setting(settings.PUBLIC_BASE_URL, primary)
         settings.set_setting(settings.PUBLIC_BASE_URL_ALT, alt)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
 
     # 改完立即生效（不然防爆破的公网/LAN 分账要等 60 秒才切过来）
@@ -113,7 +114,8 @@ async def set_public_url(request: Request, body: PublicUrlBody):
         from app.security import reset_netloc_cache
 
         reset_netloc_cache()
-    except Exception:  # noqa: BLE001 - 缓存清不掉不影响保存结果
+    # 缓存清不掉不影响保存结果
+    except Exception:
         pass
 
     return {"ok": True, "url": primary, "url_alt": alt}

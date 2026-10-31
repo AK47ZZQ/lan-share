@@ -183,21 +183,21 @@ def read_registry() -> dict[str, str]:
     """读 HKLM\\SOFTWARE\\LANShare。读不到返回空字典（非安装态）。"""
     import subprocess
 
-    script = rf"""
+    script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $k = 'HKLM:\SOFTWARE\LANShare'
-if (Test-Path $k) {{
+if (Test-Path $k) {
     $p = Get-ItemProperty $k
     # InstallFolder 是安装器写的名字；Install 是早期版本/文档里出现过的名字，两者都认
-    $install = if ($p.InstallFolder) {{ $p.InstallFolder }} else {{ $p.Install }}
-    [PSCustomObject]@{{
+    $install = if ($p.InstallFolder) { $p.InstallFolder } else { $p.Install }
+    [PSCustomObject]@{
         InstallFolder = $install
         DataFolder    = $p.DataFolder
         ApiPort       = $p.ApiPort
         WebPort       = $p.WebPort
         Prefix        = $p.ServicePrefix
-    }} | ConvertTo-Json -Compress
-}}
+    } | ConvertTo-Json -Compress
+}
 """
     try:
         proc = subprocess.run(

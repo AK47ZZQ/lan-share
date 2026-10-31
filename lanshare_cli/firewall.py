@@ -26,7 +26,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import subprocess
 from dataclasses import dataclass, asdict
 
@@ -172,7 +171,7 @@ def is_elevated() -> bool:
         import ctypes
 
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:  # noqa: BLE001 - 拿不到就按「没有」处理
+    except Exception:
         return False
 
 
