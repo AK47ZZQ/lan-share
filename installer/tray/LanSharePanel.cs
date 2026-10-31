@@ -19,6 +19,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.ServiceProcess;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -247,6 +248,13 @@ namespace LanShare
         // 服务状态区
         private readonly Label _serviceStatus;
         private readonly Label _apiLine;
+
+        // 服务卡片：api / caddy / (postgresql)
+        // 生产环境三个服务，安装版只有两个 —— 按 HasDatabaseService 动态显示
+        private readonly Card _svcBox;
+        private readonly Label[] _svcName = new Label[3];
+        private readonly Label[] _svcInfo = new Label[3];
+        private readonly Button[] _svcRestart = new Button[3];
         private readonly Label _webLine;   // 不再单独显示，API/Web 已合并进 _apiLine
 
         // 局域网区
@@ -296,10 +304,11 @@ namespace LanShare
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            // DPI 处理见 OnLoad：这里先按 96 DPI 的设计值设，
-            // 实际尺寸在 OnLoad 里按 DeviceDpi 手动缩放。
+            // WinForms 标准 DPI 机制：按 96 DPI 设计，框架按实际 DPI 缩放。
+            // 手工 Scale + SetWindowPos 试过几轮都对不齐 —— 那是和框架内部的
+            // 缩放叠加，成了两层缩放。标准机制反而是对的。
             AutoScaleMode = AutoScaleMode.None;
-            ClientSize = new Size(520, 786);
+            ClientSize = new Size(520, 910);
             Font = Theme.Body;
             BackColor = Theme.Bg;
             Icon = Theme.AppIcon;
@@ -346,8 +355,59 @@ namespace LanShare
             _webLine = new Label { Visible = false, Text = "" };
             Controls.Add(_webLine);
 
+            // ───────── 服务卡片 ─────────
+            // 生产环境跑三个服务：api / caddy / postgresql。
+            // 不显示 PG 的话，数据库挂了用户完全看不出来。
+            _svcBox = new Card(P, 86, CW, 150);
+            Controls.Add(_svcBox);
+
+            var svcTitle = new Label
+            {
+                Text = "服务",
+                Font = Theme.SectionTitle,
+                Location = new Point(Inner, 12),
+                AutoSize = true,
+                ForeColor = Theme.TextMuted,
+            };
+            _svcBox.Controls.Add(svcTitle);
+
+            string[] svcKeys = { "API", "Caddy", "数据库" };
+            for (int i = 0; i < 3; i++)
+            {
+                int rowY = 38 + i * 32;
+
+                _svcName[i] = new Label
+                {
+                    Text = "●  " + svcKeys[i],
+                    Font = Theme.Body,
+                    Location = new Point(Inner, rowY),
+                    Size = new Size(96, 22),
+                    ForeColor = Theme.Gray,
+                };
+                _svcBox.Controls.Add(_svcName[i]);
+
+                _svcInfo[i] = new Label
+                {
+                    Text = "—",
+                    Font = Theme.Meta,
+                    // 起点避开左侧服务名（96 宽 + 留白），宽度够放
+                    // 「0.0.0.0:8765  ·  Running」这种最长组合
+                    Location = new Point(Inner + 104, rowY + 3),
+                    Size = new Size(250, 18),
+                    ForeColor = Theme.TextMuted,
+                };
+                _svcBox.Controls.Add(_svcInfo[i]);
+
+                int captured = i;
+                _svcRestart[i] = Btn.Make("重启", ButtonKind.Secondary,
+                    CW - Inner - 60, rowY - 2, 60, 24);
+                _svcRestart[i].Font = Theme.Meta;
+                _svcRestart[i].Click += delegate { RestartOneService(captured); };
+                _svcBox.Controls.Add(_svcRestart[i]);
+            }
+
             // ───────── 局域网卡片 ─────────
-            _lanBox = new Card(P, 112, CW, 300);
+            _lanBox = new Card(P, 250, CW, 300);
             Controls.Add(_lanBox);
 
             var lanTitle = new Label
@@ -420,7 +480,7 @@ namespace LanShare
             _lanBox.Controls.Add(_lanToggle);
 
             // ───────── 公网卡片 ─────────
-            _wanBox = new Card(P, 428, CW, 200);
+            _wanBox = new Card(P, 564, CW, 200);
             Controls.Add(_wanBox);
 
             var wanTitle = new Label
@@ -500,7 +560,7 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 644),
+                Location = new Point(P, 778),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.TextMuted,
                 Cursor = Cursors.Hand,
@@ -511,17 +571,17 @@ namespace LanShare
             // ───────── 底部操作 ─────────
             // 去掉「数据目录」按钮：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」
-            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 672, 112, 34);
+            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 806, 112, 34);
             _btnOpenWeb.Click += delegate { OpenUrl(_cfg.WebUrl); };
             Controls.Add(_btnOpenWeb);
 
-            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 672, 112, 34);
+            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 806, 112, 34);
             _btnRestart.Click += delegate { RestartServices(); };
             Controls.Add(_btnRestart);
 
             // 「数据目录」按钮删了：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」。按钮位置重排成三个。
-            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 672, 100, 34);
+            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 806, 100, 34);
             _btnLogs.Click += delegate { OpenFolder(_cfg.LogFolder); };
             Controls.Add(_btnLogs);
 
@@ -530,7 +590,7 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 720),
+                Location = new Point(P, 854),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.Blue,
             };
@@ -540,7 +600,7 @@ namespace LanShare
             var version = new Label
             {
                 Text = "服务前缀 " + _cfg.ServicePrefix,
-                Location = new Point(P, 752),
+                Location = new Point(P, 886),
                 AutoSize = true,
                 ForeColor = Theme.TextFaint,
                 Font = Theme.Footer,
@@ -605,6 +665,7 @@ namespace LanShare
                 SetServiceBadge("状态未知", Theme.Gray);
                 _apiLine.Text = error ?? "无法读取状态";
                 _apiLine.ForeColor = Theme.Red;
+                UpdateServiceRows(null);
                 return;
             }
 
@@ -652,6 +713,7 @@ namespace LanShare
             _apiLine.ForeColor = Theme.TextMuted;
 
             UpdateLanSection(dict, state, probeOk, probeMsg, quiet);
+            UpdateServiceRows(dict);
             UpdateDataLine(dict);
         }
 
@@ -1095,7 +1157,7 @@ namespace LanShare
         ///   Label 高度不够导致绿色状态文字被裁掉半截。
         ///
         /// 手动 Scale() + 重设 ClientSize 后：
-        ///   144 DPI 屏上 520 设计单位 → 780 逻辑 → 物理正好 520×786，
+        ///   144 DPI 屏上 520 设计单位 → 780 逻辑 → 物理正好 520×910，
         ///   字体由 GDI 按真实 DPI 渲染，清晰不糊。
         /// </summary>
         [DllImport("user32.dll")]
@@ -1113,40 +1175,180 @@ namespace LanShare
             ApplyDpiScale();
         }
 
-        /// <summary>按当前显示器 DPI 把窗口撑到设计尺寸（520×786 的物理像素）。</summary>
+        /// <summary>
+        /// 按显示器 DPI 把窗口和控件一起放大到物理尺寸。
+        ///
+        /// 关键顺序：Scale() 必须放在 ResumeLayout 之后。
+        /// 放在 SuspendLayout 和 ResumeLayout 中间会被布局引擎吞掉，
+        /// 表现就是「窗口变大了但控件还是原尺寸、底部空一大块」。
+        /// </summary>
         private void ApplyDpiScale()
         {
-            // 不用 DeviceDpi —— 这个属性在本版本始终返回 96，不可信；
-            // 用系统 API 拿窗口真实 DPI。
+            if (_dpiApplied) return;
+
             uint apiDpi = Handle == IntPtr.Zero ? 96u : GetDpiForWindow(Handle);
             if (apiDpi == 0) apiDpi = 96;
 
             float k = apiDpi / 96f;
-            if (k <= 1.01f) return;
-            if (_dpiApplied) return;   // 只做一次，避免 Shown 重复触发累积缩放
+            if (k <= 1.01f)
+            {
+                _dpiApplied = true;
+                CenterOnScreen();
+                return;
+            }
+
             _dpiApplied = true;
 
             SuspendLayout();
+            ResumeLayout(true);
 
-            // 控件坐标是 96 DPI 的逻辑单位，先整体缩放到物理尺度
+            // 布局已经结算完，这时候 Scale 才会真正作用到控件上
             Scale(new SizeF(k, k));
 
             int wantW = (int)(520 * k);
-            int wantH = (int)(786 * k);
+            int wantH = (int)(910 * k);
 
-            // WinForms 会把 ClientSize 再按 (96/DPI) 缩回去，
-            // 所以直接用 SetWindowPos 给物理尺寸，绕开它的换算。
             int borderW = Width - ClientSize.Width;
             int borderH = Height - ClientSize.Height;
             ClientSize = new Size(wantW, wantH);
             SetWindowPos(Handle, IntPtr.Zero, 0, 0,
                 wantW + borderW, wantH + borderH,
-                0x0002 | 0x0004);   // SWP_NOMOVE | SWP_NOZORDER
+                0x0002 | 0x0004);
 
-            ResumeLayout(true);
-
+            CenterOnScreen();
         }
 
+        private void CenterOnScreen()
+        {
+            try
+            {
+                // 用 Bounds 而不是 WorkingArea：窗口高度 937 已经接近整屏 960，
+                // 按工作区（扣掉任务栏约 900）居中会算出负的 Top，窗口顶到屏幕外。
+                var area = Screen.FromHandle(Handle).Bounds;
+                int x = area.Left + (area.Width - Width) / 2;
+                int y = area.Top + (area.Height - Height) / 2;
+                Location = new Point(Math.Max(area.Left, x), Math.Max(area.Top, y));
+            }
+            catch (Exception) { }
+        }
+
+
+        /// <summary>
+        /// 刷新服务卡片的三行（api / caddy / 数据库）。
+        ///
+        /// 数据来源分两种：
+        ///   api、caddy  —— 服务状态用 ServiceController，端口用 lan status 的 listening
+        ///   数据库       —— SQLite 时压根没有服务，显示「内置」而不是显示红叉
+        /// </summary>
+        private void UpdateServiceRows(Dictionary<string, object> statusDict)
+        {
+            string[] names = { _cfg.ApiServiceName, _cfg.CaddyServiceName, _cfg.DbServiceName };
+            string[] labels = { "API", "Caddy", "数据库" };
+
+            // caddy 的监听地址从 lan status 里拿（可能是 :: 或 127.0.0.1）
+            string caddyBind = "";
+            if (statusDict != null)
+            {
+                foreach (var a in List(statusDict, "listening"))
+                {
+                    string s0 = Convert.ToString(a);
+                    if (s0 == "0.0.0.0" || s0 == "::") { caddyBind = "0.0.0.0"; break; }
+                    if (s0 == "127.0.0.1") caddyBind = "127.0.0.1";
+                }
+            }
+
+            for (int i = 0; i < 3; i++)
+            {
+                bool isDb = (i == 2);
+
+                // SQLite 模式下没有数据库服务，这一行说明情况就好
+                if (isDb && !_cfg.HasDatabaseService)
+                {
+                    _svcName[i].Text = "○  " + labels[i];
+                    _svcName[i].ForeColor = Theme.TextFaint;
+                    _svcInfo[i].Text = "SQLite 内置，无需服务";
+                    _svcRestart[i].Visible = false;
+                    continue;
+                }
+
+                _svcRestart[i].Visible = true;
+
+                string state = "未知";
+                Color color = Theme.Gray;
+
+                try
+                {
+                    using (var sc = new ServiceController(names[i]))
+                    {
+                        switch (sc.Status)
+                        {
+                            case ServiceControllerStatus.Running: state = "Running"; color = Theme.Green; break;
+                            case ServiceControllerStatus.Stopped: state = "Stopped"; color = Theme.Red; break;
+                            case ServiceControllerStatus.StartPending: state = "Starting"; color = Theme.Amber; break;
+                            case ServiceControllerStatus.StopPending: state = "Stopping"; color = Theme.Amber; break;
+                            case ServiceControllerStatus.Paused: state = "Paused"; color = Theme.Amber; break;
+                            default: state = sc.Status.ToString(); color = Theme.Gray; break;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    state = "未安装";
+                    color = Theme.TextFaint;
+                }
+
+                _svcName[i].Text = "●  " + labels[i];
+                _svcName[i].ForeColor = color;
+
+                string addr;
+                if (i == 0) addr = "127.0.0.1:" + _cfg.ApiPort;
+                else if (i == 1) addr = (caddyBind.Length > 0 ? caddyBind : "—") + ":" + _cfg.WebPort;
+                else
+                {
+                    int pg = _cfg.PgPort;
+                    addr = pg > 0 ? "127.0.0.1:" + pg : "端口未知";
+                }
+
+                _svcInfo[i].Text = addr + "  ·  " + state;
+                _svcInfo[i].ForeColor = color == Theme.Green ? Theme.TextMuted : color;
+            }
+        }
+
+        /// <summary>单独重启某一个服务。0=api 1=caddy 2=数据库。</summary>
+        private void RestartOneService(int idx)
+        {
+            string[] names = { _cfg.ApiServiceName, _cfg.CaddyServiceName, _cfg.DbServiceName };
+            string[] labels = { "API", "Caddy", "数据库" };
+
+            if (idx == 2 && !_cfg.HasDatabaseService) return;
+
+            string name = names[idx];
+
+            SetBusy(true, "正在重启 " + labels[idx] + "…");
+
+            Task.Run(() => ServiceControl.RestartOnePublic(name))
+                .ContinueWith(t =>
+                {
+                    if (IsDisposed) return;
+                    SetBusy(false, "");
+
+                    string err = t.Result;
+                    if (err != null)
+                    {
+                        MessageBox.Show(this, err, "重启失败",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                    else
+                    {
+                        _busyLabel.Text = labels[idx] + " 已重启";
+                        var timer = new System.Windows.Forms.Timer { Interval = 2500 };
+                        timer.Tick += delegate { timer.Stop(); timer.Dispose(); _busyLabel.Text = ""; };
+                        timer.Start();
+                    }
+
+                    RefreshStateAsync(quiet: false);
+                }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
 
         private void CopyAddress()
         {
