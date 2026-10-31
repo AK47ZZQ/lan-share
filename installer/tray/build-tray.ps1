@@ -21,6 +21,7 @@ $Out    = Join-Path $OutDir "LanShareTray.exe"
 # 三个源文件一起编；顺序无所谓
 $Sources = @(
     (Join-Path $Here "LanShareCore.cs"),
+    (Join-Path $Here "UiKit.cs"),
     (Join-Path $Here "LanSharePanel.cs"),
     (Join-Path $Here "LanShareTray.cs")
 )
