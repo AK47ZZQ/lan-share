@@ -191,21 +191,29 @@ def fail(msg: str) -> None:
 # ──────────────────────────────────────────────────────────────
 
 
-def read_registry_value(name: str) -> str:
-    """从 HKLM\SOFTWARE\LANShare 读一个值，读不到返回空串。
+REGISTRY_KEY_DEFAULT = "LANShare"
+
+
+def read_registry_value(name: str, key: str = REGISTRY_KEY_DEFAULT) -> str:
+    """从 HKLM\SOFTWARE\<key> 读一个值，读不到返回空串。
 
     升级时要用它拿回旧密码 —— 每次安装都重新生成密码会让
     已经建好的 PG 角色对不上，库直接连不进去。
     """
     from .lan import read_registry
 
-    return (read_registry() or {}).get(name, "") or ""
+    return (read_registry(key) or {}).get(name, "") or ""
 
 
-def write_registry_value(name: str, value: str) -> None:
+def write_registry_value(
+    name: str, value: str, key: str = REGISTRY_KEY_DEFAULT
+) -> None:
     """写一个注册表值。"""
+    if not key or any(c in key for c in "\'\"; "):
+        raise ValueError(f"非法的注册表键名: {key!r}")
+
     script = (
-        "$k='HKLM:\SOFTWARE\LANShare'; "
+        f"$k='HKLM:\SOFTWARE\{key}'; "
         "if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }; "
         f"Set-ItemProperty -Path $k -Name '{name}' -Value '{value}'"
     )
@@ -228,7 +236,8 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     # 密码策略：升级时沿用注册表里的旧密码，全新安装才生成新的。
     # 每次安装都换密码会让 PG 里的旧角色对不上，库直接连不上。
-    pg_password = read_registry_value("PgPassword") or generate_password()
+    reg_key = getattr(args, "registry_key", None) or REGISTRY_KEY_DEFAULT
+    pg_password = read_registry_value("PgPassword", reg_key) or generate_password()
 
     say("=" * 64)
     say("  LAN Share 安装")
@@ -536,8 +545,8 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     say("\n" + "=" * 64)
     # 记下密码和端口，下次升级要用同一条 —— 换密码等于把库锁死
-    write_registry_value("PgPassword", pg_password)
-    write_registry_value("PgPort", str(pg_port))
+    write_registry_value("PgPassword", pg_password, reg_key)
+    write_registry_value("PgPort", str(pg_port), reg_key)
 
     say("  安装完成")
     say("=" * 64)
@@ -860,6 +869,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-port", type=int, default=DEFAULT_API_PORT)
     parser.add_argument("--web-port", type=int, default=DEFAULT_WEB_PORT)
     parser.add_argument(
+        "--registry-key",
+        default=REGISTRY_KEY_DEFAULT,
+        help="注册表键名（HKLM\SOFTWARE\<key>），默认 LANShare。"
+             "测试实例务必用独立键，否则会改到正式安装的配置",
+    )
+    parser.add_argument(
         "--pg-port",
         type=int,
         default=PG_DEFAULT_PORT,
@@ -882,6 +897,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--api-port", type=int, default=argparse.SUPPRESS)
     common.add_argument("--web-port", type=int, default=argparse.SUPPRESS)
     common.add_argument("--pg-port", type=int, default=argparse.SUPPRESS)
+    common.add_argument("--registry-key", default=argparse.SUPPRESS)
     common.add_argument("--service-prefix", default=argparse.SUPPRESS)
 
     sub = parser.add_subparsers(dest="command", required=True)
