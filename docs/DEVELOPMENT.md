@@ -4,7 +4,7 @@
 
 ## 测试
 
-**当前基线：pytest 288 项**（`check.bat` 五段：pytest + ruff + mypy + pip-audit + UI 分层守卫）。
+**当前基线：pytest 729 项**（`check.bat` 五段：pytest + ruff + mypy + pip-audit + UI 分层守卫）。
 
 ```bash
 check.bat            # 质量门禁 = pytest 基线（后端改动必跑，跑绿才算改完）
