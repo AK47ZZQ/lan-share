@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 TEMPLATE = """\
@@ -24,7 +25,7 @@ TEMPLATE = """\
 	auto_https off
 }}
 
-:{web_port} {{
+{site_block} {{
 	reverse_proxy 127.0.0.1:{api_port} {{
 		# 告诉后端这是 HTTP，Cookie 就不加 Secure 位（内网 HTTP 下才正常）
 		header_up X-Forwarded-Proto http
@@ -40,8 +41,25 @@ TEMPLATE = """\
 }}
 """
 
+# 两种监听模式。这是 LAN 开关的**唯一实现机制**：
+#   关（默认）→ 只绑回环，外部连 TCP 握手都到不了
+#   开         → 绑所有接口，配合防火墙规则才真正可达
+BIND_ALL = "0.0.0.0"        # 对应 site block `:8765`
+BIND_LOOPBACK = "127.0.0.1"  # 对应 site block `127.0.0.1:8765`
 
-def render(api_port: int, web_port: int) -> str:
+
+def site_block(bind_host: str, web_port: int) -> str:
+    """生成站点块的监听部分。
+
+    Caddy 语法：`:8765` = 所有接口；`127.0.0.1:8765` = 仅回环。
+    不写 `0.0.0.0:8765` —— Caddy 会把 0.0.0.0 当主机名处理，触发意外行为。
+    """
+    if bind_host == BIND_ALL:
+        return f":{web_port}"
+    return f"{bind_host}:{web_port}"
+
+
+def render(api_port: int, web_port: int, bind_host: str = BIND_ALL) -> str:
     """渲染 Caddyfile 内容（不落盘，方便单测）。
 
     Caddy 的占位符 `{remote_host}` / `{host}` 用双花括号转义，
@@ -56,15 +74,66 @@ def render(api_port: int, web_port: int) -> str:
     if api_port == web_port:
         raise ValueError(f"api_port 和 web_port 不能相同（都是 {api_port}）")
 
-    return TEMPLATE.format(api_port=api_port, web_port=web_port)
+    block = site_block(bind_host, web_port)
+    return TEMPLATE.format(api_port=api_port, web_port=web_port, site_block=block)
 
 
-def write(path: str | Path, api_port: int, web_port: int) -> Path:
+def write(
+    path: str | Path,
+    api_port: int,
+    web_port: int,
+    bind_host: str = BIND_ALL,
+) -> Path:
     """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = render(api_port, web_port)
+    content = render(api_port, web_port, bind_host)
     # newline="" 防止 Windows 把 \n 变成 \r\n（Caddy 两种都吃，但保持稳定）
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     return target
+
+
+# ──────────────────────────────────────────────────────────────
+# 从现有 Caddyfile 反推 LAN 状态（重装时保留用户选择）
+# ──────────────────────────────────────────────────────────────
+
+_SITE_LINE = re.compile(r"^\s*(?P<host>[^\s{]+):\d+\s*\{\s*$", re.MULTILINE)
+
+
+def detect_bind_host(path: str | Path) -> str | None:
+    """读现有 Caddyfile，判断当前是绑所有接口还是只绑回环。
+
+    返回：
+        BIND_ALL      — 站点块是 `:8765` 或 `0.0.0.0:8765`
+        BIND_LOOPBACK — 站点块是 `127.0.0.1:8765`
+        None          — 文件不存在 / 解析不出（调用方按默认值处理）
+
+    为什么需要这个：
+        `install` 会重新生成 Caddyfile。如果不先读旧文件的状态，
+        用户辛苦开好的局域网会在修复安装/升级后被静默重置成关闭。
+    """
+    target = Path(path)
+    if not target.is_file():
+        return None
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        # 跳过全局块、注释、反向代理内部结构
+        if stripped.startswith("#") or stripped in ("{", "}"):
+            continue
+        # 形如 `:8765 {` —— 所有接口
+        if re.fullmatch(r":\d+\s*\{", stripped):
+            return BIND_ALL
+        # 形如 `0.0.0.0:8765 {` —— 也是所有接口
+        if re.fullmatch(r"0\.0\.0\.0:\d+\s*\{", stripped):
+            return BIND_ALL
+        # 形如 `127.0.0.1:8765 {` —— 仅回环
+        if re.fullmatch(r"127\.0\.0\.1:\d+\s*\{", stripped):
+            return BIND_LOOPBACK
+
+    return None

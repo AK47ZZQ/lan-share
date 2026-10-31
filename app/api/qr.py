@@ -3,7 +3,7 @@ import io
 
 import qrcode
 import qrcode.image.svg  # SvgPathImage 子模块：引用前必须显式导入
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from app.security import require_user
@@ -40,4 +40,54 @@ def qr_svg_response(text: str) -> Response:
 async def generic_qr(text: str = Query(..., min_length=1, max_length=512),
                      _user=Depends(require_user)):
     """任意文本的 QR 码 SVG（登录后可用，如手机上传页二维码）。"""
+    return qr_svg_response(text)
+
+
+# ──────────────────────────────────────────────────────────────
+# 本机专用 QR（供桌面托盘/控制面板显示局域网地址二维码）
+# ──────────────────────────────────────────────────────────────
+
+def _effective_client_ip(request: Request) -> str:
+    """判断请求的真实来源 IP —— 反代场景下绕开 127.0.0.1 的假象。
+
+    陷阱：请求经过 Caddy 反代后，`request.client.host` 永远是 127.0.0.1
+    （Caddy 的地址），拿它做「是否本机」判断会把整个局域网都放进来。
+
+    规则：
+      - 直连且不是回环 → 就是真实 IP，**不信任任何 X- 头**
+        （否则公网攻击者伪造 X-Real-IP: 127.0.0.1 就能绕过）
+      - 直连且是回环 → 可能来自 Caddy，看 X-Real-IP 拿真实来源
+    """
+    direct = request.client.host if request.client else ""
+    loopbacks = ("127.0.0.1", "::1", "localhost")
+
+    if direct not in loopbacks:
+        return direct
+
+    # 只有从本机进来的请求才信反代头
+    forwarded = request.headers.get("x-real-ip", "").strip()
+    if not forwarded:
+        forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded or direct
+
+
+@router.get("/local/qr")
+async def local_qr(
+    request: Request,
+    text: str = Query(..., min_length=1, max_length=512),
+):
+    """本机专用的 QR 码 SVG，免登录。
+
+    存在的理由：桌面托盘 / 控制面板没有登录态，调不动 /api/qr，
+    但又需要在窗口里显示「手机扫码访问局域网地址」的二维码。
+
+    内容限制：只是一段带进局域网地址的文本，不是秘密 ——
+    真正保护数据的是那些接口自己的 require_user。
+    """
+    ip = _effective_client_ip(request)
+    if ip not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=403,
+            detail="该接口仅限本机访问",
+        )
     return qr_svg_response(text)

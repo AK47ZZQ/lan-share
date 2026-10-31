@@ -7125,6 +7125,46 @@
     "summary": "Healthz"
    }
   },
+  "/local/qr": {
+   "get": {
+    "description": "本机专用的 QR 码 SVG，免登录。\n\n存在的理由：桌面托盘 / 控制面板没有登录态，调不动 /api/qr，\n但又需要在窗口里显示「手机扫码访问局域网地址」的二维码。\n\n内容限制：只是一段带进局域网地址的文本，不是秘密 ——\n真正保护数据的是那些接口自己的 require_user。",
+    "operationId": "local_qr_local_qr_get",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "text",
+      "required": true,
+      "schema": {
+       "maxLength": 512,
+       "minLength": 1,
+       "title": "Text",
+       "type": "string"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Local Qr"
+   }
+  },
   "/login": {
    "get": {
     "operationId": "login_page_login_get",
