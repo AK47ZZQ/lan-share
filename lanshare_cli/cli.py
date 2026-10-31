@@ -547,6 +547,10 @@ def cmd_install(args: argparse.Namespace) -> int:
     # 记下密码和端口，下次升级要用同一条 —— 换密码等于把库锁死
     write_registry_value("PgPassword", pg_password, reg_key)
     write_registry_value("PgPort", str(pg_port), reg_key)
+    # 前缀必须回写：安装器的 [Registry] 段写的是静态值，万一和 CLI 实际用的
+    # 前缀不一致，托盘会按错的名字去找服务（lanshare-api vs lan-share-api）。
+    # 这里用真正生效的 layout.service_prefix 覆盖，保证唯一事实源。
+    write_registry_value("ServicePrefix", layout.service_prefix, reg_key)
 
     say("  安装完成")
     say("=" * 64)
