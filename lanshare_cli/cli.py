@@ -601,6 +601,65 @@ def _sc_delete(name: str) -> bool:
     return r.returncode == 0
 
 
+def _stop_tray() -> None:
+    """停掉托盘进程。
+
+    不停的话它占着 LanShareTray.exe，卸载器删不掉安装目录，
+    用户会看到「文件正在使用」然后留一个半残目录。
+    """
+    script = (
+        "Get-Process -Name 'LanShareTray' -ErrorAction SilentlyContinue | "
+        "ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True, timeout=30,
+    )
+    time.sleep(1)
+
+
+def _delete_registry_key(key: str) -> bool:
+    """删除 HKLM\SOFTWARE\<key>。"""
+    if not key or any(c in key for c in "\'\"; "):
+        return False
+    script = (
+        f"$k='HKLM:\SOFTWARE\{key}'; "
+        "if (Test-Path $k) { Remove-Item -Path $k -Recurse -Force }"
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True, timeout=30,
+    )
+    return r.returncode == 0
+
+
+def _clean_path_entries(install_root: str) -> int:
+    """从系统 PATH 移除指向本安装目录的条目，返回移除条数。
+
+    老版本安装器用 NeedsAddPath 做去重，那个检查实际失效了 ——
+    2026-10-31 在本机查到 PATH 里同一路径重复了 17 次。卸载时清掉，
+    免得越积越多（PATH 太长会导致部分老程序读不全）。
+    """
+    root = install_root.rstrip("\\")
+    script = (
+        "$old = [Environment]::GetEnvironmentVariable('Path','Machine'); "
+        "$parts = $old -split ';'; "
+        f"$kept = $parts | Where-Object {{ $_ -notlike '*{root}*' }}; "
+        "if ($kept.Count -ne $parts.Count) { "
+        "  [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'Machine'); "
+        "  Write-Output ($parts.Count - $kept.Count) "
+        "} else { Write-Output '0' }"
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    try:
+        return int((r.stdout or "0").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 def cmd_uninstall(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
@@ -614,13 +673,28 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         fail(str(exc))
         return 1
 
+    reg_key = getattr(args, "registry_key", None) or REGISTRY_KEY_DEFAULT
+    dry = getattr(args, "dry_run", False)
+
     say("卸载 LAN Share")
     say(f"  安装目录 {layout.root}")
     say(f"  数据目录 {layout.data_dir}")
+    if dry:
+        say("  （dry-run，不会真的改动系统）")
 
+    # ── 1. 先停托盘 ──
+    # 它占着 exe 文件，不先停，后面删目录会失败。
+    if not dry:
+        _stop_tray()
+        ok("已停止托盘程序")
+
+    # ── 2. 停服务 ──
     # 顺序：Web → API → 数据库。API 连着库，先停 API 再停库；
     # Web 反代到 API，所以 Web 最先停。
     for name in (layout.caddy_service, layout.api_service):
+        if dry:
+            ok(f"[dry-run] 将移除服务 {name}")
+            continue
         if nssm.exists(name):
             try:
                 nssm.remove(name)
@@ -630,8 +704,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         else:
             ok(f"{name} 本来就不存在")
 
+    # ── 3. 数据库服务 ──
     # PG 服务不是 NSSM 管的（pg_ctl register 创建），要用 sc delete
-    if _sc_exists(layout.pg_service):
+    if dry:
+        ok(f"[dry-run] 将移除服务 {layout.pg_service}")
+    elif _sc_exists(layout.pg_service):
         if _sc_delete(layout.pg_service):
             ok(f"已移除服务 {layout.pg_service}")
         else:
@@ -639,19 +716,57 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     else:
         ok(f"{layout.pg_service} 本来就不存在")
 
+    # ── 4. 防火墙规则 ──
+    # 不清的话，下次换端口重装会积一堆废旧放行规则；
+    # 更糟的是端口被别的程序占了，那些规则等于给别人开门。
+    try:
+        from . import firewall
+
+        # 只删本实例端口的规则 —— 同机多实例时别把别人的一起删了。
+        # 端口从命令行参数取，没传就按默认值（和 install 一致）。
+        fw_ports = [
+            getattr(args, "web_port", 8765),
+            getattr(args, "api_port", 8766),
+        ]
+        done, msg = firewall.remove_rules(ports=fw_ports, dry_run=dry)
+        (ok if done else fail)(msg)
+    except Exception as exc:
+        fail(f"清理防火墙规则失败：{exc}")
+
+    # ── 5. 注册表 ──
+    if dry:
+        ok(f"[dry-run] 将删除 HKLM\SOFTWARE\{reg_key}")
+    elif _delete_registry_key(reg_key):
+        ok(f"已删除注册表 HKLM\SOFTWARE\{reg_key}")
+    else:
+        fail(f"删除注册表 HKLM\SOFTWARE\{reg_key} 失败")
+
+    # ── 6. 系统 PATH ──
+    if not dry:
+        n = _clean_path_entries(str(layout.root))
+        if n:
+            ok(f"已从系统 PATH 移除 {n} 条残留")
+        else:
+            ok("系统 PATH 无残留")
+
+    # ── 7. 数据 ──
     if args.purge_data:
         if layout.data_dir.is_dir():
-            say(f"\n  即将永久删除数据目录: {layout.data_dir}")
+            say("")
+            say(f"  即将永久删除数据目录: {layout.data_dir}")
             answer = input("  确认删除输入 yes（其他任何输入都会保留数据）: ").strip()
             if answer.lower() == "yes":
                 shutil.rmtree(layout.data_dir, ignore_errors=True)
                 ok("数据已删除")
             else:
                 ok("数据已保留")
+        else:
+            ok("数据目录本来就不存在")
     else:
         ok(f"数据保留在 {layout.data_dir}")
 
-    say("\n卸载完成。安装文件可以手动删除了。")
+    say("")
+    say("卸载完成。安装文件可以手动删除了。" if not dry else "dry-run 结束，什么都没改。")
     return 0
 
 
@@ -910,6 +1025,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_uninstall = sub.add_parser("uninstall", parents=[common], help="停止并删除服务")
     p_uninstall.add_argument(
         "--purge-data", action="store_true", help="连数据一起删（需二次确认）"
+    )
+    p_uninstall.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只打印会做什么，不改系统",
     )
     p_uninstall.set_defaults(func=cmd_uninstall)
 

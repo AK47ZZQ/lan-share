@@ -360,29 +360,44 @@ catch {{
     return False, out.strip()
 
 
-def remove_rules(dry_run: bool = False) -> tuple[bool, str]:
-    """删除我们创建的所有规则。卸载时调用。
+def remove_rules(
+    ports: list[int] | None = None, dry_run: bool = False
+) -> tuple[bool, str]:
+    """删除我们创建的防火墙规则。
 
-    删不存在的规则不报错，所以可以无脑执行。
+    ports 为 None 时删所有「LAN Share」规则；给了端口就只删对应端口那几条。
+
+    为什么要按端口区分：同一台机器上可能同时跑正式实例（8765）和测试实例
+    （9912），规则名都是「LAN Share (TCP 端口)」。测试实例卸载时若无差别
+    全删，正式实例的放行规则就没了 —— 局域网访问会突然断掉，而且看起来
+    毫无原因（服务在跑、端口在听，就是外面连不进来）。
     """
+    if ports:
+        names = ", ".join(f"'{RULE_PREFIX} (TCP {p})'" for p in ports)
+        cond = f"@({names}) -contains $_.DisplayName"
+        scope = "端口 " + "、".join(str(p) for p in ports) + " 的"
+    else:
+        cond = f"$_.DisplayName -like '{RULE_PREFIX}*'"
+        scope = "所有"
+
     if dry_run:
-        return True, f"[dry-run] 将删除所有「{RULE_PREFIX}」防火墙规则"
+        return True, f"[dry-run] 将删除{scope}「{RULE_PREFIX}」防火墙规则"
 
     script = rf"""
 $ErrorActionPreference = 'SilentlyContinue'
-$before = @(Get-NetFirewallRule -DisplayName '{RULE_PREFIX}*' -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.Direction.ToString() -eq 'Inbound' }}).Count
-Get-NetFirewallRule -DisplayName '{RULE_PREFIX}*' -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.Direction.ToString() -eq 'Inbound' }} |
-    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+$targets = @(Get-NetFirewallRule -DisplayName '{RULE_PREFIX}*' -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.Direction.ToString() -eq 'Inbound' -and ({cond}) }})
+$before = $targets.Count
+$targets | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 $after = @(Get-NetFirewallRule -DisplayName '{RULE_PREFIX}*' -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.Direction.ToString() -eq 'Inbound' }}).Count
+    Where-Object {{ $_.Direction.ToString() -eq 'Inbound' -and ({cond}) }}).Count
 Write-Output "REMOVED:$($before - $after)"
 """
     code, out = run_elevated(script)
     if "REMOVED:" in out:
-        count = out.split("REMOVED:", 1)[1].strip().split()[0] if out.split("REMOVED:", 1)[1].strip() else "0"
-        return True, f"已清理 {count} 条防火墙规则"
+        tail = out.split("REMOVED:", 1)[1].strip()
+        count = tail.split()[0] if tail else "0"
+        return True, f"已清理 {count} 条防火墙规则（{scope}）"
     if not out.strip():
         return False, "已取消（需要管理员权限）"
     return False, out.strip()

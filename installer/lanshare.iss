@@ -112,7 +112,6 @@ Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "ServiceP
 ; ── 托盘开机自启（HKA = 安装模式下自动选对根键，避免 admin 装到错误账户）──
 Root: HKA; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LANShareTray"; ValueData: """{app}\tray\LANShareTray.exe"""; Tasks: autostart; Flags: uninsdeletevalue
 ; ── 安装路径加入 PATH（方便命令行调 python.exe）──
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}\runtime"; Check: NeedsAddPath('{app}\runtime')
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "https://127.0.0.1:{#WebPort}"
@@ -185,20 +184,6 @@ begin
   DataDirPage.Values[0] := ExpandConstant('{commonappdata}\LANShare\data');
 end;
 
-{ ── PATH 去重（重复安装时不要重复追加）── }
-function NeedsAddPath(Param: String): Boolean;
-var
-  OrigPath: String;
-begin
-  if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
-      'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
-      'Path', OrigPath) then
-  begin
-    Result := True;
-    Exit;
-  end;
-  Result := Pos(';' + Uppercase(Param) + ';', ';' + Uppercase(OrigPath) + ';') = 0;
-end;
 
 { ── 卸载时询问是否保留数据（绝不能默认删用户照片）── }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
