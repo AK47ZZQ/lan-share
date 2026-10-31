@@ -159,9 +159,9 @@ class Postgres:
             except OSError:
                 pass
 
-        self._write_conf()
+        self.write_conf()
 
-    def _write_conf(self) -> None:
+    def write_conf(self) -> None:
         """把端口等配置写进 postgresql.conf。
 
         只追加我们需要的项，不整份重写 —— 用户可能手工调过参数。
@@ -195,10 +195,15 @@ class Postgres:
         e = dict(os.environ)
         if env:
             e.update(env)
+        # PG 的命令行工具在中文 Windows 上输出 GBK。用 text=True 默认按
+        # UTF-8 解，遇到中文就抛 UnicodeDecodeError（虽然命令本身成功了）。
+        # 这里放宽成 replace，编码猜错也只是乱码，不会中断安装。
         return subprocess.run(
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=e,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -206,32 +211,73 @@ class Postgres:
 
     # ── 服务 ──────────────────────────────────────────────
 
-    def install_service(self, nssm: NssmService) -> None:
-        """注册 PG 服务。用 pg_ctl runservice 托管，而不是让 NSSM 直接跑 postgres.exe。
+    def install_service(self, nssm: NssmService | None = None) -> None:
+        """注册 PG 服务，用 PostgreSQL 自带的 pg_ctl register。
 
-        为什么用 pg_ctl runservice：
-          * pg_ctl 会正确处理启动等待、日志重定向、崩溃重启
-          * 直接跑 postgres.exe 时，SIGTERM 的处理在 Windows 上不干净，
-            停服务会留下僵尸进程和共享内存段
+        为什么不用 NSSM（两条路都试过，都不行）：
+
+          1. NSSM 跑 pg_ctl runservice
+             报「无法启动服务，错误 1063」。runservice 是给 SCM
+             内部调用的模式，不是拿来直接执行的。
+
+          2. NSSM 跑 postgres.exe
+             服务一直是 PAUSED。因为 NSSM 默认用 LocalSystem 账户，
+             而 PostgreSQL 有硬性限制：拒绝以管理员身份运行
+             （防止特权进程被攻击）。启动时它直接检查并退出。
+
+        pg_ctl register 则由 PostgreSQL 自己创建服务：自动使用
+        NetworkService 这种低权限账户，内部参数也配好了。
+        实测起来就是 Running，端口正常监听。
+
+        nssm 参数保留但不再使用，避免调用方大改。
         """
-        pg_ctl = self.exe("pg_ctl")
-        nssm.install(
-            self.service_name,
-            pg_ctl,
-            ["runservice", "-N", self.service_name, "-D", str(self.pgdata), "-w"],
-            description="LAN Share 数据库（PostgreSQL）",
-            display_name="LAN Share PostgreSQL",
+        # 幂等：已经注册过就直接返回，别让 sc create 报冲突
+        check = self._run(["sc.exe", "query", self.service_name], timeout=20)
+        if check.returncode == 0:
+            return
+
+        res = self._run(
+            [str(self.exe("pg_ctl")), "register",
+             "-N", self.service_name,
+             "-D", str(self.pgdata),
+             "-S", "auto"],
+            timeout=60,
         )
+        if res.returncode != 0:
+            raise PostgresError(
+                f"注册 PG 服务失败：{res.stderr or res.stdout}"
+            )
 
     def start(self, timeout: int = 60) -> None:
         """启动 PG 并等它真的能连。"""
-        res = self._run(
+        # pg_ctl -l 指定的日志文件所在目录必须已存在，否则它会报
+        # 「系统找不到指定的路径」然后起不来。安装流程只建了 data_dir，
+        # 没建 data_dir/logs，所以这里自己兜一下。
+        log_dir = self.data_dir / "logs"
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise PostgresError(f"建不了日志目录 {log_dir}：{exc}") from exc
+
+        # ⚠️ 这里绝对不能用 capture_output / PIPE。
+        #
+        # pg_ctl start 会把 postgres 拉成后台进程，而那个子进程**继承父进程的
+        # stdout 管道**。于是 subprocess.run 一直在等管道 EOF，可 postgres 是常驻的、
+        # 永远不会关，结果就是安装卡死在这里 —— 服务器其实早就起来了（日志里有
+        # "database system is ready to accept connections"），但调用方一直挂着。
+        #
+        # 所以：输出一律 DEVNULL，错误信息从 -l 指定的日志文件里读。
+        res = subprocess.run(
             [str(self.exe("pg_ctl")), "start", "-D", str(self.pgdata),
-             "-w", "-t", str(timeout), "-l", str(self.data_dir / "logs" / "postgres.log")],
+             "-w", "-t", str(timeout), "-l", str(log_dir / "postgres.log")],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=timeout + 10,
+            env=dict(os.environ, **({"PGPASSWORD": self.password} if self.password else {})),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if res.returncode != 0:
-            raise PostgresError(f"启动 PG 失败：{res.stderr or res.stdout}")
+            raise PostgresError(f"启动 PG 失败（rc={res.returncode}）：{self._tail_log(log_dir)}")
 
     def stop(self, timeout: int = 60) -> None:
         res = self._run(
@@ -239,9 +285,19 @@ class Postgres:
              "-m", "fast", "-w", "-t", str(timeout)],
             timeout=timeout + 10,
         )
+        # 注：stop 不需要 DEVNULL —— 它不会 fork 常驻进程，管道会正常关闭。
         # 已经停了不算错误
         if res.returncode != 0 and "is not running" not in (res.stdout + res.stderr):
             raise PostgresError(f"停止 PG 失败：{res.stderr or res.stdout}")
+
+    def _tail_log(self, log_dir: Path, lines: int = 8) -> str:
+        """读 PG 日志尾部，用于失败时给人看。"""
+        try:
+            text = (log_dir / "postgres.log").read_text(encoding="utf-8", errors="replace")
+            tail = text.strip().splitlines()[-lines:]
+            return chr(10).join(tail) if tail else "（日志为空）"
+        except OSError:
+            return "（读不到日志）"
 
     def is_running(self) -> bool:
         res = self._run(
@@ -284,14 +340,23 @@ class Postgres:
 
     def ensure_database(self) -> None:
         """建应用库和账号（幂等）。"""
-        # 建角色。参数化传值，密码里万一有特殊字符也不会把 SQL 弄断。
+        # 建角色。
+        #
+        # ⚠️ 不能用 %s 绑参数：CREATE ROLE 是 DDL，PostgreSQL 不允许在
+        # DDL 里用绑定参数，会报 syntax error at or near "$1"。
+        # 正确做法是 psycopg 的 sql.SQL + Identifier/Literal 组合 ——
+        # 它会在客户端把标识符和字面量正确转义后再拼进语句。
+        from psycopg import sql
+
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (self.db_user,))
                 if cur.fetchone() is None:
                     cur.execute(
-                        f"CREATE ROLE {self.db_user} LOGIN PASSWORD %s",
-                        (self.password,),
+                        sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                            sql.Identifier(self.db_user),
+                            sql.Literal(self.password),
+                        )
                     )
             conn.commit()
 
@@ -301,8 +366,10 @@ class Postgres:
                 cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (self.db_name,))
                 if cur.fetchone() is None:
                     cur.execute(
-                        f'CREATE DATABASE "{self.db_name}" '
-                        f'OWNER "{self.db_user}" ENCODING UTF8'
+                        sql.SQL("CREATE DATABASE {} OWNER {} ENCODING UTF8").format(
+                            sql.Identifier(self.db_name),
+                            sql.Identifier(self.db_user),
+                        )
                     )
 
     def query_one(self, sql: str, *, db: str = "postgres") -> str:
