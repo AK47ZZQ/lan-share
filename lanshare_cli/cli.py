@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import os
 import shutil
 import socket
@@ -90,6 +91,15 @@ def probe(url: str, timeout: float = 10.0) -> tuple[bool, str]:
 # ──────────────────────────────────────────────────────────────
 # 安装布局
 # ──────────────────────────────────────────────────────────────
+
+
+def resolve_prefix(value: str | None) -> str:
+    """把可能为 None 的服务前缀解析成具体值。
+
+    None 的语义是「没指定」，此时用 DEFAULT_SERVICE_PREFIX。
+    注意 lan 子命令不用这个 —— 它需要 None 来触发本机服务自动探测。
+    """
+    return value or DEFAULT_SERVICE_PREFIX
 
 
 class Layout:
@@ -176,7 +186,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
         data_dir=Path(args.data_dir) if args.data_dir else default_data_dir(),
-        service_prefix=args.service_prefix,
+        service_prefix=resolve_prefix(args.service_prefix),
         python_override=Path(args.python) if args.python else None,
     )
     api_port, web_port = args.api_port, args.web_port
@@ -279,7 +289,24 @@ def cmd_install(args: argparse.Namespace) -> int:
     # ── 6. Caddyfile ──
     step(6, total, "生成 Caddyfile")
     try:
-        caddyfile.write(layout.caddyfile, api_port=api_port, web_port=web_port)
+        # 先看旧配置里用户选的是「局域网开」还是「关」。
+        # 不看的话，修复安装 / 升级会把用户开好的局域网静默重置成关闭 ——
+        # 这个重置没有任何提示，用户只会觉得「怎么突然手机又连不上了」。
+        previous_bind = caddyfile.detect_bind_host(layout.caddyfile)
+        if previous_bind is None:
+            bind_host = caddyfile.BIND_ALL      # 全新安装：默认开启（原有行为）
+            say("    全新安装，局域网访问默认开启")
+        else:
+            bind_host = previous_bind
+            mode = "开启" if bind_host == caddyfile.BIND_ALL else "关闭（仅本机）"
+            ok(f"沿用上次的局域网设置：{mode}")
+
+        caddyfile.write(
+            layout.caddyfile,
+            api_port=api_port,
+            web_port=web_port,
+            bind_host=bind_host,
+        )
         ok(str(layout.caddyfile))
         # 用 caddy 自己校验，别等启动才发现语法错
         result = subprocess.run(
@@ -429,7 +456,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
         data_dir=Path(args.data_dir) if args.data_dir else default_data_dir(),
-        service_prefix=args.service_prefix,
+        service_prefix=resolve_prefix(args.service_prefix),
         python_override=Path(args.python) if args.python else None,
     )
     try:
@@ -472,7 +499,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
         data_dir=Path(args.data_dir) if args.data_dir else default_data_dir(),
-        service_prefix=args.service_prefix,
+        service_prefix=resolve_prefix(args.service_prefix),
         python_override=Path(args.python) if args.python else None,
     )
     try:
@@ -499,7 +526,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
         data_dir=Path(args.data_dir) if args.data_dir else default_data_dir(),
-        service_prefix=args.service_prefix,
+        service_prefix=resolve_prefix(args.service_prefix),
         python_override=Path(args.python) if args.python else None,
     )
     say("LAN Share 环境自检\n")
@@ -533,6 +560,128 @@ def default_data_dir() -> Path:
 
 
 # ──────────────────────────────────────────────────────────────
+# lan（局域网访问开关）
+# ──────────────────────────────────────────────────────────────
+
+
+def _print_report(report, verbose: bool = True) -> None:
+    """把 ActionReport 打成人类可读的样子。"""
+    for name, ok_flag, detail in report.steps:
+        mark = "OK  " if ok_flag else "FAIL"
+        say(f"    {mark} {name}" + (f"：{detail}" if detail else ""))
+
+
+def cmd_lan(args: argparse.Namespace) -> int:
+    """局域网访问开关：status / enable / disable / diagnose。"""
+    from . import lan
+
+    action = getattr(args, "lan_action", "status")
+
+    info = lan.load_install_info(
+        root=getattr(args, "root", None),
+        api_port=getattr(args, "api_port", None),
+        web_port=getattr(args, "web_port", None),
+        service_prefix=getattr(args, "service_prefix", None),
+        data_dir=getattr(args, "data_dir", None),
+    )
+
+    if action == "status":
+        status = lan.collect_status(info)
+
+        if args.json:
+            print(json.dumps(status.as_dict(), ensure_ascii=False, indent=2))
+            return 0 if status.state in (lan.LanState.ON, lan.LanState.OFF) else 1
+
+        say()
+        say(f"  状态    {status.state.label}")
+        say(f"  端口    Web {status.web_port}  API {status.api_port}")
+        if status.listening:
+            say(f"  监听    {', '.join(status.listening)}")
+        if status.firewall:
+            say(f"  防火墙  {status.firewall}")
+        if status.addresses:
+            say("  地址")
+            for addr in status.addresses:
+                url = status.url_for(addr)
+                tag = "（默认路由）" if addr["has_gateway"] else ""
+                say(f"          {url}  {addr['alias']} {tag}")
+        else:
+            say("  地址    无可用局域网连接")
+        if status.probe_url:
+            say(f"  自检    {status.probe_url} → {status.probe_msg}")
+        if status.hints:
+            say()
+            for hint in status.hints:
+                say(f"  ! {hint}")
+        say()
+        return 0 if status.state in (lan.LanState.ON, lan.LanState.OFF) else 1
+
+    if action == "enable":
+        report = lan.enable_lan(
+            info, dry_run=args.dry_run, allow_public=getattr(args, "allow_public", False)
+        )
+        if args.json:
+            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
+            return 0 if report.success else 1
+
+        say()
+        _print_report(report)
+        say()
+        if report.success:
+            say("  局域网访问已开启。")
+            for addr in lan.collect_status(info, skip_probe=True).addresses:
+                say(f"    http://{addr['ip']}:{info.web_port}")
+        elif report.cancelled:
+            say("  已取消（需要管理员权限才能配置防火墙）。局域网仍为关闭状态。")
+        else:
+            say("  开启失败，上面是失败的那一步。用 `lan diagnose` 看详情。")
+        say()
+        return 0 if report.success else 1
+
+    if action == "disable":
+        report = lan.disable_lan(info, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
+            return 0 if report.success else 1
+
+        say()
+        _print_report(report)
+        say()
+        if report.success:
+            say("  局域网访问已关闭，现在只有这台电脑能访问。")
+            say("  （防火墙规则保留未动，卸载时才清理）")
+        else:
+            say("  关闭失败，上面是失败的那一步。")
+        say()
+        return 0 if report.success else 1
+
+    if action == "diagnose":
+        result = lan.diagnose(info)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+
+        say()
+        say(f"  状态  {result['state_label']}")
+        say()
+        for item in result["checks"]:
+            mark = "OK  " if item["ok"] else "FAIL"
+            say(f"    {mark} {item['check']}")
+            if item["detail"]:
+                say(f"         {item['detail']}")
+        if result["hints"]:
+            say()
+            say("  可能的原因：")
+            for hint in result["hints"]:
+                say(f"    - {hint}")
+        say()
+        return 0
+
+    fail(f"未知动作: {action}")
+    return 2
+
+
+# ──────────────────────────────────────────────────────────────
 # 入口
 # ──────────────────────────────────────────────────────────────
 
@@ -561,8 +710,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--web-port", type=int, default=DEFAULT_WEB_PORT)
     parser.add_argument(
         "--service-prefix",
-        default=DEFAULT_SERVICE_PREFIX,
-        help="Windows 服务名前缀（测试时改成别的，避免和现役服务冲突）",
+        default=None,
+        help=f"Windows 服务名前缀（默认自动探测，探测不到用 {DEFAULT_SERVICE_PREFIX}）",
     )
 
     # 子命令也要能接受这些参数（`install --api-port 9911` 这种写法更自然）。
@@ -596,6 +745,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", parents=[common], help="环境自检（只读）")
     p_doctor.set_defaults(func=cmd_doctor)
 
+    p_lan = sub.add_parser(
+        "lan", parents=[common], help="局域网访问开关（status/enable/disable/diagnose）"
+    )
+    p_lan.add_argument(
+        "lan_action",
+        nargs="?",
+        default="status",
+        choices=["status", "enable", "disable", "diagnose"],
+        help="默认 status",
+    )
+    p_lan.add_argument("--json", action="store_true", help="输出 JSON（给 GUI 用）")
+    p_lan.add_argument("--dry-run", action="store_true", help="只检查不执行")
+    p_lan.add_argument(
+        "--allow-public",
+        action="store_true",
+        help="当前是公用网络时也继续（调用方已向用户确认过风险）",
+    )
+    p_lan.set_defaults(func=cmd_lan)
+
     return parser
 
 
@@ -608,7 +776,7 @@ def main(argv: list[str] | None = None) -> int:
     for attr, default in (
         ("api_port", DEFAULT_API_PORT),
         ("web_port", DEFAULT_WEB_PORT),
-        ("service_prefix", DEFAULT_SERVICE_PREFIX),
+        ("service_prefix", None),
         ("root", str(Path(__file__).resolve().parent.parent)),
         ("data_dir", None),
         ("python", None),
