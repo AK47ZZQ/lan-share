@@ -472,8 +472,9 @@ namespace LanShare
                 {
                     if (stream != null)
                     {
-                        // .ico 里是多尺寸，用 32×32 那帧
-                        using (var ico = new Icon(stream, new Size(32, 32)))
+                        // .ico 里有多尺寸，取 16×16 那帧 ——
+                        // 托盘实际就显示 16×16，取 32 再缩会糊成马赛克
+                        using (var ico = new Icon(stream, new Size(16, 16)))
                         {
                             _brandCache = ico.ToBitmap();
                             return _brandCache;
@@ -511,35 +512,50 @@ namespace LanShare
                 default: fill = Color.FromArgb(140, 140, 140); break;                // 灰
             }
 
-            using (var bmp = new Bitmap(32, 32))
+            // 托盘图标单独画，不复用品牌大图。
+            //
+            // 为什么：托盘实际只显示 16×16（SM_CXSMICON=16）。
+            // 品牌图里有渐变、半透明白块、圆角、云朵四层，缩到 16px
+            // 全部糊成一团色块 —— 这就是「像马赛克」的原因。
+            //
+            // 16px 能承载的信息量只有「一个色块 + 一个简单图形」，
+            // 所以这里画极简版：纯品牌紫蓝底 + 白云朵 + 右下状态点。
+            // 完整版（渐变/半透明/圆角）保留给窗口标题栏和 exe 图标。
+            // 画布用 32×32，交付给系统由它缩到实际需要的大小。
+            //
+            // 为什么不是 16：托盘图标尺寸是 (16,24,32,48) × 缩放比例。
+            // 150% 缩放下系统要的是 24×24，给它 16×16 就得放大 → 马赛克。
+            // 画 32×32 向下缩，无论要 16 还是 24 都不会糊。
+            //
+            // 但设计必须保持极简：渐变/半透明/多层细节在小尺寸下会糊成一团，
+            // 所以这里只有「纯色底 + 简化云朵 + 状态点」三层。
+            const int S = 32;
+            float u = S / 16f;          // 以 16 为设计基准，按比例放大
+
+            using (var bmp = new Bitmap(S, S))
             using (var g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.Clear(Color.Transparent);
 
-                var brand = LoadBrandBitmap();
-                if (brand != null)
+                // 紫蓝圆角底（品牌主色）
+                using (var path = Draw.RoundedPath(new Rectangle(0, 0, S, S), (int)(4 * u)))
+                using (var brush = new SolidBrush(Color.FromArgb(0x6B, 0x62, 0xFF)))
+                    g.FillPath(brush, path);
+
+                // 白云朵：往上偏，给右下角的状态点腾地方
+                using (var white = new SolidBrush(Color.White))
                 {
-                    g.DrawImage(brand, new Rectangle(0, 0, 32, 32));
-                }
-                else
-                {
-                    // 品牌图读不到时的兜底：还画圆 + L，至少不是白板
-                    using (var brush = new SolidBrush(Color.FromArgb(0x5B, 0x6C, 0xFF)))
-                        g.FillEllipse(brush, 1, 1, 30, 30);
-                    using (var pen = new Pen(Color.White, 3.5f))
-                    {
-                        pen.StartCap = LineCap.Round;
-                        pen.EndCap = LineCap.Round;
-                        g.DrawLine(pen, 11, 9, 11, 21);
-                        g.DrawLine(pen, 11, 21, 21, 21);
-                    }
+                    g.FillEllipse(white, 1.5f*u, 4.0f*u, 5.0f*u, 5.0f*u);    // 左团
+                    g.FillEllipse(white, 3.8f*u, 1.8f*u, 6.8f*u, 6.8f*u);    // 中团
+                    g.FillRectangle(white, 3.8f*u, 5.5f*u, 5.2f*u, 3.5f*u);  // 底
                 }
 
-                // 右下角状态点：先画白色描边再填色，任何底色上都看得清
-                g.FillEllipse(Brushes.White, 16, 16, 16, 16);
-                using (var brush = new SolidBrush(fill))
-                    g.FillEllipse(brush, 18, 18, 12, 12);
+                // 右下角状态点：白边 + 状态色
+                g.FillEllipse(Brushes.White, S - 8*u, S - 8*u, 8*u, 8*u);
+                using (var dot = new SolidBrush(fill))
+                    g.FillEllipse(dot, S - 7*u, S - 7*u, 6*u, 6*u);
 
                 IntPtr hIcon = bmp.GetHicon();
                 try
