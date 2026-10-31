@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import os
+
 import subprocess
 from pathlib import Path
 
@@ -188,8 +190,11 @@ class TestNssmServiceInstall:
         svc.install("TestSvc", exe, cwd=spaced_dir)
 
         install_cmd = [c for c in calls if len(c) > 1 and c[1] == "install"][0]
-        # 列表传参时路径是一整个元素，不会被空格切开
-        assert install_cmd[3].endswith("Program Files\\LAN Share\\python.exe")
+        # 列表传参时路径是一整个元素，不会被空格切开。
+        # 期望值必须用 os.path.join 拼 —— 硬写反斜杠在 Linux CI 上必挂
+        # （路径分隔符不同，endswith 永远 False）。
+        assert install_cmd[3].endswith(
+            os.path.join("Program Files", "LAN Share", "python.exe"))
 
     def test_app_parameters_get_quoted(self, svc, tmp_path, monkeypatch):
         """回归：AppParameters 里带空格的路径必须带引号。
