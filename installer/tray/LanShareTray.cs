@@ -71,6 +71,18 @@ namespace LanShare
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern uint GetDpiForSystem();
+
+        // shcore 版：Win8.1+ 就有，比 user32 的 Context 版兼容面宽。
+        // 2 = PROCESS_PER_MONITOR_DPI_AWARE
+        [System.Runtime.InteropServices.DllImport("shcore.dll")]
+        private static extern int SetProcessDpiAwareness(int value);
+
+        // 查当前进程到底处在哪一档：0=unaware 1=system 2=permonitor
+        [System.Runtime.InteropServices.DllImport("shcore.dll")]
+        private static extern int GetProcessDpiAwareness(IntPtr process, out int value);
+
         [STAThread]
         private static void Main(string[] args)
         {
@@ -123,13 +135,23 @@ namespace LanShare
                 //
                 // Per-Monitor V2 让窗口自己按所在显示器的 DPI 渲染，不再被缩放。
                 // 老系统（Win7/8）没有这个 API，回退到 SystemAware。
-                bool dpiOk = false;
-                try { dpiOk = SetProcessDpiAwarenessContext(new IntPtr(-4)); }
-                catch (Exception) { }
-                if (!dpiOk)
-                {
-                    try { SetProcessDPIAware(); } catch (Exception) { }
-                }
+                // DPI 感知三层兜底，每层结果都记下来。
+                //
+                // 历史教训：只靠 SetProcessDpiAwarenessContext 时，同一份 exe
+                // 有时按 144 DPI 渲染、有时停在 96 DPI 被系统位图拉伸 1.5 倍，
+                // 字全糊 —— 这个 API 要求在本进程创建任何 UI 之前调用，时机敏感。
+                int awareBefore = -1;
+                try { GetProcessDpiAwareness(IntPtr.Zero, out awareBefore); } catch (Exception) { }
+
+                bool l1 = false, l2 = false, l3 = false;
+                int rc2 = -99;
+                try { l1 = SetProcessDpiAwarenessContext(new IntPtr(-4)); } catch (Exception) { }
+                if (!l1) { try { rc2 = SetProcessDpiAwareness(2); l2 = rc2 == 0; } catch (Exception) { } }
+                if (!l1 && !l2) { try { l3 = SetProcessDPIAware(); } catch (Exception) { } }
+
+                int awareAfter = -1;
+                try { GetProcessDpiAwareness(IntPtr.Zero, out awareAfter); } catch (Exception) { }
+
 
                 // ⚠️ .NET Framework 默认只启用 TLS 1.0，而现代服务器（Caddy 等）
                 // 最低要求 TLS 1.2。不显式开启的话，HTTPS 探测一律报
@@ -172,6 +194,15 @@ namespace LanShare
                         catch (Exception) { }
                         return errors == System.Net.Security.SslPolicyErrors.None;
                     };
+
+                // ⚠️ 必须在 Application.Run 之前把 SynchronizationContext 装好。
+                //
+                // TrayApp 构造函数里要抓 SynchronizationContext.Current 来回调
+                // ShowPanel()，但 WinForms 是在 Application.Run 内部才装上下文的 ——
+                // 构造函数里抓到的永远是 null，于是「双击托盘唤出面板」这条路过不去，
+                // 事件发出了、面板却纹丝不动，日志里也什么都没有（踩过）。
+                System.Threading.SynchronizationContext.SetSynchronizationContext(
+                    new System.Windows.Forms.WindowsFormsSynchronizationContext());
 
                 Application.Run(new TrayApp(openPanelOnStart));
             }
@@ -608,8 +639,20 @@ namespace LanShare
 
             if (_panel == null || _panel.IsDisposed)
             {
-                _panel = new LanSharePanel(_cfg, _cli);
-                _panel.FormClosed += (s, e) => { };
+                try
+                {
+                    _panel = new LanSharePanel(_cfg, _cli);
+                    _panel.FormClosed += (s, e) => { };
+                }
+                catch (Exception ex)
+                {
+                    // 面板构造失败以前是静默的 —— 用户点了没反应，日志里也没痕迹
+                    Log("面板构造失败: " + ex);
+                    MessageBox.Show(
+                        "打开控制面板时出错：" + Environment.NewLine + Environment.NewLine + ex.Message,
+                        "LAN Share", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
             }
 
             if (_panel.Visible)

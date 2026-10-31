@@ -67,6 +67,18 @@ if ($IconPath) {
     $iconArgs = @("/win32icon:$IconPath", "/resource:$IconPath,LanShareTray.lanshare.ico")
 }
 
+# DPI 感知写在清单里，不靠运行时调 SetProcessDpiAwarenessContext ——
+# 那个 API 要求在本进程创建任何 UI 之前调用，实际跑了十几轮发现时机不稳定，
+# 同一份代码有时生效有时静默失败，失败时窗口被系统当 96 DPI 位图拉伸 1.5 倍，
+# 字全糊。清单由加载器在读 PE 时就处理，没有这个问题。
+$ManifestPath = Join-Path $PSScriptRoot "app.manifest"
+$manifestArgs = @()
+if (Test-Path $ManifestPath) {
+    $manifestArgs = @("/win32manifest:$ManifestPath")
+} else {
+    Write-Host "警告：app.manifest 不存在，DPI 感知可能失效" -ForegroundColor Yellow
+}
+
 & $csc /target:winexe /out:$Out `
     /reference:System.dll `
     /reference:System.Core.dll `
@@ -77,6 +89,7 @@ if ($IconPath) {
     /optimize+ `
     /warn:4 `
     $iconArgs `
+    $manifestArgs `
     $Sources
 
 if ($LASTEXITCODE -ne 0) {

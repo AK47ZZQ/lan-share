@@ -251,6 +251,10 @@ namespace LanShare
 
         // 服务卡片：api / caddy / (postgresql)
         // 生产环境三个服务，安装版只有两个 —— 按 HasDatabaseService 动态显示
+        // 所有可见控件都挂在这层上，不是直接挂 Form。
+        // 这样窗口缩小时滚动条由这层管，Form 的尺寸计算不受干扰。
+        private readonly Panel _content;
+
         private readonly Card _svcBox;
         private readonly Label[] _svcName = new Label[3];
         private readonly Label[] _svcInfo = new Label[3];
@@ -301,14 +305,33 @@ namespace LanShare
             _cli = cli;
 
             Text = "LAN Share";
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            // 可拖动边框调整大小：屏幕上 910 高几乎吃满 960 的屏，
+            // 有人嫌大、有人想拉宽看地址，固定尺寸两头不讨好。
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = true;
+            // 注意：AutoScroll 不能挂在 Form 上。
+            // 挂上去之后 Form 会接管 ClientSize —— 我们辛苦算出来的
+            // wantW/wantH 被它覆盖，窗口直接不显示（实测踩过）。
+            // 改成外面套一层 Panel，滚动交给 Panel。
+            // 下限在 ApplyDpiScale 里按 DPI 重设
+            MinimumSize = new Size(420, 480);
             StartPosition = FormStartPosition.CenterScreen;
             // WinForms 标准 DPI 机制：按 96 DPI 设计，框架按实际 DPI 缩放。
             // 手工 Scale + SetWindowPos 试过几轮都对不齐 —— 那是和框架内部的
             // 缩放叠加，成了两层缩放。标准机制反而是对的。
             AutoScaleMode = AutoScaleMode.None;
-            ClientSize = new Size(520, 910);
+            ClientSize = new Size(520, 850);
+
+            // 先建容器：内容高 850，窗口拉到更小时由它出滚动条
+            _content = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                BackColor = Theme.Bg,
+                // 内容坐标是相对 Form 客户区的，容器从 0,0 起算就对得上
+                Location = new Point(0, 0),
+            };
+            Controls.Add(_content);
             Font = Theme.Body;
             BackColor = Theme.Bg;
             Icon = Theme.AppIcon;
@@ -326,7 +349,7 @@ namespace LanShare
                 AutoSize = true,
                 ForeColor = Theme.TextStrong,
             };
-            Controls.Add(title);
+            _content.Controls.Add(title);
 
             _serviceStatus = new Label
             {
@@ -336,7 +359,7 @@ namespace LanShare
                 AutoSize = true,
                 ForeColor = Theme.Gray,
             };
-            Controls.Add(_serviceStatus);
+            _content.Controls.Add(_serviceStatus);
 
             // API/Web 合并成一行元信息 —— 原来两行各占 22px，
             // 而且字号和正文一样大，把「状态」这个主角挤下去了
@@ -348,18 +371,18 @@ namespace LanShare
                 Size = new Size(CW, 18),
                 ForeColor = Theme.TextMuted,
             };
-            Controls.Add(_apiLine);
+            _content.Controls.Add(_apiLine);
 
             // _webLine 保留字段（ApplyStatus 会写），但不单独显示：
             // 内容拼进 _apiLine，两者同步
             _webLine = new Label { Visible = false, Text = "" };
-            Controls.Add(_webLine);
+            _content.Controls.Add(_webLine);
 
             // ───────── 服务卡片 ─────────
             // 生产环境跑三个服务：api / caddy / postgresql。
             // 不显示 PG 的话，数据库挂了用户完全看不出来。
-            _svcBox = new Card(P, 86, CW, 150);
-            Controls.Add(_svcBox);
+            _svcBox = new Card(P, 86, CW, 130);
+            _content.Controls.Add(_svcBox);
 
             var svcTitle = new Label
             {
@@ -407,8 +430,8 @@ namespace LanShare
             }
 
             // ───────── 局域网卡片 ─────────
-            _lanBox = new Card(P, 250, CW, 300);
-            Controls.Add(_lanBox);
+            _lanBox = new Card(P, 228, CW, 280);
+            _content.Controls.Add(_lanBox);
 
             var lanTitle = new Label
             {
@@ -480,8 +503,8 @@ namespace LanShare
             _lanBox.Controls.Add(_lanToggle);
 
             // ───────── 公网卡片 ─────────
-            _wanBox = new Card(P, 564, CW, 200);
-            Controls.Add(_wanBox);
+            _wanBox = new Card(P, 520, CW, 200);
+            _content.Controls.Add(_wanBox);
 
             var wanTitle = new Label
             {
@@ -560,52 +583,52 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 778),
+                Location = new Point(P, 734),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.TextMuted,
                 Cursor = Cursors.Hand,
             };
             _dataLabel.Click += delegate { OpenFolder(_cfg.DataFolder); };
-            Controls.Add(_dataLabel);
+            _content.Controls.Add(_dataLabel);
 
             // ───────── 底部操作 ─────────
             // 去掉「数据目录」按钮：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」
-            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 806, 112, 34);
+            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 762, 112, 34);
             _btnOpenWeb.Click += delegate { OpenUrl(_cfg.WebUrl); };
-            Controls.Add(_btnOpenWeb);
+            _content.Controls.Add(_btnOpenWeb);
 
-            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 806, 112, 34);
+            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 762, 112, 34);
             _btnRestart.Click += delegate { RestartServices(); };
-            Controls.Add(_btnRestart);
+            _content.Controls.Add(_btnRestart);
 
             // 「数据目录」按钮删了：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」。按钮位置重排成三个。
-            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 806, 100, 34);
+            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 762, 100, 34);
             _btnLogs.Click += delegate { OpenFolder(_cfg.LogFolder); };
-            Controls.Add(_btnLogs);
+            _content.Controls.Add(_btnLogs);
 
             // ───────── 忙碌提示 ─────────
             _busyLabel = new Label
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 854),
+                Location = new Point(P, 808),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.Blue,
             };
-            Controls.Add(_busyLabel);
+            _content.Controls.Add(_busyLabel);
 
             // ───────── 页脚 ─────────
             var version = new Label
             {
                 Text = "服务前缀 " + _cfg.ServicePrefix,
-                Location = new Point(P, 886),
+                Location = new Point(P, 834),
                 AutoSize = true,
                 ForeColor = Theme.TextFaint,
                 Font = Theme.Footer,
             };
-            Controls.Add(version);
+            _content.Controls.Add(version);
 
             // 每 5 秒刷新一次；窗口最小化时也刷新，因为托盘状态要同步
             _refreshTimer = new System.Windows.Forms.Timer { Interval = 5000 };
@@ -620,9 +643,19 @@ namespace LanShare
 
             Shown += delegate
             {
-                // Shown 之后 DeviceDpi 才是真实显示器的 DPI。
-                // OnLoad 时它恒为 96，在那儿缩放等于没做。
-                ApplyDpiScale();
+                // ⚠️ 用 BeginInvoke 把缩放推到下一拍消息循环再执行。
+                //
+                // 直接在 Shown 里设 ClientSize 会被 WinForms 自己的首轮布局覆盖回去：
+                // 实测设成 780x1080、400ms 后还是 780x1080，但窗口真正显示出来时
+                // 又变回 520x720 —— Shown 事件返回后框架还会跑一轮 layout，
+                // 用构造函数里的初始尺寸重置了客户区。
+                //
+                // 推到 Shown 完全处理完之后再设，就没有这个竞争了。
+                BeginInvoke((Action)delegate
+                {
+                    ApplyDpiScale();
+                });
+
                 RefreshStateAsync(quiet: false);
                 RefreshWanAsync();
             };
@@ -1166,13 +1199,21 @@ namespace LanShare
         [DllImport("user32.dll")]
         private static extern uint GetDpiForWindow(IntPtr h);
 
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int index);
+
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
 
-            // OnLoad 阶段 DeviceDpi 还是 96（窗口尚未关联显示器），
-            // 真正的 DPI 要等 Shown。这里只留痕，不做缩放。
-            ApplyDpiScale();
+            // ⚠️ 这里千万别调 ApplyDpiScale()。
+            //
+            // OnLoad 时窗口还没关联显示器，GetDpiForWindow 返回 96，
+            // ApplyDpiScale 里 k=1 就走「无需缩放」分支并把 _dpiApplied 置 true。
+            // 等真正到 Shown 时 DPI 是 144，但 _dpiApplied 已经挡住了 ——
+            // 结果是窗口停在 96 DPI 的尺寸，在 150% 屏上被系统位图放大，糊成一片。
+            //
+            // 缩放只在 Shown 里做一次。
         }
 
         /// <summary>
@@ -1206,14 +1247,53 @@ namespace LanShare
             Scale(new SizeF(k, k));
 
             int wantW = (int)(520 * k);
-            int wantH = (int)(910 * k);
+            int wantH = (int)(850 * k);
 
-            int borderW = Width - ClientSize.Width;
-            int borderH = Height - ClientSize.Height;
+            // ⚠️ 必须按屏幕封顶。
+            //
+            // 设计高度 850 是 96 DPI 下的逻辑像素，144 DPI 要乘 1.5 = 1275 物理像素，
+            // 而屏幕只有 960 高 —— 窗口直接比屏幕还高，底部按钮全跑到屏幕外去了，
+            // 用户看到的就是「这个窗口大得离谱、还看不全」。
+            //
+            // 封顶之后内容放不下怎么办？_content 那个 Panel 开了 AutoScroll，
+            // 会自己出滚动条，功能一个都不少。
+            // ⚠️ 单位必须统一。
+            //
+            // Per-Monitor V2 进程里 Screen.WorkingArea 给的是**逻辑像素**
+            // （144 DPI 下 920，乘 1.5 才是 1380 物理）；而 wantW/wantH 是
+            // 物理像素。拿逻辑的 920 去比物理的 1275 永远比不过，封顶形同虚设
+            // —— 实测窗口 802x1331 直接超出 960 的屏幕，底部按钮全在屏幕外。
+            //
+            // 改用 GetSystemMetrics 拿真实物理分辨率，不依赖 Screen 的单位。
+            int physW = GetSystemMetrics(0);   // SM_CXSCREEN，真实物理像素
+            int physH = GetSystemMetrics(1);   // SM_CYSCREEN
+
+            // 本机实测：物理 2560x1440，系统缩放 150% 显示成 1707x960。
+            // 设计高度 850 逻辑 × 1.5 = 1275 物理，占屏 88% —— 看着就是「大到离谱」。
+            // 按物理高度的 75% 封顶，剩下的内容交给 _content 的滚动条。
+            int maxW = Math.Max(360, (int)(physW * 0.85));
+            int maxH = Math.Max(420, (int)(physH * 0.75));
+            wantW = Math.Min(wantW, maxW);
+            wantH = Math.Min(wantH, maxH);
+
+            // ⚠️ 只设 ClientSize，不要再去调 SetWindowPos。
+            //
+            // 曾经这么写：先用**旧**的 Width 算 borderW，再设 ClientSize，
+            // 最后 SetWindowPos(wantW + borderW)。
+            // ClientSize 一赋值 Width 就同步变成 780+border 了，而 borderW
+            // 是在赋值前算的 —— 那时 Width 还是 535，于是 borderW = 535 - 780 = -245，
+            // SetWindowPos 一减，窗口被强行改回 535x757。
+            //
+            // 现象：日志明明「设完=780x1080」，实际窗口却是 520x720。查了很久。
             ClientSize = new Size(wantW, wantH);
-            SetWindowPos(Handle, IntPtr.Zero, 0, 0,
-                wantW + borderW, wantH + borderH,
-                0x0002 | 0x0004);
+
+
+
+            // 可调整大小的下限：宽度够放下卡片，高度允许缩到一个屏的三分之一，
+            // 剩下的靠 AutoScroll 滚。不按 DPI 换算的话，150% 缩放下会小到不可用。
+            // 窗口最小尺寸（外框，含边框）。按 DPI 换算，
+            // 否则 150% 缩放下能拖到小得没法用。
+            MinimumSize = new Size((int)(420 * k), (int)(480 * k));
 
             CenterOnScreen();
         }
@@ -1222,7 +1302,7 @@ namespace LanShare
         {
             try
             {
-                // 用 Bounds 而不是 WorkingArea：窗口高度 937 已经接近整屏 960，
+                // 用 Bounds 而不是 WorkingArea：默认高度约 890 已经接近整屏 960，
                 // 按工作区（扣掉任务栏约 900）居中会算出负的 Top，窗口顶到屏幕外。
                 var area = Screen.FromHandle(Handle).Bounds;
                 int x = area.Left + (area.Width - Width) / 2;
