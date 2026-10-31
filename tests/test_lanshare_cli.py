@@ -362,3 +362,87 @@ class TestLayout:
         assert len(layout.required_files()) == 6
         # app / web/dist / static
         assert len(layout.required_dirs()) == 3
+
+# ──────────────────────────────────────────────────────────────
+# 证书信任
+# ──────────────────────────────────────────────────────────────
+
+class TestTrustLocalCa:
+    """trust_local_ca 把本地 CA 装进 Windows 信任链。
+
+    为什么值得单测：这一步失败的表现极其隐蔽 —— 安装全部 "ok"、
+    服务全部 Running、healthz 200，唯独用户点「打开网盘」看到
+    ERR_CERT_AUTHORITY_INVALID 红色警告页，以为整个产品坏了。
+    """
+
+    def test_prefers_caddy_pki_root(self, tmp_path, monkeypatch):
+        """tls internal 模式优先装 Caddy 自己的根证书。"""
+        root_crt = (tmp_path / "certs" / "caddy" / "pki"
+                    / "authorities" / "local" / "root.crt")
+        root_crt.parent.mkdir(parents=True)
+        root_crt.write_text("dummy", encoding="utf-8")
+
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        layout = cli.Layout(tmp_path, tmp_path / "data", "X")
+
+        assert cli.trust_local_ca(layout) is True
+        assert calls and str(root_crt) in calls[0]
+
+    def test_falls_back_to_manual_cert(self, tmp_path, monkeypatch):
+        """不做 tls internal 时（用户自备证书），自签证书自己就是 CA。"""
+        manual = tmp_path / "certs" / "cert.pem"
+        manual.parent.mkdir(parents=True)
+        manual.write_text("dummy", encoding="utf-8")
+
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        layout = cli.Layout(tmp_path, tmp_path / "data", "X")
+
+        assert cli.trust_local_ca(layout) is True
+        assert str(manual) in calls[0]
+
+    def test_returns_false_when_nothing_found(self, tmp_path, monkeypatch):
+        """一个证书文件都没有时不能崩，只警告。"""
+        monkeypatch.setattr(
+            cli.subprocess, "run",
+            lambda *a, **k: pytest.fail("不该调用 certutil"),
+        )
+        layout = cli.Layout(tmp_path, tmp_path / "data", "X")
+        assert cli.trust_local_ca(layout) is False
+
+    def test_certutil_failure_is_not_fatal(self, tmp_path, monkeypatch):
+        """certutil 返回非 0（比如权限不够）不能把安装搞中断。"""
+        manual = tmp_path / "certs" / "cert.pem"
+        manual.parent.mkdir(parents=True)
+        manual.write_text("dummy", encoding="utf-8")
+
+        monkeypatch.setattr(
+            cli.subprocess, "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "拒绝访问"),
+        )
+        layout = cli.Layout(tmp_path, tmp_path / "data", "X")
+        assert cli.trust_local_ca(layout) is False
+
+    def test_certutil_missing_binary_is_not_fatal(self, tmp_path, monkeypatch):
+        """certutil 不存在（极端精简系统）也不能崩。"""
+        manual = tmp_path / "certs" / "cert.pem"
+        manual.parent.mkdir(parents=True)
+        manual.write_text("dummy", encoding="utf-8")
+
+        def boom(*a, **k):
+            raise OSError("certutil not found")
+
+        monkeypatch.setattr(cli.subprocess, "run", boom)
+        layout = cli.Layout(tmp_path, tmp_path / "data", "X")
+        assert cli.trust_local_ca(layout) is False

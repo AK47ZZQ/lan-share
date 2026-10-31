@@ -26,6 +26,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -246,6 +247,7 @@ namespace LanShare
                 { "wanUrl", "" },
                 { "qr", null },
                 { "logo", LogoDataUri() },
+                { "certTrusted", true },
             };
 
             if (d == null)
@@ -274,6 +276,16 @@ namespace LanShare
                 }
             }
             p["lanUrl"] = lanOn ? lanUrl : "";
+
+            // 证书信任状态：直接用严格校验去连一次。
+            //
+            // 这是「浏览器会不会报警告页」最直接的答案 —— 查证书库再比对
+            // 指纹要绕一大圈（PEM 解析、store 遍历、Subject 匹配），而这个
+            // 请求本身就是浏览器要做的事。TrustFailure 就是不受信。
+            if (lanOn)
+            {
+                p["certTrusted"] = CheckCertTrusted(_cfg.WebPort);
+            }
 
 
             if (lanOn)
@@ -419,6 +431,120 @@ namespace LanShare
             return _logoCache = "";
         }
 
+        /// <summary>判断系统信不信这张证书（等价于「浏览器会不会报警告页」）。</summary>
+        private static bool CheckCertTrusted(int webPort)
+        {
+            // 为什么不用 HttpWebRequest：
+            //
+            // LanShareTray 在启动时装了一个**全局**的
+            // ServicePointManager.ServerCertificateValidationCallback，
+            // 对 127.0.0.1 一律放行（本机自签是家用场景的常态，不放行就
+            // 永远连不上）。那个回调会让这里永远拿到「可信」——
+            // 实际测过：把证书从系统库里删掉，界面照样不提示。
+            //
+            // SslStream 是另一套 API，不吃 ServicePointManager 的回调。
+            // 回调里只把 SslPolicyErrors 记下来、照样返回 true 完成握手，
+            // 然后拿记下的错误码判断 —— 那个值和浏览器看到的完全一致。
+            try
+            {
+                using (var tcp = new System.Net.Sockets.TcpClient())
+                {
+                    tcp.Connect("127.0.0.1", webPort);
+
+                    System.Net.Security.SslPolicyErrors captured =
+                        System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors;
+
+                    // 回调必须真的把 sslPolicyErrors 记下来 —— 只是 return true
+                    // 的话 captured 永远是初始值，检测等于没做（初版就是这么写的，
+                    // 表现是无论证书在不在都报「不受信」）。
+                    System.Net.Security.RemoteCertificateValidationCallback grab =
+                        delegate(object snd, System.Security.Cryptography.X509Certificates.X509Certificate c,
+                                 System.Security.Cryptography.X509Certificates.X509Chain ch,
+                                 System.Net.Security.SslPolicyErrors err)
+                        {
+                            captured = err;
+                            return true;     // 只为拿证书，不在这儿阻断
+                        };
+
+                    using (var ssl = new System.Net.Security.SslStream(
+                               tcp.GetStream(), false, grab))
+                    {
+                        // 必须显式给协议版本。
+                        //
+                        // 不传的话 SslStream 走系统默认（老系统可能只有
+                        // SSL3/TLS1.0），而 Caddy 只接 TLS1.2+ —— 服务端
+                        // 直接断连，客户端报 "调用 SSPI 失败"。
+                        // ServicePointManager.SecurityProtocol 是另一套
+                        // API 的开关，管不到 SslStream，别指望它。
+                        ssl.AuthenticateAsClient(
+                            "localhost", null,
+                            System.Security.Authentication.SslProtocols.Tls12, false);
+                    }
+
+                    return captured == System.Net.Security.SslPolicyErrors.None;
+                }
+            }
+            catch (Exception ex)
+            {
+                // 检测失败按「不受信」处理（宁可多提示一次，也别让用户
+                // 毫不知情地撞上浏览器的红色警告页），但要把原因记下来，
+                // 否则排查时只能看到「就是false」。
+                try
+                {
+                    File.AppendAllText(
+                        Path.Combine(InstallConfig.Load().LogFolder, "tray.log"),
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                        + "  [WebPanel] CheckCertTrusted 异常: " + ex.GetType().Name
+                        + " " + ex.Message + Environment.NewLine, Encoding.UTF8);
+                }
+                catch (Exception) { }
+                return false;
+            }
+        }
+
+        /// <summary>把本地 CA 装进系统受信任根证书库（需要管理员）。</summary>
+        private void TrustCert()
+        {
+            string crt = Path.Combine(_cfg.InstallFolder, "certs", "caddy",
+                                      "pki", "authorities", "local", "root.crt");
+            if (!File.Exists(crt))
+            {
+                crt = Path.Combine(_cfg.InstallFolder, "certs", "cert.pem");
+            }
+            if (!File.Exists(crt))
+            {
+                SendToast("找不到本地证书文件");
+                return;
+            }
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "certutil.exe",
+                    Arguments = "-addstore -f Root \"" + crt + "\"",
+                    UseShellExecute = true,
+                    Verb = "runas",          // 写 LocalMachine\Root 必须提权
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                };
+                using (var proc = Process.Start(psi))
+                {
+                    proc.WaitForExit(20000);
+                }
+                SendToast("证书已装好，浏览器不会再报警告页");
+                PushStateAsync(true);
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // 用户在 UAC 框点了「否」
+                SendToast("需要管理员权限才能修改系统证书库");
+            }
+            catch (Exception ex)
+            {
+                SendToast("装证书失败：" + ex.Message);
+            }
+        }
+
         private void AppendLog(string line)
         {
             try
@@ -520,6 +646,10 @@ namespace LanShare
 
                 case "wanClear":
                     ClearWan();
+                    break;
+
+                case "trustCert":
+                    TrustCert();
                     break;
             }
         }

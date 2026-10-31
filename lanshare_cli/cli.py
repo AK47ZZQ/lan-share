@@ -684,6 +684,12 @@ def cmd_install(args: argparse.Namespace) -> int:
         fail(str(exc))
         return 1
 
+    # ── 10. 让浏览器信任本地证书 ──
+    # 顺序上必须放在服务起来之后：证书由 Caddy 首次启动时现场生成，
+    # 早于这一步根本没有文件可装。
+    step(10, total, "让浏览器信任本地证书")
+    trust_local_ca(layout)
+
     say("\n" + "=" * 64)
     # 记下密码和端口，下次升级要用同一条 —— 换密码等于把库锁死
     write_pg_password(layout.data_dir, reg_key, pg_password)
@@ -701,6 +707,57 @@ def cmd_install(args: argparse.Namespace) -> int:
     say(f"  数据目录    {layout.data_dir}")
     say("  卸载        python -m lanshare_cli uninstall")
     return 0
+
+
+def trust_local_ca(layout: Layout) -> bool:
+    """把本地自签 CA 装进 Windows 受信任根证书库。
+
+    为什么非做不可：Caddy 的 `tls internal` 用自己的内部 CA 签发证书，
+    这个 CA 不在 Windows 信任链里 —— Edge / Chrome 打开就是
+    ERR_CERT_AUTHORITY_INVALID 红色警告页。用户点「打开网盘」看到满屏警告，
+    第一反应是「打不开 / 坏了」，而不是「点高级继续」。装好之后浏览器
+    直接当正常站点打开，不弹任何提示。
+
+    Caddy 在 Linux / macOS 上会自己往系统库装，Windows 上要以 SYSTEM
+    往 LocalMachine\Root 写，而它跑在服务里拿不到写权限 —— 日志里只留
+    一行 "The request is not supported" 就过去了。所以这一步得安装器做
+    （安装器本身就是管理员）。
+
+    幂等性：Windows 证书库按指纹去重，重复 addstore 不会产生重复项。
+    """
+    # tls internal 模式的根证书落在 Caddy 的 storage 目录
+    root_crt = (layout.root / "certs" / "caddy" / "pki"
+                / "authorities" / "local" / "root.crt")
+
+    if not root_crt.is_file():
+        # 不是 tls internal（比如用户自己备了证书）：自签证书自己就是 CA
+        alt = layout.root / "certs" / "cert.pem"
+        if alt.is_file():
+            root_crt = alt
+        else:
+            warn("还没找到本地证书，浏览器首次访问需要在警告页点「继续前往」")
+            return False
+
+    try:
+        res = subprocess.run(
+            ["certutil", "-addstore", "-f", "Root", str(root_crt)],
+            capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        warn(f"装证书失败（{exc}），浏览器首次访问需要点「继续前往」")
+        return False
+
+    # certutil 的输出是本地化的中文，用返回码判断更可靠
+    if res.returncode == 0:
+        ok(f"已信任本地证书（{root_crt.name}）")
+        return True
+
+    detail = (res.stdout or res.stderr or "").strip().splitlines()
+    warn("装证书没成功，浏览器首次访问需要点「继续前往」")
+    if detail:
+        say(f"    {detail[-1][:160]}")
+    return False
 
 
 def show_tail(path: Path, lines: int = 12) -> None:
