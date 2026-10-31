@@ -145,6 +145,73 @@ namespace LanShare
         public string LogFolder { get { return Path.Combine(InstallFolder, "logs"); } }
         public string ApiServiceName { get { return ServicePrefix + "-api"; } }
         public string CaddyServiceName { get { return ServicePrefix + "-caddy"; } }
+
+        /// <summary>数据库服务名。安装版用 SQLite 时这个服务根本不存在。</summary>
+        public string DbServiceName { get { return ServicePrefix + "-postgresql"; } }
+
+        /// <summary>
+        /// 数据库服务存不存在 —— 也就是「这台机器用的是 PostgreSQL 还是 SQLite」。
+        ///
+        /// 判断依据不是配置，是服务本身：安装包跑 SQLite，压根不装 PG 服务；
+        /// 生产是手动搭的 PG 服务。查服务比读配置可靠，不会出现
+        /// 「配置写着 PG 但服务没装」的鬼状态。
+        /// </summary>
+        public bool HasDatabaseService
+        {
+            get
+            {
+                try
+                {
+                    using (var sc = new ServiceController(DbServiceName))
+                    {
+                        var _ = sc.Status;   // 碰一下状态，不存在会抛
+                        return true;
+                    }
+                }
+                catch (Exception) { return false; }
+            }
+        }
+
+        /// <summary>数据库引擎名，给界面显示用。</summary>
+        public string DbEngineLabel
+        {
+            get { return HasDatabaseService ? "PostgreSQL" : "SQLite"; }
+        }
+
+        /// <summary>
+        /// 从 postgresql.conf 读 PG 端口。读不到返回 0。
+        ///
+        /// 为什么去读配置文件而不是硬编码 5433：用户完全可能改过端口，
+        /// 界面上显示错的端口比不显示更糟。
+        /// </summary>
+        public int PgPort
+        {
+            get
+            {
+                try
+                {
+                    string conf = Path.Combine(
+                        InstallFolder, "env", "pginstall", "data", "postgresql.conf");
+                    if (!File.Exists(conf)) return 0;
+
+                    foreach (string raw in File.ReadAllLines(conf))
+                    {
+                        string t = raw.Trim();
+                        if (t.Length == 0 || t[0] == '#') continue;
+                        if (!t.StartsWith("port", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        int eq = t.IndexOf('=');
+                        if (eq < 0) continue;
+
+                        string val = t.Substring(eq + 1).Trim();
+                        int port;
+                        if (int.TryParse(val, out port)) return port;
+                    }
+                }
+                catch (Exception) { }
+                return 0;
+            }
+        }
     }
 
     /// <summary>Windows 服务的启动/停止/查询。</summary>
@@ -216,6 +283,8 @@ namespace LanShare
             if (errors.Count == 0) return null;
             return "重启失败：\n\n" + string.Join("\n", errors.ToArray());
         }
+
+        public static string RestartOnePublic(string name) { return RestartOne(name); }
 
         private static string RestartOne(string name)
         {
