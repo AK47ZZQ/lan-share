@@ -343,7 +343,10 @@ $traySrc = Join-Path $Root "installer\tray\bin"
 if (Test-Path $traySrc) {
     $trayDst = Join-Path $Dist "tray"
     New-Item -ItemType Directory -Path $trayDst -Force | Out-Null
-    robocopy $traySrc $trayDst /E /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+    # /XD 排除 WebView2 的用户数据目录：那是运行时缓存（实测 73 MB），
+    # 属于用户机器自己的东西，绝不能进安装包。
+    robocopy $traySrc $trayDst /E /XD "$traySrc\LanShareTray.exe.WebView2" `
+        /NFL /NDL /NJH /NJS /NC /NS | Out-Null
     Ok "托盘程序已复制"
 } else {
     New-Item -ItemType Directory -Path (Join-Path $Dist "tray") -Force | Out-Null

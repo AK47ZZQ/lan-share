@@ -350,7 +350,7 @@ namespace LanShare
             _brandIcon = new PictureBox
             {
                 Location = new Point(P, 14),
-                Size = new Size(44, 44),
+                Size = new Size(48, 48),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.Transparent,
             };
@@ -363,7 +363,7 @@ namespace LanShare
                     {
                         // Icon 也要 using —— new Icon(...).ToBitmap() 里的 Icon
                         // 不释放会占着一个 GDI 句柄，直到进程退出
-                        using (var ico = new Icon(st, new Size(44, 44)))
+                        using (var ico = new Icon(st, new Size(48, 48)))
                             _brandIcon.Image = ico.ToBitmap();
                     }
                 }
@@ -375,7 +375,7 @@ namespace LanShare
             {
                 Text = "LAN Share",
                 Font = Theme.H1,
-                Location = new Point(P + 56, 14),
+                Location = new Point(P + 60, 12),
                 AutoSize = true,
                 ForeColor = Theme.TextStrong,
             };
@@ -462,7 +462,7 @@ namespace LanShare
             }
 
             // ───────── 局域网卡片 ─────────
-            _lanBox = new Card(COL2, 100, CW, 304);
+            _lanBox = new Card(COL2, 100, CW, 330);
             _content.Controls.Add(_lanBox);
 
             var lanTitle = new Label
@@ -496,7 +496,7 @@ namespace LanShare
             _lanBox.Controls.Add(_lanHint);
 
             // 地址 + 复制：贴在一起，形成「内容 + 操作」的组合
-            _lanAddress = Btn.Address(Inner, 118, 352, 28);
+            _lanAddress = Btn.Address(Inner, 118, CW - Inner * 2 - 92, 28);
             _lanAddress.Visible = false;
             _lanBox.Controls.Add(_lanAddress);
 
@@ -531,7 +531,11 @@ namespace LanShare
             _lanBox.Controls.Add(_qrHint);
 
             // 关闭局域网是破坏性操作 —— 红色，且不抢主视觉
-            _lanToggle = Btn.Make("启动局域网服务", ButtonKind.Primary, Inner, 158, 168, 34);
+            // 位置在这里一次定好，之后 UpdateLanUi 只改文字和样式，绝不再碰 Location/Size。
+            // 原因：UpdateLanUi 是在 DPI Scale 之后才被调用的，那时用未缩放的
+            // 坐标去设 Location，控件会落在缩放后坐标系里错误的位置 —— 表现就是
+            // 按钮被压成一条线、或者跑到卡片外面。这个坑今天踩了两次。
+            _lanToggle = Btn.Make("启动局域网服务", ButtonKind.Primary, 230, 262, 170, 32);
             _lanToggle.Click += delegate { ToggleLan(); };
             _lanBox.Controls.Add(_lanToggle);
 
@@ -870,8 +874,7 @@ namespace LanShare
                 _lanToggle.Text = "关闭局域网服务";
                 // 右对齐到卡片内容右边缘（和上面「复制」按钮共用一条右基线 456），
                 // 二维码在左、关闭在右，整行留白才算均匀
-                _lanToggle.Location = new Point(_lanBox.Width - Theme.CardPad - 150, 200);
-                _lanToggle.Size = new Size(150, 32);
+                // 只改样式，坐标在构造时就定死了（见构造函数里的注释）
                 Btn.Restyle(_lanToggle, ButtonKind.Danger);
 
                 LoadQrAsync(url, quiet && wasOn);
@@ -880,8 +883,7 @@ namespace LanShare
             {
                 // 关着的时候这是主操作，蓝色、更大、和二维码同一个位置
                 _lanToggle.Text = "启动局域网服务";
-                _lanToggle.Location = new Point(Theme.CardPad, 158);
-                _lanToggle.Size = new Size(180, 34);
+                // 同样不动坐标，只换样式
                 Btn.Restyle(_lanToggle, ButtonKind.Primary);
 
                 if (_qrBox.Image != null) { _qrBox.Image.Dispose(); _qrBox.Image = null; }

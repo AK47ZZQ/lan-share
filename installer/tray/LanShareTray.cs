@@ -229,7 +229,8 @@ namespace LanShare
         private Icon _currentIcon;
         private bool _firstProbeDone;
         private readonly string _logPath;
-        private LanSharePanel _panel;          // 控制面板窗口，懒创建
+        private Form _panel;                   // 控制面板窗口，懒创建（Web 版或 WinForms 版）
+        private bool _forceWinFormsPanel;      // WebView2 失败过一次就别再试了
         private readonly System.Threading.EventWaitHandle _showPanelEvent;
         private readonly CliRunner _cli;
 
@@ -716,6 +717,40 @@ namespace LanShare
         /// 这样用户点关闭的直觉（"关掉了"）和实际行为一致，
         /// 而下次点图标能秒开，不用重新初始化。
         /// </summary>
+        /// <summary>
+        /// 建控制面板：优先 WebView2（HTML 界面），不可用就回退 WinForms 版。
+        ///
+        /// 为什么要有回退：WebView2 Runtime 不是所有 Windows 都有
+        /// （LTSC、精简版、老版本可能没装）。没有就白屏太糟糕，
+        /// 所以宁可退回旧界面 —— 丑是丑，但功能一个不少。
+        ///
+        /// _forceWinFormsPanel 记住「这台机器不行」，避免每开一次窗口
+        /// 都先失败一次再回退（那会闪一下）。
+        /// </summary>
+        private Form CreatePanel()
+        {
+            if (!_forceWinFormsPanel)
+            {
+                try
+                {
+                    var web = new WebPanel(_cfg, _cli);
+                    Log("使用 WebView2 面板");
+                    return web;
+                }
+                catch (WebView2Unavailable ex)
+                {
+                    _forceWinFormsPanel = true;
+                    Log("WebView2 不可用，回退 WinForms：" + ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    _forceWinFormsPanel = true;
+                    Log("WebView2 面板创建失败，回退 WinForms：" + ex);
+                }
+            }
+            return new LanSharePanel(_cfg, _cli);
+        }
+
         private void ShowPanel()
         {
             if (!_cfg.Installed)
@@ -731,7 +766,7 @@ namespace LanShare
             {
                 try
                 {
-                    _panel = new LanSharePanel(_cfg, _cli);
+                    _panel = CreatePanel();
                     _panel.FormClosed += (s, e) => { };
                 }
                 catch (Exception ex)

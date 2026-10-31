@@ -32,6 +32,7 @@ $Sources = @(
     (Join-Path $Here "LanShareCore.cs"),
     (Join-Path $Here "UiKit.cs"),
     (Join-Path $Here "LanSharePanel.cs"),
+    (Join-Path $Here "WebPanel.cs"),
     (Join-Path $Here "LanShareTray.cs")
 )
 
@@ -62,9 +63,37 @@ Write-Host "编译 $($Sources.Count) 个源文件 ..." -ForegroundColor Cyan
 # 必需的额外引用：
 #   System.ServiceProcess  —— 服务启停（ServiceController）
 #   System.Web.Extensions  —— JavaScriptSerializer（解析 CLI 的 JSON 输出）
+# WebView2 的 .NET Framework 引用（NuGet 包里 lib/net462 的产物）。
+#
+# 只在托盘控制面板里用得上：UI 是外置的 ui/index.html，C# 只做数据桥接。
+# 三个 dll 都要拷到输出目录 —— Core 是托管包装，Loader 是原生引导，
+# 少了任何一个启动时都会抛「找不到 WebView2」。
+$libDir = Join-Path $Here "lib"
+$wv2Refs = @()
+foreach ($dll in @("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll")) {
+    $f = Join-Path $libDir $dll
+    if (Test-Path $f) {
+        $wv2Refs += "/r:$f"
+    } else {
+        Write-Host "警告：缺少 $dll，WebView2 面板将不可用（会回退到 WinForms 版）" -ForegroundColor Yellow
+    }
+}
+
 $iconArgs = @()
 if ($IconPath) {
     $iconArgs = @("/win32icon:$IconPath", "/resource:$IconPath,LanShareTray.lanshare.ico")
+
+    # 另外把 128px PNG 单独嵌进去 —— 控制面板顶栏要把它当 data URI 传给 HTML。
+    # 不直接从 ICO 里解：GDI+ 对多帧 ICO 调 ToBitmap() 会抛
+    # 「请求的范围扩展超过了数组的结尾」，试过指定尺寸帧也一样，
+    # 干脆在构建期就准备好一张干净的 PNG。
+    # $PSScriptRoot = <repo>\installer	ray，要上溯两级才到 <repo>\logo
+    $logoPng = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "logo\lanshare-256.png"
+    if (Test-Path $logoPng) {
+        $iconArgs += "/resource:$logoPng,LanShareTray.Logo.png"
+    } else {
+        Write-Host "警告：找不到 logo\lanshare-256.png，界面顶栏图标会隐藏" -ForegroundColor Yellow
+    }
 }
 
 # 托盘四态图标：由 scripts/make-desktop-icon.py 生成（和手机 App 同一套绘制代码）。
@@ -116,6 +145,7 @@ if (Test-Path $ManifestPath) {
     /reference:System.Drawing.dll `
     /reference:System.ServiceProcess.dll `
     /reference:System.Web.Extensions.dll `
+    $wv2Refs `
     /optimize+ `
     /warn:4 `
     $iconArgs `
@@ -125,6 +155,25 @@ if (Test-Path $ManifestPath) {
 if ($LASTEXITCODE -ne 0) {
     Write-Host "编译失败（exit $LASTEXITCODE）" -ForegroundColor Red
     exit 1
+}
+
+# WebView2 的托管 dll 和原生 Loader 必须跟 exe 放一起。
+# Loader 由 Core.dll 在运行时用 P/Invoke 找，找不到就抛异常 → 走回退分支。
+$binDir = Split-Path -Parent $Out
+foreach ($f in @("Microsoft.Web.WebView2.Core.dll",
+                 "Microsoft.Web.WebView2.WinForms.dll",
+                 "WebView2Loader.dll")) {
+    $src = Join-Path $libDir $f
+    if (Test-Path $src) { Copy-Item $src $binDir -Force }
+}
+
+# ui/ 是外置的 HTML —— 单独放，改界面不用重新编译
+$uiSrc = Join-Path $Here "ui"
+$uiDst = Join-Path $binDir "ui"
+if (Test-Path $uiSrc) {
+    New-Item -ItemType Directory -Path $uiDst -Force | Out-Null
+    Copy-Item (Join-Path $uiSrc "*") $uiDst -Recurse -Force
+    Write-Host "  ui/ 已同步到输出目录" -ForegroundColor DarkGray
 }
 
 $size = [math]::Round((Get-Item $Out).Length / 1KB, 1)

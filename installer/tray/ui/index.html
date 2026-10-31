@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LAN Share</title>
+<style>
+/* 设计说明
+   ─────────────────────────────────────────────────────────
+   和手机 App 共用同一套品牌语言：紫蓝渐变 #5B6BFF → #895BFF，
+   浅灰底 + 白色圆角卡片，圆角 14px，阴影极淡（家用工具不需要立体感）。
+
+   为什么用 CSS 而不是 WinForms：原来每个控件手算坐标，DPI 150% 下
+   坐标系还分「缩放前/缩放后」两套，一个按钮调四次才摆对。CSS 里
+   flexbox 自动排版，浏览器处理 DPI，改样式不用重编译。
+*/
+:root {
+  --brand-a: #5B6BFF;
+  --brand-b: #895BFF;
+  --bg:      #F5F7FA;
+  --card:    #FFFFFF;
+  --border:  #E4E8F0;
+  --text:    #1A1F2E;
+  --body:    #3C4354;
+  --muted:   #8A90A0;
+  --faint:   #B0B5C3;
+  --field:   #F8FAFD;
+  --ok:      #34C77B;
+  --warn:    #F5B041;
+  --danger:  #EB5757;
+  --radius:  14px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--body);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 18px 22px 16px;
+  gap: 14px;
+}
+
+/* ── 顶栏 ── */
+.head { display: flex; align-items: center; gap: 12px; flex: none; }
+.head img { width: 46px; height: 46px; border-radius: 11px; }
+.head .meta { display: flex; flex-direction: column; gap: 3px; }
+.head h1 { font-size: 21px; font-weight: 700; color: var(--text); letter-spacing: -0.2px; }
+.head .sub { font-size: 11.5px; color: var(--muted); font-family: Consolas, monospace; }
+
+.pill {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 13px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600;
+  background: #EAF9F1; color: #1F9D5B;
+}
+.pill.warn { background: #FEF6E7; color: #C77F14; }
+.pill.err  { background: #FDECEC; color: #C0392B; }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* ── 主体两列 ── */
+.grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  min-height: 0;
+}
+
+.col { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 15px 17px;
+  box-shadow: 0 1px 2px rgba(20, 25, 45, 0.04);
+  display: flex; flex-direction: column; gap: 10px;
+  min-height: 0;
+}
+
+.card.grow { flex: 1; }
+
+.card-title {
+  font-size: 11.5px; font-weight: 700; color: var(--faint);
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+
+/* ── 服务行 ── */
+.svc {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid #F1F3F8;
+}
+.svc:last-child { border-bottom: none; padding-bottom: 0; }
+.svc .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.svc .dot.off { background: var(--faint); }
+.svc .dot.err { background: var(--danger); }
+.svc .name { font-weight: 600; color: var(--text); width: 62px; flex: none; }
+.svc .info { font-size: 11.5px; color: var(--muted); font-family: Consolas, monospace; flex: 1;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 按钮 ── */
+button {
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
+  border-radius: 9px; border: 1px solid var(--border);
+  background: #fff; color: var(--body);
+  padding: 7px 15px; cursor: pointer;
+  transition: background .13s, border-color .13s, transform .08s;
+  white-space: nowrap;
+}
+button:hover  { background: #F7F9FD; border-color: #D2D9E8; }
+button:active { transform: scale(.97); }
+button:disabled { opacity: .5; cursor: default; }
+
+button.mini { padding: 5px 11px; font-size: 11.5px; border-radius: 7px; }
+
+button.primary {
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+  color: #fff; border-color: transparent;
+  box-shadow: 0 2px 6px rgba(91, 107, 255, .28);
+}
+button.primary:hover { filter: brightness(1.06); }
+
+button.danger { color: var(--danger); border-color: #F5C6C6; background: #FFF8F8; }
+button.danger:hover { background: #FDEDED; border-color: #EFB0B0; }
+
+button.link {
+  border: none; background: none; color: var(--brand-a);
+  padding: 0; font-size: 11.5px; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── 状态行 ── */
+.state { display: flex; align-items: center; gap: 7px; font-weight: 600; color: var(--text); }
+.state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.state.on .dot { background: var(--ok); }
+.state.blocked .dot { background: var(--warn); }
+
+.hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+/* ── 地址行 ── */
+/* flex-shrink: 0 是必须的 —— 下面 .qr-row 用了 flex:1，会反过来把
+   .addr 挤窄，导致地址框只显示到 https://192.168. 就被截断。 */
+.addr { display: flex; gap: 8px; align-items: center; flex-shrink: 0; width: 100%; align-self: stretch; }
+.addr input {
+  /* flex-basis: 0 而不是 auto —— auto 会让浏览器退回 input 的默认
+     字符宽度（size=20 ≈ 20 个字符），地址一长就显示成 https://192.168.1.100:
+     然后没了。basis 归零之后按剩余空间分配，才会真正撑满。 */
+  flex: 1 1 0; min-width: 0;
+  font-family: Consolas, monospace; font-size: 12px;
+  padding: 8px 11px;
+  background: var(--field); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--body);
+  user-select: text;
+}
+
+/* ── 二维码 ── */
+.qr-row { display: flex; align-items: center; gap: 14px; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.qr-row img {
+  width: 104px; height: 104px; border-radius: 8px;
+  background: #fff; flex: none;
+  image-rendering: pixelated;
+}
+.qr-row .tip { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+
+/* ── 底部操作 ── */
+.foot { display: flex; gap: 10px; align-items: center; flex: none; }
+.foot .spacer { flex: 1; }
+.foot .path { text-align: right; }
+.foot .path { font-size: 11px; color: var(--faint); font-family: Consolas, monospace; }
+
+/* 忙碌遮罩 */
+.busy {
+  position: fixed; inset: 0; background: rgba(245, 247, 250, .72);
+  display: none; align-items: center; justify-content: center;
+  font-weight: 600; color: var(--brand-a); backdrop-filter: blur(1.5px);
+}
+.busy.show { display: flex; }
+
+/* toast */
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(12px);
+  background: #1A1F2E; color: #fff; padding: 8px 18px; border-radius: 999px;
+  font-size: 12px; opacity: 0; pointer-events: none;
+  transition: opacity .2s, transform .2s;
+}
+.toast.show { opacity: .95; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 顶栏 -->
+  <div class="head">
+    <img id="logo" src="" alt="">
+    <div class="meta">
+      <h1>LAN Share</h1>
+      <div class="sub" id="headsub">正在读取…</div>
+    </div>
+    <div class="pill" id="pill">
+      <span class="dot"></span><span id="pilltext">检查中</span>
+    </div>
+  </div>
+
+  <!-- 两列 -->
+  <div class="grid">
+
+    <!-- 左列 -->
+    <div class="col">
+      <div class="card">
+        <div class="card-title">服务</div>
+        <div id="svclist"></div>
+      </div>
+
+      <div class="card grow">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="card-title">公网访问</div>
+          <button class="link" id="wanhelp">怎么配置？</button>
+        </div>
+        <div class="state" id="wanstate">
+          <span class="dot"></span><span id="wanstatetext">读取中…</span>
+        </div>
+        <div class="hint" id="wanhint"></div>
+        <div class="addr">
+          <input id="wanaddr" readonly value="" size="1" style="width:100%">
+          <button class="mini" data-copy="wan">复制</button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="mini" id="wantest">验证连通性</button>
+          <button class="mini danger" id="wanclear">清除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右列 -->
+    <div class="col">
+      <div class="card grow">
+        <div class="card-title">局域网访问</div>
+        <div class="state" id="lanstate">
+          <span class="dot"></span><span id="lanstatetext">读取中…</span>
+        </div>
+        <div class="hint" id="lanhint"></div>
+        <div class="addr">
+          <input id="lanaddr" readonly value="" size="1" style="width:100%">
+          <button class="mini" data-copy="lan">复制</button>
+        </div>
+        <div class="qr-row">
+          <img id="qr" alt="二维码" style="display:none">
+          <div class="tip" id="qrtip">开启局域网后这里出现二维码</div>
+        </div>
+        <div style="display:flex;justify-content:flex-end">
+          <button class="danger" id="lantoggle">启动局域网服务</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 底部 -->
+  <div class="foot">
+    <button class="primary" id="openweb">打开网盘</button>
+    <button class="danger" id="restartall">重启服务</button>
+    <button class="danger" id="stopall">关闭服务</button>
+    <button id="logs">看日志</button>
+    <div class="spacer"></div>
+    <div class="path" id="datapath"></div>
+  </div>
+
+</div>
+
+<div class="busy" id="busy"><span id="busytext">处理中…</span></div>
+<div class="toast" id="toast"></div>
+
+
+<script>
+// ── 和 C# 的通道 ───────────────────────────────────────────
+// C# 每 5 秒 PostWebMessageAsJson 推一份状态过来；JS 点按钮 postMessage 回去。
+// 为什么不用 fetch：后端没开 CORS，file:// 页面拿 http://127.0.0.1 会被拦。
+// 走 host 桥接既不用改后端，也不受同源策略影响。
+const host = window.chrome && window.chrome.webview;
+
+function post(msg) {
+  if (host) host.postMessage(msg);
+}
+
+let last = null;
+
+// C# 推过来的状态
+function onState(data) {
+  last = data;
+  render(data);
+}
+
+if (host) {
+  host.addEventListener('message', e => {
+    const m = e.data;
+    if (m && m.type === 'state') onState(m.payload);
+    else if (m && m.type === 'toast') toast(m.text);
+    else if (m && m.type === 'busy') setBusy(m.on, m.text);
+  });
+}
+
+// ── 渲染 ───────────────────────────────────────────────────
+function render(s) {
+  // 顶栏
+  if (s.webPort) {
+    document.getElementById('headsub').textContent =
+      `API 127.0.0.1:${s.apiPort}  ·  Web 0.0.0.0:${s.webPort}`;
+  }
+  var lg = document.getElementById('logo');
+  if (s.logo) { lg.src = s.logo; lg.style.visibility = 'visible'; }
+  else { lg.style.visibility = 'hidden'; }   // 没有就藏起来，别显示破图
+
+  const pill = document.getElementById('pill');
+  const pilltext = document.getElementById('pilltext');
+  pill.className = 'pill';
+  if (s.healthy) { pilltext.textContent = '服务正常'; }
+  else if (s.services && s.services.some(x => x.status === 'Running')) {
+    pill.classList.add('warn'); pilltext.textContent = '部分异常';
+  } else { pill.classList.add('err'); pilltext.textContent = '服务未运行'; }
+
+  // 服务列表
+  const list = document.getElementById('svclist');
+  list.innerHTML = '';
+  (s.services || []).forEach((svc, i) => {
+    const row = document.createElement('div');
+    row.className = 'svc';
+    const cls = !svc.exists ? 'off' : (svc.status === 'Running' ? '' : 'err');
+    row.innerHTML = `
+      <span class="dot ${cls}"></span>
+      <span class="name">${svc.label}</span>
+      <span class="info">${svc.detail || '—'}</span>
+      <button class="mini" data-restart="${i}">重启</button>`;
+    list.appendChild(row);
+  });
+
+  // 局域网
+  const lanOn = !!s.lanOn;
+  const lanState = document.getElementById('lanstate');
+  lanState.className = 'state' + (lanOn ? ' on' : (s.lanBlocked ? ' blocked' : ''));
+  document.getElementById('lanstatetext').textContent =
+    lanOn ? '局域网已开启' : (s.noNetwork ? '没有可用网络' : '局域网未开启');
+  document.getElementById('lanhint').textContent = s.lanHint || '';
+  document.getElementById('lanaddr').value = s.lanUrl || '';
+
+  const qr = document.getElementById('qr');
+  if (s.qr) { qr.src = s.qr; qr.style.display = ''; document.getElementById('qrtip').textContent = '手机扫码直接连'; }
+  else { qr.style.display = 'none'; document.getElementById('qrtip').textContent = '开启局域网后这里出现二维码'; }
+
+  const tog = document.getElementById('lantoggle');
+  tog.textContent = lanOn ? '关闭局域网服务' : '启动局域网服务';
+  tog.className = lanOn ? 'danger' : 'primary';
+
+  // 公网
+  const wanOn = !!(s.wanUrl && s.wanUrl.length);
+  const wanState = document.getElementById('wanstate');
+  wanState.className = 'state' + (wanOn ? ' on' : '');
+  document.getElementById('wanstatetext').textContent = wanOn ? '已配置' : '未配置';
+  document.getElementById('wanhint').textContent = wanOn
+    ? '局域网外可通过这个地址访问'
+    : '配好穿透后在下面填入地址，别人在外面也能访问';
+  document.getElementById('wanaddr').value = s.wanUrl || '';
+
+  // 底部
+  document.getElementById('datapath').textContent = s.dataPath ? ('数据目录 ' + s.dataPath) : '';
+}
+
+// ── 交互 ───────────────────────────────────────────────────
+document.querySelectorAll('[data-restart]').forEach(el => {
+  el.onclick = () => post({ action: 'restartService', index: +el.dataset.restart });
+});
+
+document.querySelectorAll('[data-copy]').forEach(el => {
+  el.onclick = () => {
+    const which = el.dataset.copy;
+    post({ action: 'copy', which });
+  };
+});
+
+document.getElementById('lantoggle').onclick = () =>
+  post({ action: 'toggleLan', on: !(last && last.lanOn) });
+document.getElementById('openweb').onclick  = () => post({ action: 'openWeb' });
+document.getElementById('restartall').onclick = () => post({ action: 'restartAll' });
+document.getElementById('stopall').onclick  = () => post({ action: 'stopAll' });
+document.getElementById('logs').onclick     = () => post({ action: 'openLogs' });
+document.getElementById('wanhelp').onclick  = () => post({ action: 'wanHelp' });
+document.getElementById('wantest').onclick  = () => post({ action: 'wanTest' });
+document.getElementById('wanclear').onclick = () => post({ action: 'wanClear' });
+
+// ── 小工具 ─────────────────────────────────────────────────
+let toastTimer = null;
+function toast(text) {
+  const t = document.getElementById('toast');
+  t.textContent = text; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+function setBusy(on, text) {
+  const b = document.getElementById('busy');
+  if (text) document.getElementById('busytext').textContent = text;
+  b.classList.toggle('show', !!on);
+}
+
+// 让 host 知道页面加载完了，可以开始推数据
+post({ action: 'ready' });
+</script>
+</body>
+</html>
