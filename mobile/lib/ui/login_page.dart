@@ -21,6 +21,7 @@ import '../data/local/verifier_store.dart';
 import '../data/totp.dart';
 import '../state/session.dart';
 import 'invite_redeem_page.dart';
+import 'scan_page.dart';
 import 'theme/app_theme.dart';
 import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
@@ -129,6 +130,15 @@ class _LoginPageState extends ConsumerState<LoginPage>
   Future<void> _pickServer() async {
     await showServerPicker(context, current: _server.text.trim(),
         onPick: _applyAddress);
+  }
+
+  /// 直接开扫（服务器条上的扫码按钮），扫到就走和选地址一样的流程：
+  /// 记住地址 + 信任裁决 + 连通性预检。
+  Future<void> _scanServer() async {
+    final url = await Navigator.of(context).push<String>(
+        MaterialPageRoute(builder: (_) => const ScanPage()));
+    if (!mounted || url == null) return;
+    await _applyAddress(url);
   }
 
   Future<void> _applyAddress(String url) async {
@@ -330,7 +340,19 @@ class _LoginPageState extends ConsumerState<LoginPage>
                       .textTheme
                       .bodySmall
                       ?.copyWith(fontSize: 11)),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
+              // 扫码入口（2026-10-31 用户反馈「登录页没有扫码入口」）：
+              // 原来只能「点服务器条 → 弹窗底部 → 扫码添加」，三步才够得着，
+              // 等于没有。这里直接摆在服务器条上，一步开扫。
+              IconButton(
+                icon: const Icon(Icons.qr_code_scanner, size: 20),
+                tooltip: '扫码填服务器地址',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 34, minHeight: 34),
+                onPressed: session.checking ? null : _scanServer,
+              ),
               Icon(Icons.expand_more,
                   size: 18, color: cs.onSurfaceVariant),
             ]),

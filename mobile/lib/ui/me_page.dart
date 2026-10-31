@@ -35,6 +35,7 @@ import '../transfer/transfer_task.dart' show humanSize;
 import 'shares_page.dart';
 import 'trash_page.dart';
 import 'verifier_page.dart';
+import 'scan_page.dart';
 import 'widgets/auth_image.dart';
 import 'widgets/server_picker.dart' show shortHost, showServerPicker;
 import 'widgets/kit.dart';
@@ -647,17 +648,29 @@ class _MePageState extends ConsumerState<MePage> {
   Future<void> _pickServer() async {
     final current = _server;
     if (current == null) return;
-    await showServerPicker(context, current: current, onPick: (url) async {
-      final ok = await ensureAddressTrusted(context, url,
-          onAutoTrusted: () => showToast('指纹与已信任服务器一致，已自动信任此入口'));
-      if (!ok || !mounted) return;
-      await ApiClient.I.switchServer(url);
-      await Prefs.rememberAddress(url);
-      AutoSwitch.I.noteManualPick(); // 手动选择后 10 分钟内自动切换不干预
-      if (!mounted) return;
-      setState(() => _server = url);
-      showToast('已切换到 ${shortHost(url)}');
-    });
+    await showServerPicker(context, current: current, onPick: _switchTo);
+  }
+
+  /// 扫码切换服务器（2026-10-31 用户反馈「登录后也没有扫码入口」）。
+  /// 扫到的地址走和手动选择完全一样的流程：信任裁决 → 切换 → 记住。
+  Future<void> _scanServer() async {
+    final url = await Navigator.of(context)
+        .push<String>(MaterialPageRoute(builder: (_) => const ScanPage()));
+    if (!mounted || url == null) return;
+    await _switchTo(url);
+  }
+
+  /// 真正的切换动作，手动选择和扫码共用。
+  Future<void> _switchTo(String url) async {
+    final ok = await ensureAddressTrusted(context, url,
+        onAutoTrusted: () => showToast('指纹与已信任服务器一致，已自动信任此入口'));
+    if (!ok || !mounted) return;
+    await ApiClient.I.switchServer(url);
+    await Prefs.rememberAddress(url);
+    AutoSwitch.I.noteManualPick(); // 手动选择后 10 分钟内自动切换不干预
+    if (!mounted) return;
+    setState(() => _server = url);
+    showToast('已切换到 ${shortHost(url)}');
   }
 
   /// 公网入口徽标
@@ -870,9 +883,18 @@ class _MePageState extends ConsumerState<MePage> {
                       subtitle: Text(_server != null && isPublicAddress(_server!)
                           ? '当前入口 · 公网（点按切换 主/备隧道/局域网）'
                           : '当前入口 · 局域网（点按切换 公网隧道）'),
-                      trailing: _server != null && isPublicAddress(_server!)
-                          ? _netBadge(context)
-                          : null,
+                      // 右侧：公网徽标 + 扫码按钮。
+                      // 扫码和点行是两条路：点行进列表选，点图标直接开扫。
+                      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                        if (_server != null && isPublicAddress(_server!))
+                          _netBadge(context),
+                        IconButton(
+                          icon: const Icon(Icons.qr_code_scanner, size: 20),
+                          tooltip: '扫码切换服务器',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: _scanServer,
+                        ),
+                      ]),
                       onTap: _pickServer,
                     ),
                     // 自动切换（v0.15）：在家直连、出门走隧道的自动化
