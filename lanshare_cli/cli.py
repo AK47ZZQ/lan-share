@@ -35,6 +35,7 @@ import urllib.request
 from pathlib import Path
 
 from . import caddyfile
+from .pg import Postgres, PostgresError, generate_password, DEFAULT_PORT as PG_DEFAULT_PORT
 from .service import NssmService, ServiceError
 
 
@@ -135,6 +136,12 @@ class Layout:
 
         self.api_service = f"{service_prefix}-api"
         self.caddy_service = f"{service_prefix}-caddy"
+        self.pg_service = f"{service_prefix}-postgresql"
+
+        # PostgreSQL 二进制跟着程序走（安装包自带），数据跟着 data_dir 走
+        # —— 这样用户把数据目录放到 D 盘时，库和文件一起搬。
+        self.pgsql_dir = self.root / "pgsql"
+        self.pgdata = self.data_dir / "pgdata"
 
     def required_files(self) -> list[tuple[Path, str]]:
         return [
@@ -142,6 +149,9 @@ class Layout:
             (self.nssm, "NSSM（服务包装器）"),
             (self.caddy, "Caddy（Web 反代）"),
             (self.entry, "server.py（服务入口）"),
+            (self.pgsql_dir / "bin" / "initdb.exe", "PostgreSQL（initdb）"),
+            (self.pgsql_dir / "bin" / "pg_ctl.exe", "PostgreSQL（pg_ctl）"),
+            (self.pgsql_dir / "bin" / "psql.exe", "PostgreSQL（psql）"),
         ]
 
     def required_dirs(self) -> list[tuple[Path, str]]:
@@ -182,6 +192,30 @@ def fail(msg: str) -> None:
 # ──────────────────────────────────────────────────────────────
 
 
+def read_registry_value(name: str) -> str:
+    """从 HKLM\SOFTWARE\LANShare 读一个值，读不到返回空串。
+
+    升级时要用它拿回旧密码 —— 每次安装都重新生成密码会让
+    已经建好的 PG 角色对不上，库直接连不进去。
+    """
+    from .lan import read_registry
+
+    return (read_registry() or {}).get(name, "") or ""
+
+
+def write_registry_value(name: str, value: str) -> None:
+    """写一个注册表值。"""
+    script = (
+        "$k='HKLM:\SOFTWARE\LANShare'; "
+        "if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }; "
+        f"Set-ItemProperty -Path $k -Name '{name}' -Value '{value}'"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", script],
+        capture_output=True, timeout=30,
+    )
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
@@ -190,7 +224,12 @@ def cmd_install(args: argparse.Namespace) -> int:
         python_override=Path(args.python) if args.python else None,
     )
     api_port, web_port = args.api_port, args.web_port
+    pg_port = getattr(args, "pg_port", PG_DEFAULT_PORT)
     dry = args.dry_run
+
+    # 密码策略：升级时沿用注册表里的旧密码，全新安装才生成新的。
+    # 每次安装都换密码会让 PG 里的旧角色对不上，库直接连不上。
+    pg_password = read_registry_value("PgPassword") or generate_password()
 
     say("=" * 64)
     say("  LAN Share 安装")
@@ -199,11 +238,12 @@ def cmd_install(args: argparse.Namespace) -> int:
     say(f"  数据目录  {layout.data_dir}")
     say(f"  API 端口  {api_port}")
     say(f"  Web 端口  {web_port}")
+    say(f"  数据库端口 {pg_port}")
     say(f"  服务名前缀 {layout.service_prefix}")
     if dry:
         say("\n  *** DRY RUN —— 只检查不执行，不会改动任何东西 ***")
 
-    total = 8
+    total = 10
 
     # ── 1. 权限 ──
     step(1, total, "检查管理员权限")
@@ -235,7 +275,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     # ── 3. 端口 ──
     step(3, total, "检查端口占用")
     conflict = False
-    for port, label in ((api_port, "API"), (web_port, "Web")):
+    for port, label in ((api_port, "API"), (web_port, "Web"), (pg_port, "数据库")):
         if port_in_use(port):
             fail(f"{label} 端口 {port} 已被占用")
             conflict = True
@@ -323,8 +363,45 @@ def cmd_install(args: argparse.Namespace) -> int:
         fail(f"{exc}")
         return 1
 
-    # ── 7. 注册服务 ──
-    step(7, total, "注册服务")
+    # ── 7. 初始化数据库 ──
+    # 只跑 PostgreSQL 一个数据库（2026-10-31 主人拍板：不再在 SQLite/PG 之间切）
+    step(7, total, "初始化 PostgreSQL")
+
+    pg = Postgres(
+        root=layout.root,
+        data_dir=layout.data_dir,
+        prefix=layout.service_prefix,
+        port=pg_port,
+        password=pg_password,
+    )
+
+    try:
+        if pg.is_initialized():
+            ok(f"数据目录已存在（PG {pg.installed_version()}）：{pg.pgdata}")
+        else:
+            say(f"    初始化数据目录 {pg.pgdata}")
+            pg.initdb()
+            ok(f"已初始化（PG {pg.installed_version()}）")
+
+        # 每次重写 conf，保证端口跟着参数走（用户可能换端口重装）
+        pg.write_conf()
+        ok(f"端口 {pg.port}，仅监听 127.0.0.1")
+
+        if not pg.is_running():
+            pg.start()
+        ok("PostgreSQL 已启动")
+
+        pg.ensure_database()
+        ok(f"库 {pg.db_name} / 用户 {pg.db_user} 就绪")
+
+    except (PostgresError, OSError) as exc:
+        fail(f"数据库初始化失败：{exc}")
+        say("")
+        say(f"    日志: {layout.logs / 'postgres.log'}")
+        return 1
+
+    # ── 8. 注册服务 ──
+    step(8, total, "注册服务")
     registered: list[str] = []
     try:
         nssm.install(
@@ -335,6 +412,9 @@ def cmd_install(args: argparse.Namespace) -> int:
             env={
                 "SHARE_ROOT": str(layout.data_dir),
                 "LANSHARE_API_PORT": str(api_port),
+                # 只跑 PostgreSQL。不设这个变量时 app/db.py 会退到 SQLite，
+                # 那不是我们要的行为 —— 必须显式给。
+                "DATABASE_URL": pg.connection_url(),
             },
             stdout=layout.logs / "api-stdout.log",
             stderr=layout.logs / "api-stderr.log",
@@ -360,7 +440,12 @@ def cmd_install(args: argparse.Namespace) -> int:
         )
         registered.append(layout.caddy_service)
         ok(layout.caddy_service)
-    except ServiceError as exc:
+
+        # PG 用 pg_ctl runservice 托管（理由见 pg.py）
+        pg.install_service(nssm)
+        registered.append(layout.pg_service)
+        ok(layout.pg_service)
+    except (ServiceError, PostgresError) as exc:
         fail(str(exc))
         say("\n    回滚：删掉本次已注册的服务")
         for name in registered:
@@ -371,9 +456,34 @@ def cmd_install(args: argparse.Namespace) -> int:
                 warn(f"回滚 {name} 失败: {rexc}")
         return 1
 
-    # ── 8. 启动 + 探针 ──
-    step(8, total, "启动并做健康检查")
+    # ── 9. 启动 + 探针 ──
+    # 顺序必须 数据库 → API → Web：
+    # API 启动时就连库，库没好 API 直接崩；Caddy 反代到 API，API 没好是 502。
+    step(9, total, "启动并做健康检查")
     try:
+        st = nssm.start(layout.pg_service, wait_seconds=60)
+        if st == "RUNNING":
+            ok(f"{layout.pg_service}: {st}")
+        else:
+            fail(f"{layout.pg_service}: {st}")
+            show_tail(layout.logs / "postgres.log")
+            return 1
+
+        pg_ready = False
+        for _ in range(30):
+            try:
+                if pg.psql_value("SELECT 1;") == "1":
+                    pg_ready = True
+                    break
+            except PostgresError:
+                pass
+            time.sleep(1)
+        if not pg_ready:
+            fail("PostgreSQL 在 30 秒内没有接受连接")
+            show_tail(layout.logs / "postgres.log")
+            return 1
+        ok("数据库探针: SELECT 1 通过")
+
         st = nssm.start(layout.api_service, wait_seconds=30)
         if st == "RUNNING":
             ok(f"{layout.api_service}: {st}")
@@ -422,6 +532,10 @@ def cmd_install(args: argparse.Namespace) -> int:
         return 1
 
     say("\n" + "=" * 64)
+    # 记下密码和端口，下次升级要用同一条 —— 换密码等于把库锁死
+    write_registry_value("PgPassword", pg_password)
+    write_registry_value("PgPort", str(pg_port))
+
     say("  安装完成")
     say("=" * 64)
     say(f"  浏览器打开  http://127.0.0.1:{web_port}")
