@@ -252,43 +252,66 @@ class Postgres:
 
     # ── 数据库 ────────────────────────────────────────────
 
+    def _connect(self, *, db: str = "postgres", autocommit: bool = False):
+        """连数据库，用超级用户。
+
+        走 psycopg 而不是 psql.exe：随包带的是 zonky 精简版 PG，
+        它只含 postgres / initdb / pg_ctl，根本没有 psql 客户端。
+        反正 psycopg 是运行时必需依赖，用它反而少一个外部进程。
+        """
+        try:
+            import psycopg
+        except ImportError as exc:  # pragma: no cover
+            raise PostgresError(
+                "缺少 psycopg。安装包的运行时依赖应该带上它，"
+                "开发环境请 pip install 'psycopg[binary]'"
+            ) from exc
+
+        try:
+            conn = psycopg.connect(
+                host="127.0.0.1",
+                port=self.port,
+                user="postgres",
+                password=self.password,
+                dbname=db,
+                connect_timeout=10,
+            )
+        except Exception as exc:
+            raise PostgresError(f"连不上 PostgreSQL：{exc}") from exc
+
+        conn.autocommit = autocommit
+        return conn
+
     def ensure_database(self) -> None:
         """建应用库和账号（幂等）。"""
-        # 先建角色，再建库并指定 owner
-        self.psql(
-            f"DO $$ BEGIN "
-            f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{self.db_user}') THEN "
-            f"CREATE ROLE {self.db_user} LOGIN PASSWORD '{self.password}'; "
-            f"END IF; END $$;",
-            db="postgres",
-        )
+        # 建角色。参数化传值，密码里万一有特殊字符也不会把 SQL 弄断。
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (self.db_user,))
+                if cur.fetchone() is None:
+                    cur.execute(
+                        f"CREATE ROLE {self.db_user} LOGIN PASSWORD %s",
+                        (self.password,),
+                    )
+            conn.commit()
 
-        # CREATE DATABASE 不能在事务块里，也不能用 IF NOT EXISTS
-        exists = self.psql_value(
-            f"SELECT 1 FROM pg_database WHERE datname = '{self.db_name}';",
-            db="postgres",
-        )
-        if exists.strip() != "1":
-            self.psql(
-                f'CREATE DATABASE {self.db_name} OWNER {self.db_user} ENCODING \'UTF8\';',
-                db="postgres",
-            )
+        # CREATE DATABASE 不能在事务块里，必须 autocommit
+        with self._connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (self.db_name,))
+                if cur.fetchone() is None:
+                    cur.execute(
+                        f'CREATE DATABASE "{self.db_name}" '
+                        f'OWNER "{self.db_user}" ENCODING UTF8'
+                    )
 
-    def psql(self, sql: str, *, db: str = "postgres") -> str:
-        """跑一条 SQL，用超级用户。"""
-        env = {"PGPASSWORD": self.password}
-        res = self._run(
-            [str(self.exe("psql")), "-h", "127.0.0.1", "-p", str(self.port),
-             "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-t", "-A", "-c", sql],
-            timeout=60,
-            env=env,
-        )
-        if res.returncode != 0:
-            raise PostgresError(f"SQL 执行失败：{res.stderr.strip()}")
-        return res.stdout
-
-    def psql_value(self, sql: str, *, db: str = "postgres") -> str:
-        return self.psql(sql, db=db).strip()
+    def query_one(self, sql: str, *, db: str = "postgres") -> str:
+        """跑一条只返回单值的查询，返回字符串（空结果返回空串）。"""
+        with self._connect(db=db) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+                return "" if row is None else str(row[0])
 
     # ── 数据目录迁移 ──────────────────────────────────────
 
