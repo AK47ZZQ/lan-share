@@ -128,8 +128,8 @@ Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 ;
 ; 这里只放「装完之后给用户看的东西」。
 
-; ── 打开浏览器到首启页面（HTTP —— CLI 生成的 Caddyfile 走纯 HTTP 反代）──
-Filename: "http://127.0.0.1:{#WebPort}"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share（首次使用需创建管理员账号）"
+; ── 打开浏览器到首启页面（HTTPS —— CLI 生成的 Caddyfile 用 tls internal 自签）──
+Filename: "https://127.0.0.1:{#WebPort}"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share（首次使用需创建管理员账号）"
 
 ; ── 启动托盘 ──
 Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait postinstall skipifsilent skipifdoesntexist; Tasks: autostart
