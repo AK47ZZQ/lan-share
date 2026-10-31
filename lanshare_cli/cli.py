@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import socket
+import re
 import subprocess
 import sys
 import time
@@ -209,7 +210,12 @@ def write_registry_value(
     name: str, value: str, key: str = REGISTRY_KEY_DEFAULT
 ) -> None:
     """写一个注册表值。"""
-    if not key or any(c in key for c in "\'\"; "):
+    # 白名单，不是黑名单。
+    #
+    # 黑名单（只挡引号分号空格）漏了换行符和 PowerShell 的 $() 子表达式，
+    # 对抗性测试里这两个都穿过去了（换行能另起一条命令，$() 会真的求值）。
+    # 注册表键名本来就只需要字母数字下划线连字符，直接限定范围最稳。
+    if not key or not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", key):
         raise ValueError(f"非法的注册表键名: {key!r}")
 
     script = (
@@ -223,6 +229,40 @@ def write_registry_value(
     )
 
 
+def _acquire_install_lock():
+    """拿一个进程级互斥锁，防止两个 install 同时跑。
+
+    不加锁会出什么事：用户双击两次安装包，或者安装器还没跑完又手动跑 CLI ——
+    两个进程同时 initdb 同一个目录、同时抢 8766/5433、同时 nssm install 同名
+    服务。结果是一半失败一半成功，留下一个半死的安装，还得手工清理。
+
+    只在 Windows 上真加锁；非 Windows（CI 跑单测）直接放行。
+    返回的句柄必须由调用方持有到安装结束 —— 句柄一关锁就释放了。
+    """
+    try:
+        import msvcrt
+    except ImportError:
+        return None
+
+    import tempfile
+
+    lock_path = Path(tempfile.gettempdir()) / "lanshare-install.lock"
+    try:
+        fh = open(lock_path, "w")
+    except OSError:
+        return None
+
+    try:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        fh.close()
+        raise ServiceError(
+            "另一个 LAN Share 安装进程正在运行（端口/服务都被它占着）。"
+            "等它结束再试，或重启电脑后再装。"
+        )
+    return fh
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
@@ -233,6 +273,9 @@ def cmd_install(args: argparse.Namespace) -> int:
     api_port, web_port = args.api_port, args.web_port
     pg_port = getattr(args, "pg_port", PG_DEFAULT_PORT)
     dry = args.dry_run
+
+    # dry-run 不碰系统，不用抢锁
+    _install_lock = None if dry else _acquire_install_lock()
 
     # 密码策略：升级时沿用注册表里的旧密码，全新安装才生成新的。
     # 每次安装都换密码会让 PG 里的旧角色对不上，库直接连不上。
