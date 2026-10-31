@@ -12,7 +12,7 @@
   ![server](https://img.shields.io/badge/server-v3.72-2563eb)
   ![app](https://img.shields.io/badge/app-v1.1.18%2B125-2563eb)
   ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
-  ![tests](https://img.shields.io/badge/tests-560%20passed-16a34a)
+  ![tests](https://img.shields.io/badge/tests-729%20passed-16a34a)
   ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
 </div>
 

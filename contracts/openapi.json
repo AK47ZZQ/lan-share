@@ -419,6 +419,66 @@
     "title": "HTTPValidationError",
     "type": "object"
    },
+   "InboxItem": {
+    "properties": {
+     "app_ver": {
+      "default": "",
+      "maxLength": 40,
+      "title": "App Ver",
+      "type": "string"
+     },
+     "body": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Body",
+      "type": "string"
+     },
+     "created": {
+      "default": "",
+      "maxLength": 32,
+      "title": "Created",
+      "type": "string"
+     },
+     "device": {
+      "default": "",
+      "maxLength": 80,
+      "title": "Device",
+      "type": "string"
+     },
+     "id": {
+      "default": "",
+      "maxLength": 64,
+      "title": "Id",
+      "type": "string"
+     },
+     "source": {
+      "default": "",
+      "maxLength": 40,
+      "title": "Source",
+      "type": "string"
+     },
+     "title": {
+      "default": "",
+      "maxLength": 80,
+      "title": "Title",
+      "type": "string"
+     },
+     "type": {
+      "default": "other",
+      "maxLength": 16,
+      "title": "Type",
+      "type": "string"
+     },
+     "user": {
+      "default": "",
+      "maxLength": 60,
+      "title": "User",
+      "type": "string"
+     }
+    },
+    "title": "InboxItem",
+    "type": "object"
+   },
    "InviteBody": {
     "properties": {
      "hours": {
@@ -659,6 +719,107 @@
      "password"
     ],
     "title": "RedeemBody",
+    "type": "object"
+   },
+   "RelayConfig": {
+    "description": "上报/收件配置。全部可选 —— 只改传上来的那几项。",
+    "properties": {
+     "gh_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gh Enabled"
+     },
+     "gh_repo": {
+      "anyOf": [
+       {
+        "maxLength": 120,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gh Repo"
+     },
+     "gh_token": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gh Token"
+     },
+     "inbox_token": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Inbox Token"
+     },
+     "relay_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Relay Enabled"
+     },
+     "relay_token": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Relay Token"
+     },
+     "relay_url": {
+      "anyOf": [
+       {
+        "maxLength": 300,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Relay Url"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "maxLength": 40,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source"
+     }
+    },
+    "title": "RelayConfig",
     "type": "object"
    },
    "RenameBody": {
@@ -1579,6 +1740,58 @@
      }
     },
     "summary": "Feedback Admin List"
+   }
+  },
+  "/api/admin/feedback-relay": {
+   "get": {
+    "description": "读上报配置。token 类字段只回「设没设」，不回原值。",
+    "operationId": "get_relay_config_api_admin_feedback_relay_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Relay Config"
+   },
+   "put": {
+    "description": "改上报配置。传空字符串表示清空该 token。",
+    "operationId": "set_relay_config_api_admin_feedback_relay_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RelayConfig"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Relay Config"
    }
   },
   "/api/admin/grants": {
@@ -3708,6 +3921,71 @@
      }
     },
     "summary": "Feedback Create"
+   }
+  },
+  "/api/feedback/inbox": {
+   "post": {
+    "operationId": "feedback_inbox_api_feedback_inbox_post",
+    "parameters": [
+     {
+      "in": "header",
+      "name": "authorization",
+      "required": false,
+      "schema": {
+       "default": "",
+       "title": "Authorization",
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/InboxItem"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Feedback Inbox"
+   }
+  },
+  "/api/feedback/inbox/status": {
+   "get": {
+    "description": "给管理面板看：收件箱开没开、收了多少。",
+    "operationId": "inbox_status_api_feedback_inbox_status_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Inbox Status"
    }
   },
   "/api/feedback/{fid}": {
