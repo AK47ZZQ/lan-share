@@ -61,6 +61,7 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.i
 
 [Tasks]
 Name: "autostart"; Description: "开机时自动启动 LAN Share 托盘图标"; GroupDescription: "启动选项:"; Flags: checkedonce
+Name: "desktopicon"; Description: "在桌面创建 LAN Share 快捷方式"; GroupDescription: "附加图标:"; Flags: checkedonce
 
 [Files]
 ; ── Python 运行时 + 依赖（最大的一块，62 MB）──
@@ -117,7 +118,12 @@ Root: HKA; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: s
 ; ── 安装路径加入 PATH（方便命令行调 python.exe）──
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "https://127.0.0.1:{#WebPort}"
+; 桌面和开始菜单的主图标都指向**托盘程序**，不是网页。
+; 托盘才是控制面板入口（启停服务、看状态、复制地址），比直接开网页有用。
+; 网页那个保留在开始菜单，名字写明白是「在浏览器中打开」。
+Name: "{commondesktop}\{#AppName}"; Filename: "{app}\tray\LANShareTray.exe"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\tray\LANShareTray.exe"
+Name: "{group}\在浏览器中打开"; Filename: "https://127.0.0.1:{#WebPort}"
 Name: "{group}\打开数据文件夹"; Filename: "{code:GetDataDir}"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 
@@ -132,7 +138,11 @@ Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 Filename: "https://127.0.0.1:{#WebPort}"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share（首次使用需创建管理员账号）"
 
 ; ── 启动托盘 ──
-Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait postinstall skipifsilent skipifdoesntexist; Tasks: autostart
+; 去掉 postinstall：那标志只在「安装完成」页勾选时才执行。
+; 装完如果弹了任何错误（哪怕只是自检误报），完成页可能根本不出现，
+; 托盘就永远不启动 —— 用户装完桌面上什么都没有，以为没装上。
+; 现在安装流程走到这里就起；只有 /SILENT 才跳过。
+Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait skipifsilent skipifdoesntexist; Tasks: autostart
 
 [UninstallRun]
 ; 撤销安装 = 撤销 lanshare_cli install 做的事：先停服务再删服务，数据保留。
