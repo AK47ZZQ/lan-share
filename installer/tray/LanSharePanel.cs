@@ -246,7 +246,7 @@ namespace LanShare
         // 服务状态区
         private readonly Label _serviceStatus;
         private readonly Label _apiLine;
-        private readonly Label _webLine;
+        private readonly Label _webLine;   // 不再单独显示，API/Web 已合并进 _apiLine
 
         // 局域网区
         private readonly Panel _lanBox;
@@ -262,7 +262,6 @@ namespace LanShare
         private readonly Label _dataLabel;
         private readonly Button _btnOpenWeb;
         private readonly Button _btnRestart;
-        private readonly Button _btnFolder;
         private readonly Button _btnLogs;
 
         // 公网访问区
@@ -274,6 +273,8 @@ namespace LanShare
         private readonly Button _wanTest;
         private readonly Button _wanClear;
         private readonly Button _wanHelp;
+        private readonly TextBox _wanAddress;
+        private readonly Button _wanCopy;
         private string _wanConfigured = "";
 
         private readonly System.Windows.Forms.Timer _refreshTimer;
@@ -293,118 +294,102 @@ namespace LanShare
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(520, 810);
-            Font = new Font("Microsoft YaHei UI", 9F);
-            BackColor = Color.FromArgb(250, 250, 252);
+            ClientSize = new Size(520, 786);
+            Font = Theme.Body;
+            BackColor = Theme.Bg;
             Icon = SystemIcons.Application;
 
-            // ── 标题 ──
+            const int P = Theme.Pad;        // 窗口左右边距 24
+            const int CW = 472;             // 卡片宽 = 520 - 2*24
+            const int Inner = Theme.CardPad; // 卡片内边距 16
+
+            // ───────── 顶部：标题 + 服务状态 ─────────
             var title = new Label
             {
                 Text = "LAN Share",
-                Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold),
-                Location = new Point(24, 18),
+                Font = Theme.H1,
+                Location = new Point(P, 18),
                 AutoSize = true,
-                ForeColor = Color.FromArgb(40, 44, 60),
+                ForeColor = Theme.TextStrong,
             };
             Controls.Add(title);
 
-            // ── 服务状态 ──
             _serviceStatus = new Label
             {
                 Text = "检查中…",
-                Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold),
-                Location = new Point(24, 56),
+                Font = Theme.Status,
+                Location = new Point(P, 54),
                 AutoSize = true,
-                ForeColor = Color.Gray,
+                ForeColor = Theme.Gray,
             };
             Controls.Add(_serviceStatus);
 
+            // API/Web 合并成一行元信息 —— 原来两行各占 22px，
+            // 而且字号和正文一样大，把「状态」这个主角挤下去了
             _apiLine = new Label
             {
                 Text = "",
-                Location = new Point(40, 88),
-                AutoSize = true,
-                ForeColor = Color.FromArgb(90, 94, 110),
+                Font = Theme.Meta,
+                Location = new Point(P, 84),
+                Size = new Size(CW, 18),
+                ForeColor = Theme.TextMuted,
             };
             Controls.Add(_apiLine);
 
-            _webLine = new Label
-            {
-                Text = "",
-                Location = new Point(40, 110),
-                AutoSize = true,
-                ForeColor = Color.FromArgb(90, 94, 110),
-            };
+            // _webLine 保留字段（ApplyStatus 会写），但不单独显示：
+            // 内容拼进 _apiLine，两者同步
+            _webLine = new Label { Visible = false, Text = "" };
             Controls.Add(_webLine);
 
-            // ── 局域网卡片 ──
-            _lanBox = new Panel
-            {
-                Location = new Point(24, 140),
-                Size = new Size(472, 326),
-                BackColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-            };
+            // ───────── 局域网卡片 ─────────
+            _lanBox = new Card(P, 112, CW, 300);
             Controls.Add(_lanBox);
 
             var lanTitle = new Label
             {
                 Text = "局域网访问",
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Location = new Point(14, 12),
+                Font = Theme.SectionTitle,
+                Location = new Point(Inner, 18),
                 AutoSize = true,
-                ForeColor = Color.FromArgb(120, 124, 140),
+                ForeColor = Theme.TextMuted,
             };
             _lanBox.Controls.Add(lanTitle);
 
             _lanState = new Label
             {
                 Text = "读取中…",
-                Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold),
-                Location = new Point(14, 36),
-                Size = new Size(440, 26),
-                ForeColor = Color.Gray,
+                Font = Theme.Status,
+                Location = new Point(Inner, 42),
+                Size = new Size(CW - Inner * 2, 26),
+                ForeColor = Theme.Gray,
             };
             _lanBox.Controls.Add(_lanState);
 
             _lanHint = new Label
             {
                 Text = "",
-                Location = new Point(14, 64),
-                // 60 高是为了容纳三行中文（DPI 感知后字体按真实像素渲染，
-                // 40 高只够两行，长句会被切掉半个字）
-                Size = new Size(440, 60),
-                ForeColor = Color.FromArgb(110, 114, 130),
+                Font = Theme.Meta,
+                Location = new Point(Inner, 72),
+                Size = new Size(CW - Inner * 2, 38),
+                ForeColor = Theme.TextMuted,
             };
             _lanBox.Controls.Add(_lanHint);
 
-            _lanAddress = new TextBox
-            {
-                Location = new Point(14, 132),
-                Size = new Size(330, 26),
-                ReadOnly = true,
-                BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Consolas", 10F),
-                Visible = false,
-                BackColor = Color.FromArgb(248, 250, 255),
-            };
+            // 地址 + 复制：贴在一起，形成「内容 + 操作」的组合
+            _lanAddress = Btn.Address(Inner, 118, 352, 28);
+            _lanAddress.Visible = false;
             _lanBox.Controls.Add(_lanAddress);
 
-            _lanCopy = new Button
-            {
-                Text = "复制",
-                Location = new Point(352, 131),
-                Size = new Size(100, 28),
-                FlatStyle = FlatStyle.System,
-                Visible = false,
-            };
+            _lanCopy = Btn.Make("复制", ButtonKind.Secondary, Inner + 352 + 8, 118, 80, 28);
+            _lanCopy.Visible = false;
             _lanCopy.Click += delegate { CopyAddress(); };
             _lanBox.Controls.Add(_lanCopy);
 
+            // 二维码和说明文字垂直居中：QR 96 高，文字单行约 18，
+            // 所以文字 y = QR.y + (96-18)/2
             _qrBox = new PictureBox
             {
-                Location = new Point(14, 170),
+                Location = new Point(Inner, 158),
                 Size = new Size(96, 96),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BorderStyle = BorderStyle.FixedSingle,
@@ -416,161 +401,144 @@ namespace LanShare
             _qrHint = new Label
             {
                 Text = "手机扫码直接连",
-                Location = new Point(124, 170),
-                Size = new Size(200, 22),
-                ForeColor = Color.FromArgb(110, 114, 130),
+                Font = Theme.Meta,
+                Location = new Point(Inner + 96 + 18, 158 + 16),
+                Size = new Size(220, 18),
+                ForeColor = Theme.TextMuted,
                 Visible = false,
             };
             _lanBox.Controls.Add(_qrHint);
 
-            _lanToggle = new Button
-            {
-                Text = "启动局域网服务",
-                Location = new Point(14, 170),
-                Size = new Size(180, 36),
-                FlatStyle = FlatStyle.System,
-            };
+            // 关闭局域网是破坏性操作 —— 红色，且不抢主视觉
+            _lanToggle = Btn.Make("启动局域网服务", ButtonKind.Primary, Inner, 158, 168, 34);
             _lanToggle.Click += delegate { ToggleLan(); };
             _lanBox.Controls.Add(_lanToggle);
 
-            // ── 公网访问卡片 ──
-            _wanBox = new Panel
-            {
-                Location = new Point(24, 474),
-                Size = new Size(472, 170),
-                BackColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-            };
+            // ───────── 公网卡片 ─────────
+            _wanBox = new Card(P, 428, CW, 200);
             Controls.Add(_wanBox);
 
             var wanTitle = new Label
             {
                 Text = "公网访问",
-                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-                Location = new Point(14, 12),
+                Font = Theme.SectionTitle,
+                Location = new Point(Inner, 18),
                 AutoSize = true,
-                ForeColor = Color.FromArgb(120, 124, 140),
+                ForeColor = Theme.TextMuted,
             };
             _wanBox.Controls.Add(wanTitle);
+
+            // 「怎么配置？」改成文字链样式，右对齐贴住卡片右边缘，
+            // 视觉上是「标题行的附属链接」而不是一个独立按钮
+            _wanHelp = Btn.Make("怎么配置？", ButtonKind.Link, CW - Inner - 104, 14, 104, 24);
+            _wanHelp.Font = Theme.Meta;
+            _wanHelp.Click += delegate { ShowWanHelp(); };
+            _wanBox.Controls.Add(_wanHelp);
 
             _wanState = new Label
             {
                 Text = "读取中…",
-                Font = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold),
-                Location = new Point(14, 36),
-                Size = new Size(440, 26),
-                ForeColor = Color.Gray,
+                Font = Theme.Status,
+                Location = new Point(Inner, 42),
+                Size = new Size(CW - Inner * 2, 26),
+                ForeColor = Theme.Gray,
             };
             _wanBox.Controls.Add(_wanState);
 
             _wanHint = new Label
             {
                 Text = "",
-                Location = new Point(14, 64),
-                Size = new Size(440, 40),
-                ForeColor = Color.FromArgb(110, 114, 130),
+                Font = Theme.Meta,
+                Location = new Point(Inner, 72),
+                Size = new Size(CW - Inner * 2, 40),
+                ForeColor = Theme.TextMuted,
             };
             _wanBox.Controls.Add(_wanHint);
 
+            // 公网地址也用只读框 —— 原来它是纯文本，和上面的局域网地址长得不一样，
+            // 用户会以为这个不能复制
+            _wanAddress = Btn.Address(Inner, 118, 352, 28);
+            _wanAddress.Visible = false;
+            _wanBox.Controls.Add(_wanAddress);
+
+            _wanCopy = Btn.Make("复制", ButtonKind.Secondary, Inner + 352 + 8, 118, 80, 28);
+            _wanCopy.Visible = false;
+            _wanCopy.Click += delegate { CopyWan(); };
+            _wanBox.Controls.Add(_wanCopy);
+
             _wanInput = new TextBox
             {
-                Location = new Point(14, 108),
-                Size = new Size(330, 26),
+                Location = new Point(Inner, 118),
+                Size = new Size(352, 28),
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Consolas", 10F),
-                BackColor = Color.FromArgb(248, 250, 255),
+                Font = Theme.Mono9,
+                BackColor = Theme.FieldBg,
             };
             _wanBox.Controls.Add(_wanInput);
 
-            _wanSave = new Button
-            {
-                Text = "保存",
-                Location = new Point(352, 107),
-                Size = new Size(100, 28),
-                FlatStyle = FlatStyle.System,
-            };
+            _wanSave = Btn.Make("保存", ButtonKind.Primary, Inner + 352 + 8, 118, 80, 28);
             _wanSave.Click += delegate { SaveWan(); };
             _wanBox.Controls.Add(_wanSave);
 
-            _wanTest = new Button
-            {
-                Text = "验证连通性",
-                Location = new Point(14, 108),
-                Size = new Size(130, 28),
-                FlatStyle = FlatStyle.System,
-                Visible = false,
-            };
+            _wanTest = Btn.Make("验证连通性", ButtonKind.Secondary, Inner, 158, 112, 28);
+            _wanTest.Visible = false;
             _wanTest.Click += delegate { TestWan(); };
             _wanBox.Controls.Add(_wanTest);
 
-            _wanClear = new Button
-            {
-                Text = "清除",
-                Location = new Point(152, 108),
-                Size = new Size(80, 28),
-                FlatStyle = FlatStyle.System,
-                Visible = false,
-            };
+            _wanClear = Btn.Make("清除", ButtonKind.Danger, Inner + 120, 158, 72, 28);
+            _wanClear.Visible = false;
             _wanClear.Click += delegate { ClearWan(); };
             _wanBox.Controls.Add(_wanClear);
 
-            // 「怎么配置」必须始终可见 —— 用户不知道怎么配的时候，
-            // 恰恰是最需要这个按钮的时候。放右上角，跟标题一行。
-            _wanHelp = new Button
-            {
-                Text = "怎么配置？",
-                Location = new Point(358, 8),
-                Size = new Size(100, 24),
-                FlatStyle = FlatStyle.System,
-            };
-            _wanHelp.Click += delegate { ShowWanHelp(); };
-            _wanBox.Controls.Add(_wanHelp);
-
-            // ── 数据目录 ──
+            // ───────── 数据目录（可点击，替代原来重复的「数据目录」按钮）─────────
             _dataLabel = new Label
             {
                 Text = "",
-                Location = new Point(24, 658),
-                Size = new Size(472, 20),
-                ForeColor = Color.FromArgb(110, 114, 130),
+                Font = Theme.Meta,
+                Location = new Point(P, 644),
+                Size = new Size(CW, 18),
+                ForeColor = Theme.TextMuted,
+                Cursor = Cursors.Hand,
             };
+            _dataLabel.Click += delegate { OpenFolder(_cfg.DataFolder); };
             Controls.Add(_dataLabel);
 
-            // ── 底部按钮 ──
-            _btnOpenWeb = MakeButton("打开网盘", 24, 692, 112);
+            // ───────── 底部操作 ─────────
+            // 去掉「数据目录」按钮：上面那行路径已经能点，两个入口做同一件事
+            // 只会让用户猜「是不是不一样」
+            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 672, 112, 34);
             _btnOpenWeb.Click += delegate { OpenUrl(_cfg.WebUrl); };
             Controls.Add(_btnOpenWeb);
 
-            _btnRestart = MakeButton("重启服务", 144, 692, 112);
+            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 672, 112, 34);
             _btnRestart.Click += delegate { RestartServices(); };
             Controls.Add(_btnRestart);
 
-            _btnFolder = MakeButton("数据目录", 264, 692, 112);
-            _btnFolder.Click += delegate { OpenFolder(_cfg.DataFolder); };
-            Controls.Add(_btnFolder);
-
-            _btnLogs = MakeButton("看日志", 384, 692, 112);
+            // 「数据目录」按钮删了：上面那行路径已经能点，两个入口做同一件事
+            // 只会让用户猜「是不是不一样」。按钮位置重排成三个。
+            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 672, 100, 34);
             _btnLogs.Click += delegate { OpenFolder(_cfg.LogFolder); };
             Controls.Add(_btnLogs);
 
-            // ── 忙碌提示 ──
+            // ───────── 忙碌提示 ─────────
             _busyLabel = new Label
             {
                 Text = "",
-                Location = new Point(24, 742),
-                Size = new Size(472, 20),
-                ForeColor = Color.FromArgb(0, 120, 200),
+                Font = Theme.Meta,
+                Location = new Point(P, 720),
+                Size = new Size(CW, 18),
+                ForeColor = Theme.Blue,
             };
             Controls.Add(_busyLabel);
 
-            // ── 版本 ──
+            // ───────── 页脚 ─────────
             var version = new Label
             {
                 Text = "服务前缀 " + _cfg.ServicePrefix,
-                Location = new Point(24, 772),
+                Location = new Point(P, 752),
                 AutoSize = true,
-                ForeColor = Color.FromArgb(170, 174, 190),
-                Font = new Font("Microsoft YaHei UI", 8F),
+                ForeColor = Theme.TextFaint,
+                Font = Theme.Footer,
             };
             Controls.Add(version);
 
@@ -593,16 +561,6 @@ namespace LanShare
             FormClosed += delegate { _refreshTimer.Stop(); _qrBox.Image = null; };
         }
 
-        private Button MakeButton(string text, int x, int y, int w)
-        {
-            return new Button
-            {
-                Text = text,
-                Location = new Point(x, y),
-                Size = new Size(w, 32),
-                FlatStyle = FlatStyle.System,
-            };
-        }
 
         // ──────────────────────────────────────────────────────
         // 状态刷新
@@ -636,10 +594,9 @@ namespace LanShare
         {
             if (dict == null)
             {
-                SetServiceBadge("状态未知", Color.Gray);
-                _apiLine.Text = "";
-                _webLine.Text = error ?? "无法读取状态";
-                _webLine.ForeColor = Color.Firebrick;
+                SetServiceBadge("状态未知", Theme.Gray);
+                _apiLine.Text = error ?? "无法读取状态";
+                _apiLine.ForeColor = Theme.Red;
                 return;
             }
 
@@ -671,8 +628,6 @@ namespace LanShare
                 SetServiceBadge(stateLabel.Length > 0 ? stateLabel : "服务未运行", Color.Firebrick);
             }
 
-            _apiLine.Text = "API   127.0.0.1:" + apiPort + "   " + (listeningAny ? "监听中" : "未监听");
-
             // Web 那行显示真实监听范围，这比「RUNNING」有信息量
             string bindText = "未监听";
             foreach (var a in listening)
@@ -682,8 +637,11 @@ namespace LanShare
                 else if (s == "127.0.0.1") bindText = "127.0.0.1:" + webPort + "（仅本机）";
                 else if (bindText.IndexOf(':') < 0) bindText = s + ":" + webPort;
             }
-            _webLine.Text = "Web   " + bindText;
-            _webLine.ForeColor = Color.FromArgb(90, 94, 110);
+
+            // API 和 Web 合并成一行元信息：原来各占一行 22px 且字号和正文一样大，
+            // 把「服务正常」这个真正的主角挤下去了
+            _apiLine.Text = "API 127.0.0.1:" + apiPort + "  ·  Web " + bindText;
+            _apiLine.ForeColor = Theme.TextMuted;
 
             UpdateLanSection(dict, state, probeOk, probeMsg, quiet);
             UpdateDataLine(dict);
@@ -730,12 +688,12 @@ namespace LanShare
             else if (state == "no_network")
             {
                 _lanHint.Text = "这台电脑没有连接任何网络，插上网线或连上 WiFi 后再试";
-                _lanHint.ForeColor = Color.FromArgb(110, 114, 130);
+                _lanHint.ForeColor = Theme.TextMuted;
             }
             else
             {
                 _lanHint.Text = "现在只有这台电脑能访问。开启后同一个 WiFi 下的手机也能用";
-                _lanHint.ForeColor = Color.FromArgb(110, 114, 130);
+                _lanHint.ForeColor = Theme.TextMuted;
             }
 
             _lanAddress.Visible = showOn;
@@ -750,18 +708,28 @@ namespace LanShare
             if (showOn)
             {
                 if (_lanAddress.Text != url) _lanAddress.Text = url;
-                _lanCopy.Top = _lanAddress.Top - 1;
+                // 地址框和复制按钮同高同基线，不再手动 -1 微调
+                _lanCopy.Top = _lanAddress.Top;
+
+                // 开着的时候这个按钮是「关闭」——破坏性操作，换成红色并缩小占位，
+                // 别让它跟「打开网盘」那样抢主视觉
                 _lanToggle.Text = "关闭局域网";
-                // 开启时按钮挪到二维码下方的空白处，避免和地址栏挤在一起
-                _lanToggle.Location = new Point(14, 280);
-                _lanToggle.Size = new Size(140, 32);
+                // 右对齐到卡片内容右边缘（和上面「复制」按钮共用一条右基线 456），
+                // 二维码在左、关闭在右，整行留白才算均匀
+                _lanToggle.Location = new Point(472 - Theme.CardPad - 130, 200);
+                _lanToggle.Size = new Size(130, 32);
+                Btn.Restyle(_lanToggle, ButtonKind.Danger);
+
                 LoadQrAsync(url, quiet && wasOn);
             }
             else
             {
+                // 关着的时候这是主操作，蓝色、更大、和二维码同一个位置
                 _lanToggle.Text = "启动局域网服务";
-                _lanToggle.Location = new Point(14, 170);
-                _lanToggle.Size = new Size(180, 36);
+                _lanToggle.Location = new Point(Theme.CardPad, 158);
+                _lanToggle.Size = new Size(180, 34);
+                Btn.Restyle(_lanToggle, ButtonKind.Primary);
+
                 _qrBox.Image = null;
             }
         }
@@ -830,9 +798,11 @@ namespace LanShare
             if (dict == null)
             {
                 _wanState.Text = "○  读不到配置";
-                _wanState.ForeColor = Color.Firebrick;
+                _wanState.ForeColor = Theme.Red;
                 _wanHint.Text = error ?? "服务可能没在运行";
-                _wanHint.ForeColor = Color.Firebrick;
+                _wanHint.ForeColor = Theme.Red;
+                _wanAddress.Visible = false;
+                _wanCopy.Visible = false;
                 return;
             }
 
@@ -840,9 +810,11 @@ namespace LanShare
             if (!available)
             {
                 _wanState.Text = "○  读不到配置";
-                _wanState.ForeColor = Color.Firebrick;
+                _wanState.ForeColor = Theme.Red;
                 _wanHint.Text = Str(dict, "error");
-                _wanHint.ForeColor = Color.Firebrick;
+                _wanHint.ForeColor = Theme.Red;
+                _wanAddress.Visible = false;
+                _wanCopy.Visible = false;
                 return;
             }
 
@@ -860,6 +832,8 @@ namespace LanShare
 
                 _wanInput.Visible = true;
                 _wanSave.Visible = true;
+                _wanAddress.Visible = false;
+                _wanCopy.Visible = false;
                 _wanTest.Visible = false;
                 _wanClear.Visible = false;
                 if (_wanInput.Text.Length == 0)
@@ -870,13 +844,19 @@ namespace LanShare
             else
             {
                 _wanState.Text = "●  已配置";
-                _wanState.ForeColor = Color.FromArgb(40, 160, 90);
-                _wanHint.Text = url;
-                _wanHint.ForeColor = Color.FromArgb(60, 64, 80);
-                _wanHint.Height = 22;
+                _wanState.ForeColor = Theme.Green;
+                _wanHint.Text = "局域网外可通过这个地址访问";
+                _wanHint.ForeColor = Theme.TextMuted;
+                _wanHint.Height = 20;
+
+                // 地址放进只读框，和上面的局域网地址长得一样 ——
+                // 纯文本会让人以为不能复制
+                if (_wanAddress.Text != url) _wanAddress.Text = url;
 
                 _wanInput.Visible = false;
                 _wanSave.Visible = false;
+                _wanAddress.Visible = true;
+                _wanCopy.Visible = true;
                 _wanTest.Visible = true;
                 _wanClear.Visible = true;
             }
@@ -1091,12 +1071,24 @@ namespace LanShare
             return sb.ToString();
         }
 
+        /// <summary>复制公网地址，给个即时反馈（否则用户不知道点没点上）。</summary>
+        private void CopyWan()
+        {
+            TryCopy(_wanAddress.Text);
+        }
+
         private void CopyAddress()
         {
-            if (_lanAddress.Text.Length == 0) return;
+            TryCopy(_lanAddress.Text);
+        }
+
+        /// <summary>复制到剪贴板，并在底部给 2 秒反馈。</summary>
+        private void TryCopy(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
             try
             {
-                Clipboard.SetText(_lanAddress.Text);
+                Clipboard.SetText(text);
                 _busyLabel.Text = "地址已复制";
                 var t = new System.Windows.Forms.Timer { Interval = 2000 };
                 t.Tick += delegate { t.Stop(); t.Dispose(); _busyLabel.Text = ""; };
