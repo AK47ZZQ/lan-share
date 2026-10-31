@@ -108,6 +108,22 @@ def default_hosts() -> list[str]:
     return hosts
 
 
+_HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,252}[A-Za-z0-9])?")
+
+
+def _safe_host(h: str) -> str:
+    """主机名白名单校验。
+
+    主机名直接拼进站点地址行，含换行/空格/花括号就能注入 Caddyfile 指令 ——
+    对抗性测试里 `192.168.1.1 {}` 成功闭合了站点块。
+    合法主机名只可能是字母、数字、点、连字符（IPv4 和域名共用这套字符集）。
+    """
+    v = (h or "").strip()
+    if not v or not _HOST_RE.fullmatch(v):
+        raise ValueError(f"非法主机名: {h!r}")
+    return v
+
+
 def site_block(
     bind_host: str, web_port: int, hosts: list[str] | None = None
 ) -> str:
@@ -119,7 +135,7 @@ def site_block(
     tls internal 就不生效了（2026-10-31 找到的真正原因）。
     """
     names = hosts or ["localhost"]
-    return ", ".join(f"https://{h}:{web_port}" for h in names)
+    return ", ".join(f"https://{_safe_host(h)}:{web_port}" for h in names)
 
 
 def bind_line(bind_host: str, indent: str = "\t") -> str:

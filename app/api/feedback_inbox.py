@@ -70,6 +70,18 @@ def _expected_token() -> str:
     return (settings.get_setting(settings.FEEDBACK_INBOX_TOKEN, "") or "").strip()
 
 
+def _token_ok(got: str, want: str) -> bool:
+    """恒定时间比较。
+
+    直接 `got != want` 会在第一个不同的字符处提前返回，逐字符的响应时间差
+    足以在多次请求中把 token 爆破出来。这里用 hmac.compare_digest：
+    长度一致时比较耗时与内容无关。
+    """
+    import hmac
+
+    return hmac.compare_digest(got.encode("utf-8"), want.encode("utf-8"))
+
+
 @router.post("/api/feedback/inbox")
 async def feedback_inbox(
     item: InboxItem,
@@ -85,7 +97,7 @@ async def feedback_inbox(
         )
 
     got = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
-    if not got or got != want:
+    if not got or not _token_ok(got, want):
         raise HTTPException(status_code=403, detail="token 不正确")
 
     source = _safe(item.source)

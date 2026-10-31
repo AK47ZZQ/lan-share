@@ -71,6 +71,10 @@ async def _post_inbox(payload: dict[str, Any]) -> str:
     url = (settings.get_setting(settings.FEEDBACK_RELAY_URL, "") or "").strip()
     if not url:
         return "skip:未配置上报地址"
+    # 只走 http/https。配置项理论上由管理员填，但填错/被改成 file://
+    # 之类的时候，httpx 的行为不值得赌 —— 直接拒绝，返回原因。
+    if not url.lower().startswith(("http://", "https://")):
+        return "skip:上报地址必须是 http/https"
     token = (settings.get_setting(settings.FEEDBACK_RELAY_TOKEN, "") or "").strip()
     headers = {"Content-Type": "application/json"}
     if token:

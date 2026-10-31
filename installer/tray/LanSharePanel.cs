@@ -1561,7 +1561,20 @@ namespace LanShare
 
         private void OpenUrl(string url)
         {
-            try { Process.Start(url); }
+            // 只放行 http/https。
+            //
+            // Process.Start 对任意 scheme 都照单全收：配置被改成 file:///
+            // 或 ms-settings: 时它会直接执行本地程序 —— 不是"打开浏览器"了。
+            // 地址来源是注册表/本地 API，正常不会被篡改，但校验成本几乎为零。
+            var u = (url ?? "").Trim();
+            if (!u.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !u.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(this, "地址格式不对，只支持 http/https：\n\n" + u,
+                    "LAN Share", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            try { Process.Start(u); }
             catch (Exception ex)
             {
                 MessageBox.Show(this, "打不开浏览器：" + ex.Message, "LAN Share",
@@ -1573,8 +1586,12 @@ namespace LanShare
         {
             try
             {
-                if (!Directory.Exists(path)) Directory.CreateDirectory(path);
-                Process.Start("explorer.exe", "\"" + path + "\"");
+                var p = (path ?? "").Trim();
+                if (p.Length == 0) return;
+                if (!Directory.Exists(p)) Directory.CreateDirectory(p);
+                // 路径里的双引号会截断 explorer 的参数解析，
+                // 后面的内容被当成另一个参数 —— 直接去掉最稳妥。
+                Process.Start("explorer.exe", "\"" + p.Replace("\"", "") + "\"");
             }
             catch (Exception ex)
             {
