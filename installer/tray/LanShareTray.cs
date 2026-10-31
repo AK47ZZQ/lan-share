@@ -534,74 +534,129 @@ namespace LanShare
 
         private static Icon BuildIcon(AppState state)
         {
+            // 四态图标由 scripts/make-desktop-icon.py 预先画好（32px PNG），
+            // 这里只负责加载。绘制逻辑不在这里 —— 手机 App、桌面图标、托盘
+            // 共用 scripts/brandmark.py 一份实现，避免又出现「两边长得不一样」。
+            string res;
+            switch (state)
+            {
+                case AppState.Healthy: res = "LanShareTray.tray-ok.png"; break;
+                case AppState.Unhealthy: res = "LanShareTray.tray-warn.png"; break;
+                case AppState.Down: res = "LanShareTray.tray-error.png"; break;
+                default: res = "LanShareTray.tray-none.png"; break;
+            }
+
+            try
+            {
+                var asm = typeof(TrayApp).Assembly;
+                using (var stream = asm.GetManifestResourceStream(res))
+                {
+                    if (stream != null)
+                    {
+                        using (var bmp = new Bitmap(stream))
+                        {
+                            // 统一到 32×32：托盘按 DPI 可能向系统要 16/20/24/32，
+                            // 给 32 向小缩不会糊，给 16 放大会马赛克。
+                            var sized = new Bitmap(bmp, new Size(32, 32));
+                            var icon = IconFromBitmapWithAlpha(sized);
+                            if (icon != null) return icon;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // BuildIcon 是静态的，拿不到实例上的 Log() —— 走 Debug 输出，
+                // 有调试器时可见，没有时静默回退，绝不让图标问题拖垮托盘启动
+                System.Diagnostics.Debug.WriteLine("托盘图标加载失败，回退旧画法: " + ex);
+            }
+
+            return BuildIconFallback(state);
+        }
+
+        /// <summary>
+        /// Bitmap → Icon，保留 alpha 通道。
+        ///
+        /// 为什么不能用 Bitmap.GetHicon()：它会把 alpha 抹平，圆角变方块、
+        /// 半透明边缘变黑边 —— 图标看起来像贴了张黑底纸。
+        /// CreateIconIndirect 走 HBITMAP（带 alpha），能保住透明度。
+        /// </summary>
+        private static Icon IconFromBitmapWithAlpha(Bitmap bmp)
+        {
+            IntPtr hIcon = IntPtr.Zero, hMask = IntPtr.Zero, hColor = IntPtr.Zero;
+            try
+            {
+                // 用 0-alpha 做背景色传入，GetHbitmap 才会保留每像素的 alpha
+                hColor = bmp.GetHbitmap(Color.FromArgb(0));
+                hMask = bmp.GetHbitmap(Color.FromArgb(0));
+                var ii = new ICONINFO
+                {
+                    fIcon = true,
+                    xHotspot = 0,
+                    yHotspot = 0,
+                    hbmMask = hMask,
+                    hbmColor = hColor
+                };
+                hIcon = CreateIconIndirect(ref ii);
+                if (hIcon == IntPtr.Zero) return null;
+                return (Icon)Icon.FromHandle(hIcon).Clone();
+            }
+            finally
+            {
+                if (hIcon != IntPtr.Zero) DestroyIcon(hIcon);
+                if (hMask != IntPtr.Zero) DeleteObject(hMask);
+                if (hColor != IntPtr.Zero) DeleteObject(hColor);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ICONINFO
+        {
+            public bool fIcon;
+            public int xHotspot;
+            public int yHotspot;
+            public IntPtr hbmMask;
+            public IntPtr hbmColor;
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr CreateIconIndirect(ref ICONINFO piconinfo);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        /// <summary>旧画法：资源缺失时兜底，保证托盘里一定有个图标。</summary>
+        private static Icon BuildIconFallback(AppState state)
+        {
             Color fill;
             switch (state)
             {
-                case AppState.Healthy: fill = Color.FromArgb(34, 160, 90); break;    // 绿
-                case AppState.Unhealthy: fill = Color.FromArgb(220, 160, 30); break; // 黄
-                case AppState.Down: fill = Color.FromArgb(200, 60, 60); break;       // 红
-                default: fill = Color.FromArgb(140, 140, 140); break;                // 灰
+                case AppState.Healthy: fill = Color.FromArgb(34, 160, 90); break;
+                case AppState.Unhealthy: fill = Color.FromArgb(220, 160, 30); break;
+                case AppState.Down: fill = Color.FromArgb(200, 60, 60); break;
+                default: fill = Color.FromArgb(140, 140, 140); break;
             }
-
-            // 健康时用品牌紫蓝（正常态就是品牌图标）；
-            // 出问题时整块换成告警色，比一个小圆点更醒目。
             Color bg = state == AppState.Healthy
                 ? Color.FromArgb(0x6B, 0x62, 0xFF)
                 : fill;
 
-            // 托盘图标单独画，不复用品牌大图。
-            //
-            // 为什么：托盘实际只显示 16×16（SM_CXSMICON=16）。
-            // 品牌图里有渐变、半透明白块、圆角、云朵四层，缩到 16px
-            // 全部糊成一团色块 —— 这就是「像马赛克」的原因。
-            //
-            // 16px 能承载的信息量只有「一个色块 + 一个简单图形」，
-            // 所以这里画极简版：纯品牌紫蓝底 + 白云朵 + 右下状态点。
-            // 完整版（渐变/半透明/圆角）保留给窗口标题栏和 exe 图标。
-            // 画布用 32×32，交付给系统由它缩到实际需要的大小。
-            //
-            // 为什么不是 16：托盘图标尺寸是 (16,24,32,48) × 缩放比例。
-            // 150% 缩放下系统要的是 24×24，给它 16×16 就得放大 → 马赛克。
-            // 画 32×32 向下缩，无论要 16 还是 24 都不会糊。
-            //
-            // 但设计必须保持极简：渐变/半透明/多层细节在小尺寸下会糊成一团，
-            // 所以这里只有「纯色底 + 简化云朵 + 状态点」三层。
             const int S = 32;
-            float u = S / 16f;          // 以 16 为设计基准，按比例放大
-
+            float u = S / 16f;
             using (var bmp = new Bitmap(S, S))
             using (var g = Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.Clear(Color.Transparent);
-
-                // 底色即状态：
-                //   健康 → 品牌紫蓝（正常状态下它就是品牌图标）
-                //   异常/挂了/未知 → 换成橙/红/灰，一眼看出不对劲
-                //
-                // 为什么不用右下角状态点：16×16 只有 256 个像素，
-                // 云朵和状态点各占一块必然互相挤压 —— 云朵要居中就压点，
-                // 点要看清就挤云。改成整块底色变色后，云朵可以完全居中，
-                // 状态信息反而更醒目（整块色 vs 一个 3px 的点）。
                 using (var path = Draw.RoundedPath(new Rectangle(0, 0, S, S), (int)(4 * u)))
                 using (var brush = new SolidBrush(bg))
                     g.FillPath(brush, path);
-
-                // 白云朵居中。
-                //
-                // 几何中心算在 (8.0, 8.0)，但云朵是「上部圆、底边平」的形状，
-                // 视觉重心会自然偏上 —— 光靠几何居中看起来还是往左上飘。
-                // 所以整体下移 0.5 做光学补偿，肉眼才是真的「在中间」。
                 using (var white = new SolidBrush(Color.White))
                 {
-                    g.FillEllipse(white, 3.5f*u, 7.1f*u, 5.0f*u, 5.0f*u);      // 左团
-                    g.FillEllipse(white, 5.8f*u, 4.9f*u, 6.8f*u, 6.8f*u);      // 中团
-                    g.FillRectangle(white, 5.8f*u, 8.6f*u, 5.2f*u, 3.5f*u);    // 底
+                    g.FillEllipse(white, 3.5f*u, 7.1f*u, 5.0f*u, 5.0f*u);
+                    g.FillEllipse(white, 5.8f*u, 4.9f*u, 6.8f*u, 6.8f*u);
+                    g.FillRectangle(white, 5.8f*u, 8.6f*u, 5.2f*u, 3.5f*u);
                 }
-
-
-
                 IntPtr hIcon = bmp.GetHicon();
                 try
                 {

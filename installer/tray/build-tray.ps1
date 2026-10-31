@@ -23,7 +23,7 @@ $Out    = Join-Path $OutDir "LanShareTray.exe"
 # /resource    → 嵌进程序集，托盘和窗口用 new Icon(stream) 取，不依赖外部文件
 $IconPath = Join-Path (Split-Path -Parent (Split-Path -Parent $Here)) "logo\lanshare.ico"
 if (-not (Test-Path $IconPath)) {
-    Write-Host "! 图标不存在: $IconPath（先跑 python scripts/make_icon.py）" -ForegroundColor Yellow
+    Write-Host "! 图标不存在: $IconPath（先跑 python scripts/make-desktop-icon.py）" -ForegroundColor Yellow
     $IconPath = $null
 }
 
@@ -65,6 +65,36 @@ Write-Host "编译 $($Sources.Count) 个源文件 ..." -ForegroundColor Cyan
 $iconArgs = @()
 if ($IconPath) {
     $iconArgs = @("/win32icon:$IconPath", "/resource:$IconPath,LanShareTray.lanshare.ico")
+}
+
+# 托盘四态图标：由 scripts/make-desktop-icon.py 生成（和手机 App 同一套绘制代码）。
+#
+# 为什么嵌入 PNG 而不是让 C# 现画：
+# 之前 C# 里自己画云（三个 g.FillEllipse 大概拼），和 App 的 SVG 描边云
+# 完全不是一回事，用户一眼就看出「电脑上那个丑」。现在两边共用
+# scripts/brandmark.py，C# 只负责把 PNG 转成 Icon，不参与绘图。
+#
+# 为什么带 alpha 的 PNG 能转成 Icon 需要 CreateIconIndirect：
+# Bitmap.GetHicon() 会丢掉 alpha 通道，圆角变成方块、边缘变成黑边。
+$LogoSrc = Join-Path (Split-Path -Parent (Split-Path -Parent $Here)) "logo"
+$trayStates = @(
+    @{ File = "lanshare-tray-32.png";       Res = "LanShareTray.tray-none.png" },
+    @{ File = "lanshare-tray-32-ok.png";    Res = "LanShareTray.tray-ok.png" },
+    @{ File = "lanshare-tray-32-warn.png";  Res = "LanShareTray.tray-warn.png" },
+    @{ File = "lanshare-tray-32-error.png"; Res = "LanShareTray.tray-error.png" }
+)
+$missing = @()
+foreach ($t in $trayStates) {
+    $f = Join-Path $LogoSrc $t.File
+    if (Test-Path $f) {
+        $iconArgs += "/resource:$f,$($t.Res)"
+    } else {
+        $missing += $t.File
+    }
+}
+if ($missing.Count -gt 0) {
+    Write-Host ("警告：托盘图标缺失，程序会回退到旧画法：" + ($missing -join ", ")) -ForegroundColor Yellow
+    Write-Host "      修：python scripts/make-desktop-icon.py" -ForegroundColor Yellow
 }
 
 # DPI 感知写在清单里，不靠运行时调 SetProcessDpiAwarenessContext ——

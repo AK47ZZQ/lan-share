@@ -320,7 +320,7 @@ namespace LanShare
             // 手工 Scale + SetWindowPos 试过几轮都对不齐 —— 那是和框架内部的
             // 缩放叠加，成了两层缩放。标准机制反而是对的。
             AutoScaleMode = AutoScaleMode.None;
-            ClientSize = new Size(520, 850);
+            ClientSize = new Size(900, 600);
 
             // 先建容器：内容高 850，窗口拉到更小时由它出滚动条
             _content = new Panel
@@ -337,7 +337,8 @@ namespace LanShare
             Icon = Theme.AppIcon;
 
             const int P = Theme.Pad;        // 窗口左右边距 24
-            const int CW = 472;             // 卡片宽 = 520 - 2*24
+            const int CW = 416;             // 卡片宽 = (900 - 24*2 - 20) / 2
+            const int COL2 = P + CW + 20;   // 右列起点 x
             const int Inner = Theme.CardPad; // 卡片内边距 16
 
             // ───────── 顶部：标题 + 服务状态 ─────────
@@ -345,7 +346,7 @@ namespace LanShare
             {
                 Text = "LAN Share",
                 Font = Theme.H1,
-                Location = new Point(P, 18),
+                Location = new Point(P, 16),
                 AutoSize = true,
                 ForeColor = Theme.TextStrong,
             };
@@ -355,7 +356,7 @@ namespace LanShare
             {
                 Text = "检查中…",
                 Font = Theme.Status,
-                Location = new Point(P, 54),
+                Location = new Point(P, 50),
                 AutoSize = true,
                 ForeColor = Theme.Gray,
             };
@@ -367,7 +368,7 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 84),
+                Location = new Point(P, 78),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.TextMuted,
             };
@@ -381,7 +382,7 @@ namespace LanShare
             // ───────── 服务卡片 ─────────
             // 生产环境跑三个服务：api / caddy / postgresql。
             // 不显示 PG 的话，数据库挂了用户完全看不出来。
-            _svcBox = new Card(P, 86, CW, 130);
+            _svcBox = new Card(P, 100, CW, 140);
             _content.Controls.Add(_svcBox);
 
             var svcTitle = new Label
@@ -416,21 +417,23 @@ namespace LanShare
                     // 起点避开左侧服务名（96 宽 + 留白），宽度够放
                     // 「0.0.0.0:8765  ·  Running」这种最长组合
                     Location = new Point(Inner + 104, rowY + 3),
-                    Size = new Size(250, 18),
+                    // 右边必须让出「重启」按钮（84 宽 + 8 间距），
+                    // 否则信息文本会盖住按钮 —— 卡片从 472 缩到 416 后挤出来的
+                    Size = new Size(CW - Inner - 84 - 8 - (Inner + 104), 18),
                     ForeColor = Theme.TextMuted,
                 };
                 _svcBox.Controls.Add(_svcInfo[i]);
 
                 int captured = i;
                 _svcRestart[i] = Btn.Make("重启", ButtonKind.Secondary,
-                    CW - Inner - 60, rowY - 2, 60, 24);
+                    CW - Inner - 84, rowY - 2, 84, 24);
                 _svcRestart[i].Font = Theme.Meta;
                 _svcRestart[i].Click += delegate { RestartOneService(captured); };
                 _svcBox.Controls.Add(_svcRestart[i]);
             }
 
             // ───────── 局域网卡片 ─────────
-            _lanBox = new Card(P, 228, CW, 280);
+            _lanBox = new Card(COL2, 100, CW, 304);
             _content.Controls.Add(_lanBox);
 
             var lanTitle = new Label
@@ -448,7 +451,7 @@ namespace LanShare
                 Text = "读取中…",
                 Font = Theme.Status,
                 Location = new Point(Inner, 42),
-                Size = new Size(CW - Inner * 2, 26),
+                Size = new Size(CW - Inner * 2 - 84, 26),   // 右边让出复制按钮的位置
                 ForeColor = Theme.Gray,
             };
             _lanBox.Controls.Add(_lanState);
@@ -468,7 +471,8 @@ namespace LanShare
             _lanAddress.Visible = false;
             _lanBox.Controls.Add(_lanAddress);
 
-            _lanCopy = Btn.Make("复制", ButtonKind.Secondary, Inner + 352 + 8, 118, 80, 28);
+            _lanCopy = Btn.Make("复制", ButtonKind.Secondary,
+                CW - Inner - 76, 118, 76, 28);
             _lanCopy.Visible = false;
             _lanCopy.Click += delegate { CopyAddress(); };
             _lanBox.Controls.Add(_lanCopy);
@@ -503,7 +507,7 @@ namespace LanShare
             _lanBox.Controls.Add(_lanToggle);
 
             // ───────── 公网卡片 ─────────
-            _wanBox = new Card(P, 520, CW, 200);
+            _wanBox = new Card(P, 254, CW, 150);
             _content.Controls.Add(_wanBox);
 
             var wanTitle = new Label
@@ -528,7 +532,7 @@ namespace LanShare
                 Text = "读取中…",
                 Font = Theme.Status,
                 Location = new Point(Inner, 42),
-                Size = new Size(CW - Inner * 2, 26),
+                Size = new Size(CW - Inner * 2 - 84, 26),   // 右边让出复制按钮的位置
                 ForeColor = Theme.Gray,
             };
             _wanBox.Controls.Add(_wanState);
@@ -545,11 +549,12 @@ namespace LanShare
 
             // 公网地址也用只读框 —— 原来它是纯文本，和上面的局域网地址长得不一样，
             // 用户会以为这个不能复制
-            _wanAddress = Btn.Address(Inner, 118, 352, 28);
+            _wanAddress = Btn.Address(Inner, 118, CW - Inner * 2 - 84, 28);
             _wanAddress.Visible = false;
             _wanBox.Controls.Add(_wanAddress);
 
-            _wanCopy = Btn.Make("复制", ButtonKind.Secondary, Inner + 352 + 8, 118, 80, 28);
+            _wanCopy = Btn.Make("复制", ButtonKind.Secondary,
+                CW - Inner - 76, 118, 76, 28);
             _wanCopy.Visible = false;
             _wanCopy.Click += delegate { CopyWan(); };
             _wanBox.Controls.Add(_wanCopy);
@@ -557,14 +562,15 @@ namespace LanShare
             _wanInput = new TextBox
             {
                 Location = new Point(Inner, 118),
-                Size = new Size(352, 28),
+                Size = new Size(CW - Inner * 2 - 84, 28),
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = Theme.Mono9,
                 BackColor = Theme.FieldBg,
             };
             _wanBox.Controls.Add(_wanInput);
 
-            _wanSave = Btn.Make("保存", ButtonKind.Primary, Inner + 352 + 8, 118, 80, 28);
+            _wanSave = Btn.Make("保存", ButtonKind.Primary,
+                CW - Inner - 76, 118, 76, 28);
             _wanSave.Click += delegate { SaveWan(); };
             _wanBox.Controls.Add(_wanSave);
 
@@ -583,7 +589,7 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 734),
+                Location = new Point(P, 428),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.TextMuted,
                 Cursor = Cursors.Hand,
@@ -594,17 +600,17 @@ namespace LanShare
             // ───────── 底部操作 ─────────
             // 去掉「数据目录」按钮：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」
-            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 762, 112, 34);
+            _btnOpenWeb = Btn.Make("打开网盘", ButtonKind.Primary, P, 488, 112, 34);
             _btnOpenWeb.Click += delegate { OpenUrl(_cfg.WebUrl); };
             _content.Controls.Add(_btnOpenWeb);
 
-            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 762, 112, 34);
+            _btnRestart = Btn.Make("重启服务", ButtonKind.Danger, P + 120, 488, 112, 34);
             _btnRestart.Click += delegate { RestartServices(); };
             _content.Controls.Add(_btnRestart);
 
             // 「数据目录」按钮删了：上面那行路径已经能点，两个入口做同一件事
             // 只会让用户猜「是不是不一样」。按钮位置重排成三个。
-            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 762, 100, 34);
+            _btnLogs = Btn.Make("看日志", ButtonKind.Secondary, P + 240, 488, 100, 34);
             _btnLogs.Click += delegate { OpenFolder(_cfg.LogFolder); };
             _content.Controls.Add(_btnLogs);
 
@@ -613,7 +619,7 @@ namespace LanShare
             {
                 Text = "",
                 Font = Theme.Meta,
-                Location = new Point(P, 808),
+                Location = new Point(P, 456),
                 Size = new Size(CW, 18),
                 ForeColor = Theme.Blue,
             };
@@ -623,7 +629,7 @@ namespace LanShare
             var version = new Label
             {
                 Text = "服务前缀 " + _cfg.ServicePrefix,
-                Location = new Point(P, 834),
+                Location = new Point(P, 536),
                 AutoSize = true,
                 ForeColor = Theme.TextFaint,
                 Font = Theme.Footer,
@@ -1246,8 +1252,8 @@ namespace LanShare
             // 布局已经结算完，这时候 Scale 才会真正作用到控件上
             Scale(new SizeF(k, k));
 
-            int wantW = (int)(520 * k);
-            int wantH = (int)(850 * k);
+            int wantW = (int)(900 * k);
+            int wantH = (int)(600 * k);
 
             // ⚠️ 必须按屏幕封顶。
             //

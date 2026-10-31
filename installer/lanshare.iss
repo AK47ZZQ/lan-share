@@ -40,6 +40,15 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
 DefaultDirName={autopf}\LAN Share
+; 用户选一次安装目录，所有文件就在那儿 —— 不再自动追加一层。
+;
+; AppendDefaultDirName 默认是 yes：用户在向导里把路径改成 C:\lanshare 之后，
+; Inno 发现末段不是默认的 "LAN Share"，会自动再拼上去，实际装到
+; C:\lanshare\LAN Share。于是「只选了一次目录」却散成两处：
+;   C:\lanshare\LAN Share   程序
+;   C:\lanshare\data        数据
+; 关掉它，选哪就是哪。数据目录默认取 {app}\data，也在同一个根下。
+AppendDefaultDirName=no
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\build\out
@@ -121,8 +130,8 @@ Root: HKA; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: s
 ; 桌面和开始菜单的主图标都指向**托盘程序**，不是网页。
 ; 托盘才是控制面板入口（启停服务、看状态、复制地址），比直接开网页有用。
 ; 网页那个保留在开始菜单，名字写明白是「在浏览器中打开」。
-Name: "{commondesktop}\{#AppName}"; Filename: "{app}\tray\LANShareTray.exe"; Tasks: desktopicon
-Name: "{group}\{#AppName}"; Filename: "{app}\tray\LANShareTray.exe"
+Name: "{commondesktop}\{#AppName}"; Filename: "{app}\tray\LANShareTray.exe"; Parameters: "--panel"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\tray\LANShareTray.exe"; Parameters: "--panel"
 Name: "{group}\在浏览器中打开"; Filename: "https://127.0.0.1:{#WebPort}"
 Name: "{group}\打开数据文件夹"; Filename: "{code:GetDataDir}"
 Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
@@ -189,12 +198,16 @@ end;
 procedure InitializeWizard;
 begin
   DataDirPage := CreateInputDirPage(wpSelectDir,
-    '选择数据存放位置', '照片和文件会保存在这里，请选一个空间充足的位置。',
-    '默认位置是 C:\ProgramData\LANShare\data。如果 C 盘空间紧张，' +
-    '建议改到其他盘（比如 D:\LANShare）。以后备份就是把这个目录整个复制走。',
+    '数据存放位置',
+    '照片和文件会保存在这里。',
+    '默认放在安装目录下的 data 文件夹 —— 你上一步选的那个目录，程序和数据都在里面，' +
+    '备份时整个复制走就行。如果 C 盘空间紧张，可以改到别的盘。',
     False, '');
   DataDirPage.Add('');
-  DataDirPage.Values[0] := ExpandConstant('{commonappdata}\LANShare\data');
+  { 默认跟随安装目录。以前是 {commonappdata}\LANShare\data（C:\ProgramData 下），
+    结果用户只选了一次安装目录，盘上却散成两处 —— 程序在 C:\lanshare，
+    数据跑到 C:\ProgramData\LANShare，找起来别扭、备份也要记两个路径。 }
+  DataDirPage.Values[0] := ExpandConstant('{app}\data');
 end;
 
 
