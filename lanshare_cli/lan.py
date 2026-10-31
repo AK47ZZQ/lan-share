@@ -179,13 +179,21 @@ class InstallInfo:
         return f"{self.service_prefix}-caddy"
 
 
-def read_registry() -> dict[str, str]:
-    """读 HKLM\\SOFTWARE\\LANShare。读不到返回空字典（非安装态）。"""
+def read_registry(key: str = "LANShare") -> dict[str, str]:
+    """读 HKLM\\SOFTWARE\\<key>。读不到返回空字典（非安装态）。
+
+    key 默认 LANShare（正式安装）。测试实例必须用独立键（如 LANShareE2E），
+    否则 e2e 安装会把生产配置一起改掉 —— 2026-10-31 真实踩过：跑完 e2e 冒烟，
+    生产注册表的 PgPort 被写成 9955，服务却还连着 5433。
+    """
     import subprocess
+
+    if not key or any(c in key for c in "\\'\"; "):
+        raise ValueError(f"非法的注册表键名: {key!r}")
 
     script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
-$k = 'HKLM:\SOFTWARE\LANShare'
+$k = 'HKLM:\SOFTWARE\%s'
 if (Test-Path $k) {
     $p = Get-ItemProperty $k
     # InstallFolder 是安装器写的名字；Install 是早期版本/文档里出现过的名字，两者都认
@@ -196,9 +204,15 @@ if (Test-Path $k) {
         ApiPort       = $p.ApiPort
         WebPort       = $p.WebPort
         Prefix        = $p.ServicePrefix
+        # PgPassword / PgPort 必须一起返回：安装时靠 PgPassword 沿用旧密码，
+        # 漏了它每次 install 都生成新密码，已建好的 PG 角色直接锁死。
+        # （2026-10-31 查出来的：这个字段一直没被读出来过。）
+        PgPort        = $p.PgPort
+        PgPassword    = $p.PgPassword
+        Version       = $p.Version
     } | ConvertTo-Json -Compress
 }
-"""
+""" % key
     try:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
