@@ -315,7 +315,7 @@ Ok ("VC++ 运行库已随包分发（" + $vcRuntime.Count + " 个 DLL）")
 $pgRequired = @(
     "bin\postgres.exe", "bin\initdb.exe", "bin\pg_ctl.exe",
     "share\postgresql.conf.sample",
-    "bincruntime140.dll", "bin\msvcp140.dll"
+    "bin\vcruntime140.dll", "bin\msvcp140.dll"
 )
 $pgMissing = @()
 foreach ($f in $pgRequired) {
