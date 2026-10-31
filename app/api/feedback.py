@@ -22,7 +22,7 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -160,6 +160,7 @@ async def feedback_create(request: Request,
                           app_ver: str = Form(""),
                           device: str = Form(""),
                           files: list[UploadFile] = File(default=[]),
+                          background: BackgroundTasks = None,
                           _user=Depends(require_user)):
     user = users_store.get_username(_user["user_id"]) or f"#{_user['user_id']}"
     if not allow_rate(f"fb:{_user['user_id']}", _MAX_PER_DAY, 86400):
@@ -218,6 +219,26 @@ async def feedback_create(request: Request,
     events_bus.publish_many(users_store.list_active_admin_ids(), {"kind": "feedback"})
     audit("feedback.create", target=title[:40],
           detail=f"type={type} images={len(files)}", ip=client_ip(request))
+
+    # 上报到开发端（A: HTTP / B: GitHub Issue），不阻塞用户。
+    # 本地已经写盘了，上报失败也不该让用户看到错误 —— relay 内部只记日志。
+    if background is not None:
+        from app.services.feedback_relay import relay
+
+        background.add_task(
+            relay,
+            {
+                "id": fid,
+                "title": title,
+                "type": type,
+                "body": body,
+                "app_ver": app_ver,
+                "device": device,
+                "user": user,
+                "created": now,
+            },
+        )
+
     return {"ok": True, "id": fid}
 
 

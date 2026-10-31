@@ -24,6 +24,18 @@ ACTIVITY_CLEARED_AT = "activity_cleared_at"
 FEATURED_ALBUMS = "featured_albums"
 PHOTO_WALL_EXCLUDES = "photo_wall_excludes"   # 照片墙全局隐藏目录（JSON 数组，相对路径前缀）
 
+# ── 反馈上报（2026-10-31）────────────────────────────────
+# 反馈默认只落在本机 data/反馈/，别人装了看不到。这两个通道把反馈
+# 送到开发端：A 走 HTTP 上报，B 直接开 GitHub Issue。
+FEEDBACK_RELAY_ENABLED = "feedback_relay_enabled"   # "1" 开启
+FEEDBACK_RELAY_URL = "feedback_relay_url"           # 开发端 /api/feedback/inbox
+FEEDBACK_RELAY_TOKEN = "feedback_relay_token"       # Bearer
+FEEDBACK_GH_ENABLED = "feedback_gh_enabled"         # "1" 开启
+FEEDBACK_GH_REPO = "feedback_gh_repo"               # owner/repo
+FEEDBACK_GH_TOKEN = "feedback_gh_token"             # fine-grained PAT，只给 issues:write
+FEEDBACK_SOURCE = "feedback_source"                 # 本机标识，多台时区分来源
+FEEDBACK_INBOX_TOKEN = "feedback_inbox_token"       # 收件端鉴权 token（开发端配）
+
 
 def get_setting(key: str, default: str = "") -> str:
     """缺失或空值一律返回 default（"空串=未配置"语义）。"""
