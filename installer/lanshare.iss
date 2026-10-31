@@ -108,6 +108,9 @@ Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "DataFold
 Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "ApiPort"; ValueData: "{#ApiPort}"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "WebPort"; ValueData: "{#WebPort}"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"; Flags: uninsdeletekey
+; 和 lanshare_cli 的 DEFAULT_SERVICE_PREFIX 保持一致（lanshare，无连字符）。
+; 托盘按 ServicePrefix+"-api" 拼服务名，两边不一致就会找不到服务。
+; 注：CLI 装完会用自己的实际前缀再回写一次，这里只是文件复制阶段的初值。
 Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "ServicePrefix"; ValueData: "lanshare"; Flags: uninsdeletekey
 ; ── 托盘开机自启（HKA = 安装模式下自动选对根键，避免 admin 装到错误账户）──
 Root: HKA; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LANShareTray"; ValueData: """{app}\tray\LANShareTray.exe"""; Tasks: autostart; Flags: uninsdeletevalue

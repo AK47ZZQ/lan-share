@@ -282,10 +282,40 @@ robocopy (Join-Path $pgSrc "share") (Join-Path $pgDst "share") /E /NFL /NDL /NJH
 # 不复制：postgres-windows-x86_64.txz（22MB 原始包，解压后的东西才是我们要的）
 #         META-INF（Java 包的元数据，对 Windows 服务无用）
 
+# ── VC++ 运行库（app-local 部署）──
+# PostgreSQL 的 Windows 二进制是 MSVC 编译的，依赖 vcruntime140 / msvcp140。
+# 这两样不在 Windows 里，属于 VC++ Redistributable。
+#
+# 踩过的坑：2026-10-31 在 Windows Sandbox（干净系统）里装安装包，
+# initdb 直接失败，报「initdb 失败，日志见 postgres.log」。真机上是好的，
+# 因为真机装过 VC++ 运行库 —— 也就是说，**任何没装过 VC++ 的干净系统都装不上**。
+# 用沙箱测才暴露出来，真机上永远测不到。
+#
+# 解法：把 DLL 跟着 pgsql/bin 一起分发（微软允许 app-local 再分发）。
+# 只拷这几个最小的运行库，总共 ~1.2 MB。
+$vcRuntime = @(
+    "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "concrt140.dll"
+)
+$vcMissing = @()
+foreach ($dll in $vcRuntime) {
+    $src = Join-Path $env:SystemRoot "System32\$dll"
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $pgDst "bin\$dll") -Force
+    } else {
+        $vcMissing += $dll
+    }
+}
+if ($vcMissing.Count -gt 0) {
+    Fail ("构建机缺少 VC++ 运行库，无法随包分发：" + ($vcMissing -join ", ") + `
+          "`n  干净系统上 initdb 会直接失败。请先在构建机装 VC++ 2015-2022 x64 运行库。")
+}
+Ok ("VC++ 运行库已随包分发（" + $vcRuntime.Count + " 个 DLL）")
+
 # 校验关键文件真的在
 $pgRequired = @(
     "bin\postgres.exe", "bin\initdb.exe", "bin\pg_ctl.exe",
-    "share\postgresql.conf.sample"
+    "share\postgresql.conf.sample",
+    "bincruntime140.dll", "bin\msvcp140.dll"
 )
 $pgMissing = @()
 foreach ($f in $pgRequired) {
