@@ -18,7 +18,16 @@ $Here   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $OutDir = Join-Path $Here "bin"
 $Out    = Join-Path $OutDir "LanShareTray.exe"
 
-# 三个源文件一起编；顺序无所谓
+# 应用图标：logo\lanshare.ico（由 scripts/make_icon.py 生成）
+# /win32icon   → 资源管理器、任务栏、Alt+Tab 显示这个图标
+# /resource    → 嵌进程序集，托盘和窗口用 new Icon(stream) 取，不依赖外部文件
+$IconPath = Join-Path (Split-Path -Parent (Split-Path -Parent $Here)) "logo\lanshare.ico"
+if (-not (Test-Path $IconPath)) {
+    Write-Host "! 图标不存在: $IconPath（先跑 python scripts/make_icon.py）" -ForegroundColor Yellow
+    $IconPath = $null
+}
+
+# 源文件一起编；顺序无所谓
 $Sources = @(
     (Join-Path $Here "LanShareCore.cs"),
     (Join-Path $Here "UiKit.cs"),
@@ -53,6 +62,11 @@ Write-Host "编译 $($Sources.Count) 个源文件 ..." -ForegroundColor Cyan
 # 必需的额外引用：
 #   System.ServiceProcess  —— 服务启停（ServiceController）
 #   System.Web.Extensions  —— JavaScriptSerializer（解析 CLI 的 JSON 输出）
+$iconArgs = @()
+if ($IconPath) {
+    $iconArgs = @("/win32icon:$IconPath", "/resource:$IconPath,LanShareTray.lanshare.ico")
+}
+
 & $csc /target:winexe /out:$Out `
     /reference:System.dll `
     /reference:System.Core.dll `
@@ -62,6 +76,7 @@ Write-Host "编译 $($Sources.Count) 个源文件 ..." -ForegroundColor Cyan
     /reference:System.Web.Extensions.dll `
     /optimize+ `
     /warn:4 `
+    $iconArgs `
     $Sources
 
 if ($LASTEXITCODE -ne 0) {

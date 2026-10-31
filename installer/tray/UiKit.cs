@@ -40,15 +40,47 @@ namespace LanShare
         private const string Ui = "Microsoft YaHei UI";
         private const string Mono = "Consolas";
 
-        public static readonly Font H1          = new Font(Ui, 20F, FontStyle.Bold);
-        public static readonly Font Status      = new Font(Ui, 12.5F, FontStyle.Bold);
-        public static readonly Font SectionTitle= new Font(Ui, 9.5F, FontStyle.Bold);
-        public static readonly Font Body        = new Font(Ui, 9F, FontStyle.Regular);
-        public static readonly Font BodyBold    = new Font(Ui, 9F, FontStyle.Bold);
-        public static readonly Font Meta        = new Font(Ui, 8.5F, FontStyle.Regular);
-        public static readonly Font Footer      = new Font(Ui, 8F, FontStyle.Regular);
-        public static readonly Font Mono9       = new Font(Mono, 9.5F, FontStyle.Regular);
-        public static readonly Font MonoBtn     = new Font(Mono, 9F, FontStyle.Regular);
+        // 全部用 Pixel 单位而不是 Point。
+        //
+        // 原因：Point 单位会跟着 DPI 变，Form.Scale() 时字体被再乘一次缩放系数，
+        // 结果 144 DPI 屏上 9pt 变成 27px（应为 18px），字撑破控件。
+        // 改成固定像素后，基准就是 96 DPI 的视觉大小，Scale() 缩放才有确定结果。
+        // 换算按 96 DPI：1pt = 4/3 px
+        public static readonly Font H1          = new Font(Ui, 26.7F, FontStyle.Bold, GraphicsUnit.Pixel);
+        public static readonly Font Status      = new Font(Ui, 16.7F, FontStyle.Bold, GraphicsUnit.Pixel);
+        public static readonly Font SectionTitle= new Font(Ui, 12.7F, FontStyle.Bold, GraphicsUnit.Pixel);
+        public static readonly Font Body        = new Font(Ui, 12.0F, FontStyle.Regular, GraphicsUnit.Pixel);
+        public static readonly Font BodyBold    = new Font(Ui, 12.0F, FontStyle.Bold, GraphicsUnit.Pixel);
+        public static readonly Font Meta        = new Font(Ui, 11.3F, FontStyle.Regular, GraphicsUnit.Pixel);
+        public static readonly Font Footer      = new Font(Ui, 10.7F, FontStyle.Regular, GraphicsUnit.Pixel);
+        public static readonly Font Mono9       = new Font(Mono, 12.7F, FontStyle.Regular, GraphicsUnit.Pixel);
+        public static readonly Font MonoBtn     = new Font(Mono, 12.0F, FontStyle.Regular, GraphicsUnit.Pixel);
+
+        /// <summary>
+        /// 应用图标。窗口标题栏、任务栏、Alt+Tab 都用这一个。
+        ///
+        /// 从程序集的嵌入资源读（build-tray.ps1 的 /resource 参数带进来的），
+        /// 所以安装目录里没有 .ico 文件也能显示正确图标。
+        /// </summary>
+        public static Icon AppIcon
+        {
+            get
+            {
+                if (_appIcon != null) return _appIcon;
+                try
+                {
+                    var asm = typeof(Theme).Assembly;
+                    using (var st = asm.GetManifestResourceStream("LanShareTray.lanshare.ico"))
+                        if (st != null) { _appIcon = new Icon(st); return _appIcon; }
+                }
+                catch (Exception) { }
+                try { _appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+                catch (Exception) { }
+                if (_appIcon == null) _appIcon = SystemIcons.Application;
+                return _appIcon;
+            }
+        }
+        private static Icon _appIcon;
 
         // ── 间距（8 的倍数，便于对齐）──
         public const int Pad      = 24;   // 窗口左右边距
