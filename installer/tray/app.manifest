@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="LanShareTray.app" />
+
+  <!-- 用清单声明 DPI 感知，而不是在代码里调 SetProcessDpiAwarenessContext。
+       原因：进程级 DPI 感知必须在该进程创建任何 UI 之前设置，实际跑下来
+       这个时机并不稳定（有时生效、有时静默失败），表现为同一份 exe
+       有时窗口按 144 DPI 渲染、有时被系统当 96 DPI 位图拉伸放大 1.5 倍，
+       字发虚、布局也偏。清单由加载器在进程启动时就读，没有时机问题。 -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+
+  <!-- 兼容性：Win10/11 -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>
