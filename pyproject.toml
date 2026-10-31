@@ -28,3 +28,11 @@ ignore = [
 python_version = "3.11"
 ignore_missing_imports = true
 check_untyped_defs = true
+
+[tool.pytest.ini_options]
+# 裸跑 `pytest` 时必须限定目录。
+#
+# 不限定的话 pytest 会递归扫进 env/ —— 里面有 Android SDK 的 NDK 源码和
+# Flutter 引擎的第三方测试（googletest、fuchsia），collect 阶段直接 15 个
+# ERROR 然后 Interrupted，一条自己的测试都没跑。2026-10-31 实测。
+testpaths = ["tests"]
