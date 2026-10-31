@@ -25,6 +25,7 @@ from app.api import uploads, trash, previews          # files 按域拆出（07 
 from app.api import photos, albums, qr                # system 按域拆出（07 批次 3B）
 from app.api import console                           # 管理台（v3.39 Web 控制台）
 from app.api import feedback                          # 反馈通道（v0.28）
+from app.api import feedback_inbox                     # 反馈收件箱（开发端收上报）
 from app.api import events                             # SSE 实时通知（B3）
 from app.services import backup as backup_svc          # 每日备份编排（B5）
 from app.services import metrics as metrics_svc        # 指标与水位告警（B5）
@@ -39,7 +40,7 @@ from app.api import pomodoros                          # 效率舱·番茄钟（
 for _mod in (admin, appver, auth, totp, profile, account, devices, files,
              uploads, trash, previews, share,
              webdav, system, notify, healthreport, photos, albums, qr, notes,
-             local_config, console, feedback, events, todos, pomodoros):
+             local_config, console, feedback, feedback_inbox, events, todos, pomodoros):
     app.include_router(_mod.router)
 backup_svc.ensure_scheduled()   # B5：进程内每日备份兜底（外部计划任务失效时的第二道防线）
 metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发现遗漏，终审未覆盖注册面）
