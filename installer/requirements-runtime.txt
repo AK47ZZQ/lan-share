@@ -2,13 +2,11 @@
 #
 # 与 requirements.txt 的差异：
 #   砍掉 pytest / ruff / mypy / pip-audit / httpx  —— 开发门禁，装到用户机器上没用
-#   砍掉 psycopg[binary]                            —— SQLite 模式下永不导入
 #
-# 为什么 psycopg 能砍：app/db.py 的 `import psycopg` 写在 _PgConn.__init__
-# 内部（延迟导入），走 SQLite 分支时这个类根本不会被实例化。
-# 省下 psycopg_binary 7.4 MB + psycopg_binary.libs 6.3 MB ≈ 14 MB。
-#
-# 如果安装时用户勾选了「使用 PostgreSQL」，安装器再单独装 psycopg。
+# ⚠️ psycopg 现在是必需的，不再砍。
+#    2026-10-31 主人拍板：以后只用 PostgreSQL 一个数据库，
+#    安装器默认装 PG，SQLite 分支会被摘掉。所以 PG 驱动必须在运行时里。
+#    代价约 14 MB（psycopg_binary 7.4M + psycopg_binary.libs 6.3M）。
 
 fastapi==0.162.0
 opentelemetry-api==1.45.1
@@ -27,3 +25,4 @@ pyotp==2.10.0
 qrcode==8.2
 python-multipart==0.0.32
 tzdata==2026.5
+psycopg[binary]==3.3.6

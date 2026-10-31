@@ -260,6 +260,44 @@ if (Test-Path $ico) { Copy-Item $ico $binDst -Force; Ok "lanshare.ico" }
 else { Write-Host "  跳过图标（logo\lanshare.ico 不存在，不影响安装）" -ForegroundColor Yellow }
 
 # ────────────────────────────────────────────────────────────
+Step "8.5 PostgreSQL（安装器默认数据库，2026-10-31 起只跑 PG）"
+
+# 源：开发环境里的嵌入式 PG（zonky 解出来的那份，就是生产 5433 在用的）
+$pgSrc = Join-Path $Root "env\pginstall\zonky"
+if (-not (Test-Path $pgSrc)) {
+    Fail "找不到 PG 二进制：$pgSrc`n  这是开发环境里的嵌入式 PostgreSQL，构建机必须有。`n  通常来自 env/pginstall/zonky（zonky embedded-postgres 解包产物）。"
+}
+
+$pgDst = Join-Path $Dist "pgsql"
+New-Item -ItemType Directory -Path $pgDst -Force | Out-Null
+
+# bin：剔除 wx*.dll —— 那是 PG 自带 GUI 工具（pgAdmin 一类）的依赖，
+# 服务端只用 postgres/initdb/pg_ctl/psql，留着白占 14 MB。
+robocopy (Join-Path $pgSrc "bin") (Join-Path $pgDst "bin") /E /XF wx*.dll /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+robocopy (Join-Path $pgSrc "lib") (Join-Path $pgDst "lib") /E /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+# share 必须带：initdb 靠 share/postgresql.conf.sample 生成配置，
+# 还带 timezone、编码表。漏了 initdb 直接失败。
+robocopy (Join-Path $pgSrc "share") (Join-Path $pgDst "share") /E /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+
+# 不复制：postgres-windows-x86_64.txz（22MB 原始包，解压后的东西才是我们要的）
+#         META-INF（Java 包的元数据，对 Windows 服务无用）
+
+# 校验关键文件真的在
+$pgRequired = @(
+    "bin\postgres.exe", "bin\initdb.exe", "bin\pg_ctl.exe", "bin\psql.exe",
+    "share\postgresql.conf.sample"
+)
+$pgMissing = @()
+foreach ($f in $pgRequired) {
+    if (-not (Test-Path (Join-Path $pgDst $f))) { $pgMissing += $f }
+}
+if ($pgMissing.Count -gt 0) {
+    Fail ("PG 打包不完整，缺少：" + ($pgMissing -join ", "))
+}
+$pgMB = [math]::Round(((Get-ChildItem $pgDst -Recurse -File | Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
+Ok "pgsql/ ($pgMB MB，已剔除 wx* GUI 依赖和原始 tarball)"
+
+# ────────────────────────────────────────────────────────────
 Step "9. conf/ 目录（Caddyfile 由 lanshare_cli 安装时生成）"
 # Caddyfile 不再由这里生成 —— 端口是安装时才知道的（用户可能改），
 # 由 lanshare_cli/caddyfile.py 用 f-string 渲染，没有 PowerShell 的 $ 转义问题。

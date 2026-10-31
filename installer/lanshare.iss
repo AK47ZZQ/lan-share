@@ -76,6 +76,10 @@ Source: "..\build\dist\bin\nssm.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\build\dist\conf\*"; DestDir: "{app}\conf"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
 ; ── 安装/运维 CLI（[Code] 里要调它来注册服务）──
 Source: "..\build\dist\lanshare_cli\*"; DestDir: "{app}\lanshare_cli"; Flags: recursesubdirs createallsubdirs ignoreversion
+
+; PostgreSQL：安装器默认数据库，装完由 lanshare_cli install 初始化
+; 不带这个目录安装会直接失败（required_files 会报缺 initdb）
+Source: "..\build\dist\pgsql\*"; DestDir: "{app}\pgsql"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; ── 服务入口 ──
 Source: "..\build\dist\server.py"; DestDir: "{app}"; Flags: ignoreversion
 ; ── 静态资源（必需：app/main.py 启动时 mount /static，缺了直接崩）──
