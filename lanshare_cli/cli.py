@@ -386,12 +386,12 @@ def cmd_install(args: argparse.Namespace) -> int:
         pg.write_conf()
         ok(f"端口 {pg.port}，仅监听 127.0.0.1")
 
-        if not pg.is_running():
-            pg.start()
-        ok("PostgreSQL 已启动")
-
-        pg.ensure_database()
-        ok(f"库 {pg.db_name} / 用户 {pg.db_user} 就绪")
+        # 刻意不在这里 pg_ctl start。
+        #
+        # 服务托管和手动启动是两种模式，同时用会打架：手动起的 PG 占着端口，
+        # 服务再启动时发现端口被占，NSSM 直接把服务置成 PAUSED。
+        # 所以让服务来启动（服务里跑的就是 pg_ctl runservice），
+        # 建库也挪到服务起来之后做。
 
     except (PostgresError, OSError) as exc:
         fail(f"数据库初始化失败：{exc}")
@@ -483,6 +483,10 @@ def cmd_install(args: argparse.Namespace) -> int:
             return 1
         ok("数据库探针: SELECT 1 通过")
 
+        # 库必须在 API 启动前建好 —— API 一起来就连库，库不存在会直接崩
+        pg.ensure_database()
+        ok(f"库 {pg.db_name} / 用户 {pg.db_user} 就绪")
+
         st = nssm.start(layout.api_service, wait_seconds=30)
         if st == "RUNNING":
             ok(f"{layout.api_service}: {st}")
@@ -565,6 +569,29 @@ def show_tail(path: Path, lines: int = 12) -> None:
 # ──────────────────────────────────────────────────────────────
 
 
+def _sc_exists(name: str) -> bool:
+    r = subprocess.run(["sc.exe", "query", name], capture_output=True, timeout=20)
+    return r.returncode == 0
+
+
+def _sc_delete(name: str) -> bool:
+    """停止并删除一个非 NSSM 的服务（PG 用 pg_ctl register 注册，不走 NSSM）。"""
+    subprocess.run(["sc.exe", "stop", name], capture_output=True, timeout=90)
+
+    # 等它真的停下来 —— 还在跑就删不掉，而且 PG 不停的话数据文件被占用，
+    # 后面 --purge-data 会删不干净
+    for _ in range(30):
+        r = subprocess.run(
+            ["sc.exe", "query", name], capture_output=True, timeout=20
+        )
+        if r.returncode != 0 or b"STOPPED" in r.stdout:
+            break
+        time.sleep(1)
+
+    r = subprocess.run(["sc.exe", "delete", name], capture_output=True, timeout=30)
+    return r.returncode == 0
+
+
 def cmd_uninstall(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
@@ -582,7 +609,9 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     say(f"  安装目录 {layout.root}")
     say(f"  数据目录 {layout.data_dir}")
 
-    for name in (layout.caddy_service, layout.api_service):  # 先停 Web 再停 API
+    # 顺序：Web → API → 数据库。API 连着库，先停 API 再停库；
+    # Web 反代到 API，所以 Web 最先停。
+    for name in (layout.caddy_service, layout.api_service):
         if nssm.exists(name):
             try:
                 nssm.remove(name)
@@ -591,6 +620,15 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
                 fail(f"{name}: {exc}")
         else:
             ok(f"{name} 本来就不存在")
+
+    # PG 服务不是 NSSM 管的（pg_ctl register 创建），要用 sc delete
+    if _sc_exists(layout.pg_service):
+        if _sc_delete(layout.pg_service):
+            ok(f"已移除服务 {layout.pg_service}")
+        else:
+            fail(f"{layout.pg_service}: 删除失败（可能需要管理员权限）")
+    else:
+        ok(f"{layout.pg_service} 本来就不存在")
 
     if args.purge_data:
         if layout.data_dir.is_dir():
