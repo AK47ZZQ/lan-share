@@ -512,6 +512,12 @@ namespace LanShare
                 default: fill = Color.FromArgb(140, 140, 140); break;                // 灰
             }
 
+            // 健康时用品牌紫蓝（正常态就是品牌图标）；
+            // 出问题时整块换成告警色，比一个小圆点更醒目。
+            Color bg = state == AppState.Healthy
+                ? Color.FromArgb(0x6B, 0x62, 0xFF)
+                : fill;
+
             // 托盘图标单独画，不复用品牌大图。
             //
             // 为什么：托盘实际只显示 16×16（SM_CXSMICON=16）。
@@ -539,23 +545,31 @@ namespace LanShare
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.Clear(Color.Transparent);
 
-                // 紫蓝圆角底（品牌主色）
+                // 底色即状态：
+                //   健康 → 品牌紫蓝（正常状态下它就是品牌图标）
+                //   异常/挂了/未知 → 换成橙/红/灰，一眼看出不对劲
+                //
+                // 为什么不用右下角状态点：16×16 只有 256 个像素，
+                // 云朵和状态点各占一块必然互相挤压 —— 云朵要居中就压点，
+                // 点要看清就挤云。改成整块底色变色后，云朵可以完全居中，
+                // 状态信息反而更醒目（整块色 vs 一个 3px 的点）。
                 using (var path = Draw.RoundedPath(new Rectangle(0, 0, S, S), (int)(4 * u)))
-                using (var brush = new SolidBrush(Color.FromArgb(0x6B, 0x62, 0xFF)))
+                using (var brush = new SolidBrush(bg))
                     g.FillPath(brush, path);
 
-                // 白云朵：往上偏，给右下角的状态点腾地方
+                // 白云朵居中。
+                //
+                // 几何中心算在 (8.0, 8.0)，但云朵是「上部圆、底边平」的形状，
+                // 视觉重心会自然偏上 —— 光靠几何居中看起来还是往左上飘。
+                // 所以整体下移 0.5 做光学补偿，肉眼才是真的「在中间」。
                 using (var white = new SolidBrush(Color.White))
                 {
-                    g.FillEllipse(white, 1.5f*u, 4.0f*u, 5.0f*u, 5.0f*u);    // 左团
-                    g.FillEllipse(white, 3.8f*u, 1.8f*u, 6.8f*u, 6.8f*u);    // 中团
-                    g.FillRectangle(white, 3.8f*u, 5.5f*u, 5.2f*u, 3.5f*u);  // 底
+                    g.FillEllipse(white, 3.5f*u, 7.1f*u, 5.0f*u, 5.0f*u);      // 左团
+                    g.FillEllipse(white, 5.8f*u, 4.9f*u, 6.8f*u, 6.8f*u);      // 中团
+                    g.FillRectangle(white, 5.8f*u, 8.6f*u, 5.2f*u, 3.5f*u);    // 底
                 }
 
-                // 右下角状态点：白边 + 状态色
-                g.FillEllipse(Brushes.White, S - 8*u, S - 8*u, 8*u, 8*u);
-                using (var dot = new SolidBrush(fill))
-                    g.FillEllipse(dot, S - 7*u, S - 7*u, 6*u, 6*u);
+
 
                 IntPtr hIcon = bmp.GetHicon();
                 try
