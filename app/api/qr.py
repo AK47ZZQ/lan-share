@@ -36,6 +36,26 @@ def qr_svg_response(text: str) -> Response:
     return Response(content=svg, media_type="image/svg+xml")
 
 
+def qr_png_response(text: str, box_size: int = 8, border: int = 2) -> Response:
+    """QR 码 PNG。给桌面端用 —— PictureBox 直接能显示，不用 SVG 渲染器。
+
+    box_size=8 是给 300px 上下的显示区域用的，扫码距离 20cm 内清晰。
+    """
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_Q,
+        box_size=box_size,
+        border=border,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
 @router.get("/api/qr")
 async def generic_qr(text: str = Query(..., min_length=1, max_length=512),
                      _user=Depends(require_user)):
@@ -75,11 +95,16 @@ def _effective_client_ip(request: Request) -> str:
 async def local_qr(
     request: Request,
     text: str = Query(..., min_length=1, max_length=512),
+    format: str = Query("svg", pattern="^(svg|png)$"),
 ):
-    """本机专用的 QR 码 SVG，免登录。
+    """本机专用的 QR 码，免登录。
 
     存在的理由：桌面托盘 / 控制面板没有登录态，调不动 /api/qr，
     但又需要在窗口里显示「手机扫码访问局域网地址」的二维码。
+
+    format=png 是给桌面端准备的 —— WinForms 的 PictureBox 直接能显示 PNG，
+    而 SVG 在 .NET Framework 里没有内置渲染器，为了一个二维码引入
+    SVG 库不值得。
 
     内容限制：只是一段带进局域网地址的文本，不是秘密 ——
     真正保护数据的是那些接口自己的 require_user。
@@ -90,4 +115,6 @@ async def local_qr(
             status_code=403,
             detail="该接口仅限本机访问",
         )
+    if format == "png":
+        return qr_png_response(text)
     return qr_svg_response(text)
