@@ -743,7 +743,10 @@ def _write_caddyfile_and_restart(
         else:
             # 我们的配置或全新创建：整份重写
             if not dry_run:
-                caddyfile.write(target, info.api_port, info.web_port, bind_host)
+                caddyfile.write(
+                    target, info.api_port, info.web_port, bind_host,
+                    storage_dir=str(info.root / "certs" / "caddy"),
+                )
             report.add(
                 "更新 Caddyfile",
                 True,

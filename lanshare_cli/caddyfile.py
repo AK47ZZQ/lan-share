@@ -57,6 +57,15 @@ TEMPLATE = """\
 \t# 只关 80→443 自动重定向（80 端口在 Windows 上常被别的程序占着），
 \t# HTTPS 和证书签发照常工作。写成 auto_https off 会把证书也一起关掉。
 \tauto_https disable_redirects
+\t# 证书和内部 CA 存在安装目录里，不要用 Caddy 的默认位置。
+\t#
+\t# 默认位置是「当前用户的 AppData」。Caddy 作为 Windows 服务跑在 SYSTEM
+\t# 账户下，于是落到 C:\Windows\system32\config\systemprofile\AppData\Roaming\Caddy
+\t# —— 那是全机共用的一个坑：卸载重装、装第二个实例、换个安装目录，全都
+\t# 挤在同一个 storage 里，旧 CA 残留会让新证书签不出来，客户端握手直接
+\t# SEC_E_ILLEGAL_MESSAGE。2026-10-31 在虚拟机里踩到（同一台机器重装后才
+\t# 出现，干净系统首次安装是好的，所以之前的沙箱测试没抓到）。
+\tstorage file_system "{storage_dir}"
 }}
 
 {site_addrs} {{
@@ -153,8 +162,13 @@ def render(
     web_port: int,
     bind_host: str = BIND_ALL,
     hosts: list[str] | None = None,
+    storage_dir: str = "",
 ) -> str:
-    """渲染 Caddyfile 内容（不落盘，方便单测）。"""
+    """渲染 Caddyfile 内容（不落盘，方便单测）。
+
+    storage_dir：证书和内部 CA 的落盘位置。传空串时退回 Caddy 默认位置
+    （当前用户 AppData）—— 只该在单测里出现，CLI 必须传具体目录。
+    """
     if not (1 <= api_port <= 65535):
         raise ValueError(f"api_port 越界: {api_port}")
     if not (1 <= web_port <= 65535):
@@ -169,6 +183,9 @@ def render(
         web_port=web_port,
         site_addrs=site_block(bind_host, web_port, names),
         bind_line=bind_line(bind_host),
+        # Caddyfile 按空格切 token：路径含空格（"LAN Share"）必须加引号，
+        # Windows 反斜杠在 Caddy 里也不稳妥，统一换正斜杠。
+        storage_dir=(storage_dir or "${HOME}/.local/share/caddy").replace(chr(92), "/"),
     )
 
 
@@ -178,11 +195,12 @@ def write(
     web_port: int,
     bind_host: str = BIND_ALL,
     hosts: list[str] | None = None,
+    storage_dir: str = "",
 ) -> Path:
     """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = render(api_port, web_port, bind_host, hosts)
+    content = render(api_port, web_port, bind_host, hosts, storage_dir)
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     return target

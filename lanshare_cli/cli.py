@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import socket
+import ssl
 import re
 import subprocess
 import sys
@@ -78,10 +79,17 @@ def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
 
 
 def probe(url: str, timeout: float = 10.0) -> tuple[bool, str]:
-    """探针：请求一个 URL，返回 (是否成功, 描述)。全部走标准库，不依赖 httpx。"""
+    """探针：请求一个 URL，返回 (是否成功, 描述)。全部走标准库，不依赖 httpx。
+
+    HTTPS 一律跳过证书校验 —— Caddy 用的是 `tls internal` 自签证书，
+    根 CA 只在自己进程里，系统信任链里没有，urllib 默认校验必然抛
+    SSLCertVerificationError。探针的目的是「服务活着吗」，不是「证书可信吗」，
+    这两件事必须分开，否则自家服务永远探不通。
+    """
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "lanshare-cli"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ctx = ssl._create_unverified_context() if url.startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             body = resp.read(200).decode("utf-8", "replace")
             return resp.status == 200, f"HTTP {resp.status} {body}"
     except urllib.error.HTTPError as exc:
@@ -263,6 +271,69 @@ def _acquire_install_lock():
     return fh
 
 
+_PG_PASS_FILE = ".lanshare-pgpass"
+
+
+def read_pg_password(data_dir: Path, reg_key: str) -> str:
+    """取 PG 角色密码，优先级：注册表 → 数据目录文件 → 新建一个。
+
+    密码必须锚定在**数据目录**上，不能只信注册表。
+
+    原因：卸载会删掉整个注册表键（含 PgPassword），但数据目录是保留的
+    （数据不该因为卸载而丢）。重装时注册表空了 → 生成新密码 → 而 PG 数据
+    目录里那个角色还是旧密码 → psycopg 认证失败 → 卡在「PG 在 30 秒内
+    没有接受连接」。2026-10-31 在虚拟机里真实踩到。
+
+    数据目录在哪，密码就在哪，这样卸载重装、换注册表键、换安装目录之类
+    的操作都不会把库锁死。
+    """
+    value = read_registry_value("PgPassword", reg_key)
+    if value:
+        return value
+
+    f = data_dir / _PG_PASS_FILE
+    if f.exists():
+        try:
+            value = f.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        except OSError:
+            pass
+
+    return generate_password()
+
+
+def write_pg_password(data_dir: Path, reg_key: str, password: str) -> None:
+    """密码写两处：注册表（快查）+ 数据目录（跟着数据走，卸载也不丢）。"""
+    write_registry_value("PgPassword", password, reg_key)
+
+    f = data_dir / _PG_PASS_FILE
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(password, encoding="utf-8")
+        os.chmod(f, 0o600)
+    except OSError as exc:
+        # 写不进文件不致命 —— 注册表里已经有一份，下次还能读到
+        say(f"    WARN 密码文件写入失败（不影响安装）：{exc}")
+
+
+def _first_lan_ip() -> str:
+    """取本机第一个有网关的局域网 IP，取不到就退回 127.0.0.1。
+
+    用途：给 Web 探针选连接地址。之所以不用 127.0.0.1，见调用处注释 ——
+    Caddy 按主机名签证书，纯 IP 访问时 schannel 不发 SNI，回环地址会握不上手，
+    而本机 LAN IP 在证书 SAN 里，能正常握手。
+    """
+    try:
+        hosts = caddyfile.default_hosts()
+    except Exception:
+        return "127.0.0.1"
+    for h in hosts:
+        if h != "localhost":
+            return h
+    return "127.0.0.1"
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     layout = Layout(
         root=Path(args.root),
@@ -280,7 +351,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     # 密码策略：升级时沿用注册表里的旧密码，全新安装才生成新的。
     # 每次安装都换密码会让 PG 里的旧角色对不上，库直接连不上。
     reg_key = getattr(args, "registry_key", None) or REGISTRY_KEY_DEFAULT
-    pg_password = read_registry_value("PgPassword", reg_key) or generate_password()
+    pg_password = read_pg_password(layout.data_dir, reg_key)
 
     say("=" * 64)
     say("  LAN Share 安装")
@@ -397,6 +468,8 @@ def cmd_install(args: argparse.Namespace) -> int:
             api_port=api_port,
             web_port=web_port,
             bind_host=bind_host,
+            # 证书/CA 存在安装目录下，不用 Caddy 默认的 SYSTEM AppData
+            storage_dir=str(layout.root / "certs" / "caddy"),
         )
         ok(str(layout.caddyfile))
         # 用 caddy 自己校验，别等启动才发现语法错
@@ -571,15 +644,25 @@ def cmd_install(args: argparse.Namespace) -> int:
             return 1
 
         healthy = False
-        for _ in range(20):
-            okay, desc = probe(f"http://127.0.0.1:{web_port}/healthz", timeout=3)
+        # 探针用本机 IP，不用 127.0.0.1。
+        #
+        # Caddy 的站点地址是按主机名写的（https://localhost:8765, https://<IP>:8765），
+        # 每张证书绑定一个名字。Windows 的 schannel 在用纯 IP 连接时不发 SNI，
+        # Caddy 选不出对应证书 → TLS 握手直接 SEC_E_ILLEGAL_MESSAGE（HTTP 000）。
+        # 实测：127.0.0.1 必失败，本机 LAN IP 必成功（IP 就在证书 SAN 里）。
+        #
+        # 顺带把等待从 20 秒放宽到 60 秒：Caddy 首次要现场生成内部 CA 再签发，
+        # 慢的机器上 20 秒不够，会误报「Web 端口没有响应」而其实只是还没签完。
+        probe_host = _first_lan_ip()
+        for _ in range(60):
+            okay, desc = probe(f"https://{probe_host}:{web_port}/healthz", timeout=3)
             if okay:
                 ok(f"Web 探针: {desc[:120]}")
                 healthy = True
                 break
             time.sleep(1)
         if not healthy:
-            fail(f"Web 端口 {web_port} 在 20 秒内没有响应")
+            fail(f"Web 端口 {web_port} 在 60 秒内没有响应（探针 {probe_host}）")
             show_tail(layout.logs / "caddy-stderr.log")
             return 1
     except ServiceError as exc:
@@ -588,7 +671,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     say("\n" + "=" * 64)
     # 记下密码和端口，下次升级要用同一条 —— 换密码等于把库锁死
-    write_registry_value("PgPassword", pg_password, reg_key)
+    write_pg_password(layout.data_dir, reg_key, pg_password)
     write_registry_value("PgPort", str(pg_port), reg_key)
     # 前缀必须回写：安装器的 [Registry] 段写的是静态值，万一和 CLI 实际用的
     # 前缀不一致，托盘会按错的名字去找服务（lanshare-api vs lan-share-api）。
@@ -597,8 +680,9 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     say("  安装完成")
     say("=" * 64)
-    say(f"  浏览器打开  http://127.0.0.1:{web_port}")
-    say(f"  局域网访问  http://<本机IP>:{web_port}")
+    say(f"  浏览器打开  https://127.0.0.1:{web_port}")
+    say(f"  局域网访问  https://<本机IP>:{web_port}")
+    say("               （自签证书，首次访问要点“继续前往”）")
     say(f"  数据目录    {layout.data_dir}")
     say("  卸载        python -m lanshare_cli uninstall")
     return 0
