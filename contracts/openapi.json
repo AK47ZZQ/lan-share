@@ -622,6 +622,22 @@
     "title": "ProfileBody",
     "type": "object"
    },
+   "PublicUrlBody": {
+    "properties": {
+     "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+     },
+     "url_alt": {
+      "default": "",
+      "title": "Url Alt",
+      "type": "string"
+     }
+    },
+    "title": "PublicUrlBody",
+    "type": "object"
+   },
    "RedeemBody": {
     "properties": {
      "code": {
@@ -7123,6 +7139,58 @@
      }
     },
     "summary": "Healthz"
+   }
+  },
+  "/local/public-url": {
+   "get": {
+    "description": "读当前配置的公网入口地址。\n\n返回的 url 是存库值；available 表示服务器实际能不能读库\n（比如数据库还没初始化时 get_setting 会抛异常）。",
+    "operationId": "get_public_url_local_public_url_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Public Url"
+   },
+   "post": {
+    "description": "保存公网入口地址。\n\n保存后立即清掉 security 的 netloc 缓存，否则要等 60 秒才生效 ——\n用户填完点「验证」会以为没保存成功。",
+    "operationId": "set_public_url_local_public_url_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PublicUrlBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Public Url"
    }
   },
   "/local/qr": {
