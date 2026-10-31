@@ -151,7 +151,6 @@ class Layout:
             (self.entry, "server.py（服务入口）"),
             (self.pgsql_dir / "bin" / "initdb.exe", "PostgreSQL（initdb）"),
             (self.pgsql_dir / "bin" / "pg_ctl.exe", "PostgreSQL（pg_ctl）"),
-            (self.pgsql_dir / "bin" / "psql.exe", "PostgreSQL（psql）"),
         ]
 
     def required_dirs(self) -> list[tuple[Path, str]]:
@@ -472,7 +471,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         pg_ready = False
         for _ in range(30):
             try:
-                if pg.psql_value("SELECT 1;") == "1":
+                if pg.query_one("SELECT 1;") == "1":
                     pg_ready = True
                     break
             except PostgresError:

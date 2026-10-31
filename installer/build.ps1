@@ -272,7 +272,7 @@ $pgDst = Join-Path $Dist "pgsql"
 New-Item -ItemType Directory -Path $pgDst -Force | Out-Null
 
 # bin：剔除 wx*.dll —— 那是 PG 自带 GUI 工具（pgAdmin 一类）的依赖，
-# 服务端只用 postgres/initdb/pg_ctl/psql，留着白占 14 MB。
+# 服务端只用 postgres/initdb/pg_ctl（建库走 psycopg），留着白占 14 MB。
 robocopy (Join-Path $pgSrc "bin") (Join-Path $pgDst "bin") /E /XF wx*.dll /NFL /NDL /NJH /NJS /NC /NS | Out-Null
 robocopy (Join-Path $pgSrc "lib") (Join-Path $pgDst "lib") /E /NFL /NDL /NJH /NJS /NC /NS | Out-Null
 # share 必须带：initdb 靠 share/postgresql.conf.sample 生成配置，
@@ -284,7 +284,7 @@ robocopy (Join-Path $pgSrc "share") (Join-Path $pgDst "share") /E /NFL /NDL /NJH
 
 # 校验关键文件真的在
 $pgRequired = @(
-    "bin\postgres.exe", "bin\initdb.exe", "bin\pg_ctl.exe", "bin\psql.exe",
+    "bin\postgres.exe", "bin\initdb.exe", "bin\pg_ctl.exe",
     "share\postgresql.conf.sample"
 )
 $pgMissing = @()

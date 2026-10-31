@@ -324,8 +324,9 @@ class TestLayout:
 
     def test_required_files_count(self, tmp_path):
         layout = cli.Layout(tmp_path, tmp_path / "data", "X")
-        # python / nssm / caddy / server.py / initdb / pg_ctl / psql
-        # 后三个是 PostgreSQL 二进制（2026-10-31 起只跑 PG，不再有 SQLite 分支）
-        assert len(layout.required_files()) == 7
+        # python / nssm / caddy / server.py / initdb / pg_ctl
+        # 后两个是 PostgreSQL 二进制。没有 psql —— 随包带的是 zonky 精简版，
+        # 只含 postgres/initdb/pg_ctl，建库走 psycopg。
+        assert len(layout.required_files()) == 6
         # app / web/dist / static
         assert len(layout.required_dirs()) == 3
