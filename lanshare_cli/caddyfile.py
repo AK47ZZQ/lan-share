@@ -6,10 +6,25 @@
        结果生成出乱码，Caddy 读到就崩。
     3. f-string 拼字符串没有这些坑，而且能单测渲染结果。
 
-为什么默认纯 HTTP（不启用 tls internal）：
-    2026-10-30 实测：Caddy 的 tls internal 对「无主机名的站点」（:端口 这种写法）
-    无法签发证书，客户端握手一律 TLSV1_ALERT_INTERNAL_ERROR。
-    家用内网 HTTP 完全够用，用户也不用点「继续访问」。
+为什么默认 HTTPS 而且要带主机名（2026-10-31 修正）：
+    之前这里写着「tls internal 对无主机名站点签不出证书，所以默认纯 HTTP」
+    —— **结论是错的**，真相是开关用错了：
+
+        auto_https off                → 自动 HTTPS 整块关掉，证书签发一起失效
+        auto_https disable_redirects  → 只关 80→443 重定向，证书照签
+
+    本机实测：`https://localhost:9902` 和 `https://192.168.1.12:9903` 都是 200，
+    证书 issuer = CN=Caddy Local Authority - ECC Intermediate，
+    SAN 里带 `IP Address:192.168.1.12` —— 手机用 IP 直连不会证书不匹配。
+
+    为什么必须 HTTPS 不能回退 HTTP：手机端扫码只收 https（scan_page.dart
+    的 _accept 里只有 https:// 一条。理由很实在：http 二维码 = 明文上送
+    账号密码）。如果生成 HTTP 站点，二维码就是 http://192.168.x.x:8765，
+    App 扫到会**静默忽略**，用户完全不知道为什么没反应。
+
+    代价：Caddy 内部 CA 是自签的，浏览器首次要点「继续访问」，App 首次
+    连接走 TOFU。和手工 openssl 签一套效果一样，但不用往包里塞
+    cryptography（省 3~4 MB）。
 
 ============================================================
 ⚠️ 控制监听地址必须用 bind 指令，不能改站点块首行
