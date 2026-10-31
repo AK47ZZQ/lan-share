@@ -39,13 +39,16 @@ TEMPLATE = """\
 # 由 lanshare_cli 生成，不要手改 —— 改配置请改安装参数后重新 install
 {{
 \tadmin off
-\tauto_https off
+\t# 只关 80→443 自动重定向（80 端口在 Windows 上常被别的程序占着），
+\t# HTTPS 和证书签发照常工作。写成 auto_https off 会把证书也一起关掉。
+\tauto_https disable_redirects
 }}
 
-:{web_port} {{
-{bind_line}\treverse_proxy 127.0.0.1:{api_port} {{
-\t\t# 告诉后端这是 HTTP，Cookie 就不加 Secure 位（内网 HTTP 下才正常）
-\t\theader_up X-Forwarded-Proto http
+{site_addrs} {{
+{bind_line}\ttls internal
+\treverse_proxy 127.0.0.1:{api_port} {{
+\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
+\t\theader_up X-Forwarded-Proto https
 \t\theader_up X-Real-IP {{remote_host}}
 \t\theader_up Host {{host}}
 \t}}
@@ -65,12 +68,43 @@ BIND_ALL = "0.0.0.0"
 BIND_LOOPBACK = "127.0.0.1"
 
 
-def site_block(bind_host: str, web_port: int) -> str:
-    """生成站点块的监听首行，永远是裸端口 `:8765`。
+def default_hosts() -> list[str]:
+    """站点该带哪些主机名。
 
-    监听地址不在这里控制，由 bind_line() 负责 —— 见模块开头的说明。
+    每个主机名都会进证书 SAN，所以手机用 IP 直连时这个 IP 必须在内，
+    否则证书只对 localhost 有效，IP 访问会报证书不匹配。
+
+    真实网卡（has_gateway=True）排前面，虚拟网卡（VirtualBox 的
+    192.168.56.1 之类）排后面 —— 签进去无害，但不能当主要入口。
     """
-    return f":{web_port}"
+    hosts: list[str] = ["localhost"]
+    try:
+        from .network import list_lan_addresses
+
+        addrs = list_lan_addresses()
+        preferred = [a.ip for a in addrs if getattr(a, "has_gateway", False)]
+        others = [a.ip for a in addrs if not getattr(a, "has_gateway", False)]
+        for ip in preferred + others:
+            if ip and ip not in hosts:
+                hosts.append(ip)
+    except Exception:
+        # 探测失败不该阻断安装：至少 localhost 可用
+        pass
+    return hosts
+
+
+def site_block(
+    bind_host: str, web_port: int, hosts: list[str] | None = None
+) -> str:
+    """生成站点块的地址行，形如：
+
+        https://localhost:8765, https://192.168.1.12:8765
+
+    必须带 scheme 和主机名 —— 裸 `:8765` 会被 Caddy 当成 HTTP 站点，
+    tls internal 就不生效了（2026-10-31 找到的真正原因）。
+    """
+    names = hosts or ["localhost"]
+    return ", ".join(f"https://{h}:{web_port}" for h in names)
 
 
 def bind_line(bind_host: str, indent: str = "\t") -> str:
@@ -83,7 +117,12 @@ def bind_line(bind_host: str, indent: str = "\t") -> str:
     return ""
 
 
-def render(api_port: int, web_port: int, bind_host: str = BIND_ALL) -> str:
+def render(
+    api_port: int,
+    web_port: int,
+    bind_host: str = BIND_ALL,
+    hosts: list[str] | None = None,
+) -> str:
     """渲染 Caddyfile 内容（不落盘，方便单测）。"""
     if not (1 <= api_port <= 65535):
         raise ValueError(f"api_port 越界: {api_port}")
@@ -92,9 +131,12 @@ def render(api_port: int, web_port: int, bind_host: str = BIND_ALL) -> str:
     if api_port == web_port:
         raise ValueError(f"api_port 和 web_port 不能相同（都是 {api_port}）")
 
+    names = hosts if hosts is not None else default_hosts()
+
     return TEMPLATE.format(
         api_port=api_port,
         web_port=web_port,
+        site_addrs=site_block(bind_host, web_port, names),
         bind_line=bind_line(bind_host),
     )
 
@@ -104,11 +146,12 @@ def write(
     api_port: int,
     web_port: int,
     bind_host: str = BIND_ALL,
+    hosts: list[str] | None = None,
 ) -> Path:
     """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = render(api_port, web_port, bind_host)
+    content = render(api_port, web_port, bind_host, hosts)
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     return target

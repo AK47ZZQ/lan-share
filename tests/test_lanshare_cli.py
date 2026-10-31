@@ -45,16 +45,48 @@ class TestCaddyfile:
         assert "{host}" in text
         assert "{remote_host}" in text
 
-    def test_http_only_no_tls(self):
-        """默认不启用 TLS。tls internal 对无主机名站点会握手失败（实测）。"""
-        text = caddyfile.render(api_port=8000, web_port=8001)
-        assert "tls internal" not in text
-        assert "auto_https off" in text
+    def test_https_with_internal_ca(self):
+        """默认走 HTTPS + Caddy 内部 CA。
 
-    def test_forwarded_proto_is_http(self):
-        """后端要知道这是 HTTP，否则 Cookie 会加 Secure 位导致内网登不上。"""
+        2026-10-31 修正：之前判定「tls internal 对无主机名站点握手失败」
+        并退回纯 HTTP，其实是开关用错了 —— auto_https off 会把证书签发
+        一起关掉。改 disable_redirects 后 tls internal 正常，且签出的证书
+        含 IP SAN（实测 IP Address:192.168.1.12）。
+
+        为什么必须 HTTPS：手机端扫码只收 https（http 二维码 = 明文传密码），
+        生成 HTTP 站点的话二维码是 http://...，App 会静默忽略。
+        """
         text = caddyfile.render(api_port=8000, web_port=8001)
-        assert "header_up X-Forwarded-Proto http" in text
+        assert "tls internal" in text
+        assert "auto_https disable_redirects" in text
+        # 生效的指令不能是 off（模板注释里提到它不算）
+        assert "\tauto_https off\n" not in text
+
+    def test_site_block_has_scheme_and_host(self):
+        """站点地址必须带 https:// 和主机名。
+
+        裸 `:8765` 会被 Caddy 当成 HTTP 站点，tls internal 就不生效。
+        """
+        text = caddyfile.render(
+            api_port=8000, web_port=8001, hosts=["localhost", "192.168.1.12"]
+        )
+        assert "https://localhost:8001" in text
+        assert "https://192.168.1.12:8001" in text
+        # 不能出现裸端口站点块
+        assert "\n:8001 {" not in text
+
+    def test_forwarded_proto_is_https(self):
+        """后端要知道这是 HTTPS，Cookie 才会加 Secure 位。"""
+        text = caddyfile.render(api_port=8000, web_port=8001)
+        assert "header_up X-Forwarded-Proto https" in text
+
+    def test_loopback_bind_still_works(self):
+        """LAN 关闭时 bind 127.0.0.1 仍然生效（主机名和 bind 可以共存）。"""
+        text = caddyfile.render(
+            api_port=8000, web_port=8001, bind_host=caddyfile.BIND_LOOPBACK
+        )
+        assert "bind 127.0.0.1" in text
+        assert "tls internal" in text
 
     @pytest.mark.parametrize("bad", [0, -1, 65536, 99999])
     def test_rejects_out_of_range(self, bad):

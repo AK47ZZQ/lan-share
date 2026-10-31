@@ -22,22 +22,32 @@ from lanshare_cli import caddyfile, firewall, lan, network
 
 
 class TestSiteBlock:
-    def test_bind_all_renders_bare_port(self):
-        """绑所有接口写成 `:8765`，不能写 `0.0.0.0:8765`。
+    def test_bind_all_renders_hosts_with_scheme(self):
+        """站点地址写成 `https://localhost:8765, https://<ip>:8765`。
 
-        Caddy 会把 0.0.0.0 当主机名处理，行为不符合预期。
+        2026-10-31 变更：原来写裸 `:8765`（纯 HTTP）。裸端口在 Caddy 里
+        是「HTTP 站点」，tls internal 不生效 —— 而手机端扫码只收 https，
+        生成 HTTP 的话二维码会被 App 静默忽略。
+        现在必须带 scheme 和主机名，证书 SAN 也才有 IP。
         """
-        assert caddyfile.site_block(caddyfile.BIND_ALL, 8765) == ":8765"
+        out = caddyfile.site_block(
+            caddyfile.BIND_ALL, 8765, ["localhost", "192.168.1.12"]
+        )
+        assert "https://localhost:8765" in out
+        assert "https://192.168.1.12:8765" in out
+        assert out.startswith("https://")
 
-    def test_both_modes_render_bare_port(self):
+    def test_both_modes_share_same_site_block(self):
         """两种模式的站点块首行**必须相同**。
 
         2026-10-31 实测：曾经让 loopback 模式渲染 `127.0.0.1:8765`，
         Caddy 把它当「主机名+端口」，监听地址毫无变化 —— 开关完全失效。
-        监听地址只能靠 bind 指令控制。
+        监听地址只能靠 bind 指令控制，站点块本身不变。
         """
-        assert caddyfile.site_block(caddyfile.BIND_ALL, 8765) == ":8765"
-        assert caddyfile.site_block(caddyfile.BIND_LOOPBACK, 8765) == ":8765"
+        hosts = ["localhost", "192.168.1.12"]
+        assert caddyfile.site_block(
+            caddyfile.BIND_ALL, 8765, hosts
+        ) == caddyfile.site_block(caddyfile.BIND_LOOPBACK, 8765, hosts)
 
     def test_bind_line_only_for_loopback(self):
         assert caddyfile.bind_line(caddyfile.BIND_ALL) == ""
