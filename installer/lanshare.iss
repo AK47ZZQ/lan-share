@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.75"
+#define AppVersion     "3.76"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -204,9 +204,9 @@ begin
     '备份时整个复制走就行。如果 C 盘空间紧张，可以改到别的盘。',
     False, '');
   DataDirPage.Add('');
-  { 默认跟随安装目录。以前是 {commonappdata}\LANShare\data（C:\ProgramData 下），
-    结果用户只选了一次安装目录，盘上却散成两处 —— 程序在 C:\lanshare，
-    数据跑到 C:\ProgramData\LANShare，找起来别扭、备份也要记两个路径。 }
+  // 默认跟随安装目录。以前是 ProgramData\LANShare\data，
+  // 结果用户只选了一次安装目录，盘上却散成两处 —— 程序在 C:\lanshare，
+  // 数据跑到 C:\ProgramData\LANShare，找起来别扭、备份也要记两个路径。
   DataDirPage.Values[0] := ExpandConstant('{app}\data');
 end;
 
