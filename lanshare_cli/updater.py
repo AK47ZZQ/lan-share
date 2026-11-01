@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -27,6 +28,29 @@ from pathlib import Path
 REPO = "AK47ZZQ/lan-share"
 TIMEOUT = 8                 # 国内访问 GitHub 经常超时，别让 UI 干等
 PREFIX = "server-v"
+
+
+def _ssl_context() -> ssl.SSLContext | None:
+    """给 urlopen 用的 TLS 上下文；拿不到可用 CA 时返回 None（用默认）。
+
+    为什么需要这个：embedded Python 不带 CA bundle，
+    `ssl.get_default_verify_paths().cafile` 是 None，只能靠 OpenSSL 去读
+    Windows 证书存储。干净机器上这条路不总成立——2026-11-01 真机装 3.80，
+    「检查更新」直接报：
+
+        [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:
+        unable to get issuer certificate (_ssl.c:1006)
+
+    打包 certifi 之后就有独立的 CA bundle，不再看系统证书链的脸色。
+    certifi 万一没打进包（老版本残留、手工部署），退回默认上下文，
+    至少还有系统那条路。
+    """
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return None
 
 # 版本号形如 3.77 / 3.78.1 —— 只在 tag 里取这一段
 _VER_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
@@ -82,7 +106,8 @@ def fetch_latest(timeout: float = TIMEOUT) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout,
+                                    context=_ssl_context()) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 403:
@@ -90,6 +115,12 @@ def fetch_latest(timeout: float = TIMEOUT) -> dict:
         raise RuntimeError(f"GitHub 返回 {exc.code}") from exc
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
+        # 证书错误单独说，不然用户只看到一句英文 SSL 栈
+        if isinstance(reason, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(reason):
+            raise RuntimeError(
+                "连不上 GitHub：TLS 证书校验失败（本机根证书不全）。"
+                "如果开了 VPN 或代理，先关掉再试；仍然失败说明本地证书库缺根证书。"
+            ) from exc
         raise RuntimeError(f"连不上 GitHub（{reason}）——检查网络或代理") from exc
     except (TimeoutError, OSError) as exc:
         raise RuntimeError(f"连不上 GitHub（{exc}）——检查网络或代理") from exc

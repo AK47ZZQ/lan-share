@@ -1,4 +1,4 @@
-## 2026-11-01（晚）— 服务端 v3.81：证书没签给 127.0.0.1，托盘全程判定「服务未运行」
+## 2026-11-01（晚）— 服务端 v3.82：证书没签给 127.0.0.1、开局域网卡 UAC、检查更新报 SSL
 
 真机从零安装测出来的。装完三个服务全 Running、API 直连 200，但托盘界面一片红，
 「启动局域网服务」按钮点了没反应、地址不显示、二维码也没有。
@@ -46,6 +46,39 @@ Caddy 用 `tls internal` 时按**站点地址**签证书，127.0.0.1 不在站�
    提示同步改。
 
 两边都补是刻意的：以后无论谁改了一边，另一边都不会立刻断。
+
+
+### 二、点「启动局域网服务」卡 20 秒超时
+
+界面显示「局域网未开启 / 命令超时（20 秒）」，地址不显示、二维码也没有。
+
+托盘是后台调 `lanshare_cli lan on`，那一步要走 `firewall.ensure_rule`
+加防火墙规则，而加规则必须 UAC 提权。弹窗出现在后台没人点，托盘
+`WaitForExit(20000)` 就干等满 20 秒然后放弃。
+
+根子在「安装时没加规则」：`lanshare.iss` 里一条防火墙相关的都没有，
+CLI 的 install 流程也只在**卸载**时 `remove_rules`，安装时从不 `ensure_rule`。
+于是第一次开局域网必然触发提权。
+
+修：install 流程加第 11 步「预置防火墙规则」。安装器本来就是管理员，
+这一步没有任何弹窗；`ensure_rule` 幂等，升级安装不会累积重复规则；
+规则仍然只覆盖 Private,Domain（公用网络不开放）。托盘超时同时从 20 秒
+放宽到 45 秒，给慢机器留余量。
+
+### 三、检查更新报 SSL CERTIFICATE_VERIFY_FAILED
+
+```
+GitHub 请求失败 [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:
+unable to get issuer certificate (_ssl.c:1006)
+```
+
+embedded Python 不带 CA bundle：`ssl.get_default_verify_paths().cafile`
+是 `None`，只能靠 OpenSSL 去读 Windows 证书存储。这条路在精简系统上
+不总成立（LTSC 根证书少、intermediate 拉不到、代理拦了 AIA）。
+
+修：runtime 打包 `certifi`，`updater._ssl_context()` 优先用它建上下文；
+certifi 万一没打进包则返回 `None` 退回默认路径，不崩。顺手把证书错误
+翻成人话（提示关 VPN / 查本地证书库），不再甩一句英文 SSL 栈。
 
 ## 同类问题排查清单
 

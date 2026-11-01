@@ -81,7 +81,9 @@ def _fake_urlopen(payload, *, raises=None):
         def __exit__(self, *a):
             return False
 
-    def _open(req, timeout=None):
+    def _open(req, timeout=None, context=None):
+        # context 是 2026-11-01 加的（给 certifi 的 CA bundle 用），
+        # 假函数要跟着签名走，否则 TypeError 被当成真错误。
         if raises is not None:
             raise raises
         return FakeResp(payload)
@@ -210,3 +212,62 @@ class TestCheck:
         assert r["current"] == ""
         assert r["has_update"] is False
         assert r["latest"] == "3.78"     # 还是告诉用户 GitHub 上是几版
+
+class TestSslContext:
+    """embedded Python 不带 CA bundle 的补丁。
+
+    真机事故：干净机器装 3.80，点「检查更新」报
+      [SSL: CERTIFICATE_VERIFY_FAILED] unable to get issuer certificate
+    因为嵌入式 Python 的 ssl.get_default_verify_paths().cafile 是 None，
+    只能靠 OpenSSL 读 Windows 证书存储，那条路在精简系统上不总成立。
+    """
+
+    def test_uses_certifi_when_available(self, monkeypatch):
+        import ssl as _ssl
+
+        import lanshare_cli.updater as up
+
+        captured = {}
+
+        def fake_create(cafile=None):
+            captured["cafile"] = cafile
+            return "CTX"
+
+        monkeypatch.setattr(_ssl, "create_default_context", fake_create)
+        assert up._ssl_context() == "CTX"
+        assert captured["cafile"]  # 必须带上 cafile，不能是裸的默认上下文
+
+    def test_returns_none_when_certifi_missing(self, monkeypatch):
+        """certifi 没打进包时不能崩 —— 退回系统证书那条路。"""
+        import builtins
+
+        import lanshare_cli.updater as up
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "certifi":
+                raise ImportError("no certifi")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        assert up._ssl_context() is None
+
+    def test_cert_verify_error_gives_chinese_hint(self, monkeypatch):
+        """证书校验失败要说人话，不能把 SSLError 原样抛给用户。"""
+        import ssl as _ssl
+        import urllib.error
+
+        import lanshare_cli.updater as up
+
+        def boom(req, timeout=None, context=None):
+            raise urllib.error.URLError(
+                _ssl.SSLError("[SSL: CERTIFICATE_VERIFY_FAILED] unable to get issuer")
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", boom)
+        with pytest.raises(RuntimeError) as exc:
+            up.fetch_latest()
+        msg = str(exc.value)
+        assert "证书" in msg
+        assert "VPN" in msg

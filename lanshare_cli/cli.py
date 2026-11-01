@@ -37,6 +37,7 @@ import urllib.request
 from pathlib import Path
 
 from . import caddyfile
+from . import firewall
 from .pg import Postgres, PostgresError, generate_password, DEFAULT_PORT as PG_DEFAULT_PORT
 from .service import NssmService, ServiceError
 
@@ -384,7 +385,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     if dry:
         say("\n  *** DRY RUN —— 只检查不执行，不会改动任何东西 ***")
 
-    total = 10
+    total = 11
 
     # ── 1. 权限 ──
     step(1, total, "检查管理员权限")
@@ -709,6 +710,26 @@ def cmd_install(args: argparse.Namespace) -> int:
     step(10, total, "让浏览器信任本地证书")
     trust_local_ca(layout)
 
+    # ── 11. 预置防火墙规则 ──
+    # 为什么不等到用户点「启动局域网服务」再加：
+    # 那一步是托盘在后台调 `lanshare_cli lan on`，加规则要 UAC 提权，
+    # 弹窗在后台没人点，托盘的 WaitForExit(20000) 就干等到超时 ——
+    # 用户看到的是「命令超时（20 秒）」，地址不显示、二维码也没有。
+    #
+    # 安装器本身就是管理员，这里加不会有任何弹窗。ensure_rule 幂等，
+    # 已存在且正确时直接返回，所以升级安装也不会累积重复规则。
+    # 规则只覆盖 Private,Domain，公用网络下依然不开放。
+    step(11, total, "预置防火墙规则")
+    try:
+        caddy_exe = firewall.service_image_path(layout.service_prefix + "-caddy")
+        if caddy_exe:
+            ok_flag, msg = firewall.ensure_rule(web_port, caddy_exe)
+            (ok if ok_flag else warn)(msg)
+        else:
+            warn("找不到 Caddy 服务，跳过防火墙规则（开局域网时会再试一次）")
+    except Exception as exc:  # 不是致命错误：开局域网时还有一次机会
+        warn(f"预置防火墙规则失败：{exc}")
+
     say("\n" + "=" * 64)
     # 记下密码和端口，下次升级要用同一条 —— 换密码等于把库锁死
     write_pg_password(layout.data_dir, reg_key, pg_password)
@@ -944,7 +965,6 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     # 不清的话，下次换端口重装会积一堆废旧放行规则；
     # 更糟的是端口被别的程序占了，那些规则等于给别人开门。
     try:
-        from . import firewall
 
         # 只删本实例端口的规则 —— 同机多实例时别把别人的一起删了。
         # 端口从命令行参数取，没传就按默认值（和 install 一致）。

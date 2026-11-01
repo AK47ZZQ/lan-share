@@ -489,7 +489,9 @@ namespace LanShare
                 };
                 using (var proc = Process.Start(psi))
                 {
-                    proc.WaitForExit(20000);
+                    // 45 秒而不是 20：开局域网要改 Caddyfile + 重启 Caddy + 局域网自检，
+                    // 慢一点的机器上 20 秒不够（实测超时就显示「命令超时（20 秒）」）。
+                    proc.WaitForExit(45000);
                 }
                 SendToast("证书已装好，浏览器不会再报警告页");
                 PushStateAsync(true);
