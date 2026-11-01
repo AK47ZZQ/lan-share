@@ -34,4 +34,4 @@ psycopg[binary]==3.3.6
 # 表现是「检查更新」直接报：
 #   [SSL: CERTIFICATE_VERIFY_FAILED] unable to get issuer certificate
 # 自带一份 certifi 就不依赖系统的证书链是否完整了。
-certifi==2026.10.8
+certifi==2026.10.18
