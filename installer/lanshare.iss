@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.83"
+#define AppVersion     "3.84"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
