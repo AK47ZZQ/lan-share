@@ -20,7 +20,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # (label, regex)  — things that must never appear in a public repo
 SECRETS = [
     ("real e-mail",        r"[A-Za-z0-9._%+-]+@(?:qq|163|126)\.com"),
-    ("tunnel domain",      r"frp-any\.com|ngrok\.io|natapp\.cn"),
+    # `xxx.frp-any.com` 是教学占位符（告诉用户能填什么样的地址），
+    # frp-any.com 本身是 sakuraFrp 的公共域名后缀，不是谁的私有域名。
+    # 真正要抓的是「裸域名 + 真实端口」这种能直接连上去的组合，
+    # 所以负向后顾排除 xxx. 前缀。
+    ("tunnel domain",      r"(?<![a-z0-9]\.)(?:frp-any\.com|ngrok\.io|natapp\.cn)"),
     ("private LAN IP",     r"192\.168\.1\.(?!(?:1|99|100|101)\b)\d+"),
     ("tailscale identity", r"tailf[0-9a-f]{6,}|100\.(?:8[0-9]|9[0-9])\.[0-9]{1,3}\.[0-9]{1,3}"),
     ("credentials",        r"(?:api[_-]?key|access[_-]?token|client[_-]?secret)\s*[=:]\s*[\"'](?!JBSWY3DP)[A-Za-z0-9_\-]{20,}"),
@@ -54,7 +58,8 @@ print(f"  tracked files: {len(tracked)}")
 for label, pat in SECRETS:
     rx = re.compile(pat)
     hits = []
-    for f in tracked:
+    # 跳过本脚本：SECRETS 表里逐字写着这些正则，扫自己必然命中
+    for f in (x for x in tracked if x != "scripts/pre-open-source-check.py"):
         p = ROOT / f
         if not p.is_file() or p.stat().st_size > 2_000_000:
             continue
@@ -79,7 +84,10 @@ print(f"  commits: {len(revs)}")
 for label, pat in SECRETS[:4]:      # the identity-specific ones only
     found = []
     for c in revs:
-        out = sh("git", "grep", "-l", "-E", pat, c, "--", ".")
+        # 排除本脚本自身：它的 SECRETS 表里逐字写着这些模式，
+        # 扫到自己必然命中 —— 之前就是这么误报成「历史含 tunnel domain」的。
+        out = sh("git", "grep", "-l", "-E", pat, c, "--",
+                 ".", ":!scripts/pre-open-source-check.py")
         if out.strip():
             found.append(c[:8])
             break

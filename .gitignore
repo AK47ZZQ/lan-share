@@ -43,6 +43,17 @@ mobile/lanshare_app.iml
 caddy.exe
 # 自签证书可重新生成（方法见 certs/san.cnf 与 docs/DEVELOPMENT.md），私钥严禁入库
 certs/*.pem
+# RDP 等场景的 .pfx/.p12 同理
+certs/*.pfx
+certs/*.p12
+certs/*.key
+
+# ---- 运行时生成的 Caddy 配置（2026-11-01）----
+# 根 Caddyfile 是「这台机器」的实例配置：里面写死了绝对安装路径
+# （C:/lan-share/certs/cert.pem）和本机正在用的隧道端口。它由
+# lanshare_cli 安装流程的 step 6 生成（caddyfile.py 渲染），不是源码。
+# 模板请看 lanshare_cli/caddyfile.py，改 Caddyfile 的规矩看 docs/DEVELOPMENT.md。
+/Caddyfile
 
 # ---- 调试凭据（含明文密码，只留本机） ----
 docs/DEBUG-ACCOUNT.md
