@@ -72,6 +72,11 @@ namespace LanShare
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            // 同 WebPanel.RunCli：必须让子进程也用 UTF-8 输出。
+            // --json 本身是 ASCII 安全的（中文被转义），但 stderr 里的中文
+            // 报错是 GBK，不解码对就会在界面上变成乱码。
+            psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            psi.EnvironmentVariables["PYTHONUTF8"] = "1";
 
             try
             {

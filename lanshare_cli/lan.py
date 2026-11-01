@@ -454,7 +454,17 @@ class LanStatus:
         return self.addresses[0] if self.addresses else None
 
     def url_for(self, addr: dict) -> str:
-        return f"http://{addr['ip']}:{self.web_port}"
+        """展示给用户/生成二维码用的地址。
+
+        必须写 https —— 3.72 起 Caddy 只监听 HTTPS，拼 http 的话用户在
+        浏览器里输入这个地址会得到一片空白（Caddy 不接明文）。
+
+        2026-11-01 沙箱实测：`lan status` 的「地址」行显示
+        http://192.0.2.14:8765，而下面一行自检却是
+        https://192.0.2.14:8765/healthz → ok。同一个块里两个协议，
+        用户当然会照着上面那行点。
+        """
+        return f"https://{addr['ip']}:{self.web_port}"
 
 
 def collect_status(
@@ -982,5 +992,5 @@ def diagnose(info: InstallInfo) -> dict:
         "checks": items,
         "hints": status.hints,
         "addresses": status.addresses,
-        "urls": [f"http://{a['ip']}:{info.web_port}" for a in status.addresses],
+        "urls": [f"https://{a['ip']}:{info.web_port}" for a in status.addresses],
     }

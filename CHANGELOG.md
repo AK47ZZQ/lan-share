@@ -1,3 +1,91 @@
+## 2026-11-01（更晚）— 服务端 v3.84：GUI 点开关没反应、中文乱码、打开就卡
+
+用户实测 GUI 报的三个问题，根因是三个独立的地方。
+
+### 一、点「启动局域网服务」弹成功，但地址和二维码不显示
+
+界面弹出「局域网已开启」，右边局域网板块还是「局域网未开启」，地址框空、
+没有二维码、按钮文字也没变。
+
+托盘里两个操作用了**不同的超时**：
+
+```
+enable   → 30000ms  → 成功，弹 toast「局域网已开启」
+status   → 20000ms  → 失败 → dict 为 null
+```
+
+`BuildPayload` 拿不到 `dict` 就 `lanUrl = ""`，前端据此把地址框清空、
+二维码不渲染、按钮回到「启动局域网服务」。于是用户看到「说开了，但界面不认」。
+
+修：**地址不该依赖 CLI**。它本来就是本机网卡属性：
+- 新增 `LocalLanIp()`，用 `System.Net.NetworkInformation` 挑有网关、
+  metric 最小、非 169.254 的 IPv4，几毫秒出结果。
+- `BuildPayload` 在 `d == null` 和「`addresses` 为空」两种情况下都用它兜底。
+- 提示语写清楚状态没确认（「读不到服务状态（地址仍可尝试）」），
+  而不是把地址一起藏掉。
+
+### 二、检查更新的中文字是乱码
+
+`WebPanel.RunCli` 里：
+
+```
+StandardOutputEncoding = Encoding.UTF8   ← 我按 UTF-8 解码
+```
+
+但中文 Windows 上 Python 重定向到管道时用 **GBK** 编码。实测 embedded Python：
+
+```
+原始字节: b'\xb5\xb1\xc7\xb0\xb0\xe6\xb1\xbe...'   ← "当前" 的 GBK
+UTF-8 解码失败: 'utf-8' codec can't decode byte 0xb5
+GBK 解码:      当前版本：3.83
+```
+
+光设「我按什么解码」不够，还得告诉子进程「你按什么编码」。加：
+
+```
+psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+psi.EnvironmentVariables["PYTHONUTF8"] = "1";
+```
+
+`WebPanel.RunCli` 和 `LanSharePanel.RunLan` 两处都加。修完实测输出变成
+`\xe5\xbd\x93...`（真正的 UTF-8），解码正常。
+
+### 三、每次打开 GUI 都很卡，服务全显示「正在检测中」
+
+`PushStateAsync` 一进来就 `RunLan("status")` —— 每 3 秒启动一次 Python 进程，
+而 embedded Python 冷启动加 import 要好几秒。界面在结果回来前全是
+「正在检测」，而且上一个还没回来下一个又发，进程越积越多。
+
+三处改动：
+
+1. **首帧先推本地状态**：新增 `BuildLocalPayload()`，服务行查 SCM（毫秒级），
+   局域网/二维码沿用上一次 CLI 结果（`_lastPayload` 缓存），界面立刻有内容。
+2. **降频**：3 秒 → 10 秒。
+3. **防叠加**：`_busy` 时一律不刷（老代码 `_busy && !force` 在 force 时放行，
+   开局域网结束那一下正好会叠第二个进程）；新增 `_stateInFlight` 防重入。
+
+`_stateInFlight` 用 `try/finally` 释放 —— 不加的话 `RunLan` 一抛异常它就
+永远是 `true`，界面从此再也不刷新，表现和「点按钮没反应」一模一样。
+
+## 顺带修的
+
+`lan status` 展示给用户的地址写死了 `http://`：
+
+```
+lan status 输出：
+  地址   http://192.0.2.14:8765      ← 用户会照这行点
+  自检   https://192.0.2.14:8765/healthz → ok
+```
+
+同一个块里两个协议。3.72 起 Caddy 只监听 HTTPS，照 http 那行访问是一片空白。
+改成 `https://`，JSON 输出的 `urls` 同步。
+
+## 待观察
+
+`lan status` 在慢机器上本身可能要十几秒（内部做防火墙检查、HTTPS 自检）。
+这版靠「本地兜底 + 降频」绕过，没动它的内部耗时 —— 如果用户那边仍然慢，
+下一步是把 `collect_status` 里的探测改并发。
+
 ## 2026-11-01（深夜）— 服务端 v3.83：装到 D 盘却写 C 盘、卸载崩掉半途而废
 
 用户从零安装、选了 D 盘，结果发现 C 盘里长出了 lanshare 的目录；卸载时

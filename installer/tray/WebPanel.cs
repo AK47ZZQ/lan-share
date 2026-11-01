@@ -58,6 +58,10 @@ namespace LanShare
         private bool _busy;
         private DateTime _lastPush = DateTime.MinValue;
         private string _lastQrSrc;
+        // 上一次完整状态（CLI 结果），用于首帧沿用、避免地址和二维码闪没
+        private Dictionary<string, object> _lastPayload;
+        // 状态查询是否在途，防止定时器和 force 刷新叠加出两个 Python 进程
+        private bool _stateInFlight;
 
         public WebPanel(InstallConfig cfg, CliRunner cli)
         {
@@ -215,9 +219,21 @@ namespace LanShare
         private void PushStateAsync(bool force)
         {
             if (!_pageReady) return;
-            if (_busy && !force) return;
-            if (!force && (DateTime.Now - _lastPush).TotalSeconds < 3) return;
+            // 正在跑后台动作（开局域网/检查更新）时不要再叠一个 CLI 进程。
+            // 老代码 `_busy && !force` 在 force=true 时会放行 —— 而开局域网
+            // 结束那一秒正好会 force 刷一次，于是两个 Python 同时跑，
+            // 用户感觉界面像冻住了。
+            if (_busy) return;
+            if (_stateInFlight) return;     // 防重入：上一次还没回来就别再发
+            if (!force && (DateTime.Now - _lastPush).TotalSeconds < 10) return;
             _lastPush = DateTime.Now;
+            _stateInFlight = true;
+
+            // 先把「本地就能算」的部分推出去。
+            // 服务状态查 SCM 是毫秒级，没理由陪 CLI 冷启动一起等好几秒 ——
+            // 老代码一进来就 RunLan，界面在结果回来前全是「正在检测中」，
+            // 这就是「每次打开 GUI 都卡、服务都显示正在检测」的根因。
+            Send("state", BuildLocalPayload());
 
             Task.Run(() =>
             {
@@ -226,9 +242,130 @@ namespace LanShare
                 return BuildPayload(dict, error);
             }).ContinueWith(t =>
             {
-                if (IsDisposed || _web == null) return;
-                Send("state", t.Result);
+                // try/finally 保命：RunLan 抛异常时 t.Result 会重新抛出，
+                // 如果不用 finally 兜住，_stateInFlight 永远是 true，
+                // 界面从此再也不刷新 —— 表现为「点了按钮没反应」。
+                try
+                {
+                    if (t.IsFaulted || t.IsCanceled)
+                    {
+                        AppendLog("状态刷新失败：" + (t.Exception == null
+                            ? "已取消" : t.Exception.GetBaseException().Message));
+                        return;
+                    }
+                    if (IsDisposed || _web == null) return;
+                    Send("state", t.Result);
+                }
+                finally
+                {
+                    _stateInFlight = false;
+                }
             }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        /// <summary>
+        /// 只靠本机信息拼一份状态：服务行查 SCM，局域网/二维码沿用上一次
+        /// CLI 的结果。用来让界面第一帧就有内容，不用干等 CLI。
+        /// </summary>
+        private Dictionary<string, object> BuildLocalPayload()
+        {
+            var p = new Dictionary<string, object>
+            {
+                { "apiPort", _cfg.ApiPort },
+                { "webPort", _cfg.WebPort },
+                { "dataPath", _cfg.DataFolder },
+                { "services", BuildServiceRows(null) },
+                { "healthy", false },
+                { "lanOn", false },
+                { "lanUrl", "" },
+                { "lanHint", "正在读取局域网状态…" },
+                { "wanUrl", "" },
+                { "qr", null },
+                { "certTrusted", true },
+            };
+
+            // 局域网地址不要等 CLI —— 直接问网卡。
+            //
+            // 2026-11-01 用户反馈「点开局域网服务有成功弹窗，但地址和二维码
+            // 不显示、按钮状态也不变」。查下来是 lan status 那次调用失败了
+            // （用户机器上 HTTPS 自检慢，20 秒超时 → dict 为 null →
+            // addresses 空 → lanUrl 空 → 地址和二维码一起消失），
+            // 而 enable 是 30 秒超时所以成功弹窗照出。
+            // 两件事用了不同的超时，表现就成了「说开了但看不见」。
+            //
+            // 地址本来就是本机网卡属性，读一下就有，几毫秒。
+            string ip = LocalLanIp();
+            if (ip != null)
+            {
+                p["lanHint"] = "正在确认监听状态…";
+                p["__localIp"] = ip;
+            }
+
+            // 有上一次的完整结果就沿用它，避免第一帧把地址/二维码闪没
+            if (_lastPayload != null)
+            {
+                foreach (var key in new[]
+                {
+                    "healthy", "lanOn", "lanUrl", "lanHint", "wanUrl", "qr",
+                    "certTrusted", "lanBlocked", "noNetwork",
+                })
+                {
+                    if (_lastPayload.ContainsKey(key)) p[key] = _lastPayload[key];
+                }
+            }
+            return p;
+        }
+
+        /// <summary>
+        /// 本机最适合展示给局域网用的 IPv4 地址（有网关、metric 最小；虚拟网卡靠后）。
+        /// 拿不到返回 null。
+        /// </summary>
+        private static string LocalLanIp()
+        {
+            try
+            {
+                string best = null;
+                long bestMetric = long.MaxValue;
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+                    if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                        continue;
+                    var props = ni.GetIPProperties();
+                    bool hasGateway = false;
+                    foreach (var gw in props.GatewayAddresses)
+                    {
+                        if (gw.Address != null &&
+                            gw.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        {
+                            hasGateway = true;
+                            break;
+                        }
+                    }
+                    if (!hasGateway) continue;
+
+                    long metric = 0;
+                    foreach (var ipInfo in props.UnicastAddresses)
+                    {
+                        if (ipInfo.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+                            continue;
+                        // 169.254.x.x 是自动分配的无效地址
+                        if (ipInfo.Address.GetAddressBytes()[0] == 169) continue;
+                        try { metric = props.GetIPv4Properties().Index; } catch { metric = 0; }
+                        if (metric < bestMetric)
+                        {
+                            bestMetric = metric;
+                            best = ipInfo.Address.ToString();
+                        }
+                    }
+                }
+                return best;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         /// <summary>把 CLI 的 status 字典整理成前端要的形状。</summary>
@@ -251,8 +388,16 @@ namespace LanShare
 
             if (d == null)
             {
-                p["lanHint"] = error ?? "读不到服务状态";
+                // CLI 没回来（超时/服务名对不上），但网卡信息是本机就有的。
+                // 地址照常显示，提示语说清楚状态没确认 —— 总比一片空白强。
+                p["lanHint"] = (error ?? "读不到服务状态") + "（地址仍可尝试）";
                 p["services"] = BuildServiceRows(null);
+                string localIp = LocalLanIp();
+                if (localIp != null)
+                {
+                    p["lanUrl"] = "https://" + localIp + ":" + _cfg.WebPort + "/";
+                }
+                _lastPayload = p;
                 return p;
             }
 
@@ -273,6 +418,14 @@ namespace LanShare
                 {
                     lanUrl = "https://" + Str(first, "ip") + ":" + Int(d, "web_port") + "/";
                 }
+            }
+            // CLI 没给地址（比如它自己探活失败）时，用本机网卡兜一层。
+            // 用户要的是「手机扫哪个地址」，这个答案不该依赖 CLI 是否顺利。
+            if (lanUrl.Length == 0)
+            {
+                string localIp2 = LocalLanIp();
+                if (localIp2 != null)
+                    lanUrl = "https://" + localIp2 + ":" + _cfg.WebPort + "/";
             }
             p["lanUrl"] = lanOn ? lanUrl : "";
 
@@ -353,6 +506,7 @@ namespace LanShare
             }
             catch (Exception) { }
 
+            _lastPayload = p;
             return p;
         }
 
@@ -768,6 +922,16 @@ namespace LanShare
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
+            // 必须显式告诉 Python 用 UTF-8 输出。
+            //
+            // 中文 Windows 上 sys.stdout 默认是 GBK，而上面两行按 UTF-8 解码
+            // —— 字节对不上，界面上的中文全成乱码。2026-11-01 用户反馈
+            // 「检查更新显示的字体是乱码」就是这个。
+            //
+            // 光靠上面两行不行：那是「我按什么解码」，不是「你按什么编码」。
+            // PYTHONIOENCODING 才是给子进程下的指令。
+            psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            psi.EnvironmentVariables["PYTHONUTF8"] = "1";
 
             try
             {
