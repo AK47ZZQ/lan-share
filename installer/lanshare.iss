@@ -206,10 +206,33 @@ begin
     '备份时整个复制走就行。如果 C 盘空间紧张，可以改到别的盘。',
     False, '');
   DataDirPage.Add('');
-  // 默认跟随安装目录。以前是 ProgramData\LANShare\data，
-  // 结果用户只选了一次安装目录，盘上却散成两处 —— 程序在 C:\lanshare，
-  // 数据跑到 C:\ProgramData\LANShare，找起来别扭、备份也要记两个路径。
-  DataDirPage.Values[0] := ExpandConstant('{app}\data');
+
+  // 这里绝对不能写 ExpandConstant 展开 app 常量。
+  // 2026-11-01 真机装 3.79 崩了：Runtime error "An attempt was made to
+  // expand the app constant before it was initialized"。
+  //
+  // 原因是 InitializeWizard 跑在向导刚创建、用户还没选安装目录的时候，
+  // app 常量此刻是空的（尤其我们把 AppendDefaultDirName 关掉之后，没有任何
+  // 默认值可以兜底）。真正的路径要等用户在「选择目标位置」页点下一步才确定。
+  //
+  // 所以默认值留空，等 CurPageChanged 到了数据目录页再填 —— 那时
+  // WizardDirValue 一定有值。
+  //
+  // 注意：这段用 // 而不是花括号注释 —— 花括号注释里只要出现一个右花括号
+  // 就会提前闭合，而这里要提到那个常量名，必然会带出来。
+  DataDirPage.Values[0] := '';
+end;
+
+// 进入数据目录页时，用上一步刚选的安装目录当默认值。
+// 这是 app 常量唯一能安全读取的时机。
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (DataDirPage <> nil) and (CurPageID = DataDirPage.ID) then
+  begin
+    // 只在用户还没自己填过时给默认值 —— 从上一页退回来不该覆盖他的修改
+    if DataDirPage.Values[0] = '' then
+      DataDirPage.Values[0] := WizardDirValue + '\data';
+  end;
 end;
 
 
