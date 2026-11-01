@@ -93,15 +93,19 @@ class Abort(Exception):
 # 外部命令
 # ──────────────────────────────────────────────────────────────
 
-def run(cmd, *, shell: bool = False, timeout: int = 1800) -> subprocess.CompletedProcess:
+def run(cmd, *, shell: bool = False, timeout: int = 1800,
+        cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """跑命令。cwd 默认仓库根 —— 但 Flutter 必须在 mobile/ 里跑
+    （那里才有 pubspec.yaml），所以必须能传。"""
     return subprocess.run(
-        cmd, shell=shell, cwd=str(ROOT), timeout=timeout,
+        cmd, shell=shell, cwd=str(cwd or ROOT), timeout=timeout,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
-def run_checked(cmd, *, shell: bool = False, timeout: int = 1800) -> str:
-    res = run(cmd, shell=shell, timeout=timeout)
+def run_checked(cmd, *, shell: bool = False, timeout: int = 1800,
+                cwd: Path | None = None) -> str:
+    res = run(cmd, shell=shell, timeout=timeout, cwd=cwd)
     if res.returncode != 0:
         tail = ((res.stdout or "")[-1200:] + (res.stderr or "")[-1200:]).strip()
         raise Abort(f"命令失败（exit {res.returncode}）：{cmd}\n{tail}")
@@ -188,9 +192,14 @@ def check_tests() -> None:
 
     flutter = ROOT / "env" / "flutter" / "bin" / "flutter.bat"
     if flutter.is_file():
-        res = run([str(flutter), "test"], timeout=1800)
+        # 必须在 mobile/ 里跑 —— 那里才有 pubspec.yaml。在仓库根跑会
+        # 「没找到项目」直接退出，而且 stdout 是空的，报错看起来像
+        # 「Flutter 测试失败：（空白）」，完全没法排查。
+        res = run([str(flutter), "test"], timeout=1800, cwd=ROOT / "mobile")
         if res.returncode != 0:
-            raise Abort("Flutter 测试失败：\n" + (res.stdout or "")[-1200:])
+            out = ((res.stdout or "")[-1500:] + (res.stderr or "")[-1500:]).strip()
+            raise Abort("Flutter 测试失败：\n" + (out or "（命令没有输出，退出码 "
+                                                  f"{res.returncode}）"))
         ok("Flutter 测试通过")
     else:
         warn("找不到 flutter，跳过 Dart 测试")
@@ -453,9 +462,10 @@ def cmd_app(args) -> int:
     step(3, total, "跑 Dart 测试")
     flutter = ROOT / "env" / "flutter" / "bin" / "flutter.bat"
     if flutter.is_file():
-        res = run([str(flutter), "test"], timeout=1800)
+        res = run([str(flutter), "test"], timeout=1800, cwd=ROOT / "mobile")
         if res.returncode != 0:
-            raise Abort("Flutter 测试失败")
+            out = ((res.stdout or "")[-1500:] + (res.stderr or "")[-1500:]).strip()
+            raise Abort("Flutter 测试失败：\n" + (out or f"（无输出，退出码 {res.returncode}）"))
         ok("测试通过")
 
     step(4, total, "构建 APK")
