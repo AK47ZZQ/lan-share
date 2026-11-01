@@ -519,6 +519,36 @@ def github_release(tag: str, title: str, notes: str, asset: Path,
     return url
 
 
+def restore_latest_to_server() -> None:
+    """把 GitHub 的 Latest 标记还给最新的服务端 Release。
+
+    App 一发版就会抢走 Latest —— GitHub 的规则是「最新发布的那个」，
+    而服务端才应该是主产品（用户从仓库首页点进来，该看到的是安装包）。
+    客户端两个都按 tag 前缀筛，所以这个标记不影响更新检查，只影响
+    仓库首页展示；不还回去纯属看着别扭。
+
+    找不到服务端 Release 就跳过，不报错。
+    """
+    try:
+        raw = run_checked(["gh", "api", f"repos/{REPO}/releases?per_page=100"],
+                          timeout=300)
+        rels = json.loads(raw)
+    except Abort as exc:
+        warn(f"还给服务端 Latest 时拉列表失败（不影响本次发布）：{exc}")
+        return
+
+    for r in rels:
+        tag = str(r.get("tag_name") or "")
+        if tag.startswith("server-"):
+            res = run(["gh", "release", "edit", tag, "--latest"], timeout=300)
+            if res.returncode == 0:
+                ok(f"Latest 标记还给 {tag}")
+            else:
+                warn(f"设 Latest 失败（{res.stderr.strip()[:80]}）")
+            return
+    warn("没有服务端 Release，Latest 保持原样")
+
+
 def prune_old_releases(kind: str, keep_tag: str) -> None:
     """删掉同类型的旧 Release，只留刚发的这个。
 
@@ -720,6 +750,7 @@ def cmd_app(args) -> int:
                          notes, apk, latest=False)
     verify_release(f"app-v{target}", apk)
     prune_old_releases("app", f"app-v{target}")
+    restore_latest_to_server()
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")
