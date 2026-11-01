@@ -213,6 +213,28 @@ def check_tests() -> None:
         warn("找不到 flutter，跳过 Dart 测试")
 
 
+def commit_if_changed(paths: list[Path], message: str) -> bool:
+    """只在真有变化时提交，返回是否提交了。
+
+    为什么要这个：发版脚本重跑时，版本号可能已经是目标值（上一轮写过），
+    `git add` 之后暂存区是空的，`git commit` 会以 exit 1 报
+    「nothing to commit」—— 整个发版就此中断，明明什么事都没有。
+    幂等不只是「不写坏文件」，还包括「没活干时安静地跳过」。
+    """
+    git("add", *[str(p) for p in paths])
+    staged = git("diff", "--cached", "--name-only")
+    if not staged.strip():
+        ok("版本号无变化，跳过提交")
+        return False
+    run_checked([
+        "git", "-c", "user.name=Hermes",
+        "-c", "user.email=128774958+AK47ZZQ@users.noreply.github.com",
+        "commit", "-m", message,
+    ])
+    ok("已提交")
+    return True
+
+
 def check_changelog_has(ver: str) -> str:
     """从 CHANGELOG 里取这个版本那一节，当 Release 说明用。"""
     text = CHANGELOG.read_text(encoding="utf-8")
@@ -428,17 +450,16 @@ def cmd_server(args) -> int:
     ok(f"lanshare.iss → {target}")
 
     step(3, total, "跑测试")
-    check_tests()
+    if args.skip_tests:
+        warn("已跳过测试（仅当刚跑过全绿时才该这么用）")
+    else:
+        check_tests()
 
     step(4, total, "构建安装包")
     exe = build_server()
 
     step(5, total, "提交版本号")
-    git("add", str(ISS))
-    run_checked(["git", "-c", "user.name=Hermes",
-                 "-c", "user.email=128774958+AK47ZZQ@users.noreply.github.com",
-                 "commit", "-m", f"chore(release): {target}"])
-    ok("已提交")
+    commit_if_changed([ISS], f"chore(release): {target}")
 
     step(6, total, "发布")
     url = github_release(f"server-v{target}", f"LAN Share 服务端 {target}", notes, exe,
@@ -469,7 +490,9 @@ def cmd_app(args) -> int:
 
     step(3, total, "跑 Dart 测试")
     flutter = ROOT / "env" / "flutter" / "bin" / "flutter.bat"
-    if flutter.is_file():
+    if args.skip_tests:
+        warn("已跳过测试（仅当刚跑过全绿时才该这么用）")
+    elif flutter.is_file():
         res = run([str(flutter), "test"], timeout=1800, cwd=ROOT / "mobile")
         if res.returncode != 0:
             out = ((res.stdout or "")[-1500:] + (res.stderr or "")[-1500:]).strip()
@@ -486,11 +509,7 @@ def cmd_app(args) -> int:
         smoke_app(apk)
 
     step(6, total, "提交版本号")
-    git("add", str(PUBSPEC))
-    run_checked(["git", "-c", "user.name=Hermes",
-                 "-c", "user.email=128774958+AK47ZZQ@users.noreply.github.com",
-                 "commit", "-m", f"chore(release): App {target}+{new_build}"])
-    ok("已提交")
+    commit_if_changed([PUBSPEC], f"chore(release): App {target}+{new_build}")
 
     step(7, total, "发布并验证")
     url = github_release(f"app-v{target}", f"LAN Share App {target} (build {new_build})",
@@ -521,10 +540,14 @@ def main() -> int:
     p_srv = sub.add_parser("server", parents=[common], help="发服务端")
     p_srv.add_argument("version", nargs="?", help="新版本号，省略则沿用当前")
     p_srv.add_argument("--skip-smoke", action="store_true")
+    p_srv.add_argument("--skip-tests", action="store_true",
+                       help="跳过测试（只在刚跑过全绿、本轮只是补发版时用）")
 
     p_app = sub.add_parser("app", parents=[common], help="发 App")
     p_app.add_argument("version", nargs="?", help="新版本号，省略则沿用当前（build 不变）")
     p_app.add_argument("--skip-smoke", action="store_true", help="跳过模拟器冒烟")
+    p_app.add_argument("--skip-tests", action="store_true",
+                       help="跳过测试（只在刚跑过全绿、本轮只是补发版时用）")
 
     args = ap.parse_args()
 
