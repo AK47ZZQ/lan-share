@@ -177,6 +177,12 @@ Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait skipifsilent skipifdoesnt
 ; 防火墙规则清没清），藏起来的话中间哪一步失败用户和我们都看不见 ——
 ; 「卸载只删了一部分」有一半原因是这里把错误吞了。
 Filename: "{app}\runtime\python.exe"; Parameters: "-m lanshare_cli uninstall"; Flags: runminimized waituntilterminated; RunOnceId: "StopAndRemoveServices"
+; CLI 摘掉服务之后，postgres.exe / caddy.exe 不一定立刻退出，数据目录里的
+; PG 文件还锁着 —— 后面 DelTree 会返回 False，用户看到「点了是但 data 还在」。
+; 按进程名精确杀，不用通配。
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM postgres.exe /T"; Flags: runhidden; RunOnceId: "KillPostgres"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM caddy.exe /T"; Flags: runhidden; RunOnceId: "KillCaddy"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM python.exe /T"; Flags: runhidden; RunOnceId: "KillPython"
 
 [UninstallDelete]
 ; 删「运行时生成、不在安装清单里」的东西：__pycache__ / Caddyfile / 日志 / 证书。
@@ -320,6 +326,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataPath: String;
   Answer: Integer;
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -363,34 +370,56 @@ begin
         mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO);
       DeleteDataOnUninstall := (Answer = IDYES);
     end;
+
+    // 真正的删除放在 usUninstall 里做。
+    //
+    // 实测：usPostUninstall 是卸载器的收尾阶段，那里 Exec / DelTree 都会
+    // 「立刻返回成功」但什么也没干 —— 日志里 rmdir 用了 360ms、退出码 0，
+    // 200MB 的 pgdata 一个字节没少。usUninstall 是正常阶段，Exec 真生效。
+    //
+    // 先按进程名杀掉占着数据目录的（CLI 卸载在 [UninstallRun] 里，还没跑，
+    // 此刻 postgres/caddy 依然活着）。
+    if DeleteDataOnUninstall and (DataPathForPurge <> '') and DirExists(DataPathForPurge) then
+    begin
+      Log('LANShare: 开始删除数据目录 ' + DataPathForPurge);
+      Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM postgres.exe /T',
+           '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM caddy.exe /T',
+           '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Sleep(1500);
+
+      Exec(ExpandConstant('{cmd}'), '/c rmdir /s /q "' + DataPathForPurge + '"',
+           '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Log('LANShare: rmdir 退出码=' + IntToStr(ResultCode));
+
+      if DirExists(DataPathForPurge) then
+      begin
+        Sleep(2000);
+        Exec(ExpandConstant('{cmd}'), '/c rmdir /s /q "' + DataPathForPurge + '"',
+             '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Log('LANShare: rmdir 重试退出码=' + IntToStr(ResultCode));
+      end;
+
+      if DirExists(DataPathForPurge) then
+      begin
+        Log('LANShare: 数据目录仍存在');
+        SuppressibleMsgBox('数据目录没有完全删除：' + #13#10 + DataPathForPurge + #13#10 + #13#10 +
+                           '可能有进程还占用着文件。重启电脑后可以手动删除这个目录。',
+                           mbInformation, MB_OK, IDOK);
+      end
+      else
+        Log('LANShare: 数据目录已删除');
+    end;
   end
   else if CurUninstallStep = usPostUninstall then
   begin
-    Log('LANShare: usPostUninstall DeleteDataOnUninstall=' +
-        IntToStr(Ord(DeleteDataOnUninstall)) + ' path=' + DataPathForPurge);
+    // 数据已经在 usUninstall 阶段删过了 —— 那里 Exec 才真正生效。
+    // 这里只清理 Inno 自己留下的空壳。
+    Log('LANShare: usPostUninstall 收尾');
     if DeleteDataOnUninstall then
     begin
-      // 用 usUninstall 存下来的路径 —— 这里再调 GetDataDir 会拿到兜底值，
-      // 因为 CLI 已经把注册表删了。
-      if (DataPathForPurge <> '') and DirExists(DataPathForPurge) then
-      begin
-        // DelTree 返回 False 说明有文件删不掉（通常是 PG 的 postmaster.pid
-        // 或日志还被占着）。静默吞掉的话用户就是「点了是但还是残留」，
-        // 而且完全不知道为什么 —— 必须说出来。
-        //
-        // 用 SuppressibleMsgBox 不是 WizardSilent + MsgBox：卸载阶段调
-        // WizardSilent 会抛致命异常（3.83 就是这么崩的，见上）。
-        if not DelTree(DataPathForPurge, True, True, True) then
-        begin
-          SuppressibleMsgBox('数据目录没有完全删除：' + #13#10 + DataPathForPurge + #13#10 + #13#10 +
-                             '可能还有进程占用文件。重启电脑后可以手动删除这个目录。',
-                             mbInformation, MB_OK, IDOK);
-        end;
-      end;
-      // 数据删完之后，安装目录如果空了也一并移除，不留空壳
-      RemoveDir(ExpandConstant('{app}'));
-      // Inno 自己的卸载器文件也顺手清掉（通常它会自己删，删不掉就留个空壳）
       DeleteFile(ExpandConstant('{app}\unins000.dat'));
+      RemoveDir(ExpandConstant('{app}'));
     end;
   end;
 end;

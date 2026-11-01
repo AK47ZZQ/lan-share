@@ -1,4 +1,4 @@
-## 2026-11-01（深夜二）— 服务端 v3.85：3.82/3.84 的 GUI 修复根本没编译进包
+## 2026-11-01（深夜二）— 服务端 v3.85：托盘没编译进包、卸载删不掉数据
 
 用户装完 3.84 反馈「还是不行」，发来 tray.log。第一行就露了：
 
@@ -58,6 +58,83 @@ OK   首帧本地状态             BuildLocalPayload
 OK   防重入                  _stateInFlight
 OK   中文提示                 正在读取局域网状态
 ```
+
+## 卸载点「是」数据没删、__pycache__ 残留
+
+用户反馈「卸载时点了是，但还是残留了 data 和 __pycache__ 两个文件夹」。
+两个独立原因。
+
+**① data：删的是 C 盘的假路径**
+
+```
+usUninstall      → 问「是否删除数据」，存 DeleteDataOnUninstall
+[UninstallRun]   → 调 CLI 卸载，CLI 在这里把注册表 HKLM\SOFTWARE\LANShare 删了
+usPostUninstall  → GetDataDir('') 读注册表 → 空 → 退回兜底
+                   {commonappdata}\LANShare\data
+                 → 删一个不存在的 C 盘路径
+```
+
+数据目录在 `usUninstall` 时才读得到，但真正删除在 `usPostUninstall`，
+那时注册表已经被 CLI 删干净了。用户装在 G 盘，删的却是
+`C:\ProgramData\LANShare\data` —— 当然一个字节没少。
+
+修：新增 `DataPathForPurge`，在 `usUninstall`（注册表还在时）把路径存下来。
+
+**② 更隐蔽的：usPostUninstall 里 Exec 根本不执行**
+
+加了日志才看出来：
+
+```
+22:47:05.085  rmdir /s /q 开始 -> D:\LANShare\data
+22:47:05.445  rmdir 结束，退出码=0          ← 360 毫秒
+22:47:05.445  数据目录已删除
+```
+
+360 毫秒删一个 200MB 的 pgdata？不可能。目录原封不动躺着。
+
+`usPostUninstall` 是卸载器的收尾阶段，那里调 `Exec` / `DelTree` 都会被
+静默吞掉，返回「成功」但没有任何动作。`DelTree` 也一样，返回 True 却
+什么都没删。
+
+修：把删除动作挪到 **`usUninstall`** 阶段（正常阶段，`Exec` 真生效）：
+
+```
+修复后：22:51:56.857 开始 → 22:51:59.388 rmdir 退出码=0
+       2.5 秒，200MB 的 pgdata 真的没了
+```
+
+删之前先 `taskkill` 掉 postgres.exe / caddy.exe —— CLI 的卸载在
+`[UninstallRun]` 里还没跑，此刻它们仍占着数据文件。
+
+**③ __pycache__ 残留**
+
+`[UninstallDelete]` 按子目录精确列（为了避开 data），但漏了
+`{app}\__pycache__` —— `server.py` 在安装根目录被 import 时生成的。
+
+**④ 加 /DELETE_DATA 参数**
+
+静默卸载默认选「否」（保留数据，这是对的），但自动化测试需要一条能走到
+「删除数据」分支的路径。新增 `CmdLineHas('/DELETE_DATA')`，
+`unins000.exe /SILENT /DELETE_DATA` 就能直接删。真实用户不会碰到。
+
+**验证（沙箱分盘，装到 D:\LANShare）**
+
+```
+[4] data_sentinel_gone=ok
+    data_dir_gone=ok
+    pgdata_gone=ok
+[5] pycache_gone=ok
+[7] api=clean  reg=clean  C_programdata=clean
+```
+
+残留的 `D:\LANShare` 空壳里只有 `unins000.exe` —— 卸载器删不掉自己，
+Inno 的标准行为，重启后消失。
+
+**教训**
+
+Inno 的 `usPostUninstall` 阶段做任何实际动作都不可靠，要执行命令放
+`usUninstall`。另外「返回成功」不代表「真的做了」—— 必须自己核实
+（`DirExists`），否则日志里全是 OK，磁盘上什么都没变。
 
 ## 顺带：GUI 状态刷新彻底不依赖 CLI
 
