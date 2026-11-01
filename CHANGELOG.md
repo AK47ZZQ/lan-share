@@ -1,3 +1,42 @@
+## 2026-11-01（深夜四）— 未发版：服务端成为更新镜像源
+
+目标：用户手机检查更新、拉历史、下 APK **完全不出网**，局域网内走本机 IO。
+
+### 服务端 `appver.py` 反转了数据源优先级
+
+`_load_version()` 和 `_load_history()` 原来是 **GitHub 优先、本地兜底**。
+那样每个用户的服务端每次查版本都要出网，而 GitHub 在国内经常连不上 ——
+结果就是历史永远是空的、检查更新永远失败。
+
+现在反过来：**本地文件优先**，GitHub 只在本地没有时兜底（全新部署）。
+
+- `_load_version()` → 本地 `App安装包/version.json`，`_source` 标 `local`
+- `_load_history()` → 本地 `App安装包/versions.json`
+
+### `release.py` 发版后自动同步
+
+新增 `sync_to_local_server()`：发完 App 版把三样东西写进本机服务端分发目录
+
+- `LANShare-App-<ver>+<build>.apk`（本体）
+- `version.json`（含 sha256 / size / notes / date）
+- `versions.json`（全部 39 个版本的历史）
+
+目录从注册表 `HKLM\SOFTWARE\LANShare\DataFolder` 读，**找不到就跳过** ——
+别人的机器上跑 `release.py` 只是发 GitHub Release，不装服务端很正常。
+
+顺手清掉旧包和 `.part` 残留（之前服务端后台镜像线程占着文件，得要重启才释放）。
+
+### 两个容易踩的细节
+
+**build 号必须用真实值。** `versions.json` 里最新那条的 build 写的是
+`pubspec.yaml` 的真实值（130），不是从版本号推算的 10123 —— App 端拿它
+跟本地 `buildNumber` 比对，对不上就标不出「当前」。
+
+**notes 只取 `###` 小节标题。** 这份 notes 会显示在手机「发现新版本」那里，
+用 `summarize()`（给 Release 页面用的）会带上段落首句，结果是一堆半截话
+（「根因不是滚动冲突，是一次布局了全部内容：…」）。只留小标题，
+一行一句才读得下去，细节留在 CHANGELOG 里。
+
 ## 2026-11-01（深夜三）— App v1.1.23：关于页去掉内网 IP、更新历史能滑到底、加 VPN 提示
 
 ### 关于页印着家里的内网 IP

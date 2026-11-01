@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -519,6 +520,146 @@ def github_release(tag: str, title: str, notes: str, asset: Path,
     return url
 
 
+def _history_notes(body: str, max_items: int = 6) -> str:
+    """从 CHANGELOG 条目的正文里提炼要点，只取 `###` 小节标题。
+
+    为什么不用 summarize()：那个是给 Release 页面用的，会带上段落首句，
+    结果是一堆半截句子（「根因不是滚动冲突，是一次布局了全部内容：…」）。
+    服务端这份 notes 会显示在手机「发现新版本」那里，一行一句的小标题
+    才读得下去。细节留在 CHANGELOG 里，想看的人自己去看。
+    """
+    heads = re.findall(r"^###\s+(.+)$", body, re.M)
+    skip = ("已知限制", "已知事项", "安装", "下载", "顺带", "注意", "技术信息")
+    out: list[str] = []
+    for h in heads:
+        h = re.sub(r"^[一二三四五六七八九十百]+、\s*", "", h).strip()
+        h = re.sub(r"^\d+\.\s*", "", h)
+        if not h or any(k in h for k in skip):
+            continue
+        out.append(h)
+    if not out:
+        return ""
+    return "\n".join("- " + h for h in out[:max_items])
+
+
+def find_local_share_dir() -> Path | None:
+    """找本机服务端的分发目录（`<数据目录>/App安装包`）。
+    读注册表而不是猜路径 —— 用户装在哪都有可能。找不到返回 None。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\LANShare") as k:
+            data_folder = winreg.QueryValueEx(k, "DataFolder")[0]
+    except OSError:
+        return None
+    d = Path(data_folder) / "App安装包"
+    return d if d.is_dir() else None
+
+
+def parse_changelog_history(markdown: str) -> list[dict]:
+    """CHANGELOG.md → 更新历史列表（新到旧）。
+
+    只挑含 App 版本号的条目：CHANGELOG 里服务端和 App 是混着写的
+    （`v3.79 + App v1.1.23：…`），混进去会让用户以为手机装了 3.79。
+    同一版本被拆成多个小节的（1.1.20 分了「一」「二」）只留第一条。
+    """
+    items: list[dict] = []
+    seen: set[str] = set()
+    for sec in re.split(r"^## ", markdown, flags=re.M)[1:]:
+        lines = sec.splitlines()
+        if not lines:
+            continue
+        title = lines[0].strip()
+        m = re.search(r"App\s+v?(\d+\.\d+\.\d+)", title)
+        if not m:
+            continue
+        ver = m.group(1)
+        if ver in seen:
+            continue
+        seen.add(ver)
+
+        dm = re.search(r"(\d{4}-\d{2}-\d{2})", title)
+        parts = [int(x) for x in ver.split(".") if x.isdigit()]
+        build = (parts[0] * 10000 + parts[1] * 100 + parts[2]
+                 if len(parts) == 3 else 0)
+        items.append({
+            "version": ver,
+            "build": build,
+            "date": dm.group(1) if dm else "",
+            # 只留小节标题：这份 notes 会显示在手机「发现新版本」那里，
+            # 段落首句拼出来全是半截话，读不下去
+            "notes": _history_notes("\n".join(lines[1:])),
+        })
+    return items
+
+
+def sync_to_local_server(apk: Path, history: list[dict]) -> None:
+    """把 App 产物同步到本机服务端的 `App安装包/`。
+
+    ## 这是「更新镜像」的落地方式
+
+    服务端的 `/api/app/latest` 和 `/api/app/history` 已经改成**本地优先**
+    （见 app/api/appver.py），所以只要这几个文件在，用户手机就完全不用
+    碰 GitHub —— 局域网内走本机 IO，秒下。
+
+    ## 找不到服务端就安静跳过
+
+    别人的机器上跑 `release.py` 只是发 GitHub Release，不装服务端很正常，
+    不该因此报错。所以这里只 warn 不 fail。
+    """
+    import hashlib
+
+    dest = find_local_share_dir()
+    if dest is None:
+        warn("本机没装服务端（注册表无 LANShare），跳过镜像同步")
+        return
+
+    ver = read_app_version()[0]
+    build = read_app_version()[1]
+
+    # 1) APK 本体
+    sha = hashlib.sha256(apk.read_bytes()).hexdigest()
+    target = dest / apk.name
+    shutil.copy2(apk, target)
+    ok(f"APK 已同步到 {target.name}（{target.stat().st_size / 1048576:.1f} MB）")
+
+    # 2) version.json —— /api/app/latest 读它
+    (dest / "version.json").write_text(json.dumps({
+        "version": ver,
+        "build": build,
+        "filename": apk.name,
+        "sha256": sha,
+        "size": apk.stat().st_size,
+        "notes": history[0]["notes"] if history else "",
+        "date": history[0]["date"] if history else "",
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    ok("version.json 已更新")
+
+    # 3) versions.json —— /api/app/history 读它
+    #    最新那条的 build 必须用**真实值**（pubspec 里的 130），不能用
+    #    从版本号推算的 10123 —— App 端拿它跟本地 buildNumber 比对，
+    #    对不上就标不出「当前」。
+    for h in history:
+        if h["version"] == ver:
+            h["build"] = build
+    (dest / "versions.json").write_text(json.dumps({
+        "items": [{"version": h["version"], "build": h["build"],
+                   "date": h["date"], "notes": h["notes"]} for h in history],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    ok(f"versions.json 已更新（{len(history)} 个版本）")
+
+    # 4) 顺手清掉旧 APK 和下载残留，别让目录越攒越大
+    for old in dest.glob("LANShare-App-*.apk*"):
+        if old.name not in (apk.name, apk.name + ".part"):
+            try:
+                old.unlink()
+                ok(f"清掉旧包 {old.name}")
+            except OSError:
+                pass
+
+
 def restore_latest_to_server() -> None:
     """把 GitHub 的 Latest 标记还给最新的服务端 Release。
 
@@ -709,7 +850,7 @@ def cmd_app(args) -> int:
     cur_ver, cur_build = read_app_version()
     target = args.version or cur_ver
     new_build = cur_build if target == cur_ver else cur_build + 1
-    total = 7
+    total = 8
 
     step(1, total, "前置检查")
     check_git_clean()
@@ -751,6 +892,11 @@ def cmd_app(args) -> int:
     verify_release(f"app-v{target}", apk)
     prune_old_releases("app", f"app-v{target}")
     restore_latest_to_server()
+
+    step(8, 8, "同步到本机服务端（更新镜像）")
+    # 历史从完整 CHANGELOG 生成，不是只取当前版本 —— 服务端要能给出全部历史
+    history = parse_changelog_history(CHANGELOG.read_text(encoding="utf-8"))
+    sync_to_local_server(apk, history)
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")

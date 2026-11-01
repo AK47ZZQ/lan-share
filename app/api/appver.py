@@ -178,16 +178,29 @@ def _load_version_local() -> dict:
 
 
 def _load_version() -> dict:
-    """版本信息：**GitHub 主源 → 本地 version.json 兜底**。
+    """版本信息：**本地 version.json 优先 → GitHub 兜底**。
 
-    返回值多带一个 `_source` 键（"github" / "local"）：
-    `/api/app/download` 靠它决定是 302 去 GitHub 还是读本地文件。
+    返回值多带一个 `_source` 键（"local" / "github"）：
+    `/api/app/download` 靠它决定是直接发本地文件还是 302 去 GitHub。
+
+    2026-11-01 反转了顺序。本地优先的意义：
+      · 局域网内下载走本机 IO，不用出网也不用等 GitHub
+      · 服务端成了真正的镜像源 —— 只要有人同步过一次，全家的设备都快
+      · 没有本地文件时（全新部署）才去 GitHub 拿，行为和以前一样
     """
+    try:
+        return _load_version_local()
+    except HTTPException:
+        # 本地没有（全新部署）→ 才去 GitHub
+        pass
+
     gh = _github_app_releases()
     if gh:
         data = dict(gh[0])
         data["_source"] = "github"
         return data
+
+    # 两边都没有：把本地那次的 404 文案抛出去，比「空对象」清楚
     return _load_version_local()
 
 
@@ -266,12 +279,20 @@ def app_latest(_user=Depends(require_user)):
 
 
 def _load_history() -> list:
-    """更新历史：**GitHub Release 列表优先**，本地 versions.json 兜底。
+    """更新历史：**本地 versions.json 优先**，GitHub Release 兜底。
 
-    GitHub 的每个 Release body 就是更新日志 —— 发版时写的那段说明，
-    不用再单独维护一份 versions.json。这正是「更新日志也从 GitHub 拉」
-    的实现方式。
+    2026-11-01 调整顺序。原来是 GitHub 优先，但那样每个用户的服务端
+    每次查历史都要出网 —— 而 GitHub 在国内经常连不上，结果就是
+    「历史永远是空的」。
+
+    现在反过来：本地有 `App安装包/versions.json` 就用它（由 `release.py`
+    发版时同步过来，见 `sync_to_local_server`），GitHub 只在本地没有时
+    兜底。这样服务端成了真正的镜像源，局域网内零延迟、不依赖外网。
     """
+    local = _load_history_local()
+    if local:
+        return local
+
     gh = _github_app_releases()
     if gh:
         return [
@@ -280,7 +301,7 @@ def _load_history() -> list:
              "html_url": it.get("html_url") or ""}
             for it in gh
         ]
-    return _load_history_local()
+    return []
 
 
 def _load_history_local() -> list:

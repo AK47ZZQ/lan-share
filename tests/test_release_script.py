@@ -243,3 +243,64 @@ python scripts/release.py server 3.78
         md = "## 3.78：**加粗标题**\n\n- **加粗要点**内容\n"
         out = rel.summarize(md)
         assert "**" not in out
+class TestChangelogHistory:
+    """CHANGELOG → 更新历史。服务端 versions.json 和 App 端都吃这份数据。"""
+
+    def test_only_app_versions(self, rel):
+        md = """## 2026-11-01 — v3.79 + App v1.1.23：改了什么
+
+- 一条改动
+
+## 2026-10-31 — 服务端 v3.76：只有服务端
+
+- 不该出现
+"""
+        items = rel.parse_changelog_history(md)
+        assert len(items) == 1
+        assert items[0]["version"] == "1.1.23"
+
+    def test_dedupes_same_version(self, rel):
+        md = """## 2026-11-01（一）— App v1.1.20：第一篇
+
+- 甲
+
+## 2026-11-01（二）— App v1.1.20：第二篇
+
+- 乙
+"""
+        items = rel.parse_changelog_history(md)
+        assert len(items) == 1
+
+    def test_build_is_derived(self, rel):
+        md = "## 2026-11-01 — App v1.2.3：x\n\n- y\n"
+        items = rel.parse_changelog_history(md)
+        assert items[0]["build"] == 1 * 10000 + 2 * 100 + 3
+
+    def test_notes_are_compressed(self, rel):
+        """服务端文件不该背整篇复盘 —— notes 用精简版。"""
+        md = "## 2026-11-01 — App v1.1.23：标题\n\n" + ("正文很长的段落。" * 50)
+        items = rel.parse_changelog_history(md)
+        assert len(items[0]["notes"]) < 600
+
+    def test_keeps_document_order(self, rel):
+        md = """## 2026-11-02 — App v1.1.24：新
+
+- a
+
+## 2026-11-01 — App v1.1.23：旧
+
+- b
+"""
+        items = rel.parse_changelog_history(md)
+        assert [i["version"] for i in items] == ["1.1.24", "1.1.23"]
+
+    def test_empty(self, rel):
+        assert rel.parse_changelog_history("") == []
+
+
+class TestFindLocalShareDir:
+    def test_returns_none_when_no_registry(self, rel, monkeypatch):
+        """没装服务端的机器上跑 release.py 不该炸。"""
+        import sys
+        monkeypatch.setattr(sys, "platform", "linux")   # 非 Windows 直接跳过
+        assert rel.find_local_share_dir() is None
