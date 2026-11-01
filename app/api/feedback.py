@@ -160,7 +160,11 @@ async def feedback_create(request: Request,
                           app_ver: str = Form(""),
                           device: str = Form(""),
                           files: list[UploadFile] = File(default=[]),
-                          background: BackgroundTasks = None,
+                          # 默认给一个空实例而不是 None：FastAPI 不接受
+                          # `BackgroundTasks | None`（会报 Invalid args for
+                          # response field），但直接调用时又需要一个默认值。
+                          # 空实例 add_task 会正常执行，语义就是「没有额外后台任务」。
+                          background: BackgroundTasks = BackgroundTasks(),
                           _user=Depends(require_user)):
     user = users_store.get_username(_user["user_id"]) or f"#{_user['user_id']}"
     if not allow_rate(f"fb:{_user['user_id']}", _MAX_PER_DAY, 86400):

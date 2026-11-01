@@ -143,11 +143,17 @@ namespace LanShare
         // 3.72 起 Caddy 只监听 HTTPS（tls internal 自签证书）。
         // 这里拼 http 的话，「打开网盘」按钮点了没反应 —— 浏览器连
         // 8765 的明文端口，Caddy 直接不接。和 CLI 自检探针是同一个坑。
-        public string WebUrl { get { return "https://127.0.0.1:" + WebPort + "/"; } }
+        //
+        // 用 localhost 而不是 127.0.0.1：证书的站点地址来自
+        // `caddyfile.py::default_hosts()`，那里以 "localhost" 打头。
+        // 3.80 之前用 127.0.0.1，而它不在 SAN 里 —— 服务明明活着，
+        // 托盘却一直 SecureChannelFailure，界面全红、局域网按钮点不动。
+        // （3.80 起 default_hosts 也补了 127.0.0.1，两边都不指望对方。）
+        public string WebUrl { get { return "https://localhost:" + WebPort + "/"; } }
         // 3.72 起 Caddy 只监听 HTTPS。拼 http 的话探针每次都连不上，
         // 托盘永远显示「服务未运行」，而且还要白等一个超时才切到 https ——
         // 这就是「点开界面时检测感觉特别慢」的真正原因。
-        public string HealthUrl { get { return "https://127.0.0.1:" + WebPort + "/healthz"; } }
+        public string HealthUrl { get { return "https://localhost:" + WebPort + "/healthz"; } }
         public string LogFolder { get { return Path.Combine(InstallFolder, "logs"); } }
         public string ApiServiceName { get { return ServicePrefix + "-api"; } }
         public string CaddyServiceName { get { return ServicePrefix + "-caddy"; } }

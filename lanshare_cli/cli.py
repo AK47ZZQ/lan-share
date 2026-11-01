@@ -720,7 +720,9 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     say("  安装完成")
     say("=" * 64)
-    say(f"  浏览器打开  https://127.0.0.1:{web_port}")
+    # 用 localhost 不用 127.0.0.1：证书 SAN 里一定有 localhost，
+    # 127.0.0.1 则是 3.80 才补进去的 —— 老配置里写它用户会撞证书警告。
+    say(f"  浏览器打开  https://localhost:{web_port}")
     say(f"  局域网访问  https://<本机IP>:{web_port}")
     say("               （自签证书，首次访问要点“继续前往”）")
     say(f"  数据目录    {layout.data_dir}")

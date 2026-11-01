@@ -188,7 +188,10 @@ _STRINGS = {
 @router.get("/api/admin/feedback-relay")
 def get_relay_config(_admin=Depends(require_admin)):
     """读上报配置。token 类字段只回「设没设」，不回原值。"""
-    out = {k: settings.get_setting(k, "") for k in _STRINGS}
+    # 显式标成 dict[str, object]：这个字典里既有字符串（URL、来源标识）
+    # 又有布尔（各项开关），下面几行会把 str 换成 bool。用默认推导出的
+    # dict[str, str] 会跟赋值打架（mypy: Incompatible types in assignment）。
+    out: dict[str, object] = {k: settings.get_setting(k, "") for k in _STRINGS}
     for k in ("relay_token", "gh_token", "inbox_token"):
         out[k + "_set"] = bool(out.pop(k))
     out["relay_enabled"] = settings.get_setting(settings.FEEDBACK_RELAY_ENABLED, "") == "1"

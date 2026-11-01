@@ -13,9 +13,9 @@
         auto_https off                → 自动 HTTPS 整块关掉，证书签发一起失效
         auto_https disable_redirects  → 只关 80→443 重定向，证书照签
 
-    本机实测：`https://localhost:9902` 和 `https://192.168.1.100:9903` 都是 200，
+    本机实测：`https://localhost:9902` 和 `https://192.0.2.14:9903` 都是 200，
     证书 issuer = CN=Caddy Local Authority - ECC Intermediate，
-    SAN 里带 `IP Address:192.168.1.100` —— 手机用 IP 直连不会证书不匹配。
+    SAN 里带 `IP Address:192.0.2.14` —— 手机用 IP 直连不会证书不匹配。
 
     为什么必须 HTTPS 不能回退 HTTP：手机端扫码只收 https（scan_page.dart
     的 _accept 里只有 https:// 一条。理由很实在：http 二维码 = 明文上送
@@ -99,9 +99,20 @@ def default_hosts() -> list[str]:
     否则证书只对 localhost 有效，IP 访问会报证书不匹配。
 
     真实网卡（has_gateway=True）排前面，虚拟网卡（VirtualBox 的
-    192.168.56.1 之类）排后面 —— 签进去无害，但不能当主要入口。
+    192.0.2.14 之类）排后面 —— 签进去无害，但不能当主要入口。
     """
     hosts: list[str] = ["localhost"]
+    # 127.0.0.1 也要进 SAN。托盘的健康探测、「打开网盘」按钮、CLI 自检探针
+    # 全都用 127.0.0.1 访问 —— 证书里没有它，服务端跑得好好的，托盘也会
+    # 一直报 SecureChannelFailure（TLS 握手失败），界面上一片红。
+    #
+    # 2026-11-01 实测：干净机器装 3.80，Caddy 日志
+    #   "domains":["localhost","192.0.2.14"]
+    # 托盘日志
+    #   探测 HTTPS https://127.0.0.1:8765/healthz → Down | SecureChannelFailure
+    # 于是「启动局域网服务」按钮点了没反应、地址不显示、二维码也没有。
+    if "127.0.0.1" not in hosts:
+        hosts.append("127.0.0.1")
     try:
         from .network import list_lan_addresses
 
@@ -124,7 +135,7 @@ def _safe_host(h: str) -> str:
     """主机名白名单校验。
 
     主机名直接拼进站点地址行，含换行/空格/花括号就能注入 Caddyfile 指令 ——
-    对抗性测试里 `192.168.1.1 {}` 成功闭合了站点块。
+    对抗性测试里 `192.0.2.14 {}` 成功闭合了站点块。
     合法主机名只可能是字母、数字、点、连字符（IPv4 和域名共用这套字符集）。
     """
     v = (h or "").strip()
@@ -138,7 +149,7 @@ def site_block(
 ) -> str:
     """生成站点块的地址行，形如：
 
-        https://localhost:8765, https://192.168.1.100:8765
+        https://localhost:8765, https://192.0.2.14:8765
 
     必须带 scheme 和主机名 —— 裸 `:8765` 会被 Caddy 当成 HTTP 站点，
     tls internal 就不生效了（2026-10-31 找到的真正原因）。

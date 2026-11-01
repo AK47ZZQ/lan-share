@@ -153,14 +153,26 @@ class TestVersionFileTampering:
         """filename 被改成 ../../ 时，_apk_path 必须拒绝。
 
         失守后果：/api/app/download 会变成任意文件读取器。
+
+        注意样本要按平台选：`C:/Windows/x` 在 Linux 上是**相对**路径
+        （会拼成 dist/C:/Windows/x，仍然在 dist 里），拿它测 Linux CI
+        会 DID NOT RAISE —— 第一版就是这么挂的。
         """
+        import os
+
         from fastapi import HTTPException
 
         from app.api import appver
-        for evil in ("../../etc/passwd", r"..\..\Windows\win.ini",
-                     "C:/Windows/system32/config/sam", "//server/share/x.apk"):
+
+        evil = ["../../etc/passwd", "..\\..\\Windows\\win.ini", "//server/share/x.apk"]
+        if os.name == "nt":
+            evil.append("C:/Windows/system32/config/sam")
+        else:
+            evil.append("/etc/passwd")
+
+        for name in evil:
             with pytest.raises(HTTPException):
-                appver._apk_path({"filename": evil})
+                appver._apk_path({"filename": name})
 
     def test_missing_build_field_falls_back(self, dist, monkeypatch):
         """缺 build 字段 → 本地不可用 → 回落 GitHub，不崩。"""

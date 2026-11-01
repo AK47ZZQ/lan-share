@@ -388,7 +388,8 @@ namespace LanShare
 
             if (state != AppState.Healthy)
             {
-                string httpUrl = "http://127.0.0.1:" + _cfg.WebPort + "/healthz";
+                // 老部署可能是纯 HTTP 站点，只换协议不换主机名
+                string httpUrl = "http://localhost:" + _cfg.WebPort + "/healthz";
                 string httpResult;
                 var httpState = TryProbe(httpUrl, out httpResult);
                 Log("探测 HTTP（老部署兼容）" + httpUrl + " → " + httpState + " | " + httpResult);
