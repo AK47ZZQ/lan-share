@@ -1,3 +1,86 @@
+## 2026-11-01（深夜二）— 服务端 v3.85：3.82/3.84 的 GUI 修复根本没编译进包
+
+用户装完 3.84 反馈「还是不行」，发来 tray.log。第一行就露了：
+
+```
+托盘启动 | Prefix=lanshare Health=https://127.0.0.1:8765/healthz
+```
+
+`HealthUrl` 我在 **3.82** 就改成了 `https://localhost`。日志里还是 `127.0.0.1`
+—— 说明用户机器上跑的托盘 exe 是 3.82 之前的。
+
+查文件时间：
+
+```
+installer/tray/bin/LANShareTray.exe   15:55   ← 旧
+installer/tray/WebPanel.cs            21:46   ← 新源码
+build/out/LANShare-Setup-3.84.exe     22:04   ← 新包，但里面是旧 exe
+```
+
+## 根因：build.ps1 只复制不编译
+
+`build.ps1` 的第 10 步是：
+
+```powershell
+$traySrc = Join-Path $Root "installer\tray\bin"
+robocopy $traySrc $trayDst /E     # 只复制
+```
+
+而 C# 是另一个脚本 `installer/tray/build-tray.ps1` 编的。我改完
+`WebPanel.cs`、`LanSharePanel.cs` 只跑 `build.ps1`，打出来的包里还是
+七小时前的 exe。
+
+于是 3.82 和 3.84 号称修好的这些，**一条都没生效**：
+
+- `HealthUrl` / `WebUrl` 改 localhost
+- 托盘超时 20s → 45s
+- `PYTHONIOENCODING=utf-8`（乱码）
+- `LocalLanIp()` 本地地址兜底
+- `BuildLocalPayload()` 首帧本地状态
+- `_stateInFlight` 防叠加
+
+用户在界面上看到的每个问题都原样存在，而我这边测试跑得全绿 ——
+因为测的是源码和 CLI，没人验过「装出来的那个 exe 里到底有没有新代码」。
+
+## 修法
+
+1. `build.ps1` 第 10 步改为**先无条件编译**，编译失败直接 `Fail` 中断。
+   打一个用旧托盘的包出来比打不出来更糟 —— 它看起来是好的。
+2. 复制后打印 exe 的编译时间，一眼能对账。
+3. 发版前手工验证过 exe 里真的含新代码（按 UTF-16LE 搜符号）：
+
+```
+OK   HealthUrl 改 localhost   https://localhost:
+OK   编码修复                 PYTHONIOENCODING
+OK   本地 IP 兜底             LocalLanIp
+OK   本地监听判断             LanListeningOnAll
+OK   首帧本地状态             BuildLocalPayload
+OK   防重入                  _stateInFlight
+OK   中文提示                 正在读取局域网状态
+```
+
+## 顺带：GUI 状态刷新彻底不依赖 CLI
+
+用户日志里 `lan status` 20 秒超时。它内部要做防火墙检查 + HTTPS 自检，
+慢机器上十几秒很正常，而 GUI 每 3 秒刷一次必然超时。
+
+这版把开关状态也搬到本地：
+
+- 新增 `LanListeningOnAll()`：用 `IPGlobalProperties.GetActiveTcpListeners()`
+  看 8765 听在哪 —— 这正是 CLI 判断开/关的同一依据
+  （`listens_on_loopback_only` / `listens_on_all_interfaces`），只是不做
+  那堆耗时检查。
+- 新增 `FetchQrFor()`：二维码直接从本地 `/local/qr` 取，等 CLI 不再是前提。
+- CLI 那次查询超时放宽到 60 秒，反正在后台跑，不挡首帧。
+
+结果：打开 GUI 立刻显示服务状态、局域网开关、地址和二维码，
+CLI 回来只是补充细节。
+
+## 教训
+
+改 C# 之后必须跑 `build-tray.ps1`（现在 build.ps1 会自动跑）。
+验证不能只看「测试通过」，要看**产物里有没有这段代码**。
+
 ## 2026-11-01（更晚）— 服务端 v3.84：GUI 点开关没反应、中文乱码、打开就卡
 
 用户实测 GUI 报的三个问题，根因是三个独立的地方。

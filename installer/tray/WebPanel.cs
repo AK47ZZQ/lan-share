@@ -238,7 +238,9 @@ namespace LanShare
             Task.Run(() =>
             {
                 string error;
-                var dict = _cli.RunLan("status", 20000, out error);
+                // 60 秒：lan status 内部要做防火墙检查 + HTTPS 自检，慢机器上十几秒
+                // 很正常。反正它在后台跑，不挡首帧显示。
+                var dict = _cli.RunLan("status", 60000, out error);
                 return BuildPayload(dict, error);
             }).ContinueWith(t =>
             {
@@ -301,6 +303,36 @@ namespace LanShare
                 p["__localIp"] = ip;
             }
 
+            // 局域网开关：本地判断，不等 CLI
+            bool? listeningAll = LanListeningOnAll();
+            if (listeningAll == true)
+            {
+                p["lanOn"] = true;
+                p["healthy"] = true;
+                p["lanHint"] = ip != null
+                    ? "同一个 WiFi 下的手机、平板都能访问"
+                    : "已开启，但没检测到有网关的网卡";
+                if (ip != null)
+                {
+                    string url = "https://" + ip + ":" + _cfg.WebPort + "/";
+                    p["lanUrl"] = url;
+                    // 二维码也别等 CLI —— 直接从本地 API 端点取，顺便把结果缓存住
+                    if (string.IsNullOrEmpty(_lastQrSrc))
+                        _lastQrSrc = FetchQrFor(url);
+                    if (!string.IsNullOrEmpty(_lastQrSrc))
+                        p["qr"] = _lastQrSrc;
+                }
+            }
+            else if (listeningAll == false)
+            {
+                p["lanOn"] = false;
+                p["lanHint"] = "现在只有这台电脑能访问。开启后同一个 WiFi 下的手机也能用";
+            }
+            else
+            {
+                p["lanHint"] = "服务好像没在运行，稍后重试或点「重启服务」";
+            }
+
             // 有上一次的完整结果就沿用它，避免第一帧把地址/二维码闪没
             if (_lastPayload != null)
             {
@@ -361,6 +393,76 @@ namespace LanShare
                     }
                 }
                 return best;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 拿某个地址对应的二维码，返回 data URI；失败返回 null。
+        /// 单独抽出来是因为「本地首帧」和「CLI 返回」两条路径都要用。
+        /// </summary>
+        private string FetchQrFor(string targetUrl)
+        {
+            try
+            {
+                string qrUrl = "http://127.0.0.1:" + _cfg.ApiPort
+                             + "/local/qr?format=png&text="
+                             + Uri.EscapeDataString(targetUrl);
+                using (var img = _cli.FetchQrPng(qrUrl, 4000))
+                {
+                    if (img == null) return null;
+                    using (var ms = new MemoryStream())
+                    {
+                        img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                        return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 局域网开关状态 —— 直接看 8765 端口监听在哪。
+        ///
+        /// 这是 CLI `lan status` 里唯一的权威判据（它自己也这么判断：
+        /// listens_on_loopback_only → 关，listens_on_all_interfaces → 开），
+        /// 只是它顺带要做防火墙检查、HTTPS 自检，慢的时候要十几秒。
+        /// GUI 每次刷新都跑一遍那个，必然超时。
+        ///
+        /// 返回值：true = 所有网卡都在听（局域网开着）
+        ///         false = 只有环回在听（只本机）
+        ///         null = 端口根本没监听（服务没起来）
+        /// </summary>
+        private bool? LanListeningOnAll()
+        {
+            try
+            {
+                var listeners = System.Net.NetworkInformation.IPGlobalProperties
+                    .GetIPGlobalProperties()
+                    .GetActiveTcpListeners();
+                bool any = false;
+                bool all = false;
+                foreach (var ep in listeners)
+                {
+                    if (ep.Port != _cfg.WebPort) continue;
+                    any = true;
+                    if (ep.Address.Equals(System.Net.IPAddress.Any) ||
+                        ep.Address.Equals(System.Net.IPAddress.IPv6Any) ||
+                        ep.Address.Equals(System.Net.IPAddress.IPv6Loopback) ||
+                        ep.Address.ToString() == "::")
+                    {
+                        all = true;
+                    }
+                }
+                if (!any) return null;
+                // Caddy 在 Windows 上通常监听 ::（IPv6 通吃），这等价于所有网卡
+                return all;
             }
             catch (Exception)
             {

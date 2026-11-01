@@ -338,7 +338,24 @@ Set-Content -Path (Join-Path $confDst ".gitkeep") -Value "" -Encoding ASCII
 Ok "conf/ 已建（Caddyfile 在 install 时生成）"
 
 # ────────────────────────────────────────────────────────────
-Step "10. 托盘程序（可选，第一批可以没有）"
+Step "10. 托盘程序"
+# 🔴 必须先编译 C#，不能只复制旧的 bin/。
+#
+# 2026-11-01 血的教训：build.ps1 原来只做 robocopy，而托盘是另一个脚本
+# build-tray.ps1 编的。改了 WebPanel.cs / LanSharePanel.cs 之后只跑
+# build.ps1，打出来的包里还是七小时前的旧 exe —— 于是 3.82、3.84 两个
+# 版本号称修好了 GUI，用户装上还是原样（连 HealthUrl 改成 localhost 这种
+# 一行改动都没生效）。查了半天以为是编码问题，其实是根本没编译。
+#
+# 现在无条件先编译，编译失败就直接中断 —— 打一个用旧托盘的包出来，
+# 比打不出来更糟：它看起来是好的。
+$trayBuild = Join-Path $Root "installer\tray\build-tray.ps1"
+if (Test-Path $trayBuild) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $trayBuild
+    if ($LASTEXITCODE -ne 0) { Fail "托盘编译失败" }
+    Ok "托盘已重新编译"
+}
+
 $traySrc = Join-Path $Root "installer\tray\bin"
 if (Test-Path $traySrc) {
     $trayDst = Join-Path $Dist "tray"
@@ -347,7 +364,14 @@ if (Test-Path $traySrc) {
     # 属于用户机器自己的东西，绝不能进安装包。
     robocopy $traySrc $trayDst /E /XD "$traySrc\LanShareTray.exe.WebView2" `
         /NFL /NDL /NJH /NJS /NC /NS | Out-Null
-    Ok "托盘程序已复制"
+    # 落一个时间戳，出问题时一眼能看出打进包的是哪次编译的产物
+    $trayExe = Join-Path $trayDst "LanShareTray.exe"
+    if (Test-Path $trayExe) {
+        $trayTime = (Get-Item $trayExe).LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+        Ok "托盘程序已复制（编译于 $trayTime）"
+    } else {
+        Ok "托盘程序已复制"
+    }
 } else {
     New-Item -ItemType Directory -Path (Join-Path $Dist "tray") -Force | Out-Null
     Write-Host "  跳过（托盘还没编译，.iss 里有 skipifsourcedoesntexist）" -ForegroundColor Yellow
