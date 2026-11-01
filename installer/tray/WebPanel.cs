@@ -246,7 +246,6 @@ namespace LanShare
                 { "lanHint", "" },
                 { "wanUrl", "" },
                 { "qr", null },
-                { "logo", LogoDataUri() },
                 { "certTrusted", true },
             };
 
@@ -390,45 +389,6 @@ namespace LanShare
                 });
             }
             return rows;
-        }
-
-        /// <summary>品牌图标转 data URI（顶栏用）。只算一次，之后走缓存。</summary>
-        private static string _logoCache;
-        private string LogoDataUri()
-        {
-            if (_logoCache != null) return _logoCache;
-            try
-            {
-                // 直接读构建期嵌进来的 128px PNG，原样转 base64。
-                //
-                // 为什么不从 ICO 解：多帧 ICO 上 new Icon(st) / ToBitmap()
-                // 会抛「请求的范围扩展超过了数组的结尾」，指定帧尺寸也一样，
-                // GDI+ 那条路径对多帧 ICO 就是不可靠。PNG 资源没这个毛病。
-                using (var st = typeof(WebPanel).Assembly
-                           .GetManifestResourceStream("LanShareTray.Logo.png"))
-                {
-                    if (st != null)
-                    {
-                        var buf = new byte[st.Length];
-                        int read = 0;
-                        while (read < buf.Length)
-                        {
-                            int n = st.Read(buf, read, buf.Length - read);
-                            if (n <= 0) break;
-                            read += n;
-                        }
-                        _logoCache = "data:image/png;base64,"
-                                   + Convert.ToBase64String(buf, 0, read);
-                        return _logoCache;
-                    }
-                    AppendLog("[WebPanel] 找不到 LanShareTray.Logo.png 资源");
-                }
-            }
-            catch (Exception ex)
-            {
-                AppendLog("[WebPanel] LogoDataUri 失败: " + ex.Message);
-            }
-            return _logoCache = "";
         }
 
         /// <summary>判断系统信不信这张证书（等价于「浏览器会不会报警告页」）。</summary>

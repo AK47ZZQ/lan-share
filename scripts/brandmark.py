@@ -243,7 +243,8 @@ def draw_cloud_ss_into(target: Image.Image, size: int, frac: float = 0.74) -> No
 
 
 def brand_mark(size: int, bg_image: Image.Image | None = None,
-               force_outline: bool = False) -> Image.Image:
+               force_outline: bool = False,
+               cloud_frac: float | None = None) -> Image.Image:
     """品牌标：渐变（或透明）底 + 圆角块 + 云朵。
 
     三档策略（这是唯一按尺寸分叉的地方）：
@@ -268,7 +269,16 @@ def brand_mark(size: int, bg_image: Image.Image | None = None,
         draw_cloud_ss(im, size, frac=0.72)
         return im
 
-    cw = round(CLOUD_IN_TILE * tile)
+    # 云朵占比要按尺寸分档，不能一律 35%。
+    #
+    # 35% 是 512px 母版上定稿的比例，在 512px 里云朵有 179px 宽、线条舒展。
+    # 但同一比例搬到 46px 只剩 16px 宽 —— 描边线条被压到不足 1 个像素，
+    # 抗锯齿一匀就成了一圈灰边，看着又小又糊。所以中尺寸要放大占比、
+    # 让线条拿到足够的像素宽度。
+    if cloud_frac is None:
+        cloud_frac = CLOUD_IN_TILE if size >= 48 else 0.56
+
+    cw = round(cloud_frac * tile)
     draw_cloud_outline(im, (cx - cw // 2, cy - cw // 2,
                             cx - cw // 2 + cw, cy - cw // 2 + cw))
     return im

@@ -83,17 +83,6 @@ $iconArgs = @()
 if ($IconPath) {
     $iconArgs = @("/win32icon:$IconPath", "/resource:$IconPath,LanShareTray.lanshare.ico")
 
-    # 另外把 128px PNG 单独嵌进去 —— 控制面板顶栏要把它当 data URI 传给 HTML。
-    # 不直接从 ICO 里解：GDI+ 对多帧 ICO 调 ToBitmap() 会抛
-    # 「请求的范围扩展超过了数组的结尾」，试过指定尺寸帧也一样，
-    # 干脆在构建期就准备好一张干净的 PNG。
-    # $PSScriptRoot = <repo>\installer	ray，要上溯两级才到 <repo>\logo
-    $logoPng = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "logo\lanshare-256.png"
-    if (Test-Path $logoPng) {
-        $iconArgs += "/resource:$logoPng,LanShareTray.Logo.png"
-    } else {
-        Write-Host "警告：找不到 logo\lanshare-256.png，界面顶栏图标会隐藏" -ForegroundColor Yellow
-    }
 }
 
 # 托盘四态图标：由 scripts/make-desktop-icon.py 生成（和手机 App 同一套绘制代码）。
@@ -178,3 +167,4 @@ if (Test-Path $uiSrc) {
 
 $size = [math]::Round((Get-Item $Out).Length / 1KB, 1)
 Write-Host "  OK  $Out  ($size KB)" -ForegroundColor Green
+

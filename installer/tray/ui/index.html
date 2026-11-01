@@ -52,11 +52,12 @@ body {
 }
 
 /* ── 顶栏 ── */
-.head { display: flex; align-items: center; gap: 12px; flex: none; }
-.head img { width: 46px; height: 46px; border-radius: 11px; }
-.head .meta { display: flex; flex-direction: column; gap: 3px; }
+.head { display: flex; align-items: center; gap: 18px; flex: none; }
+.head .mark { display: block; flex: none; }
+.head .meta { display: flex; flex-direction: column; gap: 4px; justify-content: center; }
 .head h1 { font-size: 21px; font-weight: 700; color: var(--text); letter-spacing: -0.2px; }
-.head .sub { font-size: 11.5px; color: var(--muted); font-family: Consolas, monospace; }
+.head .sub { font-size: 11.5px; font-weight: 500; color: var(--muted);
+             font-family: Consolas, monospace; }
 
 .pill {
   margin-left: auto;
@@ -215,7 +216,27 @@ button.link {
 
   <!-- 顶栏 -->
   <div class="head">
-    <img id="logo" src="" alt="">
+    <!-- 品牌标用内联 SVG 而不是位图。
+         位图不管出多大都要缩到 46 CSS px（本机 150% DPI = 69 物理像素），
+         插值必然带一点柔化，边缘就发虚。SVG 是矢量，任何 DPI 都锐利，
+         而且不用跟着 build 打包 PNG。渐变和云朵路径都和 App 图标同源。 -->
+    <svg class="mark" width="44" height="44" viewBox="0 0 46 46" aria-hidden="true">
+      <defs>
+        <linearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%"   stop-color="#5B6BFF"/>
+          <stop offset="100%" stop-color="#895BFF"/>
+        </linearGradient>
+      </defs>
+      <!-- 只有渐变底 + 白云，不叠内层半透明块。
+           512px 母版上那个白色 25% 内块是为了给云朵做底衬，但 46px 下
+           两层圆角半径不一样、边界又只差几个像素，看着就是一块"脏"的
+           色差；去掉之后干净得多。
+           云朵放大到 30px（46 的 65%）撑住视觉重量。 -->
+      <rect width="46" height="46" rx="8.1" fill="url(#brandGrad)"/>
+      <g transform="translate(8, 10) scale(1.25)">
+        <path fill="#ffffff" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+      </g>
+    </svg>
     <div class="meta">
       <h1>LAN Share</h1>
       <div class="sub" id="headsub">正在读取…</div>
@@ -338,9 +359,7 @@ function render(s) {
     document.getElementById('headsub').textContent =
       `API 127.0.0.1:${s.apiPort}  ·  Web 0.0.0.0:${s.webPort}`;
   }
-  var lg = document.getElementById('logo');
-  if (s.logo) { lg.src = s.logo; lg.style.visibility = 'visible'; }
-  else { lg.style.visibility = 'hidden'; }   // 没有就藏起来，别显示破图
+  // 品牌标是内联 SVG，不依赖后端数据
 
   const pill = document.getElementById('pill');
   const pilltext = document.getElementById('pilltext');
