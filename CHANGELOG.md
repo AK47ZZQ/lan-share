@@ -1,4 +1,122 @@
+## 2026-11-01 — v3.73~v3.76：托盘没进包、控制面板换 WebView2、证书信任
+
+这四版连着发，起因是「装完没有桌面图标、托盘也不启动」。顺着查下去，
+发现是一串各自独立的问题叠在一起，每一个单独看都像没事。
+
+### v3.73 / v3.74 — 托盘为什么不在安装包里
+
+`build.ps1` 第 322 行报 `Test-Path : 路径中具有非法字符`，构建在打包
+PostgreSQL 那步就中断了，后面复制托盘的 Step 10 根本没执行。
+
+源头是一行字符串里混进了 **0x0B 垂直制表符**：
+
+    "bin\u000bcruntime140.dll"     ← 本意是 vcruntime140.dll
+
+而 `lanshare.iss` 里那条 source 带 `skipifsourcedoesntexist`，源目录空着
+也照样编译成功、包体积正常、装上还能用 —— 全套检查全绿，就是没托盘。
+
+修的时候反斜杠又被吃掉一次（`binvcruntime140.dll`），得用 patch 补回。
+这类不可见字符建议构建脚本开头统一做一次字节检查。
+
+同时补了两处：`[Icons]` 加桌面快捷方式（之前只有开始菜单三项，桌面
+从来没写过）；托盘启动行去掉 `postinstall` 标志（否则只在完成页勾选时
+才跑，而 3.72 报错时完成页不出现，等于永不执行）。
+
+### v3.75 — 重装三连坑
+
+**服务名查错**：`sc query lan-share-api` 报 1060「服务未安装」，
+实际前缀是 `lanshare`（无连字符）。三个服务其实都 RUNNING。
+
+**「服务配置失败」是误报**：`cli.py` 里 API 探针用 `http://`，Web 探针
+也写死了 `http://127.0.0.1:{web_port}/healthz`，而 8765 从 3.72 起就是
+HTTPS —— 探针必然失败返回 1，安装器弹错，服务其实全好。
+
+**重装必然锁库**：卸载删掉了注册表 `PgPassword`，但数据目录 `pgdata`
+留着 → 重装生成新密码，PG 角色还是旧密码 → 卡在「PG 在 30 秒内没有
+接受连接」。改成密码锚定数据目录（`.lan*` 密码文件），注册表只是副本，
+删了还有兜底。
+
+**重装后 TLS 握不上**：`schannel: using IP address, SNI is not supported`
++ `SEC_E_ILLEGAL_MESSAGE`。Caddy 的 storage 落在 SYSTEM 账户的 AppData
+（`C:\Windows\system32\config\systemprofile\...\Caddy`），残留着上一次
+安装的内部 CA，新证书签不出来。全局块加 `storage file_system "<install>
+\certs\caddy"`，把 CA 锚到安装目录，卸载重装就不串了。路径含空格会被
+Caddy 按空格切 token，所以加引号并统一转正斜杠。
+
+顺带把 `[3/10] 检查是否已安装`（含 `--force` 停旧服务）提到 `[4/10]
+检查端口占用` 之前 —— 顺序反了的话重装时旧服务占着 8766/8765/5433，
+端口检查直接失败，`--force` 那段覆盖逻辑永远轮不到。
+
+### v3.76 — 控制面板换成 WebView2
+
+WinForms 手绘面板的维护成本压不住了：每个控件手算坐标，150% DPI 下
+还有「缩放前/缩放后」两套坐标系，光「关闭局域网服务」一个按钮就改了
+四轮（宽度不够被裁 → 加宽跑出卡片 → 用错基准值 → 在 Scale 之后设坐标
+又错位）。
+
+界面改成外置 HTML（`installer/tray/ui/index.html`），flexbox 排版、
+DPI 交给浏览器、改样式不用重新编译；**右键菜单和 MessageBox 保持原生**，
+没有跟着换成网页控件。C# 侧（`WebPanel.cs`）每 4 秒跑一次
+`lanshare_cli lan status` 喂数据，按钮点击回传 C# 执行。
+
+**为什么不直接 fetch**：`app/` 里没有任何 CORS 中间件，`file://` 页面
+请求 `http://127.0.0.1:8766` 会被浏览器拦。走 `PostWebMessageAsJson`
+桥接既不动后端也不受同源策略限制。
+
+四个坑，都是「看起来像 CSS 写错了」：
+
+- **DPI 双重缩放**：`ClientSize=900` 在 DPI-aware 进程里是物理像素，
+  150% 下只等于 600 个 CSS px，卡片挤成一条、地址框只露得出
+  `https://192.168.`；`AutoScaleMode` 默认值又会在 manifest 处理完 DPI
+  之后再缩一次。要按 `GetDpiForWindow` 折算 + `AutoScaleMode.None`。
+- **WebView2 用户数据目录**默认建在 exe 同级，实测 73 MB 缓存。改到
+  `LOCALAPPDATA` 并在 build 时 `/XD` 排除，否则安装包凭空大 73 MB。
+- **多帧 ICO 不能直接 ToBitmap()**：抛「请求的范围扩展超过了数组的
+  结尾」，指定帧尺寸也一样。后来改成内联 SVG，这个问题不存在了。
+- **文件缓存**：WebView2 缓存 `file://` 页面，改了 HTML 不加时间戳参数
+  看到的还是旧内容 —— 调样式时会以为是 CSS 没生效。
+
+WebView2 Runtime 缺失时自动回退到原 WinForms 面板，代码一行没删。
+（Runtime 148.0.3967.96 在 Win10/11 一般都有，LTSC/精简版可能没有。）
+
+### v3.76 — 让浏览器信任本地证书
+
+用户反馈「打开网盘点了没反应，界面压根打不开」。实际是调用了
+`Process.Start` 打开浏览器，但看到的是满屏红色警告页
+`ERR_CERT_AUTHORITY_INVALID`。
+
+Caddy 的 `tls internal` 用自己的内部 CA 签发证书，这个 CA 不在 Windows
+信任链里。Caddy 在 Linux/macOS 上会自己装进系统库，Windows 上要往
+`LocalMachine\Root` 写、而它跑在服务里（SYSTEM）拿不到写权限，日志里
+只留一行 `The request is not supported` 就过去了 —— 装一百遍也发现不了。
+
+三处改动：安装器新增第 10 步 `trust_local_ca`（服务起来、证书已生成
+之后才装，顺序不能反）；面板顶部加证书状态提示 + 一键修复（提权
+`certutil -addstore`）；失败都不中断安装。
+
+状态检测踩了两个坑：**不能用 `HttpWebRequest`** —— 托盘启动时装了个
+全局 `ServicePointManager.ServerCertificateValidationCallback`，对
+127.0.0.1 一律放行，检测永远返回「可信」（实测删掉证书后界面照样不
+提示）；改用 `SslStream`（另一套 API，不吃这个回调）后报
+`调用 SSPI 失败` —— 不显式指定 `SslProtocols.Tls12` 就按系统默认走，
+老系统只有 SSL3/TLS1.0，Caddy 直接断连。
+
+### v3.76 — 顶栏品牌标改成内联 SVG
+
+反馈「左上角小图标太丑」，不是画得不够细，是三个尺寸问题叠加：256px
+PNG 缩到 46 CSS px（0.27 倍插值，边缘必柔）；云朵只占块边长 35%（512
+母版的比例，46px 下只剩 16px，描边压到不足一像素糊成灰边）；图里还画
+了层白色 25% 圆角块做底衬（两层圆角半径不一致，46px 下就是一块脏色差）。
+
+换成内联 SVG + 去掉内层白块 + 云朵放大到 65%。顺手补上 `brandmark.py`
+里一直没实现的 33~47px 分支：文档写着「云朵占比略微放大」，代码里恒用
+0.35。
+
+**46px 下描边镂空留不住细节，实心块的高对比才是正确解** —— 和托盘
+16~24px 用实心云是同一个判断。
+
 ## 2026-10-31（晚）— 三轮 review 与对抗性测试：修掉 6 个问题
+
 
 发版前的最后一道筛子。三轮分别看不同东西：静态审查找危险模式、对抗性
 测试想办法把它弄坏、沙箱验证干净系统上的完整闭环。
