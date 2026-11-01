@@ -3,7 +3,28 @@
 这一版是三件事：**修一个装不上的 bug**、**让服务端真正成为更新镜像源**、
 **把发版脚本的攻击面收干净**。
 
-### 一、3.79 装不上（真机反馈）
+### 二、装到 Program Files 时服务全起不来（沙箱 E2E 测出来的）
+
+干净环境装到默认路径 `C:\Program Files\LAN Share`：文件全就位、安装退出码 0，
+但三个服务一个都没起来。三个原因叠在一起：
+
+**① `initdb` 要 owner 是当前用户、无继承 ACL。** `Program Files` 的 owner 是
+SYSTEM，两条都不满足，直接 `Permission denied`。本机开发目录恰是当前用户建的、
+ACL 干净，所以这个 bug 只在干净环境暴露。
+
+**② 收紧之后服务又读不了。** initdb 能跑了，服务也注册了，但启动时
+`lanshare-postgresql: STOPPED` —— 服务以 LocalSystem 身份运行，读不了
+「只有管理员能读」的目录。所以是两步：initdb 前收紧，initdb 后把
+`NT AUTHORITY\SYSTEM` 加回来。
+
+**③ 真正的错误被编码错误顶掉。** 第一次排查看到的是 `UnicodeEncodeError`，
+压根看不到 `Permission denied`。`say()` 用 `print()`，而中文 Windows 的 stdout
+是 GBK，initdb 的输出解不出来成了 U+FFFD，再 print 一次就抛。这个坑比权限
+问题更浪费时间——它让一个五分钟能定位的问题看起来像玄学。
+
+修完后沙箱实测：`setup_exitcode=0` / `localhost_code=200` / `pgdata=yes`。
+
+### 三、3.79 装不上（真机反馈）
 
 ```
 Runtime error (at 6:431):
