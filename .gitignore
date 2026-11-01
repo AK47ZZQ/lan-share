@@ -135,3 +135,4 @@ installer/tray/bin/
 # Caddyfile 改写的临时备份（lan enable/disable 时生成，成功后不留）
 Caddyfile.lanbak
 conf/Caddyfile.lanbak
+/VERSION

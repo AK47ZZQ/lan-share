@@ -92,6 +92,8 @@ Source: "..\build\dist\lanshare_cli\*"; DestDir: "{app}\lanshare_cli"; Flags: re
 Source: "..\build\dist\pgsql\*"; DestDir: "{app}\pgsql"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; ── 服务入口 ──
 Source: "..\build\dist\server.py"; DestDir: "{app}"; Flags: ignoreversion
+; ── 版本号（check-update 靠它知道当前装的是哪个版本）──
+Source: "..\build\dist\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 ; ── 静态资源（必需：app/main.py 启动时 mount /static，缺了直接崩）──
 Source: "..\build\dist\static\*"; DestDir: "{app}\static"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; ── certs / logs 只建空目录占位（证书由 Caddy 自己生成，私钥绝不打包）──

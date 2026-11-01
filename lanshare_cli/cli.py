@@ -999,6 +999,43 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_update(args: argparse.Namespace) -> int:
+    """查服务端有没有新版本。只查不装 —— 装交给安装器。
+
+    退出码：0 已是最新 / 1 有新版本 / 2 没查成。
+    有新版本用 1 是为了让脚本能 `if lanshare_cli check-update; then` 判断。
+    """
+    from . import updater
+
+    info = updater.check(Path(args.root), timeout=args.timeout)
+
+    if getattr(args, "json", False):
+        print(json.dumps(info, ensure_ascii=False))
+        return 0 if not info["error"] else 2
+
+    cur = info["current"] or "未知（这个安装没有 VERSION 文件）"
+    say(f"  当前版本：{cur}")
+
+    if info["error"]:
+        # 没查成 ≠ 没新版。这两件事必须分开说，否则用户会以为世界和平。
+        fail(f"没查成：{info['error']}")
+        say("  （这不代表已是最新，只是这次没连上）")
+        return 2
+
+    if not info["has_update"]:
+        say(f"  已是最新（GitHub 上也是 {info['latest']}）")
+        return 0
+
+    say("")
+    say(f"  有新版本：{cur} → {info['latest']}"
+        + (f"（{info['published']}）" if info.get("published") else ""))
+    if info.get("url"):
+        say(f"  下载：{info['url']}")
+    say("")
+    say("  装上：下载后直接运行，安装器会覆盖程序文件、保留你的数据和账号。")
+    return 1
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """环境自检。只读，不改任何东西。"""
     layout = Layout(
@@ -1241,6 +1278,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", parents=[common], help="环境自检（只读）")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_update = sub.add_parser(
+        "check-update", parents=[common], help="检查服务端有没有新版本（只查不装）"
+    )
+    p_update.add_argument("--json", action="store_true", help="输出 JSON（给 GUI 用）")
+    p_update.add_argument(
+        "--timeout", type=float, default=8.0, help="GitHub 请求超时秒数，默认 8"
+    )
+    p_update.set_defaults(func=cmd_check_update)
 
     p_lan = sub.add_parser(
         "lan", parents=[common], help="局域网访问开关（status/enable/disable/diagnose）"

@@ -304,6 +304,22 @@ button.link {
           <button class="danger" id="lantoggle">启动局域网服务</button>
         </div>
       </div>
+
+      <!-- 版本 / 检查更新。只查不装：查到就给下载地址，
+           由安装器覆盖安装（它本来就会保留数据和账号）。 -->
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="card-title">版本</div>
+          <button class="link" id="chkupdate">检查更新</button>
+        </div>
+        <div class="hint" id="verline">点右边「检查更新」查一下</div>
+        <div id="updbox" style="display:none">
+          <div class="hint" id="updtext" style="margin-top:4px"></div>
+          <div style="display:flex;justify-content:flex-end;margin-top:8px">
+            <button class="mini primary" id="updget" style="display:none">下载安装包</button>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -349,8 +365,57 @@ if (host) {
     if (m && m.type === 'state') onState(m.payload);
     else if (m && m.type === 'toast') toast(m.text);
     else if (m && m.type === 'busy') setBusy(m.on, m.text);
+    else if (m && m.type === 'updateState') setUpdateBusy(m.payload && m.payload.busy);
+    else if (m && m.type === 'update') onUpdate(m.payload);
   });
 }
+
+// ── 检查更新 ───────────────────────────────────────────────
+// C# 那边把 CLI 的 JSON 摊平成 camelCase 推回来。注意 error 非空表示
+// **没查成**，不是「已是最新」—— 这两件事必须分开显示，不然用户会以为
+// 世界和平（App 端在 VPN 下栽过一次）。
+function setUpdateBusy(busy) {
+  const btn = document.getElementById('chkupdate');
+  btn.disabled = !!busy;
+  btn.textContent = busy ? '检查中…' : '检查更新';
+}
+
+function onUpdate(u) {
+  setUpdateBusy(false);
+  const line = document.getElementById('verline');
+  const box = document.getElementById('updbox');
+  const text = document.getElementById('updtext');
+  const get = document.getElementById('updget');
+
+  if (!u) return;
+  const cur = u.current ? `v${u.current}` : '未知版本';
+
+  if (u.error) {
+    // 没查成：说清楚为什么，不要假装是最新
+    line.textContent = cur;
+    box.style.display = '';
+    text.textContent = u.error;
+    text.style.color = 'var(--danger)';
+    get.style.display = 'none';
+    return;
+  }
+
+  line.textContent = cur;
+  box.style.display = '';
+  if (u.hasUpdate) {
+    text.style.color = '';
+    text.textContent = `有新版本 v${u.latest}`
+      + (u.published ? `（${u.published}）` : '') + '，下载后直接运行即可，数据和账号都会保留';
+    get.style.display = u.url ? '' : 'none';
+  } else {
+    text.style.color = '';
+    text.textContent = `已是最新（GitHub 上也是 v${u.latest}）`;
+    get.style.display = 'none';
+  }
+}
+
+document.getElementById('chkupdate').onclick = () => post({ type: 'checkUpdate' });
+document.getElementById('updget').onclick = () => post({ type: 'downloadUpdate' });
 
 // ── 渲染 ───────────────────────────────────────────────────
 function render(s) {

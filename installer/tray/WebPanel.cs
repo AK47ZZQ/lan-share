@@ -611,6 +611,150 @@ namespace LanShare
                 case "trustCert":
                     TrustCert();
                     break;
+
+                case "checkUpdate":
+                    CheckUpdate();
+                    break;
+
+                case "downloadUpdate":
+                    DownloadUpdate();
+                    break;
+            }
+        }
+
+        // ──────────────────────────────────────────────────────
+        // 检查更新
+        //
+        // 「只查不装」—— 自动替换正在跑的服务目录风险太大（exe 被占用、
+        // 升级中途断电、装一半没回滚）。查到新版就把下载地址给用户，
+        // 由安装器覆盖安装，它本来就会保留数据和注册表。
+        // ──────────────────────────────────────────────────────
+
+        /// <summary>上一次查到的新版下载地址（用户点「下载」时用）。</summary>
+        private string _updateUrl;
+
+        private void CheckUpdate()
+        {
+            Send("updateState", new Dictionary<string, object> { { "busy", true } });
+
+            Task.Run(() =>
+            {
+                string error;
+                return RunCli("check-update --json --timeout 10", 25000, out error);
+            }).ContinueWith(t =>
+            {
+                if (IsDisposed || _web == null) return;
+
+                var p = new Dictionary<string, object>();
+                string json = t.Result;
+                if (string.IsNullOrEmpty(json))
+                {
+                    p["error"] = "检查失败：命令没有输出";
+                    Send("update", p);
+                    return;
+                }
+
+                try
+                {
+                    var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                    var d = ser.Deserialize<Dictionary<string, object>>(json);
+                    if (d == null)
+                    {
+                        p["error"] = "检查失败：返回内容不是 JSON";
+                        Send("update", p);
+                        return;
+                    }
+                    // CLI 用 error 字段区分「没查成」和「确实是最新」，
+                    // 这两件事绝不能长同一张脸 —— App 端栽过一次。
+                    p["current"] = Str(d, "current");
+                    p["latest"] = Str(d, "latest");
+                    object hu;
+                    p["hasUpdate"] = d.TryGetValue("has_update", out hu)
+                        && hu is bool && (bool)hu;
+                    p["url"] = Str(d, "url");
+                    p["notes"] = Str(d, "notes");
+                    p["published"] = Str(d, "published");
+                    p["error"] = Str(d, "error");
+                    _updateUrl = Str(d, "url");
+                }
+                catch (Exception ex)
+                {
+                    p["error"] = "检查失败：" + ex.Message;
+                }
+                Send("update", p);
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        private void DownloadUpdate()
+        {
+            if (string.IsNullOrEmpty(_updateUrl)) return;
+            try
+            {
+                // 只放行 https —— 这个地址来自 GitHub API 响应，理论上可信，
+                // 但「理论上」不该成为 Process.Start 的唯一防线
+                if (!_updateUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    return;
+                Process.Start(new ProcessStartInfo(_updateUrl) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                AppendLog("打开下载页失败：" + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 跑任意 lan-share CLI 子命令，返回 stdout。
+        /// 和 RunLan 的区别：那个固定拼 `lan`，这个是给别的子命令用的。
+        /// </summary>
+        private string RunCli(string args, int timeoutMs, out string error)
+        {
+            error = null;
+            string python = _cfg.PythonPath;
+            if (string.IsNullOrEmpty(python) || !File.Exists(python))
+            {
+                error = "找不到 Python 运行时：" + (python ?? "(空)");
+                return null;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = python,
+                Arguments = "-m lanshare_cli " + args,
+                WorkingDirectory = _cfg.InstallFolder,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+
+            try
+            {
+                using (var proc = Process.Start(psi))
+                {
+                    var outTask = proc.StandardOutput.ReadToEndAsync();
+                    var errTask = proc.StandardError.ReadToEndAsync();
+                    if (!proc.WaitForExit(timeoutMs))
+                    {
+                        try { proc.Kill(); } catch { }
+                        error = "命令超时";
+                        return null;
+                    }
+                    string stdout = outTask.Result;
+                    string stderr = errTask.Result;
+                    if (string.IsNullOrWhiteSpace(stdout))
+                    {
+                        error = string.IsNullOrWhiteSpace(stderr) ? "没有输出" : stderr.Trim();
+                        return null;
+                    }
+                    return stdout.Trim();
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return null;
             }
         }
 

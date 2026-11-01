@@ -354,6 +354,27 @@ if (Test-Path $traySrc) {
 }
 
 # ────────────────────────────────────────────────────────────
+Step "10.5 版本号文件（VERSION）"
+
+# 安装目录里要留一份「我装的是哪个版本」，否则 `lanshare_cli check-update`
+# 拿不到当前版本，只能显示「未知」，用户永远收不到更新提示。
+# 版本号从 lanshare.iss 取 —— 那里是唯一来源，不另外维护一份。
+$issPath = Join-Path $Root "installer\lanshare.iss"
+$issText = Get-Content $issPath -Raw
+if ($issText -match '#define\s+AppVersion\s+"([^"]+)"') {
+    $ver = $Matches[1]
+    $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    # 必须写不带 BOM 的 UTF-8：PS 5.1 的 -Encoding UTF8 会加 BOM，
+    # 读回来第一行变成 "\ufeff3.78"，版本号正则匹配失败。
+    $verPath = Join-Path $Dist "VERSION"
+    [System.IO.File]::WriteAllText($verPath, "$ver`n$stamp`n",
+        (New-Object System.Text.UTF8Encoding $false))
+    Ok "VERSION = $ver"
+} else {
+    throw "installer\lanshare.iss 里找不到 AppVersion，无法生成 VERSION"
+}
+
+# ────────────────────────────────────────────────────────────
 Step "汇总"
 $totalMB = [math]::Round(((Get-ChildItem $Dist -Recurse -File | Measure-Object -Property Length -Sum).Sum) / 1MB, 1)
 Get-ChildItem $Dist -Directory | ForEach-Object {
