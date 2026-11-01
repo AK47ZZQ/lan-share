@@ -318,22 +318,126 @@ def app_history(_user=Depends(require_user)):
     return {"items": _load_history()}
 
 
+_apk_sync_lock = threading.Lock()
+_apk_syncing: set = set()      # 正在镜像的文件名，防重复下载
+
+
+def _find_local_apk(name: str, want_size) -> Path | None:
+    """本地有没有这一版 APK。用**字节数**判定同一份，不看文件名。
+
+    版本号可能被手改、文件名可能被改，但 100 MB 的字节数改不了。
+    """
+    for cand in (SHARE_ROOT / DIST_DIR / name,
+                 SHARE_ROOT / DIST_DIR / "lanshare.apk"):
+        if not cand.is_file():
+            continue
+        if want_size:
+            try:
+                if cand.stat().st_size != int(want_size):
+                    continue
+            except (TypeError, ValueError):
+                pass
+        return cand
+    return None
+
+
+def _mirror_apk_async(name: str, url: str, size) -> None:
+    """后台把 GitHub 上的 APK 镜像到本地 `App安装包/`。
+
+    **为什么需要**：只做「本地有就发」对别人是死代码 —— 他们自己搭的服务端
+    `App安装包/` 是空的，永远走 302。第一次下载时顺手拉一份，从第二个人开始
+    局域网内就是本地 IO，不需要任何人工操作。
+
+    几个约束：
+
+    - **失败静默**：用户这会儿已经从 GitHub 拿到 302 了，镜像失败不该让他看到错误
+    - **原子落盘**：先写 `.part` 再 rename，避免半截文件被 `_find_local_apk`
+      当成正常文件发出去（那会让下一个用户拿到损坏的 APK）
+    - **防重复**：同一文件名只跑一个线程；多个用户同时点更新不会并发拉四份
+    - **大小校验**：拉完对不上 GitHub 报的 size 就丢弃
+    """
+    if not name or not url.startswith("https://"):
+        return
+
+    with _apk_sync_lock:
+        if name in _apk_syncing:
+            return
+        _apk_syncing.add(name)
+
+    def worker() -> None:
+        tmp: Path | None = None
+        try:
+            (SHARE_ROOT / DIST_DIR).mkdir(parents=True, exist_ok=True)
+            dest = SHARE_ROOT / DIST_DIR / name
+            if dest.is_file() and size and dest.stat().st_size == int(size):
+                return
+
+            tmp = dest.with_suffix(dest.suffix + ".part")
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "LANShare-Server"})
+            # 100 MB 在慢网络上要几分钟，超时给足
+            with urllib.request.urlopen(req, timeout=180) as resp, \
+                    tmp.open("wb") as fh:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+
+            if size and tmp.stat().st_size != int(size):
+                tmp.unlink(missing_ok=True)      # 大小不符，宁可不要
+                return
+            tmp.replace(dest)                     # 原子替换
+        except Exception:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        finally:
+            with _apk_sync_lock:
+                _apk_syncing.discard(name)
+
+    threading.Thread(target=worker, name="apk-mirror", daemon=True).start()
+
+
 @router.get("/api/app/download")
 def app_download(request: Request, _user=Depends(require_user)):
     data = _load_version()
 
-    # GitHub 源：直接 302 到 Release 资产的下载地址。
+    # GitHub 源：**本地有同一份就直发，没有才 302，并顺手在后台拉一份到本地**。
     #
-    # 为什么不中转：APK 100MB，中转等于自家服务器出带宽还占连接，
-    # 而 GitHub 的 CDN 快得多。而且 302 到 objects.githubusercontent.com
-    # 是浏览器的标准行为，Android 的下载器一样吃。
+    # ## 为什么要本地优先
     #
-    # 保留 302 而不是 301：版本会变，永久重定向会被客户端缓存住。
+    # 302 到 GitHub 对公网用户没问题，但局域网用户绕了一大圈 ——
+    # 明明就在同一台机器旁边的文件，非要出网跑一趟 GitHub CDN 再回来。
+    # 国内下载 100 MB 经常几分钟起步。
+    #
+    # ## 为什么要后台自动同步
+    #
+    # 只做「本地有就发」是不够的：别人自己搭一套服务端时，
+    # `App安装包/` 是空的，那条分支对他们等于死代码，永远走 302。
+    # 所以第一次请求时在后台把这个 APK 拉下来，**从第二个人开始就是本地 IO**，
+    # 不需要任何人手动往目录里放文件。
+    #
+    # 判断「是不是同一份」用 size：版本号可能被手改，字节数改不了。
     if data.get("_source") == "github":
+        long_name = str(data.get("filename") or "")
+        want_size = data.get("size")
+
+        local = _find_local_apk(long_name, want_size)
+        if local is not None:
+            audit("app_download", f"local:{data['version']}:{local.name}",
+                  ip=client_ip(request))
+            return FileResponse(local, media_type=APK_MIME, filename=local.name)
+
+        # 本地没有 → 先让用户从 GitHub 拿，同时后台镜像一份
+        _mirror_apk_async(long_name, data.get("download_url") or "", want_size)
+
         target = data.get("download_url") or ""
         if not target.startswith("https://"):
             raise HTTPException(status_code=502, detail="GitHub 未提供可用的下载地址")
-        audit("app_download", f"github:{data['filename']}", ip=client_ip(request))
+        audit("app_download", f"github:{long_name}", ip=client_ip(request))
         return RedirectResponse(target, status_code=302)
 
     apk = _apk_path(data)

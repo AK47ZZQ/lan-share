@@ -75,8 +75,21 @@ void main() {
       expect(UpdateInfo.fromGitHub(j), isNull);
     });
 
-    test('asset 名里没有 +build 号', () {
-      expect(UpdateInfo.fromGitHub(gh(assetName: 'lanshare-v1.1.16.apk')), isNull);
+    test('asset 名里没有 +build 号 → 用 semver 推算，不再整个丢弃', () {
+      // 2026-11-01 改：以前这里是 return null，导致
+      // `LANShare-App-1.1.18.apk` 这种命名让整个 GitHub 源被放弃 ——
+      // 这是「检查更新没反应」的第二个原因。
+      final r = UpdateInfo.fromGitHub(gh(assetName: 'LANShare-App-1.1.16.apk'));
+      expect(r, isNotNull);
+      expect(r!.version, '1.1.16');
+      // 1*10000 + 1*100 + 16
+      expect(r.build, 10116);
+    });
+
+    test('下划线 _build 也要认（早期 lanshare-v1.1.15_122.apk）', () {
+      final r = UpdateInfo.fromGitHub(gh(assetName: 'lanshare-v1.1.15_122.apk'));
+      expect(r, isNotNull);
+      expect(r!.build, 122);
     });
 
     test('tag_name 里提取不出版本号', () {
@@ -129,6 +142,55 @@ void main() {
       expect(UpdateService.isNewer(remote, 122), isTrue);
       expect(UpdateService.isNewer(remote, 123), isFalse);
       expect(UpdateService.isNewer(remote, 124), isFalse);
+    });
+
+    test('版本号更高就算新，哪怕 build 数字更小', () {
+      // 真实场景：远端 1.1.20 用 +127（真实 versionCode），
+      // 本地 1.1.18 的 build 是推算值 10118 —— 只比数字会判成「本地更新」。
+      final remote = UpdateInfo.fromGitHub(gh(
+          tag: 'app-v1.1.20',
+          assetName: 'LANShare-App-1.1.20+127.apk'))!;
+      expect(UpdateService.isNewer(remote, 10118, localVersion: '1.1.18'),
+          isTrue);
+    });
+
+    test('版本号相同才退回比 build', () {
+      final remote = UpdateInfo.fromGitHub(gh(
+          tag: 'app-v1.1.20',
+          assetName: 'LANShare-App-1.1.20+127.apk'))!;
+      // 同版本，build 127 > 126 → 有更新（同版本重新打包）
+      expect(UpdateService.isNewer(remote, 126, localVersion: '1.1.20'), isTrue);
+      // 同版本，build 127 == 127 → 已是最新
+      expect(UpdateService.isNewer(remote, 127, localVersion: '1.1.20'), isFalse);
+    });
+
+    test('远端版本更低就是没有更新（不能因为 build 大就提示）', () {
+      final remote = UpdateInfo.fromGitHub(gh(
+          tag: 'app-v1.1.17',
+          assetName: 'lanshare-v1.1.17+124.apk'))!;
+      // 本地 1.1.18 但 build 只有 125；远端 1.1.17 build 124
+      expect(UpdateService.isNewer(remote, 125, localVersion: '1.1.18'),
+          isFalse);
+    });
+  });
+
+  group('UpdateCheckResult 三态', () {
+    test('reachable=true + info=null 表示「确实没有新版」', () {
+      const r = UpdateCheckResult(info: null, reachable: true);
+      expect(r.reachable, isTrue);
+      expect(r.hasUpdate, isFalse);
+    });
+
+    test('reachable=false 表示「压根没查成」，UI 要说清楚', () {
+      const r = UpdateCheckResult(info: null, reachable: false);
+      expect(r.reachable, isFalse);
+      expect(r.hasUpdate, isFalse);
+    });
+
+    test('有 info 时一定是可达的', () {
+      final info = UpdateInfo.fromGitHub(gh())!;
+      final r = UpdateCheckResult(info: info, reachable: true);
+      expect(r.hasUpdate, isTrue);
     });
   });
 }

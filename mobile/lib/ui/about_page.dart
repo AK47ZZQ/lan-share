@@ -21,6 +21,9 @@ class _AboutPageState extends State<AboutPage> {
   PackageInfo? _info;
   String? _server;
   UpdateInfo? _remote;
+  /// 是否已经查过一次。区分「没查过」和「查了但没新版」——
+  /// 两者的 _remote 都是 null，只靠它分会话内点完检查更新又退回按钮。
+  bool _checked = false;
   String? _checkError;
   bool _checking = false;
   double? _progress; // null=未在下载
@@ -65,16 +68,25 @@ class _AboutPageState extends State<AboutPage> {
       _remote = null;
     });
     try {
-      final remote = await UpdateService.check();
+      final result = await UpdateService.check();
       if (!mounted) return;
       setState(() {
-        _remote = remote;
+        _remote = result.info;
+        _checked = true;
+        // 一个源都没应答 → 明确告诉用户「没查成」，不要假装「已是最新」。
+        // 最常见的情形是开着 VPN：局域网地址被路由劫持连不上自家服务器，
+        // GitHub 那边节点也不通，两个源一起失败。
+        _checkError = result.reachable
+            ? null
+            : '连不上更新源。如果开着 VPN，先关掉再试（局域网地址会被 VPN 劫持）；'
+                '或者连 WiFi/换网络后重试。';
         _checking = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _checkError = '检查失败：服务器不可达或未登录';
+        _checked = true;
         _checking = false;
       });
     }
@@ -179,7 +191,7 @@ class _AboutPageState extends State<AboutPage> {
               child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(children: [
-                    if (!_checking && remote == null && _checkError == null)
+                    if (!_checking && !_checked && _checkError == null)
                       FilledButton.tonalIcon(
                           onPressed: _check,
                           icon: const Icon(Icons.system_update_outlined),
@@ -193,7 +205,12 @@ class _AboutPageState extends State<AboutPage> {
                       const SizedBox(height: Gap.xs),
                       TextButton(onPressed: _check, child: const Text('重试')),
                     ],
-                    if (remote != null && !hasUpdate) ...[
+                    // 查过、没有错误、也没有更新 → 才是「已是最新」
+                    if (_checked &&
+                        !_checking &&
+                        !hasUpdate &&
+                        _checkError == null &&
+                        remote != null) ...[
                       const Icon(Icons.check_circle, color: Colors.green),
                       const SizedBox(height: Gap.xxs),
                       const Text('已是最新版本'),

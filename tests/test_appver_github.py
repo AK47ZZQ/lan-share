@@ -194,3 +194,177 @@ class TestFallback:
         assert len(items) == 1
         assert "更新说明" in items[0]["notes"]
         assert items[0]["html_url"].endswith("app-v1.1.18")
+
+
+# ──────────────────────────────────────────────────────────────
+# 下载：本地优先（2026-11-01「下载太慢」）
+# ──────────────────────────────────────────────────────────────
+
+class TestDownloadLocalFirst:
+    """局域网里已经有那份 APK 时，别再 302 去 GitHub 绕一圈。
+
+    真机反馈：点更新后下载几分钟不动。局域网用户明明和服务端在同一台
+    机器旁，却要出网跑一趟 GitHub CDN 再回来。
+    """
+
+    def test_serves_local_file_when_size_matches(self, tmp_path, monkeypatch):
+        from fastapi.responses import FileResponse
+
+        dist = tmp_path / "App安装包"
+        dist.mkdir()
+        apk = dist / "LANShare-App-1.1.20+127.apk"
+        apk.write_bytes(b"x" * 1024)
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        monkeypatch.setattr(
+            appver, "_load_version",
+            lambda: {"version": "1.1.20", "build": 127,
+                     "filename": apk.name, "size": 1024,
+                     "download_url": "https://github.com/x/y/releases/download/a/b.apk",
+                     "_source": "github"},
+        )
+        monkeypatch.setattr(appver, "audit", lambda *a, **k: None)
+        monkeypatch.setattr(appver, "client_ip", lambda r: "127.0.0.1")
+
+        resp = appver.app_download(request=None, _user=None)
+        assert isinstance(resp, FileResponse)
+
+    def test_falls_back_to_302_when_size_differs(self, tmp_path, monkeypatch):
+        """本地文件大小对不上 = 不是同一版，必须回落到 GitHub。"""
+        from fastapi.responses import RedirectResponse
+
+        dist = tmp_path / "App安装包"
+        dist.mkdir()
+        (dist / "lanshare.apk").write_bytes(b"old" * 100)   # 300 字节，旧的
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        monkeypatch.setattr(
+            appver, "_load_version",
+            lambda: {"version": "1.1.20", "build": 127,
+                     "filename": "LANShare-App-1.1.20+127.apk", "size": 1024,
+                     "download_url": "https://github.com/x/y/releases/download/a/b.apk",
+                     "_source": "github"},
+        )
+        monkeypatch.setattr(appver, "audit", lambda *a, **k: None)
+        monkeypatch.setattr(appver, "client_ip", lambda r: "127.0.0.1")
+
+        resp = appver.app_download(request=None, _user=None)
+        assert isinstance(resp, RedirectResponse)
+        assert resp.headers["location"].startswith("https://github.com/")
+
+
+# ──────────────────────────────────────────────────────────────
+# 后台镜像（让「别人搭的服务端」也能本地直发）
+# ──────────────────────────────────────────────────────────────
+
+class TestMirrorApk:
+    """第一次下载时后台拉一份到本地，之后局域网走本地 IO。
+
+    这条对其他用户是关键的：他们自己搭的服务端 `App安装包/` 是空的，
+    没有镜像的话「本地优先」对他们等于死代码，永远 302 去 GitHub。
+    """
+
+    def test_find_local_apk_matches_by_size(self, tmp_path, monkeypatch):
+        dist = tmp_path / "App安装包"
+        dist.mkdir()
+        (dist / "LANShare-App-1.1.20+127.apk").write_bytes(b"x" * 500)
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        assert appver._find_local_apk("LANShare-App-1.1.20+127.apk", 500) is not None
+        # 大小对不上 → 不是同一版
+        assert appver._find_local_apk("LANShare-App-1.1.20+127.apk", 999) is None
+
+    def test_find_local_apk_falls_back_to_generic_name(self, tmp_path, monkeypatch):
+        """`lanshare.apk` 这个通用名也认（老部署习惯）。"""
+        dist = tmp_path / "App安装包"
+        dist.mkdir()
+        (dist / "lanshare.apk").write_bytes(b"y" * 300)
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        got = appver._find_local_apk("任何名字.apk", 300)
+        assert got is not None and got.name == "lanshare.apk"
+
+    def test_mirror_writes_file_and_is_atomic(self, tmp_path, monkeypatch):
+        """镜像成功后本地有完整文件，且不残留 .part。"""
+        import threading
+        import time as _t
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        payload = b"z" * 2048
+
+        class _Resp:
+            def __init__(self):
+                self._buf = payload
+            def read(self, n=-1):
+                if not self._buf:
+                    return b""
+                out, self._buf = self._buf[:n], self._buf[n:]
+                return out
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(appver.urllib.request, "urlopen",
+                            lambda req, timeout=None: _Resp())
+
+        appver._mirror_apk_async("LANShare-App-9.9.9+999.apk",
+                                 "https://example.com/a.apk", 2048)
+
+        dest = tmp_path / "App安装包" / "LANShare-App-9.9.9+999.apk"
+        for _ in range(100):          # 等后台线程落盘
+            if dest.is_file():
+                break
+            _t.sleep(0.05)
+
+        assert dest.is_file()
+        assert dest.read_bytes() == payload
+        # 不能留 .part 残骸
+        assert not dest.with_suffix(".apk.part").exists()
+        assert "LANShare-App-9.9.9+999.apk" not in appver._apk_syncing
+
+    def test_mirror_rejects_size_mismatch(self, tmp_path, monkeypatch):
+        """GitHub 报的 size 和实际拉下来的不符 → 丢弃，不留坏文件。"""
+        import time as _t
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+
+        class _Resp:
+            def read(self, n=-1):
+                return b""
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        # 实际给 0 字节，但声明 2048
+        monkeypatch.setattr(appver.urllib.request, "urlopen",
+                            lambda req, timeout=None: _Resp())
+
+        appver._mirror_apk_async("bad.apk", "https://example.com/b.apk", 2048)
+        for _ in range(40):
+            if "bad.apk" not in appver._apk_syncing:
+                break
+            _t.sleep(0.05)
+
+        assert not (tmp_path / "App安装包" / "bad.apk").exists()
+
+    def test_mirror_skips_when_already_present(self, tmp_path, monkeypatch):
+        """本地已有同 size 的文件 → 不重复下载。"""
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        dist = tmp_path / "App安装包"
+        dist.mkdir()
+        (dist / "dup.apk").write_bytes(b"a" * 100)
+
+        called = []
+        monkeypatch.setattr(appver.urllib.request, "urlopen",
+                            lambda *a, **k: called.append(1))
+
+        appver._mirror_apk_async("dup.apk", "https://example.com/c.apk", 100)
+        import time as _t
+        for _ in range(40):
+            if "dup.apk" not in appver._apk_syncing:
+                break
+            _t.sleep(0.05)
+
+        assert called == []      # 一次网络请求都没发

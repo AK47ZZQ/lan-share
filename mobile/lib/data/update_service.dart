@@ -135,46 +135,90 @@ class UpdateHistoryItem {
           notes: j['notes'] as String? ?? '');
 }
 
+/// 检查更新的结果 —— **三态**，不是「有/没有」两态。
+///
+/// ## 为什么要三态（2026-11-01 真机反馈）
+///
+/// 原来两个源都失败时返回 null，UI 一律显示「已是最新」。用户开着 VPN
+/// （局域网地址被路由劫持 → 服务端连不上；GitHub 节点也不通）点检查更新，
+/// 看到的是「已是最新」，还以为是自己记错了版本。
+///
+/// 「真的没有新版」和「压根没查成」必须分开：前者该安静，后者该告诉用户
+/// 换个网络再试。静默失败是最糟糕的失败方式 —— 用户不知道该重试。
+class UpdateCheckResult {
+  /// 候选新版本；null 表示「所有可达的源都答复：没有比本地更新的」。
+  final UpdateInfo? info;
+
+  /// 是否至少有一个源成功应答。false 时 [info] 无意义。
+  final bool reachable;
+
+  const UpdateCheckResult({
+    this.info,
+    required this.reachable,
+  });
+
+  bool get hasUpdate => info != null;
+}
+
+/// 单个源的应答结果（内部用）：拿到什么 + 这个源到底通没通。
+class _SourceResult {
+  final UpdateInfo? info;
+  final bool reachable;
+  const _SourceResult(this.info, this.reachable);
+}
+
 class UpdateService {
   UpdateService._();
 
-  /// 查最新版本：服务端和 GitHub 两路并发，取 build 号大的那个。
+  /// 查最新版本：服务端和 GitHub 两路并发，取**版本号最高**的那个。
   ///
-  /// 为什么要双源：服务端读 `App安装包/version.json`，靠人工在发版时同步，
-  /// 忘了就永远推不出新版（发 1.1.16 时真踩过）。GitHub Release 是发布
-  /// 动作本身，不会漏。反过来，GitHub 在部分网络环境下不可达，那就回落到
-  /// 服务端——两个源互为兜底，任一可用就不会让「检查更新」整体失效。
+  /// 为什么要双源：服务端读 GitHub Release（GitHub 不可达时回退本地
+  /// version.json），GitHub 直连也走一条 —— 两条路互为兜底，任一可用就
+  /// 不会让「检查更新」整体失效。
   ///
-  /// 都不通时返回 null，UI 显示「已是新版」而不是报错——检查更新失败不该
-  /// 变成一个红色错误吓唬人。
-  static Future<UpdateInfo?> check() async {
-    final results = await Future.wait<UpdateInfo?>([
+  /// **排序必须按 version 字符串，不能按 build 数字**：两个源的编号体系
+  /// 可能不一致（真实 versionCode 126 vs 没有 build 号时的推算值 10119），
+  /// 按数字排会把 1.1.18 排在 1.1.19 前面。
+  static Future<UpdateCheckResult> check() async {
+    final results = await Future.wait<_SourceResult>([
       _checkServer(),
       _checkGitHub(),
     ]);
-    final candidates = results.whereType<UpdateInfo>().toList()
-      ..sort((a, b) => b.build.compareTo(a.build));
-    return candidates.isEmpty ? null : candidates.first;
+    final candidates = results
+        .where((r) => r.info != null)
+        .map((r) => r.info!)
+        .toList()
+      ..sort((a, b) => _compareVersion(b.version, a.version));
+
+    final anyReachable = results.any((r) => r.reachable);
+    if (candidates.isNotEmpty) {
+      return UpdateCheckResult(info: candidates.first, reachable: true);
+    }
+    return UpdateCheckResult(info: null, reachable: anyReachable);
   }
 
-  /// 服务端源：未配置（404）或网络失败都返回 null
-  static Future<UpdateInfo?> _checkServer() async {
+  /// 服务端源。404（服务端没配版本信息）算「应答了但没有」，网络异常算不可达。
+  static Future<_SourceResult> _checkServer() async {
     try {
       final r = await AppverApi.latest();
-      return UpdateInfo.fromJson(Map<String, dynamic>.from(r.data as Map));
+      return _SourceResult(
+          UpdateInfo.fromJson(Map<String, dynamic>.from(r.data as Map)), true);
     } catch (_) {
-      return null;
+      return const _SourceResult(null, false);
     }
   }
 
-  /// GitHub 源：任何异常都返回 null（静默降级到服务端）
-  static Future<UpdateInfo?> _checkGitHub() async {
+  /// GitHub 源：任何异常都当不可达（静默降级到服务端）。
+  static Future<_SourceResult> _checkGitHub() async {
     try {
       final r = await AppverApi.githubLatest();
-      if (r == null || r.data is! Map) return null;
-      return UpdateInfo.fromGitHub(Map<String, dynamic>.from(r.data as Map));
+      if (r == null || r.data is! Map) {
+        return const _SourceResult(null, false);
+      }
+      return _SourceResult(
+          UpdateInfo.fromGitHub(Map<String, dynamic>.from(r.data as Map)), true);
     } catch (_) {
-      return null;
+      return const _SourceResult(null, false);
     }
   }
 
