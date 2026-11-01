@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.84"
+#define AppVersion     "3.85"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -200,6 +200,10 @@ Type: filesandordirs; Name: "{app}\static"
 Type: filesandordirs; Name: "{app}\pgsql"
 Type: filesandordirs; Name: "{app}\bin"
 Type: filesandordirs; Name: "{app}\tray"
+; server.py 在 {app} 根目录被 import 时会生成 {app}\__pycache__，
+; 它不归任何子目录管，漏了就是卸载后留一个空文件夹。
+; 2026-11-01 用户反馈「卸载后残留 __pycache__」就是这个。
+Type: filesandordirs; Name: "{app}\__pycache__"
 
 [Code]
 var
@@ -208,6 +212,33 @@ var
   // 卸载时「是否删除数据」的选择。usUninstall 阶段问，usPostUninstall 阶段执行。
   // 必须分成两个阶段：问的时候文件还没删，用户看到的目录是完整的。
   DeleteDataOnUninstall: Boolean;
+  // 🔴 数据目录必须在这里存一份。
+  //
+  // 执行顺序是：usUninstall（问）→ [UninstallRun] 调 CLI → CLI 删掉注册表
+  // → usPostUninstall（删数据）。
+  // 到 usPostUninstall 时 GetDataDir('') 已经读不到 DataFolder 了，会退回
+  // 兜底的 {commonappdata}\LANShare\data —— 去删一个不存在的 C 盘路径，
+  // 用户真正的数据目录（可能在 G 盘）原封不动。
+  // 2026-11-01 用户反馈「卸载时点了是，还是残留 2 个文件夹」就是这个。
+  DataPathForPurge: String;
+
+{ 命令行里有没有某个参数（不区分大小写）。 }
+{ 只为 /DELETE_DATA 服务：静默卸载默认选「否」（保留数据）， }
+{ 自动化测试需要一条能走到「删除数据」分支的路径。 }
+function CmdLineHas(Param: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), Param) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
 
 { ── 数据目录：安装时用向导页选择，卸载时从注册表读回 ── }
 function GetDataDir(Param: String): String;
@@ -298,8 +329,19 @@ begin
     // 把整个 {app}（含 data）删干净了，用户点「是」是删空气，点「否」也
     // 救不回照片。现在 {app}\data 不在 [UninstallDelete] 里，这里问才有意义。
     DeleteDataOnUninstall := False;
+    // 此刻注册表还在，GetDataDir 能读到真实值。存下来给 usPostUninstall 用。
     DataPath := GetDataDir('');
-    if DirExists(DataPath) then
+    DataPathForPurge := DataPath;
+    Log('LANShare: usUninstall 数据路径 = ' + DataPath);
+    Log('LANShare: /DELETE_DATA 检测 = ' + IntToStr(Ord(CmdLineHas('/DELETE_DATA'))));
+
+    // 自动化测试专用：/DELETE_DATA 直接选「是」，不用弹框。
+    if CmdLineHas('/DELETE_DATA') then
+    begin
+      DeleteDataOnUninstall := True;
+      Log('LANShare: 走 /DELETE_DATA 分支，DeleteDataOnUninstall = True');
+    end
+    else if DirExists(DataPath) then
     begin
       // 用 SuppressibleMsgBox，不是 WizardSilent + MsgBox。
       //
@@ -324,13 +366,31 @@ begin
   end
   else if CurUninstallStep = usPostUninstall then
   begin
+    Log('LANShare: usPostUninstall DeleteDataOnUninstall=' +
+        IntToStr(Ord(DeleteDataOnUninstall)) + ' path=' + DataPathForPurge);
     if DeleteDataOnUninstall then
     begin
-      DataPath := GetDataDir('');
-      if DirExists(DataPath) then
-        DelTree(DataPath, True, True, True);
+      // 用 usUninstall 存下来的路径 —— 这里再调 GetDataDir 会拿到兜底值，
+      // 因为 CLI 已经把注册表删了。
+      if (DataPathForPurge <> '') and DirExists(DataPathForPurge) then
+      begin
+        // DelTree 返回 False 说明有文件删不掉（通常是 PG 的 postmaster.pid
+        // 或日志还被占着）。静默吞掉的话用户就是「点了是但还是残留」，
+        // 而且完全不知道为什么 —— 必须说出来。
+        //
+        // 用 SuppressibleMsgBox 不是 WizardSilent + MsgBox：卸载阶段调
+        // WizardSilent 会抛致命异常（3.83 就是这么崩的，见上）。
+        if not DelTree(DataPathForPurge, True, True, True) then
+        begin
+          SuppressibleMsgBox('数据目录没有完全删除：' + #13#10 + DataPathForPurge + #13#10 + #13#10 +
+                             '可能还有进程占用文件。重启电脑后可以手动删除这个目录。',
+                             mbInformation, MB_OK, IDOK);
+        end;
+      end;
       // 数据删完之后，安装目录如果空了也一并移除，不留空壳
       RemoveDir(ExpandConstant('{app}'));
+      // Inno 自己的卸载器文件也顺手清掉（通常它会自己删，删不掉就留个空壳）
+      DeleteFile(ExpandConstant('{app}\unins000.dat'));
     end;
   end;
 end;
