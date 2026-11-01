@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -304,3 +305,55 @@ class TestFindLocalShareDir:
         import sys
         monkeypatch.setattr(sys, "platform", "linux")   # 非 Windows 直接跳过
         assert rel.find_local_share_dir() is None
+class TestSafeTag:
+    """GitHub 返回的 tag 是外部数据，但它会被拼进子进程参数和 URL。
+
+    这里失守会怎样：
+      · tag = `--yes` → argv 错位，`gh release delete` 删错东西
+      · tag = `--repo=别人的仓库` → 删到别人仓库去
+      · tag = `../../x` → `gh api .../releases/tags/<tag>` 请求路径被改写
+
+    仓库是公开的，任何有写权限的协作者都能造出这种 tag，而发版脚本
+    是自动跑的、没人看列表 —— 所以要白名单挡掉。
+    """
+
+    @pytest.mark.parametrize("good", [
+        "server-v3.79", "app-v1.1.23", "v1.0.0", "release_2026.11.01",
+        "a", "x" * 128,
+    ])
+    def test_accepts_normal_tags(self, rel, good):
+        assert rel._safe_tag(good) == good
+
+    @pytest.mark.parametrize("evil", [
+        "--yes", "-f", "--repo=other/repo", "-", "--",
+        "../../etc/passwd", "tag/../x", "tag with space",
+        "tag;rm -rf /", "tag$(id)", "tag`id`", "", "  ",
+        "tag\nname", "x" * 129,
+    ])
+    def test_rejects_dangerous_tags(self, rel, evil):
+        with pytest.raises(rel.Abort):
+            rel._safe_tag(evil)
+
+    def test_prune_refuses_on_evil_tag(self, rel, monkeypatch):
+        """被污染的 tag 列表要整体中止，不能「跳过这条继续删下一个」。
+
+        注意：恶意 tag 必须**带合法前缀**才能穿过第一道过滤
+        （`app-` 开头），否则测不到 _safe_tag —— 第一版测试就栽在这，
+        用 `--repo=evil` 当样本，结果被 startswith 挡掉，DID NOT RAISE。
+        """
+        fake = json.dumps([
+            {"tag_name": "app-v1.1.23"},
+            {"tag_name": "app-../../evil"},      # 前缀合法，内容恶意
+        ])
+        monkeypatch.setattr(rel, "run_checked", lambda *a, **k: fake)
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return type("R", (), {"returncode": 0, "stderr": ""})()
+
+        monkeypatch.setattr(rel, "run", fake_run)
+        with pytest.raises(rel.Abort):
+            rel.prune_old_releases("app", "app-v1.1.24")
+        # 关键：出事之后一个删除命令都不该发出去
+        assert not calls, f"非法 tag 出现后仍执行了：{calls}"

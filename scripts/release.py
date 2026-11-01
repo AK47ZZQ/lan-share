@@ -521,12 +521,10 @@ def github_release(tag: str, title: str, notes: str, asset: Path,
 
 
 def _history_notes(body: str, max_items: int = 6) -> str:
-    """从 CHANGELOG 条目的正文里提炼要点，只取 `###` 小节标题。
+    """从 CHANGELOG 条目正文里提炼要点（只取 `###` 小节标题）。
 
-    为什么不用 summarize()：那个是给 Release 页面用的，会带上段落首句，
-    结果是一堆半截句子（「根因不是滚动冲突，是一次布局了全部内容：…」）。
-    服务端这份 notes 会显示在手机「发现新版本」那里，一行一句的小标题
-    才读得下去。细节留在 CHANGELOG 里，想看的人自己去看。
+    用于 `version.json` 的 notes —— 那里只显示「这一版改了什么」，
+    一行一句小标题最合适。
     """
     heads = re.findall(r"^###\s+(.+)$", body, re.M)
     skip = ("已知限制", "已知事项", "安装", "下载", "顺带", "注意", "技术信息")
@@ -588,11 +586,28 @@ def parse_changelog_history(markdown: str) -> list[dict]:
             "version": ver,
             "build": build,
             "date": dm.group(1) if dm else "",
-            # 只留小节标题：这份 notes 会显示在手机「发现新版本」那里，
-            # 段落首句拼出来全是半截话，读不下去
-            "notes": _history_notes("\n".join(lines[1:])),
+            # history 里存**完整正文**，不是精简要点。
+            # 原因：App 的更新历史有两个数据源 —— 有网时拉 CHANGELOG（全文），
+            # 没网时回落服务端。如果服务端只存小标题，同一个「更新历史」在
+            # 两种网络下内容厚薄不一，用户会觉得丢了东西。App 端已经有
+            # cleanNotes + 折叠，全文进来也不会糊屏。
+            "notes": "\n".join(lines[1:]).strip(),
+            # 单独给一份精简版：version.json 的「发现新版本」只用它
+            "summary": _history_notes("\n".join(lines[1:])),
         })
     return items
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """先写 .tmp 再 rename —— 断电/崩溃时不会留下半个文件。
+
+    这两个 JSON 是服务端每次 /api/app/latest 和 /api/app/history 都要读的，
+    写坏一个就等于更新功能全废，而 appver.py 的容错是「解析失败返回空」，
+    用户看到的是「没有历史、没有新版本」，不会报错，极难查。
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def sync_to_local_server(apk: Path, history: list[dict]) -> None:
@@ -616,25 +631,32 @@ def sync_to_local_server(apk: Path, history: list[dict]) -> None:
         warn("本机没装服务端（注册表无 LANShare），跳过镜像同步")
         return
 
-    ver = read_app_version()[0]
-    build = read_app_version()[1]
+    # 0) 先验产物本身 —— 0 字节或明显偏小的包绝不能同步过去，
+    #    否则用户下到的是一个装不上的文件，而服务端会一路 200。
+    size = apk.stat().st_size
+    if size < 5 * 1024 * 1024:
+        raise Abort(f"APK 只有 {size} 字节，明显不是有效产物，拒绝同步到服务端")
+
+    ver, build = read_app_version()
 
     # 1) APK 本体
     sha = hashlib.sha256(apk.read_bytes()).hexdigest()
     target = dest / apk.name
     shutil.copy2(apk, target)
+    if target.stat().st_size != size:
+        raise Abort(f"同步后大小不一致（{target.stat().st_size} != {size}）")
     ok(f"APK 已同步到 {target.name}（{target.stat().st_size / 1048576:.1f} MB）")
 
     # 2) version.json —— /api/app/latest 读它
-    (dest / "version.json").write_text(json.dumps({
+    _atomic_write(dest / "version.json", json.dumps({
         "version": ver,
         "build": build,
         "filename": apk.name,
         "sha256": sha,
-        "size": apk.stat().st_size,
-        "notes": history[0]["notes"] if history else "",
+        "size": size,
+        "notes": history[0]["summary"] if history else "",
         "date": history[0]["date"] if history else "",
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    }, ensure_ascii=False, indent=2))
     ok("version.json 已更新")
 
     # 3) versions.json —— /api/app/history 读它
@@ -644,13 +666,15 @@ def sync_to_local_server(apk: Path, history: list[dict]) -> None:
     for h in history:
         if h["version"] == ver:
             h["build"] = build
-    (dest / "versions.json").write_text(json.dumps({
+    _atomic_write(dest / "versions.json", json.dumps({
         "items": [{"version": h["version"], "build": h["build"],
                    "date": h["date"], "notes": h["notes"]} for h in history],
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    }, ensure_ascii=False, indent=2))
     ok(f"versions.json 已更新（{len(history)} 个版本）")
 
-    # 4) 顺手清掉旧 APK 和下载残留，别让目录越攒越大
+    # 4) 顺手清掉旧 APK 和下载残留。
+    #    只动 LANShare-App-* 这种我们自己的命名，用户手动放的 lanshare.apk
+    #    之类一律不碰 —— 那可能是他自己导出的。
     for old in dest.glob("LANShare-App-*.apk*"):
         if old.name not in (apk.name, apk.name + ".part"):
             try:
@@ -681,13 +705,37 @@ def restore_latest_to_server() -> None:
     for r in rels:
         tag = str(r.get("tag_name") or "")
         if tag.startswith("server-"):
-            res = run(["gh", "release", "edit", tag, "--latest"], timeout=300)
+            _safe_tag(tag)
+            res = run(["gh", "release", "edit", "--latest", "--", tag], timeout=300)
             if res.returncode == 0:
                 ok(f"Latest 标记还给 {tag}")
             else:
                 warn(f"设 Latest 失败（{res.stderr.strip()[:80]}）")
             return
     warn("没有服务端 Release，Latest 保持原样")
+
+
+def _safe_tag(tag: str) -> str:
+    """校验来自 GitHub API 的 tag 名，非法直接拒绝。
+
+    ## 为什么必须校验
+
+    tag 是**外部数据**（GitHub 返回的字段），而它会被拼进子进程参数和 URL：
+
+      · `gh release delete <tag>` —— 以 `-` 开头的 tag 会被当成选项。
+        tag = `--yes` 时 argv 变成 `delete --yes --yes`，参数错位；
+        更糟的形态能改成 `--repo=别人的仓库`，删错地方。
+      · `gh api repos/O/R/releases/tags/<tag>` —— tag 里的 `../` 能改写路径。
+
+    虽然仓库是我们自己发的 tag，但仓库是公开的：任何有写权限的协作者
+    都能造出这类 tag，而发版脚本是自动跑的，没有人会去看列表。
+
+    白名单：git 允许的 tag 字符里，取我们实际会用到的子集。拒绝就是拒绝，
+    不做「清洗后放行」—— 清洗会让人以为能用，实际名字被悄悄改了。
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", tag or ""):
+        raise Abort(f"GitHub 返回了非法的 tag 名，拒绝执行：{tag!r}")
+    return tag
 
 
 def prune_old_releases(kind: str, keep_tag: str) -> None:
@@ -719,12 +767,23 @@ def prune_old_releases(kind: str, keep_tag: str) -> None:
         warn(f"清理旧 Release 时拉列表失败（不影响本次发布）：{exc}")
         return
 
-    removed = 0
+    # ── 第一阶段：收集 + 全部校验 ──
+    # 必须先把整张列表过一遍再动手。边遍历边删的话，遇到非法 tag 时
+    # 前面几条已经删掉了 —— 「删了一半停下来」比「全不删」更难善后。
+    targets: list[str] = []
     for r in rels:
         tag = str(r.get("tag_name") or "")
         if not tag.startswith(prefix) or tag == keep_tag:
             continue
-        res = run(["gh", "release", "delete", tag, "--yes"], timeout=300)
+        _safe_tag(tag)          # 任一非法就抛出去，此时一条都还没删
+        targets.append(tag)
+
+    # ── 第二阶段：执行删除 ──
+    # `--yes` 放在 `--` 之前：`--` 之后的一切都是位置参数，
+    # 标志写后面会被当成 tag 名。
+    removed = 0
+    for tag in targets:
+        res = run(["gh", "release", "delete", "--yes", "--", tag], timeout=300)
         if res.returncode == 0:
             removed += 1
             ok(f"清掉旧版 {tag}")
@@ -741,6 +800,8 @@ def verify_release(tag: str, asset: Path) -> None:
     `gh release create` 返回 0 只能说明「上传成功」，不能说明
     「App 点检查更新能选到它」—— 2026-11-01 那个 bug 就是这么来的。
     """
+    # tag 要拼进 URL 路径，先过白名单 —— 否则 `../` 能改写请求地址
+    _safe_tag(tag)
     raw = run_checked([
         "gh", "api", f"repos/{REPO}/releases/tags/{tag}",
     ], timeout=300)
