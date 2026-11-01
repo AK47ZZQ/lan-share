@@ -2,6 +2,7 @@
 // 开源许可。发版约定：管理员把新 APK 与 version.json 放共享空间「App安装包/」。
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../data/local/prefs.dart';
 import '../data/net.dart';
@@ -19,7 +20,6 @@ class AboutPage extends StatefulWidget {
 
 class _AboutPageState extends State<AboutPage> {
   PackageInfo? _info;
-  String? _server;
   UpdateInfo? _remote;
   /// 是否已经查过一次。区分「没查过」和「查了但没新版」——
   /// 两者的 _remote 都是 null，只靠它分会话内点完检查更新又退回按钮。
@@ -38,12 +38,8 @@ class _AboutPageState extends State<AboutPage> {
     UpdateService.purgeInstallers();
     () async {
       final info = await PackageInfo.fromPlatform();
-      final server = await Prefs.lastAddress();
       if (!mounted) return;
-      setState(() {
-        _info = info;
-        _server = server;
-      });
+      setState(() => _info = info);
     }();
     // 0.9.0 更新历史：拉取失败静默隐藏栏目（不影响检查更新主流程）
     () async {
@@ -74,12 +70,9 @@ class _AboutPageState extends State<AboutPage> {
         _remote = result.info;
         _checked = true;
         // 一个源都没应答 → 明确告诉用户「没查成」，不要假装「已是最新」。
-        // 最常见的情形是开着 VPN：局域网地址被路由劫持连不上自家服务器，
-        // GitHub 那边节点也不通，两个源一起失败。
-        _checkError = result.reachable
-            ? null
-            : '连不上更新源。如果开着 VPN，先关掉再试（局域网地址会被 VPN 劫持）；'
-                '或者连 WiFi/换网络后重试。';
+        // 具体文案交给 UpdateCheckResult.failureHint：它能分清是服务端挂了
+        // 还是 GitHub 挂了，因为这两个源的 VPN 诉求是相反的（一个要关一个要开）。
+        _checkError = result.reachable ? null : result.failureHint;
         _checking = false;
       });
     } catch (e) {
@@ -145,32 +138,104 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
+  /// 打开项目仓库。
+  ///
+  /// 打不开时给个提示而不是静默 —— 有些 ROM 没有默认浏览器，
+  /// 用户点了没反应会以为是 App 坏了。
+  Future<void> _openRepo() async {
+    final uri = Uri.parse('https://github.com/AK47ZZQ/lan-share');
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('打不开浏览器，地址是 github.com/AK47ZZQ/lan-share')));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('打不开浏览器，地址是 github.com/AK47ZZQ/lan-share')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final info = _info;
     final localBuild = int.tryParse(info?.buildNumber ?? '') ?? 0;
     final remote = _remote;
-    final hasUpdate =
-        remote != null &&
+    final hasUpdate = remote != null &&
         UpdateService.isNewer(remote, localBuild, localVersion: info?.version);
+    final showHistory = _historyLoaded && _history.isNotEmpty;
+
+    // 为什么用 ListView.builder 而不是 ListView(children: [...])：
+    // 历史改从 CHANGELOG 拉之后有近 40 个版本。塞进一个 Card 的 Column 里
+    // 意味着**一次布局全部 Widget**，手机上直接卡死，表现为「页面滑不动」。
+    // builder 只构建可见的那几条，滚动才按需生成。
+    //
+    // 索引排布：[0] 头部 → [1..n] 历史条目 → [最后] 开源许可
     return Scaffold(
-        appBar: AppBar(title: const Text('关于')),
-        body: ListView(padding: const EdgeInsets.all(Gap.md), children: [
+      appBar: AppBar(title: const Text('关于')),
+      body: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(Gap.md),
+        itemCount: 1 + (showHistory ? _history.length : 0) + 1,
+        itemBuilder: (context, i) {
+          if (i == 0) {
+            return _buildHeader(context, info, localBuild, remote, hasUpdate,
+                showHistory);
+          }
+          if (showHistory && i <= _history.length) {
+            return _HistoryEntry(
+                item: _history[i - 1],
+                localBuild: localBuild,
+                remoteBuild: remote?.build);
+          }
+          return _buildFooter(context, info);
+        },
+      ),
+    );
+  }
+
+  /// 顶部：图标、版本号、仓库链接、检查更新卡片。
+  Widget _buildHeader(BuildContext context, dynamic info, int localBuild,
+      UpdateInfo? remote, bool hasUpdate, bool showHistory) {
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           const SizedBox(height: Gap.md),
           const Center(child: BrandCloud(size: 72, onGradient: false)),
           const SizedBox(height: Gap.sm),
-          Center(child: Text('LAN Share',
-              style: Theme.of(context).textTheme.titleLarge)),
+          Center(
+              child: Text('LAN Share',
+                  style: Theme.of(context).textTheme.titleLarge)),
           const SizedBox(height: Gap.xxs),
-          Center(child: Text(
-              'v${info?.version ?? '…'} (${info?.buildNumber ?? "…"})',
-              style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant))),
+          Center(
+              child: Text('v${info?.version ?? '…'} (${info?.buildNumber ?? "…"})',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant))),
           const SizedBox(height: Gap.xxs),
-          Center(child: Text('家庭自包含网盘 · ${_server ?? ''}',
-              style: const TextStyle(fontSize: 12), textAlign: TextAlign.center)),
+          // 这里原来显示当前连接的服务器地址（`家庭自包含网盘 · https://192.168.x.x:8765`）。
+          // 那是本地内网 IP —— 关于页是最容易被截图分享的一页，把家里网段
+          // 印在上面没有任何用处，只有风险。改成项目仓库，对用户也更实用。
+          Center(
+              child: InkWell(
+            onTap: _openRepo,
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.code,
+                    size: 14, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 5),
+                Text('家庭自包含网盘 · github.com/AK47ZZQ/lan-share',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.primary)),
+              ]),
+            ),
+          )),
           const SizedBox(height: Gap.xl),
-          Card(elevation: 0,
+          Card(
+              elevation: 0,
               shape: RoundedRectangleBorder(
                   borderRadius: Radii.bControl,
                   side: BorderSide(
@@ -202,12 +267,13 @@ class _AboutPageState extends State<AboutPage> {
                       const SizedBox(height: Gap.xxs),
                       const Text('已是最新版本'),
                       const SizedBox(height: Gap.xxs),
-                      Text('服务端分发版本：v${remote.version} (${remote.build})'
+                      Text(
+                          '服务端分发版本：v${remote.version} (${remote.build})'
                           '${remote.available ? "" : " · APK 未上传"}',
                           style: const TextStyle(fontSize: 12)),
                       TextButton(onPressed: _check, child: const Text('再查一次')),
                     ],
-                    if (hasUpdate) ...[
+                    if (hasUpdate && remote != null) ...[
                       Text('发现新版本 v${remote.version} (${remote.build})',
                           style: const TextStyle(fontWeight: FontWeight.bold)),
                       if (remote.notes.isNotEmpty)
@@ -215,54 +281,75 @@ class _AboutPageState extends State<AboutPage> {
                             padding: const EdgeInsets.only(top: Gap.xxs),
                             child: Text(remote.notes,
                                 style: const TextStyle(fontSize: 12))),
+                      // 下载走 GitHub CDN。国内直连经常几 KB/s 甚至断流，
+                      // 而开 VPN 会快很多 —— 但那个建议只对下载有效，
+                      // 对「连家里服务器」是反的，所以单独写在这一块里，
+                      // 不跟检查更新的提示混在一起。
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Row(children: [
+                          Icon(Icons.info_outline,
+                              size: 12,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                                '安装包从 GitHub 下载，国内直连可能很慢，开 VPN 会快很多',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant)),
+                          ),
+                        ]),
+                      ),
                       const SizedBox(height: 10),
                       if (_progress != null) ...[
                         LinearProgressIndicator(value: _progress),
                         const SizedBox(height: Gap.xxs),
-                        Text('下载中 ${( _progress! * 100).toStringAsFixed(0)}%',
+                        Text(
+                            '下载中 ${(_progress! * 100).toStringAsFixed(0)}%',
                             style: const TextStyle(fontSize: 12)),
                       ] else
                         FilledButton.icon(
-                            onPressed: remote.available
-                                ? _downloadAndInstall
-                                : null,
+                            onPressed:
+                                remote.available ? _downloadAndInstall : null,
                             icon: const Icon(Icons.download_outlined),
                             label: Text(remote.available
                                 ? '下载并安装'
                                 : '服务端 APK 未上传')),
                     ],
                   ]))),
-          const SizedBox(height: Gap.md),
-          // 0.9.0 更新历史：每次版本的更新说明（服务端 versions.json 驱动）
-          if (_historyLoaded && _history.isNotEmpty)
-            Card(elevation: 0,
-                shape: RoundedRectangleBorder(
-                    borderRadius: Radii.bControl,
-                    side: BorderSide(
-                        color: Theme.of(context).dividerColor, width: 0.5)),
-                child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(children: [
-                            Icon(Icons.history,
-                                size: 17,
-                                color: Theme.of(context).colorScheme.primary),
-                            const SizedBox(width: 6),
-                            Text('更新历史',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
-                                    ?.copyWith(fontSize: 14)),
-                          ]),
-                          const SizedBox(height: 6),
-                          for (final h in _history)
-                            _HistoryEntry(
-                                item: h,
-                                localBuild: localBuild,
-                                remoteBuild: remote?.build),
-                        ]))),
+          if (showHistory) ...[
+            const SizedBox(height: Gap.md),
+            Row(children: [
+              Icon(Icons.history,
+                  size: 17, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 6),
+              Text('更新历史',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontSize: 14)),
+              const Spacer(),
+              // 条数写出来，让用户知道一共多少、滑到底了没有
+              Text('共 ${_history.length} 个版本',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            ]),
+            const SizedBox(height: 2),
+          ],
+        ]);
+  }
+
+  /// 底部：开源许可入口。
+  Widget _buildFooter(BuildContext context, dynamic info) {
+    return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           const SizedBox(height: Gap.md),
           TextButton.icon(
               icon: const Icon(Icons.policy_outlined, size: 18),
@@ -271,7 +358,7 @@ class _AboutPageState extends State<AboutPage> {
                   context: context,
                   applicationName: 'LAN Share',
                   applicationVersion: info?.version)),
-        ]));
+        ]);
   }
 }
 

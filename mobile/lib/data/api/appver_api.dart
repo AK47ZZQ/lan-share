@@ -1,3 +1,4 @@
+import 'dart:convert';
 // 版本/更新域 HTTP 契约（B8 裸 dio 收编：自 data/update_service.dart 抽出）。
 // 契约见 app/api/appver.py；管理员把新 APK + version.json 放进共享空间即发版。
 import 'dart:io';
@@ -34,6 +35,44 @@ class AppverApi {
       {void Function(int, int)? onProgress}) async {
     await download(savePath, onProgress: onProgress);
     return File(savePath);
+  }
+
+  /// 拉仓库里的 CHANGELOG.md（更新历史的数据源）。
+  ///
+  /// ## 为什么不用 Release 列表
+  ///
+  /// 原来历史是从 GitHub Releases 拉 body。但 Release 是**会被清理**的
+  /// —— 仓库只保留最新一版之后，历史就只剩一两条了，而用户想看的是
+  /// 「这个 App 一路是怎么变过来的」。
+  ///
+  /// CHANGELOG.md 在 git 历史里，删不掉、不会丢，也自带完整时间线。
+  ///
+  /// 走 `contents` API 而不是 `raw.githubusercontent.com`：后者在国内
+  /// 经常直接 000，前者和 Release API 是同一个域名，可达性一致。
+  ///
+  /// 失败返回 null（调用方回落 Release 列表）。
+  static Future<String?> githubChangelog() async {
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 6),
+      receiveTimeout: const Duration(seconds: 10),
+      headers: const {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'LANShare-Android',
+      },
+    ));
+    try {
+      final r = await dio.get(
+        'https://api.github.com/repos/AK47ZZQ/lan-share/contents/CHANGELOG.md',
+      );
+      final data = r.data;
+      if (data is! Map) return null;
+      final b64 = '${data['content'] ?? ''}'.replaceAll(RegExp(r'\s'), '');
+      if (b64.isEmpty) return null;
+      final bytes = base64Decode(b64);
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 拉 GitHub 上所有 `app-` 前缀的 Release（新到旧），更新历史用。

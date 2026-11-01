@@ -31,6 +31,8 @@ Map<String, dynamic> gh({
     };
 
 void main() {
+  _changelogTests();
+
   group('UpdateInfo.fromGitHub 正常解析', () {
     test('完整 JSON 能解出四要素：version / build / sha256 / url', () {
       final info = UpdateInfo.fromGitHub(gh())!;
@@ -191,6 +193,86 @@ void main() {
       final info = UpdateInfo.fromGitHub(gh())!;
       final r = UpdateCheckResult(info: info, reachable: true);
       expect(r.hasUpdate, isTrue);
+    });
+  });
+}
+// ──────────────────────────────────────────────────────────────
+// CHANGELOG 解析（2026-11-01）
+//
+// 更新历史原来从 GitHub Release 的 body 拉。但 Release 会被清理 ——
+// 仓库只保留最新一版之后，历史就只剩一两条，而用户想看的是
+// 「这个 App 一路怎么变过来的」。改从仓库里的 CHANGELOG.md 拉：
+// 它在 git 历史里，删不掉。
+// ──────────────────────────────────────────────────────────────
+
+void _changelogTests() {
+  const md = '''
+## 2026-11-01（深夜二）— v3.79 + App v1.1.22：修 GUI 检查更新
+
+### 改动
+
+- 修好了检查更新
+
+## 2026-11-01（深夜）— v3.78 + App v1.1.21：发版固化
+
+- 一条命令发版
+
+## 2026-11-01（晚）— v3.77 + App v1.1.20（一）：分节说明
+
+- 第一部分
+
+## 2026-11-01（下午）— v3.77 + App v1.1.20（二）：同一版本第二篇
+
+- 第二部分
+
+## 2026-10-31 — 服务端 v3.76：只有服务端
+
+- 没有 App 版本号，不该进 App 的历史
+''';
+
+  group('CHANGELOG 解析', () {
+    test('只取含 App 版本号的条目', () {
+      final items = UpdateService.parseChangelog(md);
+      final versions = items.map((e) => e.version).toList();
+      expect(versions, contains('1.1.22'));
+      expect(versions, contains('1.1.21'));
+      // 纯服务端条目要跳过
+      expect(items.length, 3);
+    });
+
+    test('同一版本的小节只留一条', () {
+      // 1.1.20 被拆成（一）（二）两个小节，历史里不该出现两次
+      final items = UpdateService.parseChangelog(md);
+      final count = items.where((e) => e.version == '1.1.20').length;
+      expect(count, 1);
+    });
+
+    test('build 号按版本推算', () {
+      final items = UpdateService.parseChangelog(md);
+      final v22 = items.firstWhere((e) => e.version == '1.1.22');
+      // 和检查更新同一套规则：主*10000 + 次*100 + 修订
+      expect(v22.build, 1 * 10000 + 1 * 100 + 22);
+    });
+
+    test('提取日期', () {
+      final items = UpdateService.parseChangelog(md);
+      expect(items.first.date, '2026-11-01');
+    });
+
+    test('正文带过去供 UI 清洗折叠', () {
+      final items = UpdateService.parseChangelog(md);
+      final v22 = items.firstWhere((e) => e.version == '1.1.22');
+      expect(v22.notes, contains('修好了检查更新'));
+    });
+
+    test('空文档返回空列表', () {
+      expect(UpdateService.parseChangelog(''), isEmpty);
+    });
+
+    test('保持文档顺序（新的在前）', () {
+      final items = UpdateService.parseChangelog(md);
+      expect(items.first.version, '1.1.22');
+      expect(items.last.version, '1.1.20');
     });
   });
 }

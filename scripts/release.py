@@ -519,6 +519,51 @@ def github_release(tag: str, title: str, notes: str, asset: Path,
     return url
 
 
+def prune_old_releases(kind: str, keep_tag: str) -> None:
+    """删掉同类型的旧 Release，只留刚发的这个。
+
+    ## 为什么要清
+
+    Release 攒多了会：①仓库页一眼全是历史版本，用户找不到该下哪个；
+    ②每个都挂着 50~100 MB 的安装包，白占配额；③「最新版是哪个」
+    在列表里越来越不直观。
+
+    ## 只删 Release，不删 tag
+
+    tag 指向的是 git 提交，很轻，而且 CHANGELOG 里的历史链接、issue 引用
+    都靠它。删了 tag，那些引用就全断了 —— 而删 Release 只影响「下载入口」，
+    正常用户只下载最新版，不受影响。
+
+    ## 失败不影响发版
+
+    发布已经成功了，清理是锦上添花。任何一个删不掉都只记一行警告，
+    不能让整个发版流程报失败。
+    """
+    prefix = "app-" if kind == "app" else "server-"
+    try:
+        raw = run_checked(["gh", "api", f"repos/{REPO}/releases?per_page=100"],
+                          timeout=300)
+        rels = json.loads(raw)
+    except Abort as exc:
+        warn(f"清理旧 Release 时拉列表失败（不影响本次发布）：{exc}")
+        return
+
+    removed = 0
+    for r in rels:
+        tag = str(r.get("tag_name") or "")
+        if not tag.startswith(prefix) or tag == keep_tag:
+            continue
+        res = run(["gh", "release", "delete", tag, "--yes"], timeout=300)
+        if res.returncode == 0:
+            removed += 1
+            ok(f"清掉旧版 {tag}")
+        else:
+            warn(f"删不掉 {tag}（{res.stderr.strip()[:80]}）")
+
+    if removed == 0:
+        ok("没有需要清理的旧 Release")
+
+
 def verify_release(tag: str, asset: Path) -> None:
     """发完真的去拉一次，确认客户端能选到刚发的包。
 
@@ -623,6 +668,7 @@ def cmd_server(args) -> int:
 
     step(7, total, "发版后验证")
     verify_release(f"server-v{target}", exe)
+    prune_old_releases("server", f"server-v{target}")
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")
@@ -673,6 +719,7 @@ def cmd_app(args) -> int:
     url = github_release(f"app-v{target}", f"LAN Share App {target} (build {new_build})",
                          notes, apk, latest=False)
     verify_release(f"app-v{target}", apk)
+    prune_old_releases("app", f"app-v{target}")
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")

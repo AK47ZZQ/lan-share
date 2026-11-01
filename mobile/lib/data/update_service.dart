@@ -187,12 +187,43 @@ class UpdateCheckResult {
   /// 是否至少有一个源成功应答。false 时 [info] 无意义。
   final bool reachable;
 
+  /// 各自通没通。分开展示才能给出正确的 VPN 建议 ——
+  /// 这两个源的网络诉求是**相反**的：
+  ///   · 服务端（局域网 IP）：开 VPN 会被路由劫持，要关
+  ///   · GitHub：国内直连经常失败，要开
+  /// 混在一起说「连不上更新源」等于让用户猜。
+  final bool serverReachable;
+  final bool githubReachable;
+
   const UpdateCheckResult({
     this.info,
     required this.reachable,
+    this.serverReachable = false,
+    this.githubReachable = false,
   });
 
   bool get hasUpdate => info != null;
+
+  /// 给用户看的失败原因 + 建议。只有检查失败（reachable=false）时才有意义。
+  ///
+  /// 这里分三种情况，因为「怎么办」完全不同：
+  /// · 只有服务端挂 → 大概率开了 VPN 或换了网络，不影响检查，不用管
+  /// · GitHub 挂而服务端通 → 能查到版本，只是下载要走服务端，也能用
+  /// · 两个全挂 → 才是真没辙，此时才建议开 VPN（并对局域网场景说明取舍）
+  String get failureHint {
+    if (reachable) return '';
+    if (!serverReachable && !githubReachable) {
+      return '两个更新源都连不上。GitHub 在国内经常直连失败，建议开 VPN 后重试；'
+          '但开 VPN 会劫持局域网地址，那时就连不上家里的服务器了 —— '
+          '更新完记得关掉，或者改用公网入口。';
+    }
+    if (githubReachable) {
+      return '连不上家里的服务端（换了网络，或者开着 VPN 导致局域网地址被劫持）。'
+          'GitHub 是通的，检查更新不受影响。';
+    }
+    return '连不上 GitHub（国内直连经常失败），服务端也没有应答。'
+        '建议开 VPN 后点「重试」。';
+  }
 }
 
 /// 单个源的应答结果（内部用）：拿到什么 + 这个源到底通没通。
@@ -226,10 +257,24 @@ class UpdateService {
       ..sort((a, b) => _compareVersion(b.version, a.version));
 
     final anyReachable = results.any((r) => r.reachable);
+    // 顺序和 Future.wait 一致：0 = 服务端，1 = GitHub。
+    // 两个都要带上，UI 靠它们给出针对性的 VPN 建议。
+    final serverOk = results[0].reachable;
+    final githubOk = results[1].reachable;
     if (candidates.isNotEmpty) {
-      return UpdateCheckResult(info: candidates.first, reachable: true);
+      return UpdateCheckResult(
+        info: candidates.first,
+        reachable: true,
+        serverReachable: serverOk,
+        githubReachable: githubOk,
+      );
     }
-    return UpdateCheckResult(info: null, reachable: anyReachable);
+    return UpdateCheckResult(
+      info: null,
+      reachable: anyReachable,
+      serverReachable: serverOk,
+      githubReachable: githubOk,
+    );
   }
 
   /// 服务端源。404（服务端没配版本信息）算「应答了但没有」，网络异常算不可达。
@@ -257,6 +302,49 @@ class UpdateService {
     }
   }
 
+
+  /// 把 CHANGELOG.md 解析成更新历史。
+  ///
+  /// 只挑**含 App 版本号**的条目 —— CHANGELOG 里服务端和 App 是混着写的
+  /// （标题长这样：`v3.79 + App v1.1.22：修 GUI 检查更新`），而 App 的
+  /// 更新历史只该显示 App 自己的版本，把服务端版本混进去会让用户以为
+  /// 手机装了 3.79。
+  static List<UpdateHistoryItem> parseChangelog(String md) {
+    final items = <UpdateHistoryItem>[];
+    final seen = <String>{};
+    // 按一级标题切块
+    final sections = md.split(RegExp(r'^## ', multiLine: true));
+    for (final sec in sections.skip(1)) {
+      final lines = sec.split('\n');
+      if (lines.isEmpty) continue;
+      final title = lines.first.trim();
+
+      // 必须带 App 版本号才算 App 的条目
+      final m = RegExp(r'App\s+v?(\d+\.\d+\.\d+)').firstMatch(title);
+      if (m == null) continue;
+      final ver = m.group(1)!;
+
+      // 同一个版本可能被拆成多个小节（比如 1.1.20 分了「（一）」「（二）」），
+      // 只留第一条 —— 否则历史里会出现两个一模一样的版本号。
+      if (!seen.add(ver)) continue;
+
+      final dm = RegExp(r'(\d{4}-\d{2}-\d{2})').firstMatch(title);
+      // build 用和检查更新同一套推算规则，保证「当前」标记能对上
+      final parts = ver.split('.').map(int.tryParse).toList();
+      final build = (parts.length == 3 && parts.every((x) => x != null))
+          ? parts[0]! * 10000 + parts[1]! * 100 + parts[2]!
+          : 0;
+
+      items.add(UpdateHistoryItem(
+        version: ver,
+        build: build,
+        date: dm?.group(1) ?? '',
+        notes: lines.skip(1).join('\n'),
+      ));
+    }
+    return items;
+  }
+
   /// 更新历史（新版本在前）。
   ///
   /// **GitHub 优先，服务端兜底**（2026-11-01）。原来只读服务端的
@@ -265,7 +353,18 @@ class UpdateService {
   ///
   /// GitHub Release 的正文就是更新日志，直接拉，和 App 检查更新同源。
   static Future<List<UpdateHistoryItem>> history() async {
-    // 1. GitHub：不依赖服务端
+    // 1. CHANGELOG.md：最完整，且不会被 Release 清理影响
+    try {
+      final md = await AppverApi.githubChangelog();
+      if (md != null && md.isNotEmpty) {
+        final items = parseChangelog(md);
+        if (items.isNotEmpty) return items;
+      }
+    } catch (_) {
+      // 掉到下一步
+    }
+
+    // 2. GitHub Release：CHANGELOG 拉不到时兜底
     try {
       final releases = await AppverApi.githubAppReleases();
       if (releases != null && releases.isNotEmpty) {
@@ -279,7 +378,7 @@ class UpdateService {
       // 掉到服务端兜底
     }
 
-    // 2. 服务端：旧版兼容 / GitHub 不可达
+    // 3. 服务端：旧版兼容 / GitHub 不可达
     try {
       final r = await AppverApi.history();
       final items = (r.data['items'] as List? ?? const [])
