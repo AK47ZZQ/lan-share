@@ -176,7 +176,26 @@ class Layout:
 
 
 def say(msg: str = "") -> None:
-    print(msg, flush=True)
+    """打一行输出。**绝不能因为编码问题崩**。
+
+    中文 Windows 的 stdout 是 GBK。安装日志里会混进子进程（initdb、
+    pg_ctl、caddy）的原始输出，那些字节解不出来就成了 U+FFFD；
+    再 print 一次就抛 UnicodeEncodeError —— 而这个异常会把**真正的
+    错误**盖掉（用户看到「编码错误」，完全不知道其实是权限问题）。
+
+    实测：initdb 在 C:\\Program Files 下失败时，本该显示 Permission denied，
+    结果被 UnicodeEncodeError 顶掉，排查绕了一大圈。
+    """
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        # 退一步：按 UTF-8 写原始字节，非法字符换成 ?
+        try:
+            sys.stdout.buffer.write(
+                (msg + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
 
 
 def step(n: int, total: int, msg: str) -> None:

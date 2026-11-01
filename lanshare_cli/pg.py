@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import re
 import secrets
 import shutil
@@ -119,6 +120,85 @@ class Postgres:
 
     # ── 生命周期 ──────────────────────────────────────────
 
+    def _secure_data_dir(self) -> None:
+        """把数据目录的 owner 和 ACL 收成 PostgreSQL 能接受的样子。
+
+        ## 为什么必须做
+
+        `initdb` 不只看「能不能写」，它要求数据目录：
+
+          · owner 是当前用户
+          · 没有从父目录继承来的宽松 ACL（Users 只读也不行）
+
+        `C:\\Program Files` 两条都不满足 —— owner 是 SYSTEM，ACL 继承自
+        系统目录。所以在 Program Files 下装（安装器的默认路径）时，
+        initdb 直接报 `Permission denied`，整个安装停在 [7/10]：
+        文件都就位了，服务一个都没起来。
+
+        本机开发目录（`C:\\lan-share`）恰好是当前用户建的、ACL 干净，
+        所以这个 bug 只在干净环境暴露 —— 沙箱里一测就现原形。
+
+        ## 为什么不用「改默认数据目录」
+
+        默认数据目录跟着安装目录走是刻意的（用户只选一次路径，程序和
+        数据在一起，备份时整个复制走）。为了迁就 initdb 把数据赶到
+        ProgramData，等于让用户记两个路径 —— 那个体验问题比这个权限
+        问题更难解释。
+
+        ## 失败不阻断
+
+        非管理员 / 非 Windows 环境下 icacls 可能不可用。真失败了让
+        initdb 自己去报它自己的错，比在这里编一个错误清楚。
+        """
+        # 用 sys.platform 而不是 os.name：测试里 monkeypatch os.name 会把
+        # pathlib 一起改坏（Path 变成 PosixPath，Windows 上直接崩）。
+        if sys.platform != "win32":
+            return
+        user = os.environ.get("USERNAME", "")
+        if not user:
+            return
+        try:
+            # /inheritance:r 断开继承；/grant:r 只留当前用户完全控制。
+            # 两条一起做，顺序不能反 —— 先 grant 再断继承会把刚加的也清掉。
+            self._run(["icacls", str(self.pgdata),
+                       "/inheritance:r",
+                       "/grant:r", f"{user}:(OI)(CI)F"],
+                      timeout=60)
+            # owner 也改掉：initdb 会检查「目录是不是我自己的」
+            self._run(["icacls", str(self.pgdata), "/setowner", user],
+                      timeout=60)
+        except Exception:
+            # 权限收拾失败不该在这里报错 —— 让 initdb 用它自己的话去说
+            pass
+
+    def _grant_service_access(self) -> None:
+        """把数据目录的访问权还给「服务账户」。
+
+        ## 为什么需要第二步
+
+        前面 `_secure_data_dir()` 把 pgdata 收成「只有当前用户」，那是
+        `initdb` 的要求。但服务是以 LocalSystem 注册的（`pg_ctl register`
+        的默认行为），它以另一个身份访问同一个目录——
+
+          收紧 → initdb 能跑 → 服务起不来（STOPPED）
+          不收 → initdb 直接拒绝（Permission denied）
+
+        所以必须两步：initdb 之前收紧，initdb 之后再把服务账户加回来。
+
+        实测顺序错掉的症状：`[9/10] 启动服务 FAIL lanshare-postgresql: STOPPED`，
+        而 `[7/10] initdb` 和 `[8/10] 注册服务` 都是 OK —— 很容易误判成
+        「PG 二进制有问题」。
+        """
+        if sys.platform != "win32":
+            return
+        # LocalSystem 的正式名字；SID 形式 S-1-5-18 同样有效，但名字更可读
+        try:
+            self._run(["icacls", str(self.pgdata),
+                       "/grant", r"NT AUTHORITY\SYSTEM:(OI)(CI)F"],
+                      timeout=60)
+        except Exception:
+            pass
+
     def initdb(self, *, encoding: str = "UTF8") -> None:
         """初始化数据目录。
 
@@ -137,6 +217,10 @@ class Postgres:
             raise PostgresError("initdb 需要超级用户密码")
 
         self.pgdata.parent.mkdir(parents=True, exist_ok=True)
+        # 先把目录建出来，才能给它设权限（initdb 会拒绝「不存在的目录」吗？
+        # 不会 —— 但它会自己建，而自建的目录会继承父目录 ACL，正好是要避免的）
+        self.pgdata.mkdir(parents=True, exist_ok=True)
+        self._secure_data_dir()
 
         pwfile = self.pgdata.parent / ".pgpass.tmp"
         try:
@@ -160,6 +244,8 @@ class Postgres:
                 pass
 
         self.write_conf()
+        # initdb 跑完了，把权限还给服务账户 —— 不然服务起不来（STOPPED）
+        self._grant_service_access()
 
     def write_conf(self) -> None:
         """把端口等配置写进 postgresql.conf。

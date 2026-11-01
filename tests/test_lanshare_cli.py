@@ -446,3 +446,134 @@ class TestTrustLocalCa:
         monkeypatch.setattr(cli.subprocess, "run", boom)
         layout = cli.Layout(tmp_path, tmp_path / "data", "X")
         assert cli.trust_local_ca(layout) is False
+
+class TestSecureDataDir:
+    """initdb 要求数据目录 owner 是当前用户、无继承 ACL。
+
+    C:\Program Files 下两条都不满足 → initdb Permission denied →
+    安装停在 [7/10]，文件都就位但服务一个没起。
+    这个 bug 只在干净环境暴露（开发目录恰好 ACL 干净），沙箱一测就现原形。
+    """
+
+    def _pg(self, tmp_path):
+        from lanshare_cli.pg import Postgres
+        return Postgres(root=tmp_path, data_dir=tmp_path / "pgdata",
+                        port=5433, password="x")
+
+    def test_noop_on_non_windows(self, tmp_path, monkeypatch):
+        import sys as _sys
+        # 只改 sys.platform：改 os.name 会把 pathlib 也带坏
+        monkeypatch.setattr(_sys, "platform", "linux")
+        called = []
+        pg = self._pg(tmp_path)
+        monkeypatch.setattr(pg, "_run", lambda *a, **k: called.append(a))
+        pg._secure_data_dir()
+        assert not called, "非 Windows 不该调 icacls"
+
+    def test_noop_without_username(self, tmp_path, monkeypatch):
+        import sys as _sys
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.delenv("USERNAME", raising=False)
+        called = []
+        pg = self._pg(tmp_path)
+        monkeypatch.setattr(pg, "_run", lambda *a, **k: called.append(a))
+        pg._secure_data_dir()
+        assert not called
+
+    def test_runs_icacls_twice_on_windows(self, tmp_path, monkeypatch):
+        import sys as _sys
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setenv("USERNAME", "tester")
+        calls = []
+        pg = self._pg(tmp_path)
+        monkeypatch.setattr(pg, "_run",
+                            lambda cmd, **k: calls.append(cmd) or
+                            type("R", (), {"returncode": 0})())
+        pg._secure_data_dir()
+        assert len(calls) == 2
+        # 第一条必须同时包含断继承和授权
+        assert "/inheritance:r" in calls[0]
+        assert "/grant:r" in calls[0]
+        # 第二条改 owner
+        assert "/setowner" in calls[1]
+
+    def test_failure_is_swallowed(self, tmp_path, monkeypatch):
+        """icacls 不可用时不能把安装搞崩 —— 让 initdb 去报它自己的错。"""
+        import sys as _sys
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setenv("USERNAME", "tester")
+        pg = self._pg(tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("icacls not found")
+
+        monkeypatch.setattr(pg, "_run", boom)
+        pg._secure_data_dir()   # 不该抛
+
+    def test_grant_service_access_adds_system(self, tmp_path, monkeypatch):
+        """initdb 之后要把权限给 LocalSystem，否则服务起不来。
+
+        两难的顺序：
+          收紧 → initdb 能跑 → 服务 STOPPED
+          不收 → initdb Permission denied
+        所以是两步，不是一步。
+        """
+        import sys as _sys
+        monkeypatch.setattr(_sys, "platform", "win32")
+        calls = []
+        pg = self._pg(tmp_path)
+        monkeypatch.setattr(pg, "_run",
+                            lambda cmd, **k: calls.append(cmd) or
+                            type("R", (), {"returncode": 0})())
+        pg._grant_service_access()
+        assert len(calls) == 1
+        joined = " ".join(calls[0])
+        assert "SYSTEM" in joined
+        assert "/grant" in joined
+
+    def test_grant_noop_on_non_windows(self, tmp_path, monkeypatch):
+        import sys as _sys
+        monkeypatch.setattr(_sys, "platform", "linux")
+        calls = []
+        pg = self._pg(tmp_path)
+        monkeypatch.setattr(pg, "_run", lambda *a, **k: calls.append(a))
+        pg._grant_service_access()
+        assert not calls
+
+    def test_grant_failure_swallowed(self, tmp_path, monkeypatch):
+        import sys as _sys
+        monkeypatch.setattr(_sys, "platform", "win32")
+        pg = self._pg(tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("icacls missing")
+
+        monkeypatch.setattr(pg, "_run", boom)
+        pg._grant_service_access()
+
+
+class TestSayNeverCrashes:
+    """say() 崩掉会把真正的错误盖掉。
+
+    实测：initdb 报 Permission denied 时，输出的字节解不出来成了 U+FFFD，
+    再 print 就抛 UnicodeEncodeError —— 用户看到的是编码错误，
+    完全不知道是权限问题，白白多排查一轮。
+    """
+
+    def test_survives_unencodable_char(self, capsys, monkeypatch):
+        from lanshare_cli import cli
+
+        # 模拟 GBK 编码失败：把 print 换成会抛的
+        real_print = print
+
+        def fake_print(*args, **kwargs):
+            raise UnicodeEncodeError("gbk", "\ufffd", 0, 1, "illegal")
+
+        monkeypatch.setattr("builtins.print", fake_print)
+        cli.say("initdb 失败：\ufffd\ufffd Permission denied")   # 不该抛
+        monkeypatch.setattr("builtins.print", real_print)
+
+    def test_normal_output_still_works(self, capsys):
+        from lanshare_cli import cli
+        cli.say("普通输出")
+        assert "普通输出" in capsys.readouterr().out
