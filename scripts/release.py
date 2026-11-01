@@ -131,6 +131,11 @@ def write_server_version(ver: str) -> None:
     s = ISS.read_text(encoding="utf-8")
     s2 = re.sub(r'(#define\s+AppVersion\s+")[^"]+(")', rf'\g<1>{ver}\g<2>', s, count=1)
     if s2 == s:
+        # 内容没变有两种可能：一是已经是这个版本（重跑发版，正常），
+        # 二是那行根本没匹配上（真出问题）。必须分清 —— 上一次就是在这里
+        # 把「重跑」误判成「写不进去」，白停一轮。
+        if read_server_version() == ver:
+            return
         raise Abort("写不进去：lanshare.iss 的 AppVersion 行没匹配上")
     ISS.write_text(s2, encoding="utf-8", newline="")
 
@@ -147,6 +152,9 @@ def write_app_version(ver: str, build: int) -> None:
     s = PUBSPEC.read_text(encoding="utf-8")
     s2 = re.sub(r"^version:\s*[\d.]+\+\d+", f"version: {ver}+{build}", s, count=1, flags=re.M)
     if s2 == s:
+        # 同 write_server_version —— 已经是这个版本就静默跳过
+        if read_app_version() == (ver, build):
+            return
         raise Abort("写不进去：pubspec.yaml 的 version 行没匹配上")
     PUBSPEC.write_text(s2, encoding="utf-8", newline="")
 

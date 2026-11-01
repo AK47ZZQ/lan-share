@@ -63,6 +63,15 @@ class TestServerVersion:
         with pytest.raises(rel.Abort):
             rel.read_server_version()
 
+    def test_write_same_version_is_noop(self, rel):
+        """重跑发版：目标版本 == 当前版本时不该报错。
+
+        第一次跑 3.78 就卡在这 —— 上一次已经写成 3.78，这次再写同样内容，
+        文本没变化，`if s2 == s` 就误判成「那行没匹配上」。
+        """
+        rel.write_server_version("3.77")          # 文件里本来就是 3.77
+        assert rel.read_server_version() == "3.77"
+
 
 class TestAppVersion:
     def test_reads_version_and_build(self, rel):
@@ -94,6 +103,16 @@ class TestAppVersion:
         rel.PUBSPEC.write_text("name: x\n", encoding="utf-8")
         with pytest.raises(rel.Abort):
             rel.read_app_version()
+
+    def test_write_same_version_is_noop(self, rel):
+        """同 write_server_version —— 重跑不该炸。"""
+        rel.write_app_version("1.1.20", 127)
+        assert rel.read_app_version() == ("1.1.20", 127)
+
+    def test_write_same_version_differs_only_in_build(self, rel):
+        """只改 build 号也要真写进去。"""
+        rel.write_app_version("1.1.20", 128)
+        assert rel.read_app_version() == ("1.1.20", 128)
 
 
 class TestChangelogGate:
