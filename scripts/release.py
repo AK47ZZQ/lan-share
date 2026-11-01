@@ -485,18 +485,26 @@ def cmd_app(args) -> int:
 
 
 def main() -> int:
+    # --dry-run / --yes 挂在父 parser 上，同时用 parent 挂到每个子命令 ——
+    # argparse 的全局参数只能写在子命令前面（`release.py --yes server 3.78`），
+    # 写在后面会报 unrecognized arguments。而人的直觉是写在最后
+    # （`release.py server 3.78 --yes`），这个落差没必要让使用者记住。
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--dry-run", action="store_true", help="只检查，不执行")
+    common.add_argument("--yes", action="store_true", help="不交互确认")
+
     ap = argparse.ArgumentParser(description="一条命令发版")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不执行")
     ap.add_argument("--yes", action="store_true", help="不交互确认")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("check", help="只检查，不发版")
+    sub.add_parser("check", parents=[common], help="只检查，不发版")
 
-    p_srv = sub.add_parser("server", help="发服务端")
+    p_srv = sub.add_parser("server", parents=[common], help="发服务端")
     p_srv.add_argument("version", nargs="?", help="新版本号，省略则沿用当前")
     p_srv.add_argument("--skip-smoke", action="store_true")
 
-    p_app = sub.add_parser("app", help="发 App")
+    p_app = sub.add_parser("app", parents=[common], help="发 App")
     p_app.add_argument("version", nargs="?", help="新版本号，省略则沿用当前（build 不变）")
     p_app.add_argument("--skip-smoke", action="store_true", help="跳过模拟器冒烟")
 
