@@ -1,3 +1,95 @@
+## 2026-11-02（凌晨）— 服务端 v3.87：装完打不开、服务控制失败、新用户无从登录
+
+用户实测 3.86 报六条，逐条查下来根因各不相同，但有两个是同一个病。
+
+### ① 安装完成勾选「打开」→ 没动静
+
+`[Run]` 里那条 `postinstall` 是 `shellexec https://127.0.0.1:8765`——
+打开的是浏览器，而且被证书警告页挡在最前面。用户点完「完成」什么都看不到。
+
+改成启动控制面板：`Filename: "{app}\tray\LANShareTray.exe"; Parameters: "--panel"`，
+浏览器那条降级为第二个选项，地址也从 127.0.0.1 换成 localhost。
+
+### ② 重启服务 / 关闭服务全部失败
+
+报错原文：
+```
+无法打开计算机"."上的lanshare-caddy服务。(可能需要管理员权限)
+```
+
+托盘 `app.manifest` 里**压根没写 `requestedExecutionLevel`**，默认 `asInvoker`。
+而 `ServiceController` 打开服务要 SERVICE_START/STOP 权限，普通用户拿不到。
+面板上一半按钮（重启/关闭/开局域网/防火墙）都靠管理员权限，没有它全是废的。
+
+加 `<requestedExecutionLevel level="requireAdministrator" uiAccess="false" />`。
+
+连带：`requireAdministrator` 的 exe 不能再走 `Run` 键自启（每次开机弹 UAC）。
+改用任务计划 `/RL HIGHEST`：
+
+```
+schtasks /create /tn "LANShareTray" /tr "<app>\tray\LANShareTray.exe" /sc onlogon /rl highest /f
+```
+
+卸载时 `/delete /tn LANShareTray /f`。
+
+### ③ 检查更新说「本机根证书不全」
+
+上一版在 `requirements-runtime.txt` 加了 `certifi`，但 `build.ps1` 的
+`-SkipDeps` 判据是「fastapi 目录存在就跳过」—— fastapi 早就在，于是
+certifi 从来没被装进去。
+
+更要命的是我写的版本号 `certifi==2026.10.8` **根本不存在**（实际最新 2026.10.23），
+是我凭印象编的。
+
+修：
+1. `-SkipDeps` 改为逐个检查 requirements 里每个包名是否真的存在，缺一个就装。
+2. 版本号改成 2026.10.23，并用 `pip download` 验证过可装。
+
+### ④ 打开网盘 → 白屏
+
+白屏 = JS/CSS 全被浏览器拦了（证书不受信）。根因和 ③ 是连锁的：
+
+`trust_local_ca` 找的 `certs/caddy/pki/authorities/local/root.crt` 是
+**Caddy 启动后现场生成的**。CLI 的健康检查只要 API 通了就往下走，此时
+Caddy 可能还没签完证 → `is_file()` 为假 → 一句 warn 跳过 → CA 永远进不了
+根证书库。
+
+修：装证书前最多等 30 秒（每秒探一次），等不到才放弃，且提示语指到
+控制面板的「修复证书信任」。
+
+### ⑤ 关闭局域网按钮失效
+
+同 ②：`lan disable` 要改 Caddyfile 并重启服务，普通权限做不了。
+
+### ⑥ 新用户不知道账号密码
+
+服务端有 `POST /api/setup`（创建首个管理员）、`GET /api/auth/state`
+也返回 `needs_setup`，但**前端从来没读过它**。新装用户打开只看到一个
+空的账号密码框，完全不知道该填什么。
+
+修：登录页 `onMounted` 查 `authState()`，`needs_setup` 为真时整页换成
+「创建工作账号」表单（用户名默认 admin、密码两次输入、至少 8 位），
+建完自动登录。同时确保首次设置时不渲染登录框和邀请码框，避免三份表单打架。
+
+## 教训（同一个病）
+
+③ 和 ④ 表面是「证书问题」，根子是**同一个**：
+
+> 改了配置/依赖，但从没验证过最终产物里到底有没有它。
+
+`-SkipDeps` 跳过了新依赖、`trust_local_ca` 跳过了还没生成的证书、
+版本号是编的没验证过能不能装 —— 三处都是「我以为它在那儿」。
+
+对应的检查已经落地：
+- `build.ps1` 逐个核对 requirements 里的包，缺就装，装失败就中断
+- `trust_local_ca` 等证书真正落盘再装，等不到要说清楚
+- 依赖版本必须 `pip download` 验证过才写进 requirements
+
+## 测试
+
+`test_lanshare_cli.py` 已覆盖 `_secure_data_dir` / `_kill_by_name` /
+`_read_data_dir_from_registry`。前端首次设置页由手工 + 沙箱 E2E 验证。
+
 ## 2026-11-01（深夜三）— 服务端 v3.86：托盘没编译进包、卸载删不掉数据
 
 用户装完 3.84 反馈「还是不行」，发来 tray.log。第一行就露了：

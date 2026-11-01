@@ -767,9 +767,26 @@ def trust_local_ca(layout: Layout) -> bool:
 
     幂等性：Windows 证书库按指纹去重，重复 addstore 不会产生重复项。
     """
-    # tls internal 模式的根证书落在 Caddy 的 storage 目录
+    # tls internal 模式的根证书落在 Caddy 的 storage 目录。
+    #
+    # 但这文件不是装完就有的 —— Caddy 服务启动后才现场生成 CA。CLI 的健康
+    # 检查只要 API 的 /healthz 通了就往下走，此时 Caddy 可能还没签完证。
+    # 不等就直接判断 is_file() → 文件不存在 → 一句 warn 跳过 → CA 永远进不了
+    # 根证书库 → 浏览器打开就是 ERR_CERT_AUTHORITY_INVALID，用户看到白屏
+    # （JS/CSS 全被拦）。
+    #
+    # 2026-11-01 用户反馈「点打开网盘白屏」「检查更新说本机根证书不全」，
+    # 两条其实是同一个根因。
     root_crt = (layout.root / "certs" / "caddy" / "pki"
                 / "authorities" / "local" / "root.crt")
+
+    # 最多等 30 秒，每秒看一眼。慢机器上 Caddy 首次生成 CA 要几秒。
+    waited = 0
+    while not root_crt.is_file() and waited < 30:
+        time.sleep(1)
+        waited += 1
+    if waited:
+        say(f"    等待 Caddy 生成 CA 证书… {waited}s")
 
     if not root_crt.is_file():
         # 不是 tls internal（比如用户自己备了证书）：自签证书自己就是 CA
@@ -777,7 +794,9 @@ def trust_local_ca(layout: Layout) -> bool:
         if alt.is_file():
             root_crt = alt
         else:
-            warn("还没找到本地证书，浏览器首次访问需要在警告页点「继续前往」")
+            warn(f"等了 30 秒仍没等到 {root_crt}")
+            warn("浏览器首次访问需要在警告页点「继续前往」，"
+                 "或者点控制面板里的「修复证书信任」重试")
             return False
 
     try:

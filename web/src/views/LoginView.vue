@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { login as authLogin, refreshAuth } from '../auth'
-import { api } from '../api'
+import { api, authApi } from '../api'
 import { toast } from '../ui'
 import CodeField from '../components/CodeField.vue'
 
@@ -17,6 +17,49 @@ const codeRef = ref<InstanceType<typeof CodeField> | null>(null)
 const rcMode = ref(false)
 const route = useRoute()
 const router = useRouter()
+
+// ── 首次使用：库里一个用户都没有时，把登录框换成「创建管理员」 ──
+//
+// 全新安装打开就是登录页，新用户根本不知道该输什么账号密码 —— 服务端
+// 有 /api/setup 可以创建首个管理员，但前端从没用过 needs_setup。
+// 2026-11-01 用户实测反馈「新用户压根不知道如何登录，没有初始账号和密码」。
+const needsSetup = ref(false)
+const checkingSetup = ref(true)
+const setupName = ref('admin')
+const setupPwd = ref('')
+const setupPwd2 = ref('')
+
+onMounted(async () => {
+  try {
+    const st = await authApi.state()
+    needsSetup.value = !!st.needs_setup
+  } catch {
+    // 查不到就按正常登录走 —— 总比卡在空白页强
+    needsSetup.value = false
+  } finally {
+    checkingSetup.value = false
+  }
+})
+
+async function submitSetup() {
+  err.value = ''
+  if (setupPwd.value.length < 8) { err.value = '密码至少 8 位'; return }
+  if (setupPwd.value !== setupPwd2.value) { err.value = '两次输入的密码不一致'; return }
+  busy.value = true
+  try {
+    await authApi.setup(setupName.value.trim() || 'admin', setupPwd.value)
+    // 建完直接登录，省得用户再输一遍
+    await authLogin(setupName.value.trim() || 'admin', setupPwd.value)
+    await refreshAuth()
+    toast('管理员账号已创建', 'ok')
+    needsSetup.value = false
+    router.replace('/')
+  } catch (e) {
+    err.value = (e as Error).message
+  } finally {
+    busy.value = false
+  }
+}
 
 // 邀请码建号（管理面板生成 /login?invite=code）
 const inviteCode = ref(String(route.query.invite || ''))
@@ -83,8 +126,24 @@ async function redeem() {
   <main class="login-wrap">
     <div class="card login-card">
       <div class="login-logo"><img class="logo big" src="/static/favicon.svg" alt="LAN Share" /></div>
-      <h1>{{ redeeming ? '加入家庭空间' : 'LAN Share' }}</h1>
-      <p class="sub">{{ redeeming ? '用邀请码创建你的账号' : '家庭团队网盘' }}</p>
+      <h1>{{ checkingSetup ? 'LAN Share' : needsSetup ? '创建工作账号' : (redeeming ? '加入家庭空间' : 'LAN Share') }}</h1>
+      <p class="sub">{{ checkingSetup ? '正在检查…' : needsSetup
+        ? '这是第一次使用，先创建一个管理员账号'
+        : (redeeming ? '用邀请码创建你的账号' : '家庭团队网盘') }}</p>
+
+      <!-- 首次使用：服务端一个用户都没有，直接引导建管理员 -->
+      <form v-if="!checkingSetup && needsSetup" @submit.prevent="submitSetup">
+        <input v-model="setupName" placeholder="用户名（默认 admin）" autocomplete="username" />
+        <input v-model="setupPwd" type="password" placeholder="密码（至少 8 位）" autocomplete="new-password" />
+        <input v-model="setupPwd2" type="password" placeholder="再输一次密码" autocomplete="new-password" />
+        <button class="btn" type="submit" :disabled="busy || setupPwd.length < 8 || !setupPwd2">
+          {{ busy ? '创建中…' : '创建并登录' }}
+        </button>
+        <p class="sub" style="text-align:center;margin:0;line-height:1.6">
+          这是这台服务器的第一个账号，拥有全部管理权限。<br />
+          建好之后，家人可以用你生成的邀请码加入。
+        </p>
+      </form>
 
       <form v-if="redeeming" @submit.prevent="redeem">
         <input v-model="inviteCode" placeholder="邀请码" />
@@ -117,7 +176,8 @@ async function redeem() {
       </form>
 
       <!-- v-else-if（R1-P1-1）：邀请码建号页此前会同时渲染下方的登录表单 -->
-      <form v-else-if="!redeeming" @submit.prevent="submit">
+      <!-- 再加 !needsSetup：首次设置时也不能冒出登录框，否则用户不知道该填哪个 -->
+      <form v-else-if="!redeeming && !needsSetup" @submit.prevent="submit">
         <input v-model="username" placeholder="用户名" autocomplete="username" autofocus />
         <input v-model="password" type="password" placeholder="密码" autocomplete="current-password" />
         <button class="btn" type="submit" :disabled="busy || !username || !password">

@@ -2,6 +2,26 @@
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
   <assemblyIdentity version="1.0.0.0" name="LanShareTray.app" />
 
+  <!-- 必须以管理员身份运行。
+       托盘要控制 Windows 服务（启停 lan-share-api / -caddy / -postgresql），
+       而 ServiceController 打开服务需要 SERVICE_START/STOP 权限 —— 普通用户
+       拿不到，报的错是：
+         「无法打开计算机"."上的lan-share-caddy服务。(可能需要管理员权限)」
+
+       2026-11-01 用户反馈「重启服务和关闭服务都失败」「关闭局域网按钮失效」，
+       根因就是这份 manifest 里压根没写 requestedExecutionLevel，默认 asInvoker。
+       服务控制、防火墙规则、证书信任全靠管理员权限，没有它整个面板一半按钮是废的。
+
+       注：加了 requireAdministrator 之后不能再塞进 HKCU\...\Run 自启
+       （那会每次开机弹 UAC），安装器已改用「任务计划 + 最高权限」自启。 -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
   <!-- 用清单声明 DPI 感知，而不是在代码里调 SetProcessDpiAwarenessContext。
        原因：进程级 DPI 感知必须在该进程创建任何 UI 之前设置，实际跑下来
        这个时机并不稳定（有时生效、有时静默失败），表现为同一份 exe

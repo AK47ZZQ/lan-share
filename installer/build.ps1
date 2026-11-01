@@ -125,11 +125,36 @@ Ok "python311._pth 已改（Lib\site-packages + import site）"
 # ────────────────────────────────────────────────────────────
 Step "4. 安装运行时依赖到 embeddable"
 $sitePackages = Join-Path $runtime "Lib\site-packages"
-if ($SkipDeps -and (Test-Path (Join-Path $sitePackages "fastapi"))) {
-    Ok "跳过（-SkipDeps 且依赖已存在）"
+$reqFile = Join-Path $Root "installer\requirements-runtime.txt"
+if (-not (Test-Path $reqFile)) { Fail "找不到 $reqFile" }
+
+# -SkipDeps 的判据不能只看 fastapi 在不在。
+#
+# 2026-11-01 事故：requirements-runtime.txt 新加了 certifi（为了让「检查更新」
+# 能验 GitHub 的 TLS，不依赖系统根证书库），但 build 一直带 -SkipDeps，
+# 而判据是「fastapi 目录存在就跳过」—— fastapi 早就在，于是 certifi 从来没被
+# 装进去。用户检查更新报「本机根证书不全」，查了半天以为是编码/证书问题。
+#
+# 现在逐个检查 requirements 里每个包名是否真的存在，缺一个就重装。
+$missing = @()
+foreach ($line in Get-Content $reqFile) {
+    $t = $line.Trim()
+    if ($t -eq "" -or $t.StartsWith("#")) { continue }
+    $name = ($t -split "[=<>!\[;]")[0].Trim()
+    if ($name -eq "") { continue }
+    # pip 的包名到目录名：hello-world -> hello_world
+    $dirName = $name -replace "-", "_"
+    if (-not (Test-Path (Join-Path $sitePackages $dirName))) {
+        $missing += $name
+    }
+}
+
+if ($SkipDeps -and $missing.Count -eq 0) {
+    Ok "跳过（-SkipDeps 且 requirements 里每个包都在）"
 } else {
-    $reqFile = Join-Path $Root "installer\requirements-runtime.txt"
-    if (-not (Test-Path $reqFile)) { Fail "找不到 $reqFile" }
+    if ($SkipDeps -and $missing.Count -gt 0) {
+        Write-Host "  -SkipDeps 但缺这些包，仍然要装：$($missing -join ', ')" -ForegroundColor Yellow
+    }
 
     # 关键：用系统 Python 的 pip，--target 传 Windows 绝对路径
     # 绝不要传 MSYS 风格的 /c/... —— Windows 版 pip 会解析成 C:\c\...

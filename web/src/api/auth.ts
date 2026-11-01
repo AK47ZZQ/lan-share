@@ -3,6 +3,13 @@ import { handle, jpost } from './core'
 import type { DeviceInfo, Me } from './types'
 
 export const authApi = {
+  // 首次使用判断：needs_setup = 库里一个用户都没有（全新安装）。
+  // 登录页靠它决定显示「登录」还是「创建管理员账号」，否则新用户打开
+  // 只看到一个空的账号密码框，压根不知道自己该输什么。
+  state: () => fetch('/api/auth/state').then(r => handle<{ needs_setup: boolean; logged_in: boolean; username: string | null }>(r)),
+  // 创建首个管理员。密码至少 8 位（服务端校验）。
+  setup: (username: string, password: string) =>
+    jpost('/api/setup', { username, password }).then(r => handle<{ ok?: boolean; username?: string }>(r)),
   me: () => fetch('/api/auth/me').then(r => handle<Me>(r)),
   login: (username: string, password: string) => jpost('/api/login', { username, password }).then(r => handle<{ ok?: boolean; totp_required?: boolean; username?: string }>(r)),
   loginTotp: (username: string, password: string, code: string) => jpost('/api/login/totp', { username, password, code }).then(r => handle<{ ok: boolean }>(r)),

@@ -134,8 +134,12 @@ Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "Version"
 ; 托盘按 ServicePrefix+"-api" 拼服务名，两边不一致就会找不到服务。
 ; 注：CLI 装完会用自己的实际前缀再回写一次，这里只是文件复制阶段的初值。
 Root: HKLM; Subkey: "SOFTWARE\LANShare"; ValueType: string; ValueName: "ServicePrefix"; ValueData: "lanshare"; Flags: uninsdeletekey
-; ── 托盘开机自启（HKA = 安装模式下自动选对根键，避免 admin 装到错误账户）──
-Root: HKA; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LANShareTray"; ValueData: """{app}\tray\LANShareTray.exe"""; Tasks: autostart; Flags: uninsdeletevalue
+; ── 托盘开机自启：改用「任务计划 + 最高权限」──
+; 托盘 manifest 现在是 requireAdministrator（要控制 Windows 服务）。
+; 这种 exe 放进 HKCU/HKLM\...\Run 自启，每次开机都会弹 UAC 确认框 ——
+; 用户不会为了一个家用网盘每次开机点「是」。任务计划用 /RL HIGHEST
+; 可以静默以最高权限启动，代价只是要求安装时是管理员（本来就是）。
+; 具体注册见 [Run] 段的 schtasks。
 ; ── 安装路径加入 PATH（方便命令行调 python.exe）──
 
 [Icons]
@@ -155,8 +159,13 @@ Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 ;
 ; 这里只放「装完之后给用户看的东西」。
 
-; ── 打开浏览器到首启页面（HTTPS —— CLI 生成的 Caddyfile 用 tls internal 自签）──
-Filename: "https://127.0.0.1:{#WebPort}"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share（首次使用需创建管理员账号）"
+; ── 勾选「打开 LAN Share」→ 启动控制面板（GUI），不是浏览器 ──
+; 2026-11-01 用户反馈「安装完成后勾选打开，点完成没动静，GUI 界面没被打开」。
+; 原先这里 shellexec 一个 https://127.0.0.1:8765，浏览器被证书警告页挡在前面，
+; 用户看到的就是「没反应」。控制面板才是用户想点的东西。
+Filename: "{app}\tray\LANShareTray.exe"; Parameters: "--panel"; Flags: nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share 控制面板"
+; 仍然保留「在浏览器里打开」（用 localhost，证书 SAN 里一定有它）
+Filename: "https://localhost:{#WebPort}"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "在浏览器中打开 LAN Share"
 
 ; ── 启动托盘 ──
 ; 去掉 postinstall：那标志只在「安装完成」页勾选时才执行。
@@ -164,6 +173,10 @@ Filename: "https://127.0.0.1:{#WebPort}"; Flags: shellexec nowait postinstall sk
 ; 托盘就永远不启动 —— 用户装完桌面上什么都没有，以为没装上。
 ; 现在安装流程走到这里就起；只有 /SILENT 才跳过。
 Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait skipifsilent skipifdoesntexist; Tasks: autostart
+; 注册开机自启任务（最高权限、不弹 UAC）。/F 覆盖同名任务，幂等。
+; 用 "" 转义内层引号 —— schtasks 的 /tr 参数本身要带引号包住含空格的路径
+; （{app} 默认是 C:\Program Files\LAN Share）。
+Filename: "{sys}\schtasks.exe"; Parameters: "/create /tn ""LANShareTray"" /tr """"{app}\tray\LANShareTray.exe"""" /sc onlogon /rl highest /f"; Flags: runhidden waituntilterminated; Tasks: autostart
 
 [UninstallRun]
 ; 撤销安装 = 撤销 lanshare_cli install 做的事：先停服务再删服务，数据保留。
@@ -177,6 +190,8 @@ Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait skipifsilent skipifdoesnt
 ; 防火墙规则清没清），藏起来的话中间哪一步失败用户和我们都看不见 ——
 ; 「卸载只删了一部分」有一半原因是这里把错误吞了。
 Filename: "{app}\runtime\python.exe"; Parameters: "-m lanshare_cli uninstall"; Flags: runminimized waituntilterminated; RunOnceId: "StopAndRemoveServices"
+; 删掉开机自启任务（托盘已经是任务计划自启，不再走 Run 键）
+Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""LANShareTray"" /f"; Flags: runhidden; RunOnceId: "RemoveAutostartTask"
 ; CLI 摘掉服务之后，postgres.exe / caddy.exe 不一定立刻退出，数据目录里的
 ; PG 文件还锁着 —— 后面 DelTree 会返回 False，用户看到「点了是但 data 还在」。
 ; 按进程名精确杀，不用通配。
