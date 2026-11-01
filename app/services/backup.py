@@ -333,32 +333,59 @@ def _write_settings_snapshot(p: Path) -> None:
 def _prune_old() -> None:
     """滚动保留最近 BACKUP_KEEP **组**（终审 P1 修复：原按文件名排序时
     meta-* 字典序恒前于 settings-*，切片会先删光全部 dump——改为按
-    时间戳分组，组为单位整组淘汰，dump 与快照保持成对）。"""
+    时间戳分组，组为单位整组淘汰，dump 与快照保持成对）。
+
+    ## 只删自己产的东西
+
+    备份目录现在是用户自己选的，可能指向一个已有数据的盘（D:\\备份 里还放着
+    照片和文档）。所以这里**绝不能**出现「不匹配备份名的文件一律删除」——
+    2026-11-02 复查发现原实现正是 `else: f.unlink()`，那等于把用户目录清空。
+
+    只允许删三类：
+      1. 我们自己的 `meta-*` / `settings-*`（含 `.db-shm` / `.db-wal` 边车）
+      2. 我们自己的半成品 `.tmp` / `.part`
+      3. 已经没有对应主文件、孤零零躺着的 `*-shm` / `*-wal`
+
+    第 3 类是必须的：SQLite 引擎落盘会留 sidecar，如果只认 `.db`/`.json`，
+    这些边车会永久堆积 —— 表现为「备份目录越用越大，但明明只保留 7 份」。
+    """
     import re
+
     dest = backup_dir()
     if not dest.is_dir():
         return
+
+    # 主文件 + 可选边车后缀
+    pat = re.compile(r"^(meta|settings)-(\d{8}-\d{6})\.(db|json)(-shm|-wal)?$")
+
     groups: dict[str, list] = {}
+    orphans: list = []
+
     for f in dest.iterdir():
-        m = re.match(r"(meta|settings)-(\d{8}-\d{6})\.(db|json)$", f.name)
+        if not f.is_file():
+            continue
+        m = pat.match(f.name)
         if m:
             groups.setdefault(m.group(2), []).append(f)
         elif f.name.endswith((".tmp", ".part")):
-            # 只清理我们自己写到一半的临时文件。
-            #
-            # 🔴 绝不能写成「不匹配备份名的文件一律删除」——备份目录是
-            # 用户自己选的，可能指向一个已有数据的磁盘（比如 D:\备份 里
-            # 还放着别的东西）。那种写法等于把人家整个目录清空。
-            # 2026-11-02 复查发现原实现就是 else: f.unlink()，危险。
+            orphans.append(f)               # 我们自己写坏的半成品
+        elif f.name.endswith(("-shm", "-wal")) and not (
+            dest / f.name.rsplit("-", 1)[0]
+        ).exists():
+            orphans.append(f)               # 主文件已经没了的野边车
+
+    for f in orphans:
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
+    keep = sorted(groups)[-BACKUP_KEEP:]
+    for stamp, files in groups.items():
+        if stamp in keep:
+            continue
+        for f in files:
             try:
                 f.unlink()
             except OSError:
                 pass
-    keep = sorted(groups)[-BACKUP_KEEP:]
-    for stamp, files in groups.items():
-        if stamp not in keep:
-            for f in files:
-                try:
-                    f.unlink()
-                except OSError:
-                    pass

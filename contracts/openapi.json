@@ -122,6 +122,34 @@
     "title": "AuthBody",
     "type": "object"
    },
+   "BackupDirBody": {
+    "properties": {
+     "dir": {
+      "default": "",
+      "title": "Dir",
+      "type": "string"
+     }
+    },
+    "title": "BackupDirBody",
+    "type": "object"
+   },
+   "BackupRunBody": {
+    "properties": {
+     "dir": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Dir"
+     }
+    },
+    "title": "BackupRunBody",
+    "type": "object"
+   },
    "Body_create_share_api_share_post": {
     "properties": {
      "expires_hours": {
@@ -7417,6 +7445,102 @@
      }
     },
     "summary": "Healthz"
+   }
+  },
+  "/local/backup": {
+   "get": {
+    "operationId": "get_backup_local_backup_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Backup"
+   }
+  },
+  "/local/backup/dir": {
+   "post": {
+    "operationId": "set_backup_dir_local_backup_dir_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/BackupDirBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Backup Dir"
+   }
+  },
+  "/local/backup/run": {
+   "post": {
+    "description": "立即备份一次。\n\n用线程池跑，因为这个函数内部是同步阻塞的（pg_dump 子进程）。\n直接在 async 函数里同步调用会把整个事件循环卡住 —— 备份 20GB 的时候\n全站都会没响应。",
+    "operationId": "run_backup_local_backup_run_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "anyOf": [
+         {
+          "$ref": "#/components/schemas/BackupRunBody"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "title": "Body"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Run Backup"
    }
   },
   "/local/public-url": {

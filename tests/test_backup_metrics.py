@@ -13,14 +13,17 @@ import pytest
 
 from conftest import MEMBER_PASS
 
-from app.config import BACKUP_DIR, PG_BIN_FALLBACK
+from app.config import PG_BIN_FALLBACK
 from app.services import backup as backup_svc
 from app.services import metrics as metrics_svc
 from app.settings import get_setting, set_setting
 
 
 def _fresh_env(tmp_path, monkeypatch):
-    monkeypatch.setattr(backup_svc, "BACKUP_DIR", tmp_path / "b")
+    # 备份目录现在是运行时解析的（settings.backup_dir → 默认值），
+    # 所以打桩函数而不是常量。
+    _bkdir = tmp_path / "b"
+    monkeypatch.setattr(backup_svc, "backup_dir", lambda: _bkdir)
     # 日期钉死：backup 编排经 backup_svc._today() 取日期（值守批 C3 收口）——
     # 直呼 strftime 时"写幂等位"与断言读取可能分踞午夜两侧，偶发错位失败
     monkeypatch.setattr(backup_svc, "_today", lambda: "2026-09-12")
@@ -128,7 +131,7 @@ def test_backup_verify_catches_corrupt_dump(tmp_path, monkeypatch):
     assert get_setting(backup_svc.LAST_DATE_KEY) != "2026-09-12"   # 明天会重试
     # 坏产物不留"备份"之名（2026-09-13 审查修复）：验证失败即删，
     # 不占 keep 组、不占盘、不被误当真
-    assert list(backup_svc.BACKUP_DIR.glob("meta-*.db")) == []
+    assert list(backup_svc.backup_dir().glob("meta-*.db")) == []
 
 
 def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
@@ -142,7 +145,7 @@ def test_backup_verify_catches_empty_dump(tmp_path, monkeypatch):
     st = backup_svc.run_backup_once(push=lambda t, b: alerts.append(t))
     assert st["ok"] is False
     assert alerts == ["备份失败"]
-    assert list(backup_svc.BACKUP_DIR.glob("meta-*.db")) == []   # 同上：坏产物即删
+    assert list(backup_svc.backup_dir().glob("meta-*.db")) == []   # 同上：坏产物即删
 
 
 # _fresh_env 会把 _verify_dump 桩化（PG 跑法下）——工具缺失用例需要还原真实
@@ -219,14 +222,26 @@ def test_backup_prune_keeps_pairs_balanced(tmp_path, monkeypatch):
 def test_backup_prune_keeps_recent(tmp_path, monkeypatch):
     _fresh_env(tmp_path, monkeypatch)
     st = backup_svc.run_backup_once(push=lambda *a: None)
-    # 伪造 20 份旧产物（10 组）再跑一轮：应只留最近 7 组（14 件）+ 本轮 2 件
+    # 伪造 20 份旧产物（10 组）再跑一轮：应只留最近 7 组
     for i in range(10):
         (tmp_path / "b" / f"meta-2026010{i % 10}-00000{i}.db").write_text("x")
         (tmp_path / "b" / f"settings-2026010{i % 10}-00000{i}.json").write_text("{}")
     backup_svc._prune_old()
-    left = list((tmp_path / "b").iterdir())
-    assert len(left) <= backup_svc.BACKUP_KEEP * 2
+
+    # 按「组」断言，不按文件数 —— 一个组里除了 meta/settings 还可能有
+    # .db-shm / .db-wal 边车（SQLite 引擎落盘），文件数不是契约，组数才是。
+    import re
+    left = [p for p in (tmp_path / "b").iterdir() if p.is_file()]
+    stamps = {m.group(2) for p in left
+              if (m := re.match(r"^(meta|settings)-(\d{8}-\d{6})\.", p.name))}
+    assert len(stamps) <= backup_svc.BACKUP_KEEP
     assert st["ok"]
+
+    # 边车不能变成孤儿留在目录里（长跑时会让备份目录无限涨）
+    for p in left:
+        if p.name.endswith(("-shm", "-wal")):
+            base = p.name.rsplit("-", 1)[0]
+            assert (tmp_path / "b" / base).exists(), f"{p.name} 是没有主文件的野边车"
 
 
 def test_metrics_snapshot_counts_and_latency():
