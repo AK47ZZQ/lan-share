@@ -640,13 +640,22 @@ namespace LanShare
             Task.Run(() =>
             {
                 string error;
-                return RunCli("check-update --json --timeout 10", 25000, out error);
+                string json = RunCli("check-update --json --timeout 10", 25000, out error);
+                if (string.IsNullOrEmpty(json) && !string.IsNullOrEmpty(error))
+                {
+                    // 把真实的 CLI 错误带回去 —— 否则用户只看到「命令没有输出」，
+                    // 而真正的原因（找不到 python / 超时 / 没这个子命令）全丢了
+                    return "{\"error\": " + Quote(error) + "}";
+                }
+                return json;
             }).ContinueWith(t =>
             {
                 if (IsDisposed || _web == null) return;
 
                 var p = new Dictionary<string, object>();
                 string json = t.Result;
+                AppendLog("检查更新：CLI 返回 " +
+                          (string.IsNullOrEmpty(json) ? "(空)" : json.Length + " 字符"));
                 if (string.IsNullOrEmpty(json))
                 {
                     p["error"] = "检查失败：命令没有输出";
@@ -703,6 +712,34 @@ namespace LanShare
         }
 
         /// <summary>
+        /// 把一个字符串转成 JSON 字符串字面量（含引号）。
+        /// C# 5 没有现成的，JavaScriptSerializer 也能做，但为了一个字段
+        /// new 一个序列化器不值当。
+        /// </summary>
+        private static string Quote(string s)
+        {
+            if (s == null) return "null";
+            var sb = new StringBuilder("\"");
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            sb.Append("\"");
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// 跑任意 lan-share CLI 子命令，返回 stdout。
         /// 和 RunLan 的区别：那个固定拼 `lan`，这个是给别的子命令用的。
         /// </summary>
@@ -713,6 +750,7 @@ namespace LanShare
             if (string.IsNullOrEmpty(python) || !File.Exists(python))
             {
                 error = "找不到 Python 运行时：" + (python ?? "(空)");
+                AppendLog("RunCli 失败：" + error);
                 return null;
             }
 
@@ -746,6 +784,9 @@ namespace LanShare
                     if (string.IsNullOrWhiteSpace(stdout))
                     {
                         error = string.IsNullOrWhiteSpace(stderr) ? "没有输出" : stderr.Trim();
+                        AppendLog("RunCli 空输出（exit " + proc.ExitCode + "）："
+                                  + python + " -m lanshare_cli " + args
+                                  + " | " + (error.Length > 300 ? error.Substring(0, 300) : error));
                         return null;
                     }
                     return stdout.Trim();
@@ -754,6 +795,7 @@ namespace LanShare
             catch (Exception ex)
             {
                 error = ex.Message;
+                AppendLog("RunCli 抛异常：" + ex.Message);
                 return null;
             }
         }

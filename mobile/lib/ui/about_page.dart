@@ -145,19 +145,6 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
-  Widget _badge(BuildContext context, String text, Color color) {
-    return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-        decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(Radii.pill)),
-        child: Text(text,
-            style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: FontWeight.w700,
-                color: color)));
-  }
-
   @override
   Widget build(BuildContext context) {
     final info = _info;
@@ -271,49 +258,10 @@ class _AboutPageState extends State<AboutPage> {
                           ]),
                           const SizedBox(height: 6),
                           for (final h in _history)
-                            Padding(
-                                padding: const EdgeInsets.only(top: 10),
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(children: [
-                                        Text('v${h.version}',
-                                            style: TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w700,
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .primary)),
-                                        const SizedBox(width: Gap.xs),
-                                        if (h.date.isNotEmpty)
-                                          Text(h.date,
-                                              style: TextStyle(
-                                                  fontSize: 11.5,
-                                                  color: Theme.of(context)
-                                                      .colorScheme
-                                                      .onSurfaceVariant)),
-                                        const SizedBox(width: 6),
-                                        if (h.build == localBuild)
-                                          _badge(context, '当前', Colors.green)
-                                        else if (remote != null &&
-                                            h.build == remote.build)
-                                          _badge(context, '最新',
-                                              Theme.of(context)
-                                                  .colorScheme
-                                                  .primary),
-                                      ]),
-                                      if (h.notes.isNotEmpty) ...[
-                                        const SizedBox(height: 3),
-                                        Text(h.notes,
-                                            style: TextStyle(
-                                                fontSize: 12,
-                                                height: 1.4,
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .onSurfaceVariant)),
-                                      ],
-                                    ])),
+                            _HistoryEntry(
+                                item: h,
+                                localBuild: localBuild,
+                                remoteBuild: remote?.build),
                         ]))),
           const SizedBox(height: Gap.md),
           TextButton.icon(
@@ -324,5 +272,123 @@ class _AboutPageState extends State<AboutPage> {
                   applicationName: 'LAN Share',
                   applicationVersion: info?.version)),
         ]));
+  }
+}
+
+/// 更新历史里的一条。
+///
+/// 为什么要单独拆出来：
+/// 1. GitHub Release 的 body 是 markdown，直接塞进 Text 会把 `###`、`**`、
+///    "| 表 |" 全露出来，手机上像乱码。
+/// 2. 一个版本的说明可能上千字，七个版本加起来七八千字，一屏看不完 ——
+///    用户要的「能看全」不是「全部展开堆在一起」，是「每个版本都在、
+///    都能点到，但默认不糊一屏」。
+/// 所以：清洗标记 + 默认只显示前几行，点一下展开全文。
+class _HistoryEntry extends StatefulWidget {
+  const _HistoryEntry({
+    required this.item,
+    required this.localBuild,
+    required this.remoteBuild,
+  });
+
+  final UpdateHistoryItem item;
+  final int localBuild;
+  final int? remoteBuild;
+
+  @override
+  State<_HistoryEntry> createState() => _HistoryEntryState();
+}
+
+class _HistoryEntryState extends State<_HistoryEntry> {
+  bool _expanded = false;
+
+  /// markdown → 纯文本。只做最朴素的清洗：不引第三方渲染库，
+  /// 因为这里要的只是「能读」，不是「好看」。
+  static String cleanNotes(String raw) {
+    var s = raw.replaceAll('\r\n', '\n');
+    s = s.replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');   // 标题井号
+    s = s.replaceAll('**', '');                                      // 加粗
+    s = s.replaceAllMapped(RegExp(r'`([^`]*)`'),
+        (m) => m.group(1) ?? '');                                    // 行内代码
+    s = s.replaceAll(RegExp(r'^\s*[-*]\s+', multiLine: true), '· ');  // 列表
+    s = s.replaceAll(RegExp(r'^\s*\|.*\|\s*$', multiLine: true), ''); // 表格行
+    s = s.replaceAll(RegExp(r'\n{3,}'), '\n\n');                      // 多余空行
+    return s.trim();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final h = widget.item;
+    final full = cleanNotes(h.notes);
+
+    // 超过这个长度才折叠。短说明（几个字）折叠反而多一步操作。
+    const collapseOver = 140;
+    final needsCollapse = full.length > collapseOver;
+    final shown = (!needsCollapse || _expanded) ? full : _preview(full);
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Text('v${h.version}',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.primary)),
+              const SizedBox(width: Gap.xs),
+              if (h.date.isNotEmpty)
+                Text(h.date,
+                    style: TextStyle(
+                        fontSize: 11.5,
+                        color: theme.colorScheme.onSurfaceVariant)),
+              const SizedBox(width: 6),
+              if (h.build == widget.localBuild)
+                _tag(context, '当前', Colors.green)
+              else if (widget.remoteBuild != null &&
+                  h.build == widget.remoteBuild)
+                _tag(context, '最新', theme.colorScheme.primary),
+            ]),
+            if (shown.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(shown,
+                  style: TextStyle(
+                      fontSize: 12,
+                      height: 1.45,
+                      color: theme.colorScheme.onSurfaceVariant)),
+            ],
+            if (needsCollapse)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: GestureDetector(
+                  onTap: () => setState(() => _expanded = !_expanded),
+                  child: Text(_expanded ? '收起' : '展开全文',
+                      style: TextStyle(
+                          fontSize: 11.5,
+                          color: theme.colorScheme.primary)),
+                ),
+              ),
+          ]),
+    );
+  }
+
+  /// 折叠时显示的内容：标题行 + 前三条要点。
+  /// 按行切而不是按字数切 —— 切在半句话中间比多显示一行更难看。
+  static String _preview(String full) {
+    final lines = full.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    if (lines.length <= 4) return full;
+    return lines.take(4).join('\n');
+  }
+
+  Widget _tag(BuildContext context, String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(4)),
+      child: Text(text, style: TextStyle(fontSize: 10, color: color)),
+    );
   }
 }

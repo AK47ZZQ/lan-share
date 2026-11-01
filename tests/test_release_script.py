@@ -142,3 +142,104 @@ class TestChangelogGate:
         monkeypatch.setattr(rel, "CHANGELOG", cl)
         with pytest.raises(rel.Abort):
             rel.check_changelog_has("3.7")
+
+class TestSummarize:
+    """Release 说明的压缩 —— 用户看到的更新历史就是它生成的。
+
+    这一块最容易出的错不是崩溃，是「压出一堆断句」：
+    正文是折行写的，按行取首句会把一句话切成四条，读起来全是半截。
+    """
+
+    def test_merges_soft_wrapped_lines(self, rel):
+        """折行的长句要被拼回一句，不能切成好几条。"""
+        md = """## 2026-11-01 — 3.78：修掉检查更新
+
+一天发了两版，每版十来步全靠手走，每一步都错过：
+版本号散在四处改漏一处、APK 资产名少个 +125 客户端就放弃整个源。
+"""
+        out = rel.summarize(md)
+        # 拼回来应该是一整句，而不是两条半截
+        assert out.count("- ") == 1
+        assert "版本号散在四处" in out
+
+    def test_skips_fenced_code_block(self, rel):
+        md = """## 3.78：发版固化
+
+正文一句话。
+
+```
+python scripts/release.py check
+python scripts/release.py server 3.78
+```
+"""
+        out = rel.summarize(md)
+        assert "release.py check" not in out
+        assert "发版固化" in out
+
+    def test_skips_indented_code_block(self, rel):
+        """CHANGELOG 里命令行用的是 4 空格缩进，不是 ```。"""
+        md = """## 3.78：发版固化
+
+正文一句话。
+
+    python scripts/release.py check
+
+后面还有一句有用的。
+"""
+        out = rel.summarize(md)
+        assert "release.py" not in out
+
+    def test_title_skips_install_heading(self, rel):
+        """第一个 ## 若是「装这个」，要跳过找下一个 —— 否则主题全错。"""
+        md = """## 装这个
+
+`Setup.exe`（53 MB）。
+
+## 手机端下载变快了
+
+- 本地有就直发
+"""
+        out = rel.summarize(md)
+        assert "装这个" not in out
+        assert "手机端下载变快了" in out
+
+    def test_skips_known_limits_section(self, rel):
+        md = """## 3.78：真改动
+
+- 修了更新检查
+
+## 已知限制
+
+- 自签证书会提示不安全
+"""
+        out = rel.summarize(md)
+        assert "自签证书" not in out
+        assert "修了更新检查" in out
+
+    def test_caps_bullets(self, rel):
+        md = "## 3.78：很多改动\n\n" + "\n".join(
+            f"- 第 {i} 条改动内容" for i in range(12))
+        out = rel.summarize(md, max_bullets=3)
+        assert out.count("- 第") == 3
+        assert "CHANGELOG" in out      # 提示还有更多
+
+    def test_dedupes(self, rel):
+        md = """## 3.78：改了什么
+
+- 修了更新检查
+
+### 修了更新检查
+
+正文重复说一遍修了更新检查。
+"""
+        out = rel.summarize(md)
+        assert out.count("修了更新检查") == 1
+
+    def test_empty_input(self, rel):
+        assert rel.summarize("") == ""
+
+    def test_strips_bold_markers(self, rel):
+        """手机上不一定渲染 markdown，留着 ** 很难看。"""
+        md = "## 3.78：**加粗标题**\n\n- **加粗要点**内容\n"
+        out = rel.summarize(md)
+        assert "**" not in out

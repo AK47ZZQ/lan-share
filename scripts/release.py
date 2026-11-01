@@ -235,6 +235,160 @@ def commit_if_changed(paths: list[Path], message: str) -> bool:
     return True
 
 
+def summarize(markdown: str, max_bullets: int = 6) -> str:
+    """把 CHANGELOG 的长条目压成发版用的短说明。
+
+    ## 为什么要压
+
+    CHANGELOG 是写给未来的自己看的：为什么这么改、踩了什么坑、试过什么
+    没用的方案。但 Release 页面是写给**用户**看的，用户只想知道
+    「这版有什么不一样」。把两千字的内部复盘原样贴上去，手机上一屏
+    都放不下，用户直接不看。
+
+    所以：只留一句主标题 + 前几条要点，正文段落、代码块、### 小节全部丢掉。
+
+    ## 例外
+
+    代码块里的命令（`lanshare_cli check-update` 这种）对用户是有用的，
+    但为了短，也不留 —— 需要细节的人会去看仓库里的 CHANGELOG。
+    """
+    if not markdown:
+        return ""
+
+    lines = markdown.splitlines()
+
+    # 第一步：把 markdown 拆成「块」。
+    # 为什么不能按行处理：正文为了源码可读是折行写的，
+    # 「一天发了两版，每版十来步全靠手走，每一步都错过：版本号散在四处改漏一处、」
+    # 这种半句话就是一行。按行取首句会把一句话切成四条，读起来全是断句。
+    # 所以先把连续的非空、非标题、非列表行合并成一个段落块。
+    blocks: list[tuple[str, str]] = []      # (kind, text)
+    buf: list[str] = []
+    in_code = False
+
+    def flush() -> None:
+        if buf:
+            blocks.append(("p", "".join(buf).strip()))
+            buf.clear()
+
+    for raw in lines:
+        line = raw.rstrip()
+        s = line.strip()
+
+        # 代码块要整段吞掉，包括围栏行本身和里面的内容。
+        # 之前只把 ``` 那一行标 skip，块里的命令行全漏进了要点
+        # （「python scripts/release.py check # 只检查python scripts/...」）。
+        if s.startswith("```"):
+            flush()
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+
+        # 缩进 4 空格 = markdown 的缩进代码块。CHANGELOG 里那些命令行
+        # （`    python scripts/release.py check`）就是这么写的，
+        # 不收掉会被当成正文，最后变成一条「python scripts/release.py check…」
+        if raw.startswith("    "):
+            continue
+
+        if not s:
+            flush()
+        elif s.startswith("#"):
+            flush()
+            blocks.append(("h", s))
+        elif s.startswith("|"):
+            flush()                      # 表格整段丢弃
+            blocks.append(("skip", s))
+        elif s.startswith(("- ", "* ", "> ")) or re.match(r"^\d+\.\s", s):
+            flush()
+            blocks.append(("li", s))
+        else:
+            buf.append(s)                # 软换行：接着上一行
+    flush()
+
+    title = ""
+    bullets: list[str] = []
+
+    # 这些小节是「怎么装」「有什么限制」，不是「这版改了什么」。
+    SKIP = ("已知限制", "已知事项", "技术信息", "安装", "下载", "完整改动", "顺带",
+            "注意", "升级", "如果你的虚拟机", "验证", "测试", "校验", "本版说明")
+
+    # 这类标题是动作指引，不是这版的主题 —— 跳过，继续找下一个 ##
+    SKIP_TITLE = ("装这个", "下载", "安装", "升级", "先看")
+
+    in_skipped = False
+    for kind, text in blocks:
+        if kind == "h" and text.startswith("## "):
+            head = text[3:].strip()
+            for sep in ("：", ":", "—"):
+                if sep in head:
+                    head = head.split(sep)[-1].strip()
+            # 「已知限制」这类 ## 小节整段跳过（不只是不算标题）。
+            # 必须用「以它开头」而不是「包含」—— 用 `in` 会把
+            # 「手机端下载变快了」（含「下载」）这种正经标题当噪音杀掉。
+            if any(head.startswith(k) or head == k for k in SKIP):
+                in_skipped = True
+                continue
+            # 标题：取第一个不像动作指引的，取了就不再换。
+            # SKIP_TITLE 必须是精确相等判断 —— 用 `in` 会把
+            # 「手机端下载变快了」这种正经标题误杀（含「下载」二字）。
+            if not title and head not in SKIP_TITLE and len(head) > 3:
+                title = head
+            in_skipped = False
+            continue
+
+        if kind == "h" and text.startswith("### "):
+            h = re.sub(r"^[一二三四五六七八九十百]+、\s*", "", text[4:].strip())
+            h = re.sub(r"^\d+\.\s*", "", h)
+            in_skipped = any(k in h for k in SKIP)
+            if h and not in_skipped:
+                bullets.append(h)
+            continue
+
+        if in_skipped or kind == "skip":
+            continue
+
+        if kind == "li":
+            b = text.lstrip("-*> ").strip()
+            b = re.sub(r"^\d+\.\s*", "", b)
+            if len(b) > 4 and not any(k in b for k in SKIP):
+                bullets.append(b)
+            continue
+
+        # 段落块：取首句，太长再截断
+        if len(text) > 10:
+            first = re.split(r"[。！？]", text)[0].strip()
+            if len(first) > 10:
+                if len(first) > 80:
+                    first = first[:78] + "…"
+                bullets.append(first + "。")
+
+    # 去重（标题和段落经常重复说同一件事）。
+    # 用「包含」而不是「开头相同」：同一件事的两种说法往往开头不一样
+    # （「修了更新检查」vs「正文重复说一遍修了更新检查」）。
+    seen: list[str] = []
+    uniq: list[str] = []
+    for b in bullets:
+        key = re.sub(r"[\s`*_\-。，、]", "", b)
+        if any(key in s or s in key for s in seen if len(s) >= 6):
+            continue
+        seen.append(key)
+        uniq.append(b)
+
+    out: list[str] = []
+    if title:
+        # 不加 ** —— App 里是 Text 直接显示，不渲染 markdown，
+        # 加了会把星号原样露出来。标题本身可能自带 **（`## **加粗**`），
+        # 也一并去掉。
+        out.append(title.replace("**", "").strip())
+        out.append("")
+    for b in uniq[:max_bullets]:
+        out.append("- " + b.replace("**", "").strip())
+    if len(uniq) > max_bullets:
+        out.append("- …（完整说明见 CHANGELOG.md）")
+    return "\n".join(out).strip()
+
+
 def check_changelog_has(ver: str) -> str:
     """从 CHANGELOG 里取这个版本那一节，当 Release 说明用。"""
     text = CHANGELOG.read_text(encoding="utf-8")
@@ -443,7 +597,9 @@ def cmd_server(args) -> int:
     check_git_clean()
     check_privacy()
     target = ver or read_server_version()
-    notes = check_changelog_has(target)
+    raw_notes = check_changelog_has(target)
+    notes = summarize(raw_notes)
+    ok(f"发版说明 {len(notes)} 字符（CHANGELOG 原文 {len(raw_notes)}）")
 
     step(2, total, "写版本号")
     write_server_version(target)
@@ -482,7 +638,9 @@ def cmd_app(args) -> int:
     step(1, total, "前置检查")
     check_git_clean()
     check_privacy()
-    notes = check_changelog_has(target)
+    raw_notes = check_changelog_has(target)
+    notes = summarize(raw_notes)
+    ok(f"发版说明 {len(notes)} 字符（CHANGELOG 原文 {len(raw_notes)}）")
 
     step(2, total, "写版本号")
     write_app_version(target, new_build)

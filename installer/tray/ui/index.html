@@ -414,8 +414,8 @@ function onUpdate(u) {
   }
 }
 
-document.getElementById('chkupdate').onclick = () => post({ type: 'checkUpdate' });
-document.getElementById('updget').onclick = () => post({ type: 'downloadUpdate' });
+document.getElementById('chkupdate').onclick = () => post({ action: 'checkUpdate' });
+document.getElementById('updget').onclick = () => post({ action: 'downloadUpdate' });
 
 // ── 渲染 ───────────────────────────────────────────────────
 function render(s) {
