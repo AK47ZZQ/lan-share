@@ -162,8 +162,8 @@ class TestRelayScrub:
     def test_scrubs_urls_and_ips(self):
         from app.services.feedback_relay import _scrub
 
-        out = _scrub("我的服务器是 https://192.168.1.12:8765 打不开", 2000)
-        assert "192.168.1.12" not in out
+        out = _scrub("我的服务器是 https://192.0.2.10:8765 打不开", 2000)
+        assert "192.0.2.10" not in out
         assert "<地址>" in out
 
     def test_scrubs_bare_ip(self):
@@ -176,15 +176,15 @@ class TestRelayScrub:
     def test_scrubs_windows_path(self):
         from app.services.feedback_relay import _scrub
 
-        out = _scrub(r"文件在 C:\Users\zhangsan\Desktop\a.zip", 2000)
+        out = _scrub(r"文件在 D:\work\a.zip", 2000)
         assert "zhangsan" not in out
         assert "<路径>" in out
 
     def test_scrubs_email(self):
         from app.services.feedback_relay import _scrub
 
-        out = _scrub("联系我 zhangsan@qq.com", 2000)
-        assert "zhangsan@qq.com" not in out
+        out = _scrub("联系我 user@example.com", 2000)
+        assert "user@example.com" not in out
         assert "<邮箱>" in out
 
     def test_keeps_normal_text(self):
@@ -210,12 +210,12 @@ class TestRelayScrub:
 
         payload = build_payload({
             "id": "f1", "title": "上传失败", "type": "bug",
-            "body": "在 https://192.168.1.12:8765 上，用户 zhangsan 传不上去",
+            "body": "在 https://192.0.2.10:8765 上，用户 zhangsan 传不上去",
             "app_ver": "1.1.20", "device": "ZZQ的台式机",
             "user": "zhangsan", "created": "2026-11-01",
         })
         blob = str(payload)
-        assert "192.168.1.12" not in blob
+        assert "192.0.2.10" not in blob
         assert "zhangsan" not in blob
         assert "ZZQ的台式机" not in blob
         # 该留的还在

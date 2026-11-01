@@ -56,7 +56,7 @@ def _scrub(text: str, limit: int) -> str:
     out = re.sub(r"https?://[^\s\"'<>）)】]+", "<地址>", out)
     # 裸 IPv4
     out = re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b", "<IP>", out)
-    # 本机/用户目录绝对路径（C:\Users\xxx\... / /home/xxx/...）
+    # 本机/用户目录绝对路径（D:\some\path\... / /home/xxx/...）
     out = re.sub(r"[A-Za-z]:\\[^\s\"'<>]+", "<路径>", out)
     out = re.sub(r"/(?:home|Users)/[^\s\"'<>]+", "<路径>", out)
     # 邮箱
