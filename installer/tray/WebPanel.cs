@@ -219,50 +219,42 @@ namespace LanShare
         private void PushStateAsync(bool force)
         {
             if (!_pageReady) return;
-            // 正在跑后台动作（开局域网/检查更新）时不要再叠一个 CLI 进程。
-            // 老代码 `_busy && !force` 在 force=true 时会放行 —— 而开局域网
-            // 结束那一秒正好会 force 刷一次，于是两个 Python 同时跑，
-            // 用户感觉界面像冻住了。
+            // 正在跑后台动作（开局域网/检查更新）时不要叠刷新 —— 但绝不能因此
+            // 把刷新永久挡住，见下面 finally 里的复位。
             if (_busy) return;
-            if (_stateInFlight) return;     // 防重入：上一次还没回来就别再发
-            if (!force && (DateTime.Now - _lastPush).TotalSeconds < 10) return;
+            if (_stateInFlight) return;
+            if (!force && (DateTime.Now - _lastPush).TotalSeconds < 5) return;
             _lastPush = DateTime.Now;
+
+            // 🔴 状态刷新完全不碰 CLI。
+            //
+            // 2026-11-02 用户实测「状态更新很卡很慢，局域网状态的更新根本没有」。
+            // 上一版虽然加了本地首帧，后面仍然异步发了 `lan status`（超时 60 秒），
+            // 而 _stateInFlight 期间所有刷新一律 return —— 于是 CLI 哪天慢，
+            // 界面就几十秒不动，看起来像卡死。
+            //
+            // 现在全是本机数据：
+            //   服务状态   → ServiceController 查 SCM（毫秒）
+            //   局域网开关 → 8765 端口监听地址（LanListeningOnAll）
+            //   局域网地址 → 网卡枚举（LocalLanIp）
+            //   二维码     → 本地 /local/qr 接口
+            // 只有点按钮时才真正调 CLI（那时用户在等，慢也认）。
             _stateInFlight = true;
-
-            // 先把「本地就能算」的部分推出去。
-            // 服务状态查 SCM 是毫秒级，没理由陪 CLI 冷启动一起等好几秒 ——
-            // 老代码一进来就 RunLan，界面在结果回来前全是「正在检测中」，
-            // 这就是「每次打开 GUI 都卡、服务都显示正在检测」的根因。
-            Send("state", BuildLocalPayload());
-
-            Task.Run(() =>
+            try
             {
-                string error;
-                // 60 秒：lan status 内部要做防火墙检查 + HTTPS 自检，慢机器上十几秒
-                // 很正常。反正它在后台跑，不挡首帧显示。
-                var dict = _cli.RunLan("status", 60000, out error);
-                return BuildPayload(dict, error);
-            }).ContinueWith(t =>
+                Send("state", BuildLocalPayload());
+            }
+            catch (Exception ex)
             {
-                // try/finally 保命：RunLan 抛异常时 t.Result 会重新抛出，
-                // 如果不用 finally 兜住，_stateInFlight 永远是 true，
-                // 界面从此再也不刷新 —— 表现为「点了按钮没反应」。
-                try
-                {
-                    if (t.IsFaulted || t.IsCanceled)
-                    {
-                        AppendLog("状态刷新失败：" + (t.Exception == null
-                            ? "已取消" : t.Exception.GetBaseException().Message));
-                        return;
-                    }
-                    if (IsDisposed || _web == null) return;
-                    Send("state", t.Result);
-                }
-                finally
-                {
-                    _stateInFlight = false;
-                }
-            }, TaskScheduler.FromCurrentSynchronizationContext());
+                AppendLog("推送状态失败：" + ex.Message);
+            }
+            finally
+            {
+                // 同步完成，立刻放开。之前放在异步 ContinueWith 的 finally 里，
+                // 而 Send 本身在 try 外 —— Send 一抛异常，_stateInFlight 就永远
+                // 是 true，界面从此再不刷新（表现和「点按钮没反应」一样）。
+                _stateInFlight = false;
+            }
         }
 
         /// <summary>
@@ -284,6 +276,8 @@ namespace LanShare
                 { "wanUrl", "" },
                 { "qr", null },
                 { "certTrusted", true },
+                { "backup", FetchBackupState() },
+                { "certDaysLeft", CertDaysLeft() },
             };
 
             // 局域网地址不要等 CLI —— 直接问网卡。
@@ -425,6 +419,144 @@ namespace LanShare
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 本地根 CA 还有多久到期（天）。拿不到返回 -1。
+        ///
+        /// 为什么需要：Caddy 的 internal CA 根证书默认有效期 10 年。它到期那天，
+        /// 所有已经信任它的设备（家里每台手机、平板、电脑）会同时开始报
+        /// 证书错误，而 Caddy 不会提前告诉你，也不会自己换根 —— 换根意味着
+        /// 所有客户端要重新信任一次。
+        ///
+        /// 对一个打算长期跑下去的系统，这件事必须提前一年就开始提醒，
+        /// 而不是到期当天才发现全家的设备连不上。
+        /// </summary>
+        private int CertDaysLeft()
+        {
+            try
+            {
+                string root = Path.Combine(_cfg.InstallFolder, "certs", "caddy",
+                                           "pki", "authorities", "local", "root.crt");
+                if (!File.Exists(root)) return -1;
+                var cert = new System.Security.Cryptography.X509Certificates.X509Certificate2(root);
+                var left = (cert.NotAfter - DateTime.Now).TotalDays;
+                return left > 0 ? (int)left : 0;
+            }
+            catch (Exception)
+            {
+                return -1;
+            }
+        }
+
+        // 备份状态的缓存。
+        //
+        // 🔴 不能在这里同步发 HTTP。BuildLocalPayload 是在 UI 线程上跑的，
+        // ApiGet 的超时是 5 秒 —— API 服务没起来（或正在重启）时，每次刷新
+        // 都会把界面冻住 5 秒。那正是 2026-11-02 修掉的「卡死」，从另一个
+        // 门口再进来一次。
+        //
+        // 所以：永远返回缓存，过期了就在后台线程异步刷，UI 线程一次都不等。
+        private Dictionary<string, object> _backupCache;
+        private DateTime _backupCacheAt = DateTime.MinValue;
+        private volatile bool _backupFetching;
+
+        private Dictionary<string, object> FetchBackupState()
+        {
+            if (!_backupFetching && (DateTime.Now - _backupCacheAt).TotalSeconds > 10)
+            {
+                _backupFetching = true;
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        var fresh = ApiGet<Dictionary<string, object>>("/local/backup", d => d, null);
+                        if (fresh != null && fresh.Count > 0)
+                        {
+                            _backupCache = fresh;
+                            _backupCacheAt = DateTime.Now;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // 拿不到就继续用上一次的，卡片不会闪空
+                    }
+                    finally
+                    {
+                        _backupFetching = false;
+                    }
+                });
+            }
+            return _backupCache ?? new Dictionary<string, object>();
+        }
+
+        /// <summary>
+        /// 让用户选备份目录，然后写进服务端配置。
+        ///
+        /// 为什么必须让用户能改：默认备份落在数据目录里（同一块盘），
+        /// 盘坏的时候源和备份一起没。这是备份这个功能存在的全部意义的反面。
+        /// </summary>
+        private void PickBackupDir()
+        {
+            using (var dlg = new System.Windows.Forms.FolderBrowserDialog())
+            {
+                dlg.Description = "选择备份保存到哪个文件夹（建议选一块和数据盘不同的硬盘）";
+                dlg.ShowNewFolderButton = true;
+                var curSt = FetchBackupState();
+                string cur = curSt != null && curSt.ContainsKey("dir") ? Str(curSt, "dir") : "";
+                if (!string.IsNullOrEmpty(cur) && Directory.Exists(cur))
+                    dlg.SelectedPath = cur;
+
+                if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+                string chosen = dlg.SelectedPath;
+
+                // Quote() 自带首尾引号且已经转义反斜杠，不要再包一层。
+                string json = "{\"dir\": " + Quote(chosen) + "}";
+                if (!ApiPost("/local/backup/dir", json))
+                {
+                    SendToast("设置备份目录失败，看日志");
+                    return;
+                }
+                AppendLog("备份目录已设置: " + chosen);
+                SendToast("备份目录已改为 " + chosen);
+                PushStateAsync(true);
+            }
+        }
+
+        /// <summary>立即备份一次（后台跑，备份完刷新卡片）。</summary>
+        private void RunBackupNow()
+        {
+            RunBusy("正在备份…", () =>
+            {
+                AppendLog("手动备份开始");
+                // 备份可能要几秒到几十秒（取决于数据量），超时给足
+                var resp = ApiPostJson("/local/backup/run", "{}", 300000);
+                if (resp == null)
+                {
+                    AppendLog("手动备份：接口无响应");
+                    return "备份失败：服务没有响应";
+                }
+                // 响应本身就是最新的完整状态，直接写回缓存，卡片立刻更新
+                _backupCache = resp;
+                _backupCacheAt = DateTime.Now;
+
+                object lastRaw;
+                if (resp.TryGetValue("last", out lastRaw))
+                {
+                    var last = lastRaw as Dictionary<string, object>;
+                    if (last != null)
+                    {
+                        bool ok = false;
+                        object okObj;
+                        if (last.TryGetValue("ok", out okObj)) ok = okObj is bool && (bool)okObj;
+                        string detail = last.ContainsKey("detail") ? Str(last, "detail") : "";
+                        AppendLog("手动备份结果 ok=" + ok + " detail=" + detail);
+                        return ok ? ("备份完成" + (detail.Length > 0 ? "：" + detail : ""))
+                                  : ("备份失败：" + detail);
+                    }
+                }
+                return "备份已执行";
+            });
         }
 
         /// <summary>
@@ -842,6 +974,12 @@ namespace LanShare
                     StopAll();
                     break;
 
+                case "pickBackupDir":
+                    PickBackupDir();
+                    break;
+                case "runBackup":
+                    RunBackupNow();
+                    break;
                 case "toggleLan":
                     ToggleLan(Convert.ToBoolean(msg.ContainsKey("on") ? msg["on"] : false));
                     break;
@@ -1081,17 +1219,18 @@ namespace LanShare
                 {
                     text = ApiGet<string>("/local/public-url", d2 => Str(d2, "url"));
                 }
+                if (which == "backup")
+                {
+                    var bkc = FetchBackupState();
+                    text = bkc != null && bkc.ContainsKey("dir") ? Str(bkc, "dir") : null;
+                }
                 if (which == "lan")
                 {
-                    string err;
-                    var d = _cli.RunLan("status", 8000, out err);
-                    var addrs = List(d, "addresses");
-                    if (addrs.Count > 0)
-                    {
-                        var first = addrs[0] as Dictionary<string, object>;
-                        if (first != null)
-                            text = "https://" + Str(first, "ip") + ":" + Int(d, "web_port") + "/";
-                    }
+                    // 用本机网卡算，不再调 CLI —— 复制地址是点一下就期待有反应的
+                    // 操作，等 Python 冷启动好几秒太离谱。
+                    string ip = LocalLanIp();
+                    if (ip != null)
+                        text = "https://" + ip + ":" + _cfg.WebPort + "/";
                 }
                 if (string.IsNullOrEmpty(text))
                 {
@@ -1142,10 +1281,35 @@ namespace LanShare
             {
                 string err;
                 // 子命令只认 enable / disable（写 lan-on 会 argparse 报错）
+                AppendLog("ToggleLan: " + (turnOn ? "enable" : "disable") + " 开始");
                 _cli.RunLan(turnOn ? "enable" : "disable", 30000, out err);
-                return err == null
-                    ? (turnOn ? "局域网已开启" : "局域网已关闭")
-                    : ("操作失败：" + err);
+                AppendLog("ToggleLan: CLI 返回 err=" + (err ?? "(null)"));
+
+                // 🔴 不能只看 err。
+                //
+                // CLI 返回 0 只代表「命令跑完了」，Caddy 重启要几秒，端口监听
+                // 状态这期间没变。用户点完按钮瞬间看到的还是旧状态，就以为
+                // 「点了没效果」。2026-11-02 笔记本实测反馈的正是这个。
+                //
+                // 这里等状态真的切过来（最多 10 秒），并把结果如实说出来。
+                bool wantAll = turnOn;
+                bool switched = false;
+                for (int i = 0; i < 20; i++)
+                {
+                    if (LanListeningOnAll() == wantAll) { switched = true; break; }
+                    System.Threading.Thread.Sleep(500);
+                }
+                AppendLog("ToggleLan: 监听状态切换 switched=" + switched);
+
+                if (!switched)
+                {
+                    return err != null
+                        ? ("操作失败：" + err)
+                        : (turnOn
+                            ? "命令执行了，但服务 10 秒内没切到局域网模式，点「重启服务」再试"
+                            : "命令执行了，但服务 10 秒内没切回仅本机模式");
+                }
+                return turnOn ? "局域网已开启" : "局域网已关闭";
             });
         }
 
@@ -1243,6 +1407,38 @@ namespace LanShare
                     return (int)resp.StatusCode < 400;
             }
             catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// POST 并返回解析后的响应体。失败返回 null。
+        ///
+        /// 备份要用它：`/local/backup/run` 的响应里带着这一轮的真实结果，
+        /// 只看 HTTP 状态码判断不了「备份到底成没成」。
+        /// </summary>
+        private Dictionary<string, object> ApiPostJson(string path, string json, int timeoutMs)
+        {
+            try
+            {
+                string url = "http://127.0.0.1:" + _cfg.ApiPort + path;
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
+                req.Method = "POST";
+                req.ContentType = "application/json";
+                req.Timeout = timeoutMs;
+                req.Proxy = null;
+                byte[] body = Encoding.UTF8.GetBytes(json);
+                req.ContentLength = body.Length;
+                using (var st = req.GetRequestStream()) st.Write(body, 0, body.Length);
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                using (var sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    return new JavaScriptSerializer()
+                        .Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
+                }
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         private static bool ProbeOk(string url)

@@ -43,6 +43,9 @@ _INDEXES = """
     CREATE INDEX IF NOT EXISTS idx_notif_broadcast ON notifications(broadcast_id);
     -- 启动期审计回填每次扫 username='' 的待补行；部分索引把常驻全扫降为空段扫
     CREATE INDEX IF NOT EXISTS idx_audit_pending ON audit_log(id) WHERE username='';
+    -- ts 索引：清理任务按 ts 删旧记录，没索引会全表扫描。
+    -- 24x7 长跑几年后 audit_log 到百万级，每小时一次的清理会变成明显的卡顿。
+    CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
     -- v3.57：ttl_state 每小时按 expires_at 回收过期票据（表虽小，随 scope 增长）
     CREATE INDEX IF NOT EXISTS idx_ttl_expires ON ttl_state(expires_at);
 """

@@ -143,7 +143,12 @@ section("5. batch file line endings")
 bad_eol = []
 for f in tracked:
     if f.lower().endswith((".bat", ".cmd")):
-        raw = (ROOT / f).read_bytes()
+        p = ROOT / f
+        # 已 `git rm` 但还没提交的文件仍然在 ls-files 里，
+        # 直接 read_bytes 会 FileNotFoundError 把整个扫描打断。
+        if not p.is_file():
+            continue
+        raw = p.read_bytes()
         if raw.count(b"\r\n") != raw.count(b"\n"):
             bad_eol.append(f)
 if bad_eol:

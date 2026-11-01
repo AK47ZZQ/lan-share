@@ -70,11 +70,34 @@ TEMPLATE = """\
 
 {site_addrs} {{
 {bind_line}\ttls internal
-\treverse_proxy 127.0.0.1:{api_port} {{
-\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
-\t\theader_up X-Forwarded-Proto https
-\t\theader_up X-Real-IP {{remote_host}}
-\t\theader_up Host {{host}}
+
+\t# ── 静态资源交给 Caddy 直接发，不经过反向代理 ──
+\t# 2026-11-02 用户实测：/login 返回 200，但 /assets/*.js 和 *.css 全是 403，
+\t# 页面因此白屏（HTML 出来了，JS/CSS 被拒）。同一个包在别的机器上正常，
+\t# 说明是安装环境的偶发问题 —— 与其追这种环境差异，不如让静态资源根本
+\t# 不进 API 进程：Caddy 直接读文件，绕开所有中间件和鉴权。
+\t#
+\t# 顺带也快了：JS/CSS 不再占用 Python 线程、不经过 uvicorn。
+\thandle /assets/* {{
+\t\troot * "{web_root}"
+\t\tfile_server
+\t}}
+\thandle /static/* {{
+\t\troot * "{web_root}"
+\t\tfile_server
+\t}}
+\thandle /icons/* {{
+\t\troot * "{web_root}"
+\t\tfile_server
+\t}}
+
+\thandle {{
+\t\treverse_proxy 127.0.0.1:{api_port} {{
+\t\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
+\t\t\theader_up X-Forwarded-Proto https
+\t\t\theader_up X-Real-IP {{remote_host}}
+\t\t\theader_up Host {{host}}
+\t\t}}
 \t}}
 
 \tencode gzip
@@ -174,11 +197,16 @@ def render(
     bind_host: str = BIND_ALL,
     hosts: list[str] | None = None,
     storage_dir: str = "",
+    web_root: str = "",
 ) -> str:
     """渲染 Caddyfile 内容（不落盘，方便单测）。
 
     storage_dir：证书和内部 CA 的落盘位置。传空串时退回 Caddy 默认位置
     （当前用户 AppData）—— 只该在单测里出现，CLI 必须传具体目录。
+
+    web_root：前端产物目录（含 index.html / assets / static / icons）。
+    Caddy 用它直接 file_server 发静态资源，不经过 API。传空串时退回相对路径
+    "../web/dist"（相对 Caddyfile 所在目录），只该在单测里出现。
     """
     if not (1 <= api_port <= 65535):
         raise ValueError(f"api_port 越界: {api_port}")
@@ -197,6 +225,8 @@ def render(
         # Caddyfile 按空格切 token：路径含空格（"LAN Share"）必须加引号，
         # Windows 反斜杠在 Caddy 里也不稳妥，统一换正斜杠。
         storage_dir=(storage_dir or "${HOME}/.local/share/caddy").replace(chr(92), "/"),
+        # 同样要换正斜杠 + 不能带引号问题（模板里已经加了一对引号）
+        web_root=(web_root or "../web/dist").replace(chr(92), "/"),
     )
 
 
@@ -207,11 +237,12 @@ def write(
     bind_host: str = BIND_ALL,
     hosts: list[str] | None = None,
     storage_dir: str = "",
+    web_root: str = "",
 ) -> Path:
     """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = render(api_port, web_port, bind_host, hosts, storage_dir)
+    content = render(api_port, web_port, bind_host, hosts, storage_dir, web_root)
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     return target

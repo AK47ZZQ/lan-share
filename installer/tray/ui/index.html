@@ -254,6 +254,11 @@ button.link {
     <button class="primary" id="fixtcert">一键修复</button>
   </div>
 
+  <!-- 根 CA 快到期。默认隐藏，剩余不足一年才显示。 -->
+  <div class="certbar" id="certdays" style="display:none">
+    <span id="certdaystext"></span>
+  </div>
+
   <!-- 两列 -->
   <div class="grid">
 
@@ -280,6 +285,27 @@ button.link {
         <div style="display:flex;gap:8px">
           <button class="mini" id="wantest">验证连通性</button>
           <button class="mini danger" id="wanclear">清除</button>
+        </div>
+      </div>
+
+      <!-- 备份：让用户自己选盘。默认目录在数据目录里，盘坏时源和备份
+           会一起没 —— 这张卡片存在的意义就是把它挪到另一块盘去。 -->
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="card-title">备份</div>
+          <button class="link" id="bkpick">选择文件夹</button>
+        </div>
+        <div class="state" id="bkstate">
+          <span class="dot"></span><span id="bkstatetext">读取中…</span>
+        </div>
+        <div class="hint" id="bkhint"></div>
+        <div class="addr">
+          <input id="bkaddr" readonly value="" size="1" style="width:100%">
+          <button class="mini" data-copy="backup">复制</button>
+        </div>
+        <div id="bkwarn" class="hint" style="display:none;color:#e0a23a"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="mini primary" id="bkrun">立即备份</button>
         </div>
       </div>
     </div>
@@ -480,8 +506,53 @@ function render(s) {
   var cb = document.getElementById('certbar');
   cb.classList.toggle('show', s.certTrusted === false && !!s.lanOn);
 
+  // 根 CA 快到期了要提前一年喊 —— 到期那天全家设备会同时报证书错误
+  var cd = document.getElementById('certdays');
+  var cdt = document.getElementById('certdaystext');
+  if (cd && cdt) {
+    var left = (typeof s.certDaysLeft === 'number') ? s.certDaysLeft : -1;
+    if (left >= 0 && left < 365) {
+      cd.style.display = '';
+      cdt.textContent = left > 0
+        ? ('⚠ 本地根证书还有 ' + left + ' 天到期，到期后所有设备都要重新信任一次')
+        : '⚠ 本地根证书已过期，请重新安装或点「修复证书信任」';
+    } else {
+      cd.style.display = 'none';
+    }
+  }
+
   // 底部
   document.getElementById('datapath').textContent = s.dataPath ? ('数据目录 ' + s.dataPath) : '';
+
+  // 备份
+  var bk = s.backup || {};
+  var bkState = document.getElementById('bkstate');
+  var bkText = document.getElementById('bkstatetext');
+  var bkHint = document.getElementById('bkhint');
+  var bkWarn = document.getElementById('bkwarn');
+  document.getElementById('bkaddr').value = bk.dir || '';
+
+  var lastOk = bk.last && bk.last.ok;
+  var isDefault = !!bk.is_default;
+  bkState.className = 'state' + (lastOk && !isDefault ? ' on' : (isDefault ? ' blocked' : ''));
+  if (bk.last && bk.last.ts) {
+    var d = new Date(bk.last.ts * 1000);
+    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    var when = (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    bkText.textContent = lastOk ? ('上次备份 ' + when) : ('上次备份失败 · ' + when);
+    bkHint.textContent = (bk.last.detail || '') + (bk.keep ? ('　保留最近 ' + bk.keep + ' 份') : '');
+  } else {
+    bkText.textContent = '还没有备份过';
+    bkHint.textContent = '每天自动备份一次，也可以点「立即备份」';
+  }
+
+  // 备份目录和数据在同一块盘 —— 盘坏时源和备份一起没，必须明说
+  if (bk.same_volume_as_data) {
+    bkWarn.style.display = '';
+    bkWarn.textContent = '⚠ 备份和数据在同一块硬盘上，硬盘坏了会一起丢。建议点右上角改到别的盘。';
+  } else {
+    bkWarn.style.display = 'none';
+  }
 }
 
 // ── 交互 ───────────────────────────────────────────────────
@@ -498,6 +569,10 @@ document.querySelectorAll('[data-copy]').forEach(el => {
 
 document.getElementById('lantoggle').onclick = () =>
   post({ action: 'toggleLan', on: !(last && last.lanOn) });
+
+// 备份：选目录 / 立即备份
+document.getElementById('bkpick').onclick = () => post({ action: 'pickBackupDir' });
+document.getElementById('bkrun').onclick = () => post({ action: 'runBackup' });
 document.getElementById('openweb').onclick  = () => post({ action: 'openWeb' });
 document.getElementById('restartall').onclick = () => post({ action: 'restartAll' });
 document.getElementById('stopall').onclick  = () => post({ action: 'stopAll' });

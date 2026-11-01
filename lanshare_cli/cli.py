@@ -505,6 +505,8 @@ def cmd_install(args: argparse.Namespace) -> int:
             bind_host=bind_host,
             # 证书/CA 存在安装目录下，不用 Caddy 默认的 SYSTEM AppData
             storage_dir=str(layout.root / "certs" / "caddy"),
+            # 静态资源由 Caddy 直接发（绕开 API 中间件，避免 /assets 403 白屏）
+            web_root=str(layout.root / "web" / "dist"),
         )
         ok(str(layout.caddyfile))
         # 用 caddy 自己校验，别等启动才发现语法错

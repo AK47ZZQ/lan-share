@@ -34,13 +34,15 @@ from app.services import trash_audit       # noqa: F401 —— .trash 无主残�
 from app.services import thumb_warmup       # 缩略图后台预热（20260914213301-31cd）
 from app.api import totp, profile, account, devices   # auth 按域拆出（07 小尾巴）
 from app.api import local_config                       # 桌面端本机配置（托盘/GUI 用）
+from app.api import local_backup                       # 桌面端备份（选目录/立即备份）
 from app.api import todos                              # 效率舱·待办（v1.1 M1）
 from app.api import pomodoros                          # 效率舱·番茄钟（v1.2 M2）
 
 for _mod in (admin, appver, auth, totp, profile, account, devices, files,
              uploads, trash, previews, share,
              webdav, system, notify, healthreport, photos, albums, qr, notes,
-             local_config, console, feedback, feedback_inbox, events, todos, pomodoros):
+             local_config, local_backup, console, feedback, feedback_inbox, events,
+             todos, pomodoros):
     app.include_router(_mod.router)
 backup_svc.ensure_scheduled()   # B5：进程内每日备份兜底（外部计划任务失效时的第二道防线）
 metrics_svc.ensure_scheduled()  # B5：磁盘水位 watchdog 接线（值守发现遗漏，终审未覆盖注册面）

@@ -36,7 +36,8 @@ import time
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
-from app.config import BACKUP_DIR, BACKUP_HOUR, BACKUP_KEEP, DB_PATH, PG_BIN_FALLBACK
+from app.config import BACKUP_DIR as _DEFAULT_BACKUP_DIR
+from app.config import BACKUP_HOUR, BACKUP_KEEP, DB_PATH, PG_BIN_FALLBACK
 from app.db import DATABASE_URL, USE_PG, _db
 from app.settings import get_setting, set_setting
 from app.services import cleanup
@@ -61,6 +62,49 @@ def _resolve_tool(name: str) -> str | None:
         return p
     cand = Path(PG_BIN_FALLBACK) / f"{name}.exe"
     return str(cand) if cand.is_file() else None
+
+
+BACKUP_DIR_KEY = "backup_dir"
+
+
+def backup_dir() -> Path:
+    """当前备份目录。
+
+    默认在数据目录下的 .backups（随数据一起被网盘级保护），但允许用户在
+    控制面板里改到别的盘 —— 这是「备份和源在同一块硬盘」这个致命缺陷的解药：
+    盘坏的时候源和备份会一起没。
+
+    配置存在 settings 表（backup_dir），空值表示用默认。
+    """
+    try:
+        from app import settings as settings_store
+        raw = (settings_store.get_setting(BACKUP_DIR_KEY, "") or "").strip()
+        if raw:
+            return Path(raw)
+    except Exception:
+        pass
+    return _DEFAULT_BACKUP_DIR
+
+
+def set_backup_dir(path: str | None) -> None:
+    """设置备份目录。传空串 = 恢复默认。会做基本校验。"""
+    from app import settings as settings_store
+    raw = (path or "").strip()
+    if not raw:
+        settings_store.set_setting(BACKUP_DIR_KEY, "")
+        return
+    p = Path(raw)
+    if not p.is_absolute():
+        raise ValueError("必须是绝对路径")
+    p.mkdir(parents=True, exist_ok=True)
+    # 写一个探针文件确认真的可写 —— 用户可能选了只读盘/无权限目录
+    probe = p / ".lanshare-write-test"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        raise ValueError(f"这个目录不能写入：{exc}") from exc
+    settings_store.set_setting(BACKUP_DIR_KEY, str(p))
 
 
 def _today() -> str:
@@ -93,11 +137,23 @@ def run_backup_once(push=None) -> dict:
     """立即备份一轮（调度与 admin 手动触发共用；返回状态 dict）。"""
     if push is None:
         push = _webhook.push_webhook
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    dest = backup_dir()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     status: dict = {"ts": time.time(), "ok": False, "detail": "", "files": []}
+    # 目录创建放进 try 里。
+    #
+    # 备份目录现在允许用户指到别的盘（移动硬盘、第二块内置盘）。那种盘
+    # 最常见的失效方式就是「拔了 / 没挂上」，mkdir 会抛 OSError。放在 try
+    # 外面的话接口直接 500，用户看到的是「服务没有响应」，完全不知道是
+    # 备份盘掉了。放进 try 就能把真实原因写进 status.detail。
     try:
-        dump = _dump_to(BACKUP_DIR / f"meta-{stamp}.db")
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        status["detail"] = f"备份目录不可用：{dest}（{exc.strerror or exc}）"
+        set_setting(STATUS_KEY, json.dumps(status, ensure_ascii=False))
+        return status
+    try:
+        dump = _dump_to(dest / f"meta-{stamp}.db")
         if dump is _NO_DUMP:
             status["detail"] = "当前引擎无可用 dump 工具（PG 需 pg_dump 在 PATH）"
             raise RuntimeError(status["detail"])
@@ -109,7 +165,7 @@ def run_backup_once(push=None) -> dict:
             raise RuntimeError(status["detail"])
         status["verified"] = verified
         status["verify_detail"] = verify_detail
-        meta = BACKUP_DIR / f"settings-{stamp}.json"
+        meta = dest / f"settings-{stamp}.json"
         _write_settings_snapshot(meta)
         status["files"].append(str(meta))
         _prune_old()
@@ -279,14 +335,23 @@ def _prune_old() -> None:
     meta-* 字典序恒前于 settings-*，切片会先删光全部 dump——改为按
     时间戳分组，组为单位整组淘汰，dump 与快照保持成对）。"""
     import re
+    dest = backup_dir()
+    if not dest.is_dir():
+        return
     groups: dict[str, list] = {}
-    for f in BACKUP_DIR.iterdir():
+    for f in dest.iterdir():
         m = re.match(r"(meta|settings)-(\d{8}-\d{6})\.(db|json)$", f.name)
         if m:
             groups.setdefault(m.group(2), []).append(f)
-        else:
+        elif f.name.endswith((".tmp", ".part")):
+            # 只清理我们自己写到一半的临时文件。
+            #
+            # 🔴 绝不能写成「不匹配备份名的文件一律删除」——备份目录是
+            # 用户自己选的，可能指向一个已有数据的磁盘（比如 D:\备份 里
+            # 还放着别的东西）。那种写法等于把人家整个目录清空。
+            # 2026-11-02 复查发现原实现就是 else: f.unlink()，危险。
             try:
-                f.unlink()   # 历史半写残留/临时文件：直接清
+                f.unlink()
             except OSError:
                 pass
     keep = sorted(groups)[-BACKUP_KEEP:]

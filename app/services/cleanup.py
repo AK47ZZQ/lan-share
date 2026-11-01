@@ -157,6 +157,23 @@ def _cleanup_db():
     now = time.time()
     with _db_lock:
         _db().execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+        # 审计日志保留期。
+        #
+        # audit_log 是唯一没有任何保留策略的表 —— 每次登录、上传、删除都写一行，
+        # 24×7 跑几年就是百万级。它的用途是「最近谁动过什么」，翻几个月以前
+        # 的记录在实际使用里没有意义，但表会一直涨、索引一直胖、VACUUM 越来越吃力。
+        #
+        # 两年是刻意选的偏长值：一年前的记录基本用不上，但留足时间给
+        # 「很久以后才发现的问题」。要更短可以改 settings 里的 audit_keep_days。
+        keep_days = 730
+        try:
+            row = _db().execute(
+                "SELECT value FROM settings WHERE key='audit_keep_days'").fetchone()
+            if row and row[0]:
+                keep_days = max(30, int(row[0]))
+        except Exception:
+            pass
+        _db().execute("DELETE FROM audit_log WHERE ts < ?", (now - keep_days * 86400,))
         _db().commit()
     devices_store.delete_expired(now)
     shares_store.purge_expired(now)

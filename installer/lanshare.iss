@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.87"
+#define AppVersion     "3.88"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -163,7 +163,12 @@ Name: "{group}\卸载 {#AppName}"; Filename: "{uninstallexe}"
 ; 2026-11-01 用户反馈「安装完成后勾选打开，点完成没动静，GUI 界面没被打开」。
 ; 原先这里 shellexec 一个 https://127.0.0.1:8765，浏览器被证书警告页挡在前面，
 ; 用户看到的就是「没反应」。控制面板才是用户想点的东西。
-Filename: "{app}\tray\LANShareTray.exe"; Parameters: "--panel"; Flags: nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share 控制面板"
+; ⚠️ 必须加 shellexec：托盘 manifest 是 requireAdministrator，
+; Inno 默认用 CreateProcess 启动子进程，遇到需要提权的 exe 直接失败：
+;   CreateProcess 失败；错误代码 740。请求的操作需要提升。
+; 2026-11-02 用户笔记本实测装完就弹这个框。shellexec 走 ShellExecuteEx 会
+; 正常请求提权；安装器本身已是管理员，所以不会再弹一次 UAC。
+Filename: "{app}\tray\LANShareTray.exe"; Parameters: "--panel"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "打开 LAN Share 控制面板"
 ; 仍然保留「在浏览器里打开」（用 localhost，证书 SAN 里一定有它）
 Filename: "https://localhost:{#WebPort}"; Flags: shellexec nowait postinstall skipifsilent skipifdoesntexist; Description: "在浏览器中打开 LAN Share"
 
@@ -172,7 +177,8 @@ Filename: "https://localhost:{#WebPort}"; Flags: shellexec nowait postinstall sk
 ; 装完如果弹了任何错误（哪怕只是自检误报），完成页可能根本不出现，
 ; 托盘就永远不启动 —— 用户装完桌面上什么都没有，以为没装上。
 ; 现在安装流程走到这里就起；只有 /SILENT 才跳过。
-Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait skipifsilent skipifdoesntexist; Tasks: autostart
+; 同样要 shellexec，否则装完自动启动托盘时又是 740
+Filename: "{app}\tray\LANShareTray.exe"; Flags: shellexec nowait skipifsilent skipifdoesntexist; Tasks: autostart
 ; 注册开机自启任务（最高权限、不弹 UAC）。/F 覆盖同名任务，幂等。
 ; 用 "" 转义内层引号 —— schtasks 的 /tr 参数本身要带引号包住含空格的路径
 ; （{app} 默认是 C:\Program Files\LAN Share）。
