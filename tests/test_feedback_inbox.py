@@ -146,3 +146,78 @@ def test_relay_targets_empty_when_nothing_configured():
     ):
         settings.set_setting(k, "")
     assert feedback_relay.targets() == []
+
+
+# ──────────────────────────────────────────────────────────────
+# 上报脱敏（2026-11-01）
+# ──────────────────────────────────────────────────────────────
+
+class TestRelayScrub:
+    """反馈正文和身份字段发出去之前必须洗一遍。
+
+    用户提交反馈时想不到要删服务器地址、内网 IP、同事真名 —— 这些东西
+    一旦进开发者的收件箱就等于出了用户的机器。
+    """
+
+    def test_scrubs_urls_and_ips(self):
+        from app.services.feedback_relay import _scrub
+
+        out = _scrub("我的服务器是 https://192.168.1.12:8765 打不开", 2000)
+        assert "192.168.1.12" not in out
+        assert "<地址>" in out
+
+    def test_scrubs_bare_ip(self):
+        from app.services.feedback_relay import _scrub
+
+        out = _scrub("连 10.0.0.5 这台不行", 2000)
+        assert "10.0.0.5" not in out
+        assert "<IP>" in out
+
+    def test_scrubs_windows_path(self):
+        from app.services.feedback_relay import _scrub
+
+        out = _scrub(r"文件在 C:\Users\zhangsan\Desktop\a.zip", 2000)
+        assert "zhangsan" not in out
+        assert "<路径>" in out
+
+    def test_scrubs_email(self):
+        from app.services.feedback_relay import _scrub
+
+        out = _scrub("联系我 zhangsan@qq.com", 2000)
+        assert "zhangsan@qq.com" not in out
+        assert "<邮箱>" in out
+
+    def test_keeps_normal_text(self):
+        """别把正常内容也洗没了。"""
+        from app.services.feedback_relay import _scrub
+
+        out = _scrub("上传大文件时会卡住，重新登录后恢复", 2000)
+        assert out == "上传大文件时会卡住，重新登录后恢复"
+
+    def test_pseudonym_is_stable_and_irreversible(self):
+        from app.services.feedback_relay import _pseudonym
+
+        a = _pseudonym("admin", "salt1")
+        b = _pseudonym("admin", "salt1")
+        c = _pseudonym("admin", "salt2")
+        assert a == b            # 同一人同一部署 → 能串起来看
+        assert a != c            # 不同部署的盐不同 → 不能跨部署关联
+        assert "admin" not in a
+        assert len(a) == 12
+
+    def test_payload_has_no_plaintext_identity(self):
+        from app.services.feedback_relay import build_payload
+
+        payload = build_payload({
+            "id": "f1", "title": "上传失败", "type": "bug",
+            "body": "在 https://192.168.1.12:8765 上，用户 zhangsan 传不上去",
+            "app_ver": "1.1.20", "device": "ZZQ的台式机",
+            "user": "zhangsan", "created": "2026-11-01",
+        })
+        blob = str(payload)
+        assert "192.168.1.12" not in blob
+        assert "zhangsan" not in blob
+        assert "ZZQ的台式机" not in blob
+        # 该留的还在
+        assert payload["app_ver"] == "1.1.20"
+        assert payload["type"] == "bug"

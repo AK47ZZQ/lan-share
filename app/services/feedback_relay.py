@@ -22,7 +22,9 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -38,18 +40,73 @@ def _on(key: str) -> bool:
     return (settings.get_setting(key, "") or "").strip() == "1"
 
 
+def _scrub(text: str, limit: int) -> str:
+    """把正文里能定位到人的东西换成占位符（2026-11-01）。
+
+    反馈正文是用户手打的，什么都可能有：服务器地址、内网 IP、同事真名、
+    文件路径。这些东西一旦进了开发者的收件箱就等于出了用户的机器 ——
+    而用户提交反馈时**想不到**要去删它们。
+
+    所以发送前统一洗一遍，宁可丢掉一点上下文，也不要悄悄带走隐私。
+    """
+    if not text:
+        return ""
+    out = text
+    # URL（含协议）—— 用户的服务器地址基本都长这样
+    out = re.sub(r"https?://[^\s\"'<>）)】]+", "<地址>", out)
+    # 裸 IPv4
+    out = re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b", "<IP>", out)
+    # 本机/用户目录绝对路径（C:\Users\xxx\... / /home/xxx/...）
+    out = re.sub(r"[A-Za-z]:\\[^\s\"'<>]+", "<路径>", out)
+    out = re.sub(r"/(?:home|Users)/[^\s\"'<>]+", "<路径>", out)
+    # 邮箱
+    out = re.sub(r"[\w.+-]+@[\w-]+\.[\w.]+", "<邮箱>", out)
+    return out[:limit]
+
+
+def _pseudonym(value: str, salt: str) -> str:
+    """账号名/设备名 → 稳定的短哈希。
+
+    为什么不留原文：反馈正文里出现「admin 的网盘上传失败」这种句子时，
+    `user` 字段带真名等于把「谁在哪台机器上」一起交出去了。
+
+    为什么不用随机数：同一个人的多条反馈要能串起来看（这样才能判断
+    「同一台机器报了三个问题」是环境问题还是产品问题）。哈希稳定、
+    不可逆，两个目的都能满足。
+    """
+    v = (value or "").strip()
+    if not v:
+        return ""
+    return hashlib.sha256((salt + v).encode("utf-8")).hexdigest()[:12]
+
+
 def build_payload(item: dict[str, Any]) -> dict[str, Any]:
-    """组装上报体。只挑这几个字段 —— 其余一律不出本机。"""
+    """组装上报体。**只挑这几个字段，其余一律不出本机**。
+
+    2026-11-01 起做了脱敏：`user` / `device` 换成稳定短哈希，
+    正文洗掉 URL / IP / 路径 / 邮箱 —— 用户点「上报」时不会想到要去删这些。
+    """
+    salt = (settings.get_setting(settings.FEEDBACK_SOURCE, "") or "lanshare")
+
+    # 正文里手打的账号名/设备名 —— 正则认不出来，但它们比 IP 更能定位到人。
+    # 拿已知的值去做字面替换，太短的不动（两三个字符的账号名替换会误伤正文）。
+    body = item.get("body") or ""
+    for known in (item.get("user") or "", item.get("device") or ""):
+        known = known.strip()
+        if len(known) >= 3:
+            body = body.replace(known, "<用户>")
+
     return {
         "id": item.get("id", ""),
-        "title": (item.get("title") or "")[:80],
+        "title": _scrub(item.get("title") or "", 80),
         "type": item.get("type", "other"),
-        "body": (item.get("body") or "")[:2000],
+        "body": _scrub(body, 2000),
         "app_ver": (item.get("app_ver") or "")[:40],
-        "device": (item.get("device") or "")[:80],
-        "user": (item.get("user") or "")[:60],
+        # 设备名可能是「ZZQ的台式机」这种带真名的，只留哈希
+        "device": _pseudonym(item.get("device") or "", salt),
+        "user": _pseudonym(item.get("user") or "", salt),
         "created": item.get("created", ""),
-        "source": (settings.get_setting(settings.FEEDBACK_SOURCE, "") or "")[:40],
+        "source": (salt or "")[:40],
     }
 
 
