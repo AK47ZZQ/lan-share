@@ -846,6 +846,29 @@ def _sc_delete(name: str) -> bool:
     return r.returncode == 0
 
 
+def _kill_by_name(name: str) -> None:
+    """按进程名强杀（不带 .exe 后缀）。
+
+    卸载时 nssm 已经摘掉服务，但进程不一定立刻退出，文件还锁着。
+    不先杀就删目录，rmtree 会静默失败，用户看到残留。
+
+    只按具体名字杀，不做 `Get-Process | Where-Object Name -like '*x*'`
+    这种通配清场 —— 那是能把无关程序一起干掉的写法。
+    """
+    script = (
+        f"Get-Process -Name '{name}' -ErrorAction SilentlyContinue | "
+        "ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, timeout=30,
+        )
+        time.sleep(1)
+    except Exception:
+        pass
+
+
 def _stop_tray() -> None:
     """停掉托盘进程。
 
@@ -905,10 +928,44 @@ def _clean_path_entries(install_root: str) -> int:
         return 0
 
 
+def _read_data_dir_from_registry(reg_key: str = REGISTRY_KEY_DEFAULT) -> Path | None:
+    """从注册表读安装时实际用的数据目录。
+
+    为什么需要：卸载时 `--data-dir` 可能没传（Inno 的 [UninstallRun] 只给了
+    参数 -m lanshare_cli uninstall），退回到 `default_data_dir()` 会拿到
+    `C:\ProgramData\LANShare\data` —— 而用户装的时候很可能把数据放在
+    安装目录下的 data 里，或者干脆指到了 D 盘。
+
+    结果就是 `--purge-data` 删了个不存在的目录，真正的数据原封不动躺着，
+    用户以为删干净了。2026-11-01 真机反馈的「卸载只删了一部分」里，
+    这一条占了一半。
+    """
+    try:
+        import winreg
+    except ImportError:
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            rf"SOFTWARE\{reg_key}") as key:
+            value, _ = winreg.QueryValueEx(key, "DataFolder")
+            if value:
+                return Path(str(value))
+    except OSError:
+        return None
+    return None
+
+
 def cmd_uninstall(args: argparse.Namespace) -> int:
+    # 数据目录优先级：命令行 > 注册表（安装时真实用的）> 默认值。
+    # 中间那层不能省 —— 否则 --purge-data 会去删一个不存在的默认路径，
+    # 真数据留在原地，用户以为删干净了。
+    if args.data_dir:
+        data_dir = Path(args.data_dir)
+    else:
+        data_dir = _read_data_dir_from_registry() or default_data_dir()
     layout = Layout(
         root=Path(args.root),
-        data_dir=Path(args.data_dir) if args.data_dir else default_data_dir(),
+        data_dir=data_dir,
         service_prefix=resolve_prefix(args.service_prefix),
         python_override=Path(args.python) if args.python else None,
     )
@@ -993,7 +1050,31 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         else:
             ok("系统 PATH 无残留")
 
-    # ── 7. 数据 ──
+    # ── 7. Caddy 在 SYSTEM 账户下的残留 ──
+    # Caddy 以 LocalSystem 运行时会把 autosave.json 写到
+    # C:\Windows\system32\config\systemprofile\AppData\Roaming\Caddy。
+    # 那个目录不在安装目录里，卸载后单独留着，用户翻 C 盘会看见。
+    #
+    # 实测：nssm remove 之后 caddy.exe 不保证立刻退出，文件还锁着，
+    # 直接 rmtree 会静默失败（ignore_errors=True），目录原样留着。
+    # 所以先按进程名强杀，等一秒，再删。
+    if not dry:
+        _kill_by_name("caddy")
+        systemprofile = Path(os.environ.get("WINDIR", r"C:\Windows")) / \
+            "system32" / "config" / "systemprofile" / "AppData" / "Roaming" / "Caddy"
+        try:
+            if systemprofile.is_dir():
+                shutil.rmtree(systemprofile, ignore_errors=True)
+                if systemprofile.is_dir():
+                    warn(f"未能完全删除 {systemprofile}（文件仍被占用，重启后可删）")
+                else:
+                    ok("已清理 Caddy 的 SYSTEM 账户配置残留")
+            else:
+                ok("Caddy 无 SYSTEM 账户残留")
+        except Exception as exc:
+            warn(f"清理 Caddy 残留失败：{exc}")
+
+    # ── 8. 数据 ──
     if args.purge_data:
         if layout.data_dir.is_dir():
             say("")

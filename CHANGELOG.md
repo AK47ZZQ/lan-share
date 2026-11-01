@@ -1,3 +1,113 @@
+## 2026-11-01（深夜）— 服务端 v3.83：装到 D 盘却写 C 盘、卸载崩掉半途而废
+
+用户从零安装、选了 D 盘，结果发现 C 盘里长出了 lanshare 的目录；卸载时
+提示「只卸载了部分，还有文件需要手动删除」。查下来是四个独立缺陷叠在一起。
+
+### 一、选 D 盘，数据却写进 C:\ProgramData
+
+`[Dirs]` 段还留着早期版本的写法：
+
+```
+Name: "{commonappdata}\LANShare\data"; Permissions: users-modify
+Name: "{commonappdata}\LANShare\logs"
+```
+
+而注册表 `DataFolder` 用的是 `{code:GetDataDir}`。两套逻辑各说各话：注册表
+记着 D 盘，目录却照样在 C 盘建。安装日志里三行写得清清楚楚：
+
+```
+Creating directory: C:\ProgramData\LANShare
+Creating directory: C:\ProgramData\LANShare\data
+Creating directory: C:\ProgramData\LANShare\logs
+```
+
+改成 `{code:GetDataDir}`，与注册表同源。
+
+### 二、回退改安装目录后，数据目录不跟着走
+
+老逻辑只在值为空时填默认值：
+
+```
+if DataDirPage.Values[0] = '' then
+  DataDirPage.Values[0] := WizardDirValue + '\data';
+```
+
+用户先前进到数据页（自动填了 C 盘路径），再退回去把安装目录改成 D 盘，
+数据目录固执地停在 C 盘 —— 因为它的值已经不空了。
+
+改成区分「没填过」和「用户手动改过」：记住上次自动填的值 `LastAutoDataDir`，
+当前值等于它就跟着安装目录更新，否则一律尊重用户输入。
+
+### 三、卸载第一次调用就抛致命异常
+
+```
+Runtime error (at 13:154):
+内部错误：Cannot call "WizardSilent" function during Uninstall。
+CurUninstallStepChanged raised an exception (fatal)
+```
+
+Inno 6.7 里 `WizardSilent` 只能在安装阶段调用。卸载阶段调它，卸载器
+当场崩掉，后面删文件、删服务、清注册表一步都没跑。用户看到的就是
+「只卸载了部分」。
+
+改用 `SuppressibleMsgBox`：静默时自动返回第四个参数（`IDNO` = 保留数据），
+非静默时正常弹框。
+
+### 四、卸载顺序反了：先删文件，再问要不要保留数据
+
+`[UninstallDelete]` 原本是 `Type: filesandordirs; Name: "{app}"` —— 整个
+安装目录删掉，而数据默认就在 `{app}\data`。它在删装文件阶段执行，
+早于 `CurUninstallStepChanged(usPostUninstall)` 那个「是否删除数据」对话框。
+**问的时候数据已经没了，问了个寂寞。**
+
+改成按子目录精确列（conf/logs/certs/runtime/app/lanshare_cli/web/static/pgsql/bin/tray），
+`{app}\data` 完全不在这个表里；提问挪到 `usUninstall`（删文件之前），
+用户选「是」才在 `usPostUninstall` 里 `DelTree`。
+
+### 五、卸载时 CLI 用默认路径猜数据在哪
+
+`[UninstallRun]` 只传了 `-m lanshare_cli uninstall`，没有 `--data-dir`。
+CLI 退回 `default_data_dir()` = `C:\ProgramData\LANShare\data`，
+而真实数据在别的盘 —— `--purge-data` 删了个不存在的目录。
+
+新增 `_read_data_dir_from_registry()`：命令行 > 注册表 > 默认值，
+中间这层不能省。
+
+### 六、顺带
+
+- `[UninstallRun]` 的 `runhidden` 改 `runminimized`：CLI 每步结果
+  （服务删没删掉、防火墙清没清）藏起来的话，失败时无从查起。
+- 加清 Caddy 在 SYSTEM 账户下的 `autosave.json` 残留（先按进程名强杀
+  caddy，再 rmtree —— 不杀就锁着，rmtree 静默失败）。
+- 加 `RunOnceId` 消掉 Inno 的警告。
+
+## 验证：沙箱分盘实测
+
+沙箱里 `subst D: C:\dtest` 造一个真盘符，静默装到 `D:\LANShare`：
+
+```
+setup_exitcode=0
+C:\Program Files\LAN Share   clean      ← 程序没写 C 盘
+C:\ProgramData\LANShare      clean      ← 数据没写 C 盘
+InstallFolder = D:\LANShare
+DataFolder    = D:\LANShare\data
+api=running   caddy=running
+https://localhost:8765/healthz = 200
+--- 静默卸载 ---
+uninstall_exitcode=0
+data_kept=yes                            ← 保留数据时数据真的还在
+runtime/tray/conf/cli/logs/certs  clean  ← 程序全清
+api/caddy/pg/reg/autostart        clean  ← 系统级零残留
+caddy_sysprof                     clean  ← Caddy 的 SYSTEM 残留也清了
+```
+
+唯一留着的是 `unins000.exe` 本身 —— Inno 的延迟删除行为，重启后消失。
+
+## 测试
+
+`test_lanshare_cli.py` 50 → 54：注册表读数据目录（读到 / 键缺失）、
+`_kill_by_name` 只按具体名字杀（断言命令里没有 `*`）、powershell 不可用时不崩。
+
 ## 2026-11-01（晚）— 服务端 v3.82：证书没签给 127.0.0.1、开局域网卡 UAC、检查更新报 SSL
 
 真机从零安装测出来的。装完三个服务全 Running、API 直连 200，但托盘界面一片红，

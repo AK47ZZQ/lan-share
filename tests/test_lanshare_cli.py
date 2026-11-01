@@ -577,3 +577,77 @@ class TestSayNeverCrashes:
         from lanshare_cli import cli
         cli.say("普通输出")
         assert "普通输出" in capsys.readouterr().out
+
+class TestReadDataDirFromRegistry:
+    """卸载时不能靠默认路径猜数据在哪。
+
+    真机事故链条：用户在向导里把安装目录改到 D 盘 → 数据目录页还留着
+    自动填的 C 盘值 → 注册表 DataFolder 记的是 D 盘、但 [Dirs] 段照旧在
+    C:\ProgramData 建目录 → 卸载时 CLI 用 default_data_dir() 去删，
+    真数据原封不动。「卸载只删了一部分」有一半是这个。
+    """
+
+    def test_reads_value_from_registry(self, monkeypatch):
+        import lanshare_cli.cli as cli
+
+        class FakeKey:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        fake_winreg = type("W", (), {
+            "HKEY_LOCAL_MACHINE": "HKLM",
+            "OpenKey": staticmethod(lambda root, path: FakeKey()),
+            "QueryValueEx": staticmethod(lambda k, name: (r"D:\LANShare\data", 1)),
+        })
+        monkeypatch.setitem(__import__("sys").modules, "winreg", fake_winreg)
+        got = cli._read_data_dir_from_registry()
+        assert got is not None
+        assert "LANShare" in str(got)
+
+    def test_missing_key_returns_none(self, monkeypatch):
+        import lanshare_cli.cli as cli
+
+        def boom(*a, **k):
+            raise OSError("no such key")
+
+        fake_winreg = type("W", (), {
+            "HKEY_LOCAL_MACHINE": "HKLM",
+            "OpenKey": staticmethod(boom),
+        })
+        monkeypatch.setitem(__import__("sys").modules, "winreg", fake_winreg)
+        assert cli._read_data_dir_from_registry() is None
+
+
+class TestKillByName:
+    def test_only_targets_named_process(self, monkeypatch):
+        """只按具体进程名杀，不做通配清场 —— 通配会把无关程序一起干掉。"""
+        import lanshare_cli.cli as cli
+
+        seen = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(cmd)
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+        cli._kill_by_name("caddy")
+
+        assert seen, "应该调用一次 powershell"
+        joined = " ".join(seen[0])
+        assert "-Name 'caddy'" in joined
+        assert "Stop-Process" in joined
+        # 绝不能出现通配符
+        assert "*" not in joined
+
+    def test_failure_is_swallowed(self, monkeypatch):
+        import lanshare_cli.cli as cli
+
+        def boom(*a, **k):
+            raise OSError("powershell missing")
+
+        monkeypatch.setattr(cli.subprocess, "run", boom)
+        cli._kill_by_name("caddy")   # 不该抛

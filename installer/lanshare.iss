@@ -105,9 +105,19 @@ Source: "..\build\dist\tray\*"; DestDir: "{app}\tray"; Flags: recursesubdirs cre
 Source: "..\build\dist\bin\lanshare.ico"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Dirs]
-; data 目录默认放在 ProgramData（所有用户可访问，且不会被卸载误删）
-Name: "{commonappdata}\LANShare\data"; Permissions: users-modify
-Name: "{commonappdata}\LANShare\logs"; Permissions: users-modify
+; 🔴 这里必须用 {code:GetDataDir} 而不是写死 {commonappdata}。
+;
+; 2026-11-01 分盘实测抓到：装到 D:\LANShare 时注册表里 DataFolder 已经是
+; D:\LANShare\data，但 [Dirs] 段照样在 C:\ProgramData\LANShare\data 建目录，
+; 日志里明晃晃三行：
+;     Creating directory: C:\ProgramData\LANShare
+;     Creating directory: C:\ProgramData\LANShare\data
+;     Creating directory: C:\ProgramData\LANShare\logs
+; 用户选 D 盘、结果 C 盘长出一个数据目录，就是这么来的。
+;
+; 注释原本还写着「data 目录默认放在 ProgramData，且不会被卸载误删」——
+; 挂了 uninsdeletekey 之后这套已经废弃了，数据跟着安装目录走。
+Name: "{code:GetDataDir}"; Permissions: users-modify
 ; CLI 安装时会往里写 Caddyfile / 证书占位，先建好避免权限问题
 Name: "{app}\conf"
 Name: "{app}\certs"
@@ -158,23 +168,46 @@ Filename: "{app}\tray\LANShareTray.exe"; Flags: nowait skipifsilent skipifdoesnt
 [UninstallRun]
 ; 撤销安装 = 撤销 lanshare_cli install 做的事：先停服务再删服务，数据保留。
 ; 顺序由 CLI 内部保证（它知道要先停 caddy 再停 api）。
+;
 ; 不带 --purge-data：删用户照片这种事必须问人，不能由卸载脚本决定。
-; 刻意不传 --data-dir：卸载只需要停服务+删服务，数据目录只在 --purge-data 时用到。
-; 而且卸载阶段向导页早已销毁，{code:GetDataDir} 会拿到失效状态 —— 传了反而出错。
-Filename: "{app}\runtime\python.exe"; Parameters: "-m lanshare_cli uninstall"; Flags: runhidden waituntilterminated
+; 卸载脚本这边已经问过了（CurUninstallStepChanged 的 usUninstall 阶段），
+; 用户选「是」时由安装器自己 DelTree，CLI 只管停服务、删服务、清注册表。
+;
+; runminimized 而不是 runhidden：CLI 会输出每一步的结果（服务删没删掉、
+; 防火墙规则清没清），藏起来的话中间哪一步失败用户和我们都看不见 ——
+; 「卸载只删了一部分」有一半原因是这里把错误吞了。
+Filename: "{app}\runtime\python.exe"; Parameters: "-m lanshare_cli uninstall"; Flags: runminimized waituntilterminated; RunOnceId: "StopAndRemoveServices"
 
 [UninstallDelete]
-; 删掉「运行时才生成、不在安装清单里」的东西 —— 不写的话卸载后目录里会剩一堆
-; __pycache__ / Caddyfile / 日志，用户看着像没卸干净。
-; 用户数据在 ProgramData 里，跟这里无关，绝不在此删除。
-; 直接把安装目录整个删掉。安装目录里全是程序文件（运行时、源码、二进制），
-; 运行时还会生成各层 __pycache__ 和日志，逐个列不现实。
-; 用户数据在 {commonappdata}\LANShare\data，跟这里无关，绝不会被波及。
-Type: filesandordirs; Name: "{app}"
+; 删「运行时生成、不在安装清单里」的东西：__pycache__ / Caddyfile / 日志 / 证书。
+;
+; 🔴 绝不能写 Type: filesandordirs; Name: "{app}"。
+;    数据默认就在 {app}\data，整目录删会把用户的照片和数据库一起抹掉。
+;    2026-11-01 真机反馈「卸载时说删了数据，其实早就删没了」就是这么来的：
+;    [UninstallDelete] 在删装文件阶段执行，早于 CurUninstallStepChanged(usPostUninstall)
+;    里那个「是否删除数据」的对话框 —— 问的时候数据已经没了，问了个寂寞。
+;
+; 现在按子目录精确列，{app}\data 完全不在这个表里。
+; 数据只在 CurUninstallStepChanged 里、用户明确选「是」之后才删。
+Type: filesandordirs; Name: "{app}\conf"
+Type: filesandordirs; Name: "{app}\logs"
+Type: filesandordirs; Name: "{app}\certs"
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\lanshare_cli"
+Type: filesandordirs; Name: "{app}\web"
+Type: filesandordirs; Name: "{app}\static"
+Type: filesandordirs; Name: "{app}\pgsql"
+Type: filesandordirs; Name: "{app}\bin"
+Type: filesandordirs; Name: "{app}\tray"
 
 [Code]
 var
   DataDirPage: TInputDirWizardPage;
+  LastAutoDataDir: String;
+  // 卸载时「是否删除数据」的选择。usUninstall 阶段问，usPostUninstall 阶段执行。
+  // 必须分成两个阶段：问的时候文件还没删，用户看到的目录是完整的。
+  DeleteDataOnUninstall: Boolean;
 
 { ── 数据目录：安装时用向导页选择，卸载时从注册表读回 ── }
 function GetDataDir(Param: String): String;
@@ -226,12 +259,27 @@ end;
 // 进入数据目录页时，用上一步刚选的安装目录当默认值。
 // 这是 app 常量唯一能安全读取的时机。
 procedure CurPageChanged(CurPageID: Integer);
+var
+  Suggested: String;
 begin
   if (DataDirPage <> nil) and (CurPageID = DataDirPage.ID) then
   begin
-    // 只在用户还没自己填过时给默认值 —— 从上一页退回来不该覆盖他的修改
-    if DataDirPage.Values[0] = '' then
-      DataDirPage.Values[0] := WizardDirValue + '\data';
+    Suggested := WizardDirValue + '\data';
+
+    // 这里必须区分「用户手动改过」和「还是我们填的」。
+    //
+    // 老逻辑只在值为空时才填，结果：用户先前进到数据页（自动填了
+    // C:\Program Files\LAN Share\data），再退回去把安装目录改成 D:\LANShare，
+    // 数据目录还停在 C 盘 —— 程序装 D 盘、数据留 C 盘，用户看到的就是
+    // 「我明明选了 D 盘，为什么 C 盘里还有」。2026-11-01 真机反馈的正是这个。
+    //
+    // 现在的判据：值为空 = 没填过；值等于上次自动填的 = 用户没改过。
+    // 两种情况都跟着安装目录走，用户手动改过的一律尊重。
+    if (DataDirPage.Values[0] = '') or (DataDirPage.Values[0] = LastAutoDataDir) then
+    begin
+      DataDirPage.Values[0] := Suggested;
+      LastAutoDataDir := Suggested;
+    end;
   end;
 end;
 
@@ -240,25 +288,49 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataPath: String;
+  Answer: Integer;
 begin
-  if CurUninstallStep = usPostUninstall then
+  if CurUninstallStep = usUninstall then
   begin
+    // 在「删程序文件」之前问。
+    //
+    // 老代码把这个对话框放在 usPostUninstall —— 那时 [UninstallDelete] 早就
+    // 把整个 {app}（含 data）删干净了，用户点「是」是删空气，点「否」也
+    // 救不回照片。现在 {app}\data 不在 [UninstallDelete] 里，这里问才有意义。
+    DeleteDataOnUninstall := False;
     DataPath := GetDataDir('');
     if DirExists(DataPath) then
     begin
-      if WizardSilent then
-      begin
-        { 静默卸载一律保留数据 —— 删用户照片这种决定不能让脚本替人做 }
-      end
-      else if MsgBox('是否删除所有数据？' + #13#10 + #13#10 +
-                '数据目录：' + DataPath + #13#10 + #13#10 +
-                '选「否」将保留全部照片、文件和数据库，' +
-                '以后重新安装可以继续使用（推荐）。' + #13#10 +
-                '选「是」会永久删除，无法恢复。',
-                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
-      begin
+      // 用 SuppressibleMsgBox，不是 WizardSilent + MsgBox。
+      //
+      // Inno 6.7 里 WizardSilent 只能在安装阶段调，卸载阶段调它会抛
+      // 致命异常，整个卸载器当场崩掉：
+      //     Runtime error (at 13:154): 内部错误：Cannot call "WizardSilent"
+      //     function during Uninstall。
+      // 后果是后面的删文件、删服务、清注册表一步都没跑 —— 用户看到的就是
+      // 「卸载只删了一部分，还有东西要手动删」。
+      //
+      // SuppressibleMsgBox 自带静默语义：/SILENT 或 /VERYSILENT 时直接
+      // 返回第四个参数（这里给 IDNO = 保留数据），非静默时正常弹框。
+      Answer := SuppressibleMsgBox(
+        '卸载 LAN Share，是否同时删除数据？' + #13#10 + #13#10 +
+        '数据目录：' + DataPath + #13#10 + #13#10 +
+        '选「否」（推荐）：保留全部照片、文件和数据库。' + #13#10 +
+        '　　　　　　　　　　以后重新安装可以直接接着用。' + #13#10 + #13#10 +
+        '选「是」：永久删除上面的整个目录，无法恢复。',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO);
+      DeleteDataOnUninstall := (Answer = IDYES);
+    end;
+  end
+  else if CurUninstallStep = usPostUninstall then
+  begin
+    if DeleteDataOnUninstall then
+    begin
+      DataPath := GetDataDir('');
+      if DirExists(DataPath) then
         DelTree(DataPath, True, True, True);
-      end;
+      // 数据删完之后，安装目录如果空了也一并移除，不留空壳
+      RemoveDir(ExpandConstant('{app}'));
     end;
   end;
 end;
