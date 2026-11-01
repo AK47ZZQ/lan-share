@@ -106,6 +106,24 @@ def _pg_conn_recycle():
         close_all_pg_connections()
 
 
+@pytest.fixture(autouse=True)
+def _no_github_releases(monkeypatch):
+    """默认把 App 更新域里的 GitHub 源打成「不可用」。
+
+    `appver` 从 2026-11-01 起优先读 GitHub Release，只有拿不到才回退本地
+    `version.json`。测试不能依赖外网 —— CI 无网会全红，有网也会因为
+    仓库真实发过的 Release 让断言漂移（今天能过、明天发个版就挂）。
+
+    所以每条测试默认走「GitHub 不可达」这条分支，验的就是本地兜底逻辑。
+    要测 GitHub 分支的用例自己 monkeypatch 这个函数返回构造好的列表。
+    """
+    from app.api import appver
+
+    monkeypatch.setattr(appver, "_github_app_releases", lambda *a, **k: [])
+    monkeypatch.setattr(appver, "_gh_cache", {"ts": 0.0, "items": []})
+    yield
+
+
 @pytest.fixture()
 def workdir():
     """每个测试独立的根下子目录，测试结束清理。"""

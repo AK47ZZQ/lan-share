@@ -70,11 +70,31 @@ class UpdateInfo {
     }
     if (apk == null) return null;
 
-    // build 号只能从 asset 文件名里拿：lanshare-v1.1.16+123.apk
+    // build 号三级兜底（2026-11-01 修）：
+    //
+    //   1. asset 文件名里的 `+N` 或 `_N`（lanshare-v1.1.16+123.apk / v1.1.15_122）
+    //   2. tag 里的 `+N`
+    //   3. 都没有 → 用 semver 推算 major*10000+minor*100+patch
+    //
+    // 第 3 条是必需的：早期 Release 的资产叫 `LANShare-App-1.1.18.apk`，
+    // 没有 `+N`，原来直接 `return null` 把这个源整个丢掉了 —— 这是
+    // 「检查更新没反应」的第二个原因。推算值只用于排序/降级比较，
+    // 真正判断新旧优先比 version 字符串（见 isNewer）。
     final name = '${apk['name']}';
-    final buildMatch = RegExp(r'\+(\d+)').firstMatch(name);
-    if (buildMatch == null) return null;
-    final build = int.tryParse(buildMatch.group(1)!) ?? 0;
+    var build = 0;
+    final plusInName = RegExp(r'[+_](\d+)').firstMatch(name);
+    final plusInTag = RegExp(r'[+_](\d+)').firstMatch(tag);
+    if (plusInName != null) {
+      build = int.tryParse(plusInName.group(1)!) ?? 0;
+    } else if (plusInTag != null) {
+      build = int.tryParse(plusInTag.group(1)!) ?? 0;
+    }
+    if (build <= 0) {
+      final parts = version.split('.').map(int.tryParse).toList();
+      if (parts.length == 3 && parts.every((x) => x != null)) {
+        build = parts[0]! * 10000 + parts[1]! * 100 + parts[2]!;
+      }
+    }
     if (build <= 0) return null;
 
     final digest = '${apk['digest'] ?? ''}';
@@ -172,9 +192,34 @@ class UpdateService {
     }
   }
 
-  /// 远端 build 比本地新（build 是单调发布号，比 version 字符串可靠）
-  static bool isNewer(UpdateInfo remote, int localBuild) =>
-      remote.build > localBuild;
+  /// 远端是否比本地新。
+  ///
+  /// **先比 version 字符串，再退回 build 数字。**
+  ///
+  /// 为什么不能只比 build：仓库里同时存在两种编号体系 —— 真实 versionCode
+  /// （125）和「没有 build 号时用 semver 推算」的值（1.1.18 → 10118）。
+  /// 只比数字的话，已装 1.1.18 的用户会看到 10118 > 125 而被反复提示更新，
+  /// 而且万一哪天回退到旧 Release 也判不出来。version 字符串才是版本先后的
+  /// 唯一真相，build 只在版本号相同时用来区分同版本的重新打包。
+  static bool isNewer(UpdateInfo remote, int localBuild, {String? localVersion}) {
+    final local = (localVersion ?? '').trim();
+    if (local.isNotEmpty && remote.version.isNotEmpty) {
+      final cmp = _compareVersion(remote.version, local);
+      if (cmp != 0) return cmp > 0;
+    }
+    return remote.build > localBuild;
+  }
+
+  /// 比较 `1.1.18` 这类版本串：远大于返回 1，相等 0，小于 -1。
+  static int _compareVersion(String a, String b) {
+    int at(String s, int i) =>
+        i < s.split('.').length ? (int.tryParse(s.split('.')[i]) ?? 0) : 0;
+    for (var i = 0; i < 3; i++) {
+      final d = at(a, i) - at(b, i);
+      if (d != 0) return d > 0 ? 1 : -1;
+    }
+    return 0;
+  }
 
   /// 更新包落盘目录：Downloads 下的独立 updates 子目录（v0.16.0 二轮
   /// 审查 P2）。共享空间里任何人都可能上传名叫 lanshare-x.y.z.apk 的普通

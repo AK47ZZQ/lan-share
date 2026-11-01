@@ -36,15 +36,22 @@ class AppverApi {
     return File(savePath);
   }
 
-  /// GitHub 公开仓库的最新 Release（第二更新源）。
+  /// GitHub 上最新一个 **App** Release（主更新源）。
   ///
-  /// 为什么要有这条：服务端 /api/app/latest 读的是管理员手动维护的
-  /// `App安装包/version.json`，发版时忘了同步就永远推不出新版（真发生过）。
-  /// GitHub Release 是发布动作本身，不存在「忘了同步」。
+  /// ## 为什么不能再用 /releases/latest（2026-11-01 修）
   ///
-  /// 为什么用 api.github.com 而不是 raw.githubusercontent.com：后者在国内
-  /// 常被污染，前者虽然慢但可达；且只有 API 才给 digest（sha256）字段，
-  /// 而客户端是「sha256 缺失即拒装」的 fail-closed 策略。
+  /// 这个仓库同时发两种 Release：`server-v3.76`（安装包）和
+  /// `app-v1.1.18`（APK）。GitHub 的 `/releases/latest` 只返回**发布时间
+  /// 最晚的那一个**，跟标签前缀无关 —— 服务端发得晚，它就返回服务端那个，
+  /// 里面根本没有 APK，解析直接失败，用户点「检查更新」永远是「已是最新」。
+  ///
+  /// 改成拉列表自己筛 `app-` 前缀。`per_page=30` 够覆盖几十个版本，
+  /// 而且这个响应会走 HTTP 缓存，实际开销比单条查询大不了多少。
+  ///
+  /// ## 为什么用 api.github.com 而不是 raw.githubusercontent.com
+  ///
+  /// 后者在国内常被污染，前者虽然慢但可达；且只有 API 才给 digest（sha256）
+  /// 字段，而客户端是「sha256 缺失即拒装」的 fail-closed 策略。
   ///
   /// 独立 Dio：不共享 ApiClient 的 baseUrl 与自签证书配置，避免把 GitHub
   /// 的证书策略和自家服务器的混淆。超时压得很短——这是可选的第二源，
@@ -60,10 +67,25 @@ class AppverApi {
       },
     ));
     try {
-      return await dio.get(
-          'https://api.github.com/repos/AK47ZZQ/lan-share/releases/latest');
+      final r = await dio.get(
+        'https://api.github.com/repos/AK47ZZQ/lan-share/releases',
+        queryParameters: {'per_page': 30},
+      );
+      final list = r.data;
+      if (list is! List) return null;
+      for (final item in list) {
+        if (item is Map && '${item['tag_name'] ?? ''}'.startsWith('app-')) {
+          // 返回单个 Release 对象的形状，调用方不用改解析
+          return Response<dynamic>(
+            requestOptions: r.requestOptions,
+            data: item,
+            statusCode: r.statusCode,
+          );
+        }
+      }
+      return null; // 列表里没有 app- 前缀的 Release
     } catch (_) {
-      return null;   // 网络失败/超时/限流一律当作「这个源没有」
+      return null; // 网络失败/超时/限流一律当作「这个源没有」
     }
   }
 }

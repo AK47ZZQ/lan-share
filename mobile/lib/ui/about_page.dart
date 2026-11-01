@@ -152,7 +152,8 @@ class _AboutPageState extends State<AboutPage> {
     final localBuild = int.tryParse(info?.buildNumber ?? '') ?? 0;
     final remote = _remote;
     final hasUpdate =
-        remote != null && UpdateService.isNewer(remote, localBuild);
+        remote != null &&
+        UpdateService.isNewer(remote, localBuild, localVersion: info?.version);
     return Scaffold(
         appBar: AppBar(title: const Text('关于')),
         body: ListView(padding: const EdgeInsets.all(Gap.md), children: [
