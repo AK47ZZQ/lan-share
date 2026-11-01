@@ -133,6 +133,41 @@ class UpdateHistoryItem {
           build: (j['build'] as num?)?.toInt() ?? 0,
           date: j['date'] as String? ?? '',
           notes: j['notes'] as String? ?? '');
+
+  /// 从 GitHub Release 构造历史条目（2026-11-01，更新历史改从 GitHub 拉）。
+  ///
+  /// 字段映射：tag_name → version，published_at → date（只取日期部分），
+  /// body → notes。build 用和检查更新同一套三级兜底（文件名 +N → tag +N →
+  /// 版本号推算），没有就返回 null 让调用方跳过这条。
+  static UpdateHistoryItem? fromGitHub(Map<String, dynamic> j) {
+    final tag = (j['tag_name'] as String? ?? '').trim();
+    final m = RegExp(r'(\d+\.\d+\.\d+)').firstMatch(tag);
+    if (m == null) return null;
+    final version = m.group(1)!;
+
+    var build = 0;
+    final assets = (j['assets'] as List?) ?? const [];
+    for (final a in assets) {
+      if (a is Map && '${a['name']}'.toLowerCase().endsWith('.apk')) {
+        final bm = RegExp(r'[+_](\d+)').firstMatch('${a['name']}');
+        if (bm != null) build = int.tryParse(bm.group(1)!) ?? 0;
+        break;
+      }
+    }
+    if (build <= 0) {
+      final parts = version.split('.').map(int.tryParse).toList();
+      if (parts.length == 3 && parts.every((x) => x != null)) {
+        build = parts[0]! * 10000 + parts[1]! * 100 + parts[2]!;
+      }
+    }
+
+    final rawDate = '${j['published_at'] ?? ''}';
+    return UpdateHistoryItem(
+        version: version,
+        build: build,
+        date: rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate,
+        notes: '${j['body'] ?? ''}');
+  }
 }
 
 /// 检查更新的结果 —— **三态**，不是「有/没有」两态。
@@ -222,8 +257,29 @@ class UpdateService {
     }
   }
 
-  /// 更新历史（新版本在前）；未配置/请求失败返回空列表（UI 隐藏栏目）
+  /// 更新历史（新版本在前）。
+  ///
+  /// **GitHub 优先，服务端兜底**（2026-11-01）。原来只读服务端的
+  /// `/api/app/history`，而那条路依赖用户那台服务端的版本 —— 别人跑旧版
+  /// 服务端时，历史永远停在旧版本，「关于」页看着像死了一样。
+  ///
+  /// GitHub Release 的正文就是更新日志，直接拉，和 App 检查更新同源。
   static Future<List<UpdateHistoryItem>> history() async {
+    // 1. GitHub：不依赖服务端
+    try {
+      final releases = await AppverApi.githubAppReleases();
+      if (releases != null && releases.isNotEmpty) {
+        final items = releases
+            .map(UpdateHistoryItem.fromGitHub)
+            .whereType<UpdateHistoryItem>()
+            .toList();
+        if (items.isNotEmpty) return items;
+      }
+    } catch (_) {
+      // 掉到服务端兜底
+    }
+
+    // 2. 服务端：旧版兼容 / GitHub 不可达
     try {
       final r = await AppverApi.history();
       final items = (r.data['items'] as List? ?? const [])

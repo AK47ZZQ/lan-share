@@ -36,6 +36,40 @@ class AppverApi {
     return File(savePath);
   }
 
+  /// 拉 GitHub 上所有 `app-` 前缀的 Release（新到旧），更新历史用。
+  ///
+  /// 和服务端 `/api/app/history` 相比，这条路**不依赖用户那台服务端的版本**——
+  /// 别人跑的是旧版服务端时，历史照样是新的。
+  ///
+  /// 失败返回 null（调用方回落到服务端）。
+  static Future<List<Map<String, dynamic>>?> githubAppReleases() async {
+    final dio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 6),
+      receiveTimeout: const Duration(seconds: 8),
+      headers: const {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'LANShare-Android',
+      },
+    ));
+    try {
+      final r = await dio.get(
+        'https://api.github.com/repos/AK47ZZQ/lan-share/releases',
+        queryParameters: {'per_page': 30},
+      );
+      final list = r.data;
+      if (list is! List) return null;
+      final out = <Map<String, dynamic>>[];
+      for (final item in list) {
+        if (item is Map && '${item['tag_name'] ?? ''}'.startsWith('app-')) {
+          out.add(Map<String, dynamic>.from(item));
+        }
+      }
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// GitHub 上最新一个 **App** Release（主更新源）。
   ///
   /// ## 为什么不能再用 /releases/latest（2026-11-01 修）
