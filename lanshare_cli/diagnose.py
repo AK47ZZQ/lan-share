@@ -301,7 +301,20 @@ def _sec_ports(layout) -> list[str]:
 
 
 def _sec_pg(layout) -> list[str]:
-    """PG 是「起不来」的第一嫌疑，这里要挖到底。"""
+    """PG 是「起不来」的第一嫌疑，这里要挖到底。
+
+    ## 怎么找 pgdata
+
+    第一版是「在 data_dir 下面猜几个可能的位置」。2026-11-02 用户实机直接
+    打了这个做法的脸：诊断报「找不到 pgdata」，而实际上 pgdata 活得好好的
+    —— 只是它在 D:\\LAN Share\\data\\pgdata，因为**服务定义里的 -D 指向那里**，
+    而注册表的数据目录已经被改成 C:\\ProgramData\\LANShare\\data。
+
+    所以必须以**服务定义里的 -D 为准**，猜出来的路径只用于对比和告警。
+    这个「服务指向 A、注册表说 B」本身就是要报出来的头号问题。
+    """
+    import re
+
     out = ["## 5. PostgreSQL", ""]
     try:
         data = Path(layout.data_dir)
@@ -309,15 +322,51 @@ def _sec_pg(layout) -> list[str]:
         out.append(f"数据目录解析失败：{exc}")
         return out + [""]
 
-    pgdata = None
-    for cand in (data / "pgdata", Path(layout.root) / "pgsql" / "data",
-                 Path(layout.root) / "env" / "pginstall" / "data"):
-        if cand.is_dir():
-            pgdata = cand
-            break
-    out.append(f"  pgdata        {pgdata if pgdata else '未找到（可能从未初始化）'}")
-    if not pgdata:
-        return out + [""]
+    # ── 1) 以服务定义里的 -D 为准 ──
+    service_pgdata: Path | None = None
+    qc_raw = ""
+    try:
+        qc_raw = _run(["sc.exe", "qc", layout.pg_service], 20)
+        if "FAILED" not in qc_raw and "失败" not in qc_raw:
+            m = re.search(r'-D\s+"?([^"\r\n]+?)"?\s*(?:-w|$)', qc_raw)
+            if m:
+                service_pgdata = Path(m.group(1).strip())
+    except Exception as exc:
+        out.append(f"  读取服务定义失败：{exc}")
+
+    expected_pgdata = data / "pgdata"
+    pgdata: Path | None = None
+
+    if service_pgdata and service_pgdata.is_dir():
+        pgdata = service_pgdata
+        out.append(f"  pgdata（服务 -D）  {service_pgdata}")
+        if service_pgdata.resolve() != expected_pgdata.resolve():
+            # 只有「注册表指的那个位置也真的有一套 pgdata」才算冲突。
+            # 开发机上服务指向 env\pginstall\data、注册表指向 data\pgdata
+            # （后者根本不存在），这是正常的开发布局，不该报成故障 ——
+            # 诊断工具误报比不报更糟。
+            if expected_pgdata.is_dir():
+                out.append(f"  ⚠ 与数据目录不一致   注册表说 {expected_pgdata}")
+                out.append("  判定：PGDATA_MISMATCH")
+            else:
+                out.append(f"   （注册表指向的 {expected_pgdata} 不存在，按开发布局忽略）")
+    else:
+        if service_pgdata:
+            out.append(f"  服务 -D 指向        {service_pgdata}（该目录不存在）")
+        for cand in (expected_pgdata,
+                     Path(layout.root) / "pgsql" / "data",
+                     Path(layout.root) / "data" / "pgdata",
+                     Path(layout.root) / "env" / "pginstall" / "data"):
+            if cand.is_dir():
+                pgdata = cand
+                break
+        if pgdata:
+            out.append(f"  pgdata（猜到的）    {pgdata}")
+        else:
+            out.append("  pgdata        未找到（可能从未初始化）")
+            out.append("  判定：NO_PGDATA")
+            out.append("")
+            return out
 
     # postmaster.pid 残留是「关机后起不来」最常见的原因。
     #
@@ -353,16 +402,38 @@ def _sec_pg(layout) -> list[str]:
                 out.append("      " + line.strip())
         out.append(f"      该 PID 是否还活着：{alive_txt or '未知'}")
 
-    # ACL：initdb 要独占，服务跑 LocalSystem 又要能读，两边都得对
+    # ACL：initdb 要独占，服务跑 NetworkService 又要能读，两边都得对
     out.append("  目录权限（icacls）：")
     acl = _run(["icacls", str(pgdata)])
     for line in acl.splitlines()[:10]:
         out.append("    " + line.strip())
 
+    # pg_ctl status —— 实测 PG 自己认为自己有没有在跑。
+    #
+    # 为什么要实测：服务状态是 SCM 的看法，pg_ctl 是 PostgreSQL 自己的看法。
+    # 两者不一致（服务 Running 但 PG 认为没跑 / 反过来）是「假 Running」的典型，
+    # 光看服务状态会被骗。这一步不需要数据库密码。
+    pgctl = None
+    for cand in (Path(layout.root) / "pgsql" / "bin" / "pg_ctl.exe",
+                 Path(layout.root) / "env" / "pgsql-bin" / "pg_ctl.exe"):
+        if cand.is_file():
+            pgctl = cand
+            break
+    if pgctl:
+        st_out = _run([str(pgctl), "status", "-D", str(pgdata)], 20)
+        first = (st_out or "").strip().splitlines()
+        out.append(f"  pg_ctl status {first[0] if first else '(无输出)'}")
+        if "server is running" in st_out or "正在运行" in st_out:
+            out.append("  判定：PG_RUNNING")
+        elif "no server running" in st_out or "没有运行" in st_out:
+            out.append("  判定：PG_NOT_RUNNING")
+        elif "not a database cluster" in st_out or "不是数据库集群" in st_out:
+            out.append("  判定：PG_BAD_CLUSTER（这个目录不是有效的数据目录）")
+
     # PG 自己的日志最能说明问题
     for log_dir in (pgdata / "log", pgdata / "pg_log"):
         if log_dir.is_dir():
-            logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime,
+            logs = sorted(log_dir.glob("*.log"), key=lambda f: f.stat().st_mtime,
                           reverse=True)[:2]
             for lf in logs:
                 out.append(f"  日志尾部 {lf.name}：")
@@ -373,6 +444,198 @@ def _sec_pg(layout) -> list[str]:
                 except Exception as exc:
                     out.append(f"    读取失败：{exc}")
             break
+    out.append("")
+    return out
+
+
+def _sec_backup(layout) -> list[str]:
+    """备份能不能跑。
+
+    2026-11-02 用户报「备份失败」，但诊断包里**完全没有备份相关信息** ——
+    只能靠猜。这里把三件事都摆出来：目录在哪、里面有什么、pg_dump 能不能找到。
+    """
+    out = ["## 5b. 备份", ""]
+    try:
+        root = Path(layout.root)
+        data = Path(layout.data_dir)
+    except Exception as exc:
+        out.append(f"路径解析失败：{exc}")
+        return out + [""]
+
+    # pg_dump 能不能找到 —— 这是「当前引擎无可用 dump 工具」的直接判据
+    try:
+        from app.services.backup import _resolve_tool
+        dump = _resolve_tool("pg_dump")
+        restore = _resolve_tool("pg_restore")
+        out.append(f"  pg_dump       {dump or '找不到（备份必然失败）'}")
+        out.append(f"  pg_restore    {restore or '找不到（恢复演练会失败）'}")
+        if not dump:
+            out.append("  判定：NO_PG_TOOL")
+    except Exception as exc:
+        out.append(f"  pg_dump 解析失败：{exc}")
+
+    # 备份目录（可能在 settings 里被改过，也可能是默认的 data/.backups）
+    cands = [data / ".backups", root / "data" / ".backups"]
+    found_dir = None
+    for c in cands:
+        if c.is_dir():
+            found_dir = c
+            break
+    if found_dir:
+        out.append(f"  备份目录      {found_dir}")
+        try:
+            files = sorted(found_dir.iterdir(),
+                           key=lambda f: f.stat().st_mtime, reverse=True)
+            out.append(f"  文件数        {len(files)}")
+            for f in files[:5]:
+                try:
+                    size = f.stat().st_size
+                    age_d = (time.time() - f.stat().st_mtime) / 86400
+                    out.append(f"    {f.name}  {size} 字节  {age_d:.1f} 天前")
+                except OSError:
+                    out.append(f"    {f.name}  （读不到大小）")
+            if not files:
+                out.append("  判定：EMPTY（从没成功备份过）")
+        except OSError as exc:
+            out.append(f"  列目录失败：{exc}")
+    else:
+        out.append("  备份目录      不存在（从未备份过）")
+        out.append("  判定：NO_DIR")
+
+    out.append("")
+    return out
+
+
+def _sec_runtime(layout) -> list[str]:
+    """运行时环境：残留进程、系统代理、hosts、时区。
+
+    这几项各自对应一类实际踩过的故障：
+      · 残留进程   → 端口被占、服务起不来、旧实例抢锁
+      · 系统代理   → 检查更新失败、Caddy 出网异常（而且报错完全不指向代理）
+      · hosts      → 域名解析到奇怪的地方，TLS 握手失败
+      · 时区/时间  → 证书有效期判断错，明明没过期却被判过期
+    """
+    out = ["## 6b. 运行时环境", ""]
+
+    # ── 1) 相关进程（含残留）──
+    try:
+        raw = _ps(
+            "Get-Process -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.ProcessName -in @('caddy','python','postgres','nssm','LANShareTray') } | "
+            "ForEach-Object { $_.ProcessName + '|' + $_.Id + '|' + "
+            "$(try { $_.Path } catch { '' }) + '|' + "
+            "$(try { $_.StartTime.ToString('MM-dd HH:mm') } catch { '' }) }",
+            15)
+        procs = [ln.strip().split("|") for ln in (raw or "").splitlines() if "|" in ln]
+        out.append(f"  相关进程      {len(procs)} 个")
+        for row in procs[:12]:
+            if len(row) >= 4:
+                out.append(f"    {row[0]:14s} PID {row[1]:<7s} {row[3]}  {row[2]}")
+        # 🔴 进程数不是残留的判据。
+        #
+        # 第一版写的是「caddy/postgres 超过 2 个就是残留」，实机一跑就发现是
+        # 纯误报：PostgreSQL 本来就是多进程架构（主进程 + 每个连接一个 backend），
+        # 20 个进程完全正常；nssm 也是每个服务一个。
+        #
+        # 真正的判据只有一个：**服务已经 Stopped，却还有它的进程活着**。
+        # 那才是上次没退干净。
+        out.append("  说明：PostgreSQL 与 NSSM 都是多进程架构，数量多属正常；"
+                   "只有「服务已停止但进程还在」才算残留")
+    except Exception as exc:
+        out.append(f"  进程检查失败：{exc}")
+
+    # ── 2) 系统代理 ──
+    #
+    # 代理是「检查更新失败」的头号隐形原因：urllib 会读 HTTP(S)_PROXY，
+    # 而报错只会说「连不上 GitHub」，完全指不到代理身上。
+    try:
+        # 🔴 NO_PROXY 是**例外列表**，不是代理。把它算成「开着代理」是误报。
+        env_proxy = {k: v for k, v in os.environ.items()
+                     if k.lower() in ("http_proxy", "https_proxy", "all_proxy")}
+        no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+        if no_proxy:
+            out.append(f"  例外列表 NO_PROXY = {no_proxy}（这不是代理，是排除项）")
+        if env_proxy:
+            for k, v in env_proxy.items():
+                out.append(f"  环境变量 {k} = {_redact(v)}")
+            out.append("  判定：PROXY_SET（检查更新/出网可能走代理）")
+        ie = _ps(
+            "try { $p = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion"
+            "\\Internet Settings' -ErrorAction Stop; "
+            "'Enable=' + $p.ProxyEnable + ' Server=' + $p.ProxyServer } catch { '' }", 10)
+        if ie.strip():
+            out.append(f"  系统代理      {ie.strip()}")
+            if "Enable=1" in ie:
+                out.append("  判定：SYSTEM_PROXY_ON")
+        if not env_proxy and "Enable=1" not in (ie or ""):
+            out.append("  代理          未启用")
+    except Exception as exc:
+        out.append(f"  代理检查失败：{exc}")
+
+    # ── 3) hosts 文件里和本机相关的条目 ──
+    try:
+        hosts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "drivers" / "etc" / "hosts"
+        if hosts.is_file():
+            lines = hosts.read_text(encoding="utf-8", errors="replace").splitlines()
+            interesting = [ln.strip() for ln in lines
+                           if ln.strip() and not ln.strip().startswith("#")
+                           and any(k in ln.lower() for k in
+                                   ("localhost", "lan", "share", "127.0.0.1", "::1"))]
+            if interesting:
+                out.append(f"  hosts 相关行  {len(interesting)} 条")
+                for ln in interesting[:8]:
+                    out.append(f"    {ln}")
+            else:
+                out.append("  hosts         没有本机相关条目")
+        else:
+            out.append("  hosts         读不到")
+    except Exception as exc:
+        out.append(f"  hosts 检查失败：{exc}")
+
+    # ── 4) 时间与时区（证书有效期判断依赖它）──
+    try:
+        tz = _ps("(Get-TimeZone).Id", 8).strip()
+        out.append(f"  时区          {tz}")
+        out.append(f"  本机时间      {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        # 和外部时间源比一下：偏差大会导致 TLS 握手被判过期
+        try:
+            import urllib.request
+            with urllib.request.urlopen("https://www.baidu.com", timeout=5) as r:
+                server_date = r.headers.get("Date", "")
+            out.append(f"  网络时间头    {server_date or '(取不到)'}")
+        except Exception:
+            out.append("  网络时间头    取不到（出网可能有问题）")
+    except Exception as exc:
+        out.append(f"  时间检查失败：{exc}")
+
+    out.append("")
+    return out
+
+
+def _sec_registry(layout) -> list[str]:
+    """安装注册表快照。
+
+    `HKLM\\SOFTWARE\\LANShare` 是安装器、CLI、托盘三方共用的状态，
+    「服务和注册表对不上」这类问题的现场全靠它。
+    """
+    out = ["## 2b. 注册表", ""]
+    try:
+        key = "HKLM:\\SOFTWARE\\LANShare"
+        raw = _ps(
+            f"$k = Get-ItemProperty '{key}' -ErrorAction SilentlyContinue; "
+            f"if ($k) {{ $k.PSObject.Properties | "
+            f"Where-Object {{ $_.Name -notlike 'PS*' }} | "
+            f"ForEach-Object {{ $_.Name + '=' + $_.Value }} }} else {{ 'KEY_NOT_FOUND' }}",
+            12)
+        lines = [ln.strip() for ln in (raw or "").splitlines() if ln.strip()]
+        if not lines or lines == ["KEY_NOT_FOUND"]:
+            out.append("  键不存在（HKLM\\SOFTWARE\\LANShare）")
+            out.append("  判定：NO_REGKEY")
+        else:
+            for ln in lines:
+                out.append("  " + _redact(ln))
+    except Exception as exc:
+        out.append(f"  读取失败：{exc}")
     out.append("")
     return out
 
@@ -425,40 +688,117 @@ def _sec_firewall(layout) -> list[str]:
     return out
 
 
+def _caddy_storage_dir(layout) -> Path | None:
+    """从 Caddyfile 的 `storage file_system "..."` 读出证书实际落盘位置。
+
+    为什么要读配置而不是猜路径：Caddy 的证书默认放「当前用户的 AppData」，
+    但安装版把它改到了安装目录里（否则 SYSTEM 账户和用户账户会各存一份）。
+    开发机上又可能是 AppData —— 猜出来的路径很容易指向一份**历史残留**，
+    然后得出「当前根证书不在信任库里」这种完全错误的结论。
+    """
+    import re
+    try:
+        cf = Path(layout.root) / "conf" / "Caddyfile"
+        if not cf.is_file():
+            return None
+        text = cf.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r'storage\s+file_system\s+"?([^"\r\n]+)"?', text)
+        if m:
+            return Path(m.group(1).strip())
+    except Exception:
+        pass
+    return None
+
+
 def _sec_cert(layout) -> list[str]:
+    """Caddy 根证书。
+
+    ## 为什么要数个数
+
+    2026-11-02 用户实机诊断里，系统信任库有**三个** Caddy 根证书
+    （NotAfter 分别是 11:03、10:26、14:02）。当前 storage 里用的是 14:02 那个，
+    前两个是历史安装的残留。
+
+    单看「根证书存在、2046 才过期」会以为一切正常，但实际上：
+      · 已经按旧根信任过的设备，连新根签的证书会报错
+      · 换过根却没清理旧根，会让「到底信任的是哪个」变得完全说不清
+
+    所以这里要给出：信任库里有几个、当前用的是哪一个、它在不在信任库里。
+    """
     out = ["## 8. 证书", ""]
     try:
         root = Path(layout.root)
     except Exception:
         root = Path(".")
-    cands = [
+
+    # ── 1) 当前 storage 里实际在用的那份 ──
+    #
+    # 顺序：Caddyfile 里写的 storage（最可靠）→ 安装目录默认位 → 用户 AppData。
+    storage = _caddy_storage_dir(layout)
+    if storage:
+        out.append(f"  storage 配置  {storage}（来自 Caddyfile）")
+    cands = ([storage / "pki" / "authorities" / "local" / "root.crt"] if storage else []) + [
         root / "certs" / "caddy" / "pki" / "authorities" / "local" / "root.crt",
         Path(os.environ.get("APPDATA", "")) / "Caddy" / "pki" / "authorities" / "local" / "root.crt",
-        Path(os.environ.get("PROGRAMDATA", "")) / ".." / "Windows" / "System32" / "config"
+        Path(os.environ.get("PROGRAMDATA", "")) / "Windows" / "System32" / "config"
         / "systemprofile" / "AppData" / "Roaming" / "Caddy" / "pki" / "authorities" / "local" / "root.crt",
     ]
-    found = False
+    active = None
     for c in cands:
         try:
             if c.is_file():
-                found = True
-                out.append(f"  根证书        {c}")
-                txt = _run(["certutil", "-dump", str(c)])
-                for line in txt.splitlines():
-                    if "NotAfter" in line or "不会在此时间后" in line:
-                        out.append("    " + line.strip())
-        except Exception as exc:
-            out.append(f"    {c} 检查失败：{exc}")
-    if not found:
-        out.append("  未找到 Caddy 根证书（首次启动才生成）")
-    try:
-        trusted = _ps("Get-ChildItem Cert:\\LocalMachine\\Root | "
-                      "Where-Object {$_.Subject -like '*Caddy*'} | "
-                      "Select-Object Subject,NotAfter | Format-Table -AutoSize | Out-String -Width 120", 12)
-        out.append("  系统信任库里的 Caddy 根证书：")
-        out.append(trusted.strip() or "    没有（浏览器会报证书错误）")
-    except Exception as exc:
-        out.append(f"    检查失败：{exc}")
+                active = c
+                break
+        except Exception:
+            continue
+
+    active_thumb = ""
+    if active:
+        out.append(f"  当前使用      {active}")
+        # 指纹是判断「是不是同一个根」的唯一可靠依据，比日期更准
+        active_thumb = _ps(
+            f"try {{ (New-Object System.Security.Cryptography.X509Certificates."
+            f"X509Certificate2('{_psq(active)}')).Thumbprint }} catch {{ '' }}", 10).strip()
+        if active_thumb:
+            out.append(f"  指纹          {active_thumb}")
+        dumped = _run(["certutil", "-dump", str(active)], 15)
+        for line in dumped.splitlines():
+            if "NotAfter" in line or "不会在此时间后" in line:
+                out.append(f"  有效期至      {line.strip()}")
+    else:
+        out.append("  当前使用      未找到 Caddy 根证书（首次启动才生成）")
+        out.append("  判定：NO_ROOT_CERT")
+
+    # ── 2) 系统信任库里所有 Caddy 根 ──
+    listed = _ps(
+        "Get-ChildItem Cert:\\LocalMachine\\Root -ErrorAction SilentlyContinue | "
+        "Where-Object {$_.Subject -like '*Caddy*'} | "
+        "ForEach-Object { $_.Thumbprint + '|' + $_.NotAfter.ToString('yyyy-MM-dd HH:mm') + '|' + $_.Subject }",
+        15)
+
+    entries: list[tuple[str, str, str]] = []
+    for line in (listed or "").splitlines():
+        parts = line.strip().split("|")
+        if len(parts) >= 3:
+            entries.append((parts[0].strip(), parts[1].strip(), parts[2].strip()))
+
+    out.append(f"  信任库里的 Caddy 根    {len(entries)} 个")
+    for thumb, when, subj in entries:
+        mark = " ← 当前使用" if active_thumb and thumb.upper() == active_thumb.upper() else ""
+        out.append(f"    {thumb}  {when}  {subj}{mark}")
+
+    if not entries:
+        out.append("  判定：NOT_TRUSTED（浏览器会报证书错误）")
+    elif len(entries) > 1:
+        out.append("  判定：MULTI_ROOT")
+        if active_thumb and not any(
+                t.upper() == active_thumb.upper() for t, _w, _s in entries):
+            out.append("  ⚠ 当前在用的那个根**不在**信任库里 —— 浏览器会报证书错误")
+            out.append("  判定：ACTIVE_NOT_TRUSTED")
+    elif active_thumb and entries[0][0].upper() != active_thumb.upper():
+        out.append("  ⚠ 信任库里那个和当前在用的不是同一个 —— 浏览器会报证书错误")
+        out.append("  判定：ACTIVE_NOT_TRUSTED")
+
     out.append("")
     return out
 
@@ -538,15 +878,34 @@ def _sec_verdict(sections: dict) -> list[str]:
     if "State=StartPending" in services:
         hints.append("有服务卡在 StartPending —— 通常是被依赖的服务没起来。")
 
-    # PG：只有「锁文件在、进程已死」才是问题。
-    # 正常运行时 postmaster.pid 本来就在，报它就是误报。
+    # PG：三种情况，按严重程度分别说。
     pg = "\n".join(sections.get("pg", []))
+
+    # ① 服务定义指向的 pgdata 和注册表的数据目录不是同一个地方。
+    #    这是「重装换了数据目录、但服务没重建」的典型症状，PG 必然起不来，
+    #    而且光看注册表完全看不出问题 —— 2026-11-02 用户实机就是这个。
+    if "判定：PGDATA_MISMATCH" in pg:
+        hints.append(
+            "🔴 PG 服务定义里的数据目录和注册表的 DataFolder 不是同一个地方"
+            "（重装时换过数据目录，但服务没重建）。PG 会一直 Stopped。"
+            "解决办法：以「数据在哪」为准重跑一次安装，或者手动把服务的 -D 改到正确路径。")
+
+    # ② 锁文件在、进程已死。
     if "判定：STALE_LOCK" in pg:
         hints.append(
             "PG 留下了 postmaster.pid 但进程已经不在了（上次非正常退出），"
             "这会让 PG 拒绝启动。删掉该文件后再启动服务。")
-    if "未找到（可能从未初始化）" in pg:
-        hints.append("找不到 pgdata —— 数据库从未初始化成功，重装时留意第 7 步的输出。")
+
+    # ③ 压根没有 pgdata。
+    if "判定：NO_PGDATA" in pg:
+        hints.append("找不到 pgdata —— 数据库从未初始化成功，重装时留意安装程序的输出。")
+
+    # 备份
+    bk = "\n".join(sections.get("backup", []))
+    if "判定：NO_PG_TOOL" in bk:
+        hints.append("找不到 pg_dump —— 备份必然失败。检查安装目录下的 pgsql\\bin。")
+    if "判定：EMPTY" in bk or "判定：NO_DIR" in bk:
+        hints.append("备份目录里没有可用的备份 —— 每日备份没跑成功过。")
 
     # 端口：只有「服务没在跑、端口却被占」才是问题。
     # 服务正常运行时端口当然被自己占着。
@@ -554,6 +913,43 @@ def _sec_verdict(sections: dict) -> list[str]:
     api_running = "State=Running" in services
     if "已被占用" in ports and not api_running:
         hints.append("端口被占用但服务没在跑 —— 可能是上次残留的进程，或别的程序占了这个端口。")
+
+    # 「假 Running」：SCM 说服务在跑，PostgreSQL 自己说没跑。
+    # 这种情况最坑人 —— 看服务列表一切正常，可就是连不上库。
+    pg_svc_running = "lanshare-postgresql" in services and "State=Running" in services
+    if "判定：PG_NOT_RUNNING" in pg and pg_svc_running:
+        hints.append(
+            "🔴 PG 服务显示 Running，但 pg_ctl 说数据库没在跑 —— 典型的「假运行」。"
+            "通常意味着服务定义指向的目录不是真正在用的数据目录，看本报告第 5 节的 -D 路径。")
+    elif "判定：PG_BAD_CLUSTER" in pg:
+        hints.append("🔴 服务指向的目录不是有效的 PG 数据目录 —— 服务定义错了，要重建。")
+
+    # 证书
+    cert = "\n".join(sections.get("cert", []))
+    if "判定：NO_ROOT_CERT" in cert:
+        hints.append("没有 Caddy 根证书 —— 首次启动才会生成，如果服务从没起来过就会缺。")
+    if "判定：ACTIVE_NOT_TRUSTED" in cert:
+        hints.append(
+            "🔴 当前在用的根证书不在系统信任库里 —— 浏览器会报证书错误，"
+            "「打开网盘」会看到红色警告页。点面板上的「修复证书信任」。")
+    if "判定：MULTI_ROOT" in cert:
+        hints.append(
+            "系统信任库里有多个 Caddy 根证书（历史安装残留）。当前用的那个已标注，"
+            "其余可以删掉，否则「到底信任哪个」会说不清。")
+
+    # 运行时环境
+    runtime = "\n".join(sections.get("runtime", []))
+    if "判定：STALE_PROCESS" in runtime:
+        hints.append("有残留进程（同名进程数量异常）—— 可能导致端口占用、服务起不来。")
+    if "判定：PROXY_SET" in runtime or "判定：SYSTEM_PROXY_ON" in runtime:
+        hints.append(
+            "系统开着代理 —— 「检查更新」失败、Caddy 出网异常很可能就是它，"
+            "而且这类报错不会指向代理，只报『连不上』。")
+
+    # 注册表
+    reg = "\n".join(sections.get("registry", []))
+    if "判定：NO_REGKEY" in reg:
+        hints.append("安装注册表键不存在 —— 装了一半，或者被清理工具删了。")
 
     basic = "\n".join(sections.get("basic", []))
     if "管理员权限    否" in basic:
@@ -569,10 +965,13 @@ def _sec_verdict(sections: dict) -> list[str]:
         hints.append("根证书没进系统信任库 —— 浏览器会拦，需要重新信任一次。")
 
     if hints:
+        out.append(f"  发现 {len(hints)} 条值得注意的：")
+        out.append("")
         for h in hints:
             out.append(f"  · {h}")
     else:
         out.append("  没有发现明显问题。把这份报告连同具体现象一起发出来。")
+        out.append("  （没发现问题不等于没问题 —— 具体现象往往比机器状态更能说明问题）")
     out.append("")
     return out
 
@@ -589,9 +988,12 @@ def build_report(layout) -> str:
 
     grab("basic", _sec_basic, layout)
     grab("layout", _sec_layout, layout)
+    grab("registry", _sec_registry, layout)
     grab("services", _sec_services, layout)
     grab("ports", _sec_ports, layout)
     grab("pg", _sec_pg, layout)
+    grab("backup", _sec_backup, layout)
+    grab("runtime", _sec_runtime, layout)
     grab("network", _sec_network)
     grab("firewall", _sec_firewall, layout)
     grab("cert", _sec_cert, layout)
@@ -607,7 +1009,8 @@ def build_report(layout) -> str:
         "",
     ]
     body = _sec_verdict(sections)
-    for key in ("basic", "layout", "services", "ports", "pg", "network",
+    for key in ("basic", "layout", "registry", "services", "ports", "pg", "backup",
+                "runtime", "network",
                 "firewall", "cert", "config", "logs", "path"):
         body += sections.get(key, [])
     return "\n".join(head + body) + "\n"
@@ -617,7 +1020,13 @@ def export(layout, out_path: Path | None = None) -> Path:
     """生成并写盘，返回文件路径。"""
     text = build_report(layout)
     if out_path is None:
-        stem = time.strftime("lanshare-诊断-%Y%m%d-%H%M%S")
+        # 带上主机名 —— 用户可能在不同机器上各导一份，混在一起分不清谁是谁
+        try:
+            host = (socket.gethostname() or "unknown").split(".")[0]
+        except Exception:
+            host = "unknown"
+        host = "".join(c for c in host if c.isalnum() or c in "-_") or "unknown"
+        stem = time.strftime(f"lanshare-诊断-{host}-%Y%m%d-%H%M%S")
         base = Path(os.environ.get("TEMP") or os.environ.get("TMP") or ".")
         out_path = base / f"{stem}.txt"
     out_path = Path(out_path)

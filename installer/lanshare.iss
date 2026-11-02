@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.89"
+#define AppVersion     "3.90"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -285,7 +285,18 @@ begin
     Result := RegDir;
     Exit;
   end;
-  Result := ExpandConstant('{commonappdata}\LANShare\data');
+  // 兜底：跟安装目录走。
+  //
+  // 这里原来是 ExpandConstant('{commonappdata}\LANShare\data')，
+  // 也就是 C:\ProgramData\LANShare\data —— 违背「所有文件都在安装目录」
+  // 这条明确要求，而且和「数据目录页」的默认值（app + \data）不是同一个地方。
+  // 一旦向导页没值（静默安装、或页面被跳过），注册表就写 ProgramData，
+  // 而上次装的 PG 服务还指着 app + \data\pgdata —— 两边对不上，PG 起不来。
+  // 2026-11-02 用户实机正是这个组合。
+  //
+  // 注意：这段必须用 // 而不是花括号注释 —— 花括号里只要出现一个右花括号
+  // 就会提前闭合，而这里必然会提到那个常量名。
+  Result := ExpandConstant('{app}\data');
 end;
 
 procedure InitializeWizard;

@@ -149,7 +149,7 @@ button.link {
 .state.on .dot { background: var(--ok); }
 .state.blocked .dot { background: var(--warn); }
 
-.hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; word-break: break-word; overflow-wrap: anywhere; }
 
 /* ── 地址行 ── */
 /* flex-shrink: 0 是必须的 —— 下面 .qr-row 用了 flex:1，会反过来把
@@ -166,6 +166,12 @@ button.link {
   border-radius: 8px; color: var(--body);
   user-select: text;
 }
+
+/* ── 按钮行 ──
+   三个按钮挤在一行、又没有 flex-wrap，卡片一窄就溢出到边框外面。
+   这是「公网访问模块不美观」的直接原因。现在允许换行、等分宽度。 */
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
+.btnrow .mini { flex: 1 1 auto; min-width: 76px; white-space: nowrap; }
 
 /* ── 二维码 ── */
 .qr-row { display: flex; align-items: center; gap: 14px; flex: 1 1 auto; min-height: 0; min-width: 0; }
@@ -279,12 +285,12 @@ button.link {
         </div>
         <div class="hint" id="wanhint"></div>
         <div class="addr">
-          <input id="wanaddr" value="" size="1" style="width:100%" placeholder="https://你的域名:端口">
+          <input id="wanaddr" value="" placeholder="https://你的域名:端口">
           <button class="mini" data-copy="wan">复制</button>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="mini primary" id="wansave">保存地址</button>
-          <button class="mini" id="wantest">验证连通性</button>
+        <div class="btnrow">
+          <button class="mini primary" id="wansave">保存</button>
+          <button class="mini" id="wantest">验证</button>
           <button class="mini danger" id="wanclear">清除</button>
         </div>
       </div>

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -93,6 +94,69 @@ def is_newer(latest: str, current: str) -> bool:
         return False
 
 
+def _system_proxy() -> str | None:
+    """读 Windows 系统代理设置。
+
+    ## 为什么必须自己读
+
+    `urllib` 只认 `HTTP_PROXY` / `HTTPS_PROXY` 环境变量，**完全不读 Windows
+    的「Internet 选项」代理**。而绝大多数翻墙工具（Clash、v2rayN 之类）只改
+    注册表、不设环境变量。
+
+    结果就是：用户开着代理，浏览器能上 GitHub，而「检查更新」却一直报
+    「连不上 GitHub」—— 报错完全指不到代理身上，用户只会觉得是软件坏了。
+    2026-11-02 实机诊断里就是 `ProxyEnable=1, ProxyServer=127.0.0.1:7897`。
+
+    返回 `http://host:port` 形式；没开或读不到返回 None。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as key:
+            enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            if not enable:
+                return None
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except Exception:
+        return None
+
+    server = str(server or "").strip()
+    if not server:
+        return None
+    # ProxyServer 可能是 "host:port"，也可能是 "http=h:p;https=h:p" 这种分协议写法
+    if "=" in server:
+        parts = dict(
+            x.split("=", 1) for x in server.split(";") if "=" in x
+        )
+        server = parts.get("https") or parts.get("http") or ""
+        server = server.strip()
+    if not server:
+        return None
+    if "://" not in server:
+        server = "http://" + server
+    return server
+
+
+def _opener():
+    """带代理的 opener。
+
+    优先级：环境变量 > Windows 系统代理。环境变量是显式指定的，应当尊重；
+    系统代理只是「用户以为它在生效」的那一个。
+    """
+    proxies = urllib.request.getproxies() or {}
+    if not proxies.get("https") and not proxies.get("http"):
+        sysproxy = _system_proxy()
+        if sysproxy:
+            proxies = {"http": sysproxy, "https": sysproxy}
+    if not proxies:
+        return None
+    return urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+
+
 def fetch_latest(timeout: float = TIMEOUT) -> dict:
     """拉 GitHub Releases，筛出最新的服务端包。
 
@@ -107,8 +171,13 @@ def fetch_latest(timeout: float = TIMEOUT) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout,
-                                    context=_ssl_context()) as resp:
+        _op = _opener()
+        if _op is not None:
+            resp_ctx = _op.open(req, timeout=timeout)
+        else:
+            resp_ctx = urllib.request.urlopen(req, timeout=timeout,
+                                              context=_ssl_context())
+        with resp_ctx as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 403:

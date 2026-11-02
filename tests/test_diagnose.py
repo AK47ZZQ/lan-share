@@ -199,3 +199,181 @@ class TestRedactionQuoted:
     def test_ordinary_key_keeps_value(self):
         out = diag._redact('"host": "localhost"')
         assert "localhost" in out
+
+
+class TestPgdataResolution:
+    """pgdata 必须以服务定义里的 -D 为准。
+
+    2026-11-02 用户实机：诊断报「找不到 pgdata」，而 pgdata 就在
+    D:/LAN Share/data/pgdata —— 服务定义指着它，注册表却写的是
+    C:/ProgramData/LANShare/data。第一版只会在 data_dir 下面猜，
+    于是既找不到、也发现不了「服务和注册表不一致」这个真问题。
+    """
+
+    def _qc(self, path):
+        # 只保留 -D 相关的部分 —— 测试要验的就是从这里解析路径
+        return 'BINARY_PATH_NAME : "pg_ctl.exe" runservice -N "x" -D "' + path + '" -w'
+
+    def test_uses_service_dash_d(self, layout, monkeypatch):
+        real = layout.root / "realdb"
+        real.mkdir()
+        (real / "postmaster.pid").write_text("1\n/x\n0\n5433\n", encoding="utf-8")
+        monkeypatch.setattr(diag, "_run", lambda cmd, timeout=12.0: self._qc(str(real)))
+        monkeypatch.setattr(diag, "_ps", lambda s, timeout=15.0: "False")
+        text = "\n".join(diag._sec_pg(layout))
+        assert str(real) in text
+
+    def test_reports_mismatch_when_both_exist(self, layout, monkeypatch):
+        """两份 pgdata 都存在 → 服务定义和注册表打架，这是真故障。"""
+        svc = layout.root / "svcdb"
+        svc.mkdir()
+        reg = layout.data_dir / "pgdata"
+        reg.mkdir()
+        monkeypatch.setattr(diag, "_run", lambda cmd, timeout=12.0: self._qc(str(svc)))
+        monkeypatch.setattr(diag, "_ps", lambda s, timeout=15.0: "False")
+        text = "\n".join(diag._sec_pg(layout))
+        assert "PGDATA_MISMATCH" in text
+
+    def test_no_mismatch_when_only_service_side_exists(self, layout, monkeypatch):
+        """注册表指向的位置没有 pgdata → 只是开发布局，不该报成故障。"""
+        svc = layout.root / "svcdb"
+        svc.mkdir()
+        monkeypatch.setattr(diag, "_run", lambda cmd, timeout=12.0: self._qc(str(svc)))
+        monkeypatch.setattr(diag, "_ps", lambda s, timeout=15.0: "False")
+        text = "\n".join(diag._sec_pg(layout))
+        assert "PGDATA_MISMATCH" not in text
+
+
+class TestBackupSection:
+    def test_reports_missing_dir(self, layout):
+        text = "\n".join(diag._sec_backup(layout))
+        assert "不存在" in text or "从未备份" in text
+
+    def test_lists_files(self, layout):
+        bk = layout.data_dir / ".backups"
+        bk.mkdir()
+        (bk / "meta-20260101-040000.db").write_text("x", encoding="utf-8")
+        text = "\n".join(diag._sec_backup(layout))
+        assert "meta-20260101-040000.db" in text
+
+
+class TestVerdictNewSignals:
+    def _report(self, sections):
+        return "\n".join(diag._sec_verdict(sections))
+
+    def test_pgdata_mismatch_surfaces(self):
+        txt = self._report({"pg": ["  判定：PGDATA_MISMATCH"]})
+        assert "不是同一个地方" in txt
+
+    def test_no_pg_tool_surfaces(self):
+        txt = self._report({"backup": ["  判定：NO_PG_TOOL"]})
+        assert "pg_dump" in txt
+
+    def test_empty_backup_surfaces(self):
+        txt = self._report({"backup": ["  判定：EMPTY"]})
+        assert "备份" in txt
+
+
+class TestCertMultiRoot:
+    """信任库里有多个 Caddy 根证书时的判定。
+
+    2026-11-02 用户实机信任库里有三个 Caddy 根（11:03 / 10:26 / 14:02），
+    当前用的是 14:02 那个。单看「根证书存在」会以为一切正常，
+    但「到底信任的是哪个」其实完全说不清 —— 换过根的设备连新证书会报错。
+    """
+
+    THUMB_A = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    THUMB_B = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+    def _mock(self, monkeypatch, active_thumb, trusted):
+        def fake_ps(script, timeout=15.0):
+            if "X509Certificate2" in script:
+                return active_thumb
+            if "cert:" in script.lower() or "Get-ChildItem Cert" in script:
+                return "\n".join(trusted)
+            return ""
+        monkeypatch.setattr(diag, "_ps", fake_ps)
+
+    def _cert_file(self, layout):
+        d = layout.root / "certs" / "caddy" / "pki" / "authorities" / "local"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "root.crt").write_text("x", encoding="utf-8")
+
+    def test_single_matching_root_is_clean(self, layout, monkeypatch):
+        self._cert_file(layout)
+        self._mock(monkeypatch, self.THUMB_A,
+                   [f"{self.THUMB_A}|2036-09-10 14:02|CN=Caddy Local Authority"])
+        text = "\n".join(diag._sec_cert(layout))
+        assert "MULTI_ROOT" not in text
+        assert "ACTIVE_NOT_TRUSTED" not in text
+        assert "← 当前使用" in text
+
+    def test_multiple_roots_flagged(self, layout, monkeypatch):
+        self._cert_file(layout)
+        self._mock(monkeypatch, self.THUMB_B, [
+            f"{self.THUMB_A}|2036-09-10 11:03|CN=Caddy Local Authority",
+            f"{self.THUMB_B}|2036-09-10 14:02|CN=Caddy Local Authority",
+        ])
+        text = "\n".join(diag._sec_cert(layout))
+        assert "判定：MULTI_ROOT" in text
+        assert "2 个" in text
+
+    def test_active_not_in_trust_store(self, layout, monkeypatch):
+        self._cert_file(layout)
+        self._mock(monkeypatch, self.THUMB_B, [
+            f"{self.THUMB_A}|2036-09-10 11:03|CN=Caddy Local Authority",
+        ])
+        text = "\n".join(diag._sec_cert(layout))
+        assert "ACTIVE_NOT_TRUSTED" in text
+
+    def test_no_trusted_root(self, layout, monkeypatch):
+        self._cert_file(layout)
+        self._mock(monkeypatch, self.THUMB_A, [])
+        text = "\n".join(diag._sec_cert(layout))
+        assert "NOT_TRUSTED" in text
+
+
+class TestPgStatusCrossCheck:
+    """SCM 说 Running、PG 自己说没跑 —— 最坑人的「假 Running」。"""
+
+    def _report(self, sections):
+        return "\n".join(diag._sec_verdict(sections))
+
+    def test_fake_running_detected(self):
+        txt = self._report({
+            "services": ["  lanshare-postgresql  State=Running StartType=Auto"],
+            "pg": ["  判定：PG_NOT_RUNNING"],
+        })
+        assert "假运行" in txt
+
+    def test_bad_cluster_detected(self):
+        txt = self._report({"pg": ["  判定：PG_BAD_CLUSTER"]})
+        assert "不是有效的 PG 数据目录" in txt
+
+
+class TestRuntimeSignals:
+    def _report(self, sections):
+        return "\n".join(diag._sec_verdict(sections))
+
+    def test_proxy_flagged(self):
+        txt = self._report({"runtime": ["  判定：PROXY_SET"]})
+        assert "代理" in txt
+
+    def test_stale_process_flagged(self):
+        txt = self._report({"runtime": ["  判定：STALE_PROCESS"]})
+        assert "残留进程" in txt
+
+
+class TestRegistrySection:
+    def test_missing_key(self, layout, monkeypatch):
+        monkeypatch.setattr(diag, "_ps", lambda s, timeout=15.0: "KEY_NOT_FOUND")
+        text = "\n".join(diag._sec_registry(layout))
+        assert "NO_REGKEY" in text
+
+    def test_redacts_password(self, layout, monkeypatch):
+        monkeypatch.setattr(
+            diag, "_ps",
+            lambda s, timeout=15.0: "InstallFolder=D:\LAN Share\nPgPassword=hunter2")
+        text = "\n".join(diag._sec_registry(layout))
+        assert "hunter2" not in text
+        assert "LAN Share" in text

@@ -28,6 +28,7 @@ import re
 import secrets
 import shutil
 import string
+import time
 import subprocess
 from pathlib import Path
 
@@ -317,10 +318,31 @@ class Postgres:
 
         nssm 参数保留但不再使用，避免调用方大改。
         """
-        # 幂等：已经注册过就直接返回，别让 sc create 报冲突
+        # 幂等，但要校验 -D。
+        #
+        # 🔴 这里原来只有一句「服务已存在就 return」，埋了一个很难看的坑：
+        # 用户重装时如果数据目录换了（比如从 {app}\data 改成 ProgramData，
+        # 或者反过来），服务不会被重建，-D 还指着**旧目录**。表现是 PG 服务
+        # 一直 Stopped，而注册表说数据目录是新那个 —— 两边对不上，谁也看不出
+        # 是服务定义过期了。2026-11-02 用户实机正是这个：
+        #   服务定义 -D = D:\LAN Share\data\pgdata
+        #   注册表 DataFolder = C:\ProgramData\LANShare\data
         check = self._run(["sc.exe", "query", self.service_name], timeout=20)
         if check.returncode == 0:
-            return
+            qc = self._run(["sc.exe", "qc", self.service_name], timeout=20)
+            current = (qc.stdout or "") + (qc.stderr or "")
+            if str(self.pgdata) in current:
+                return                      # 指向的就是当前 pgdata，保持不动
+            # 指向别处 → 删掉重建（数据本身不动，只换服务定义）
+            self._run(["sc.exe", "delete", self.service_name], timeout=30)
+            for _ in range(20):             # sc delete 是异步的，等它真消失
+                if self._run(["sc.exe", "query", self.service_name],
+                             timeout=10).returncode != 0:
+                    break
+                time.sleep(0.5)
+            else:
+                raise PostgresError(
+                    f"旧服务 {self.service_name} 删不掉，-D 还指向 {current[:120]}")
 
         res = self._run(
             [str(self.exe("pg_ctl")), "register",

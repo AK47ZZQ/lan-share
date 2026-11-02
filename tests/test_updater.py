@@ -14,6 +14,17 @@ import pytest
 from lanshare_cli import updater
 
 
+@pytest.fixture(autouse=True)
+def _no_proxy_in_tests(monkeypatch):
+    """测试里禁用代理分支。
+
+    本机开着系统代理时，`_opener()` 会返回一个真 opener，于是请求走
+    `_opener().open(...)` 而不是 `urllib.request.urlopen(...)` ——
+    现有那些 mock 了 urlopen 的用例就全部失效，还会真的发网络请求。
+    """
+    monkeypatch.setattr(updater, "_opener", lambda: None)
+
+
 class TestCurrentVersion:
     def test_reads_plain_version(self, tmp_path):
         (tmp_path / "VERSION").write_text("3.78\n2026-11-02 10:00:00\n",
@@ -347,3 +358,69 @@ class TestCache:
         out = updater.check(tmp_path)
         assert out["has_update"] is True
         assert updater._read_cache(tmp_path)["version"] == "3.99"
+
+
+class TestSystemProxy:
+    """读 Windows 系统代理。
+
+    urllib 只认 HTTP_PROXY/HTTPS_PROXY 环境变量，**完全不读「Internet 选项」**。
+    而 Clash/v2rayN 这类工具只改注册表不设环境变量，于是「检查更新」直连
+    GitHub 一直报「连不上」，报错还完全指不到代理身上。
+    2026-11-02 实机诊断到 ProxyEnable=1 / ProxyServer=127.0.0.1:7897，
+    加上这段之后检查更新立刻从「连不上」变成「能连、只是限流」。
+    """
+
+    def test_returns_none_off_windows(self, monkeypatch):
+        monkeypatch.setattr(updater.sys, "platform", "linux")
+        assert updater._system_proxy() is None
+
+    def test_reads_host_port(self, monkeypatch):
+        import sys as _sys
+        fake_winreg = type("W", (), {
+            "HKEY_CURRENT_USER": 0,
+            "OpenKey": staticmethod(lambda *a, **k: _Ctx()),
+            "QueryValueEx": staticmethod(_fake_query(1, "127.0.0.1:7897")),
+        })
+        monkeypatch.setitem(_sys.modules, "winreg", fake_winreg)
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        assert updater._system_proxy() == "http://127.0.0.1:7897"
+
+    def test_none_when_disabled(self, monkeypatch):
+        import sys as _sys
+        fake_winreg = type("W", (), {
+            "HKEY_CURRENT_USER": 0,
+            "OpenKey": staticmethod(lambda *a, **k: _Ctx()),
+            "QueryValueEx": staticmethod(_fake_query(0, "127.0.0.1:7897")),
+        })
+        monkeypatch.setitem(_sys.modules, "winreg", fake_winreg)
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        assert updater._system_proxy() is None
+
+    def test_handles_per_protocol_form(self, monkeypatch):
+        """ProxyServer 可能是 'http=h:p;https=h:p' 这种分协议写法。"""
+        import sys as _sys
+        fake_winreg = type("W", (), {
+            "HKEY_CURRENT_USER": 0,
+            "OpenKey": staticmethod(lambda *a, **k: _Ctx()),
+            "QueryValueEx": staticmethod(
+                _fake_query(1, "http=1.2.3.4:8080;https=1.2.3.4:8443")),
+        })
+        monkeypatch.setitem(_sys.modules, "winreg", fake_winreg)
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        assert updater._system_proxy() == "http://1.2.3.4:8443"
+
+
+class _Ctx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_query(enable, server):
+    def q(key, name):
+        if name == "ProxyEnable":
+            return enable, 4
+        return server, 1
+    return q
