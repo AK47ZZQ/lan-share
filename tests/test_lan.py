@@ -64,8 +64,19 @@ class TestRender:
         content = caddyfile.render(8766, 8765, caddyfile.BIND_LOOPBACK)
         assert ":8765 {" in content
         assert "	bind 127.0.0.1" in content
-        # 首行不能变成 127.0.0.1:8765（那样对 Caddy 无效）
-        assert "127.0.0.1:8765 {" not in content
+        # 必须带 scheme：裸 `127.0.0.1:8765 {` 会被 Caddy 当 HTTP 站点，
+        # tls internal 就不生效了（2026-10-31 找到的真原因）。
+        #
+        # 只禁「行首裸地址」，不禁 `https://127.0.0.1:8765` —— 后者是合法站点地址。
+        # 原来写的是 `assert "127.0.0.1:8765 {" not in content`，在 Windows 本机
+        # 恰好通过、在 CI 必挂：CI 容器没有 LAN 网卡，default_hosts() 只返回
+        # ["localhost", "127.0.0.1"]，127.0.0.1 成了站点块最后一个地址，
+        # 渲染出 `https://127.0.0.1:8765 {` 正好命中那条子串断言。
+        import re as _re
+        assert not _re.search(r"(?m)^\s*127\.0\.0\.1:8765\s*\{", content), \
+            "站点块行首不能是裸 127.0.0.1:8765（缺 scheme，会被当 HTTP 站点）"
+        # localhost 必须在（证书 SAN 里恒存在的那个名字）
+        assert "https://localhost:8765" in content
 
     def test_all_render_has_no_bind(self):
         content = caddyfile.render(8766, 8765, caddyfile.BIND_ALL)

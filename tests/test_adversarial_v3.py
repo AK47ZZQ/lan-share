@@ -164,8 +164,12 @@ class TestVersionFileTampering:
 
         from app.api import appver
 
-        evil = ["../../etc/passwd", "..\\..\\Windows\\win.ini", "//server/share/x.apk"]
+        evil = ["../../etc/passwd", "//server/share/x.apk"]
+        # 反斜杠只在 Windows 上是路径分隔符。Linux 上 `..\..\Windows\win.ini`
+        # 是一个**合法的文件名**，_apk_path 不拒绝才是对的 —— 拿它测 Linux CI
+        # 会 DID NOT RAISE（3.88 CI 就是这么挂的）。
         if os.name == "nt":
+            evil.append("..\\..\\Windows\\win.ini")
             evil.append("C:/Windows/system32/config/sam")
         else:
             evil.append("/etc/passwd")
