@@ -354,7 +354,7 @@ namespace LanShare
 
             SetState(AppState.Unknown);
 
-            _timer = new Timer { Interval = 5000 };  // 5 秒一轮
+            _timer = new Timer { Interval = 5000 };  // 基础间隔 5 秒（失败时退避，见 Probe）
             _timer.Tick += (s, e) => Probe();
             _timer.Start();
 
@@ -371,7 +371,46 @@ namespace LanShare
 
         // ── 状态探测 ──────────────────────────────────────────────
 
+        // 🔴 防重叠。
+        //
+        // ProbeOk 的超时是 8 秒（TLS 握手 + 服务真的没起来时要耗满），失败分支
+        // 还会再探一次 HTTP，一轮最坏 16 秒。而 Timer 每 5 秒触发一次 ——
+        // 服务一挂，每 5 秒就新起一轮、旧的一轮还没结束，请求无限叠加。
+        // 用户看到的就是「关闭服务后整个界面卡死」。2026-11-02 实机踩到。
+        //
+        // 现在：上一轮没跑完就跳过本次 Tick，并且失败时把间隔拉长（退避），
+        // 恢复正常再收回 5 秒。
+        private volatile bool _probing;
+
         private void Probe()
+        {
+            if (_probing) return;
+            _probing = true;
+            try
+            {
+                ProbeCore();
+            }
+            finally
+            {
+                _probing = false;
+                RescheduleProbe();
+            }
+        }
+
+        /// <summary>失败退避：5s → 10s → 20s，上限 30s；健康时回到 5s。</summary>
+        private void RescheduleProbe()
+        {
+            int want;
+            if (_state == AppState.Healthy) want = 5000;
+            else if (_failCount <= 1) want = 10000;
+            else if (_failCount <= 3) want = 20000;
+            else want = 30000;
+
+            if (_timer != null && _timer.Interval != want)
+                _timer.Interval = want;
+        }
+
+        private void ProbeCore()
         {
             string result = null;
             var state = AppState.Down;

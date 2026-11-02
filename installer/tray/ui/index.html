@@ -279,10 +279,11 @@ button.link {
         </div>
         <div class="hint" id="wanhint"></div>
         <div class="addr">
-          <input id="wanaddr" readonly value="" size="1" style="width:100%">
+          <input id="wanaddr" value="" size="1" style="width:100%" placeholder="https://你的域名:端口">
           <button class="mini" data-copy="wan">复制</button>
         </div>
         <div style="display:flex;gap:8px">
+          <button class="mini primary" id="wansave">保存地址</button>
           <button class="mini" id="wantest">验证连通性</button>
           <button class="mini danger" id="wanclear">清除</button>
         </div>
@@ -356,6 +357,7 @@ button.link {
     <button class="danger" id="restartall">重启服务</button>
     <button class="danger" id="stopall">关闭服务</button>
     <button id="logs">看日志</button>
+    <button id="diag">导出诊断包</button>
     <div class="spacer"></div>
     <div class="path" id="datapath"></div>
   </div>
@@ -428,14 +430,22 @@ function onUpdate(u) {
 
   line.textContent = cur;
   box.style.display = '';
+  // 缓存结果：GitHub 限流/断网时的降级，必须标明时间，否则用户以为刚查的
+  var staleNote = u.stale
+    ? `（这是 ${u.staleHours || 0} 小时前查到的结果，刚才是因为 GitHub 限流或断网没查成）`
+    : '';
   if (u.hasUpdate) {
     text.style.color = '';
     text.textContent = `有新版本 v${u.latest}`
-      + (u.published ? `（${u.published}）` : '') + '，下载后直接运行即可，数据和账号都会保留';
+      + (u.published ? `（${u.published}）` : '') + '，下载后直接运行即可，数据和账号都会保留'
+      + staleNote;
     get.style.display = u.url ? '' : 'none';
   } else {
     text.style.color = '';
-    text.textContent = `已是最新（GitHub 上也是 v${u.latest}）`;
+    text.textContent = u.stale
+      ? `上次查到的是 v${u.latest}（不是刚查的）`
+      : `已是最新（GitHub 上也是 v${u.latest}）`;
+    if (staleNote && u.stale) text.textContent += staleNote;
     get.style.display = 'none';
   }
 }
@@ -500,7 +510,12 @@ function render(s) {
   document.getElementById('wanhint').textContent = wanOn
     ? '局域网外可通过这个地址访问'
     : '配好穿透后在下面填入地址，别人在外面也能访问';
-  document.getElementById('wanaddr').value = s.wanUrl || '';
+  // 用户正在输入时不要覆盖 —— 状态每 5~10 秒刷一次，硬写会把人家
+  // 刚敲的字冲掉。只有失焦状态下才同步。
+  var wanEl = document.getElementById('wanaddr');
+  if (wanEl && document.activeElement !== wanEl) {
+    wanEl.value = s.wanUrl || '';
+  }
 
   // 证书警告条
   var cb = document.getElementById('certbar');
@@ -570,6 +585,12 @@ document.querySelectorAll('[data-copy]').forEach(el => {
 document.getElementById('lantoggle').onclick = () =>
   post({ action: 'toggleLan', on: !(last && last.lanOn) });
 
+// 公网地址：保存输入框里的值
+document.getElementById('wansave').onclick = () => {
+  var el = document.getElementById('wanaddr');
+  post({ action: 'setWanUrl', url: (el && el.value || '').trim() });
+};
+
 // 备份：选目录 / 立即备份
 document.getElementById('bkpick').onclick = () => post({ action: 'pickBackupDir' });
 document.getElementById('bkrun').onclick = () => post({ action: 'runBackup' });
@@ -577,6 +598,7 @@ document.getElementById('openweb').onclick  = () => post({ action: 'openWeb' });
 document.getElementById('restartall').onclick = () => post({ action: 'restartAll' });
 document.getElementById('stopall').onclick  = () => post({ action: 'stopAll' });
 document.getElementById('logs').onclick     = () => post({ action: 'openLogs' });
+document.getElementById('diag').onclick = () => post({ action: 'exportDiag' });
 document.getElementById('wanhelp').onclick  = () => post({ action: 'wanHelp' });
 document.getElementById('wantest').onclick  = () => post({ action: 'wanTest' });
 document.getElementById('wanclear').onclick = () => post({ action: 'wanClear' });

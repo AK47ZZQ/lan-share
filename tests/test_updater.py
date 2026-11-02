@@ -271,3 +271,79 @@ class TestSslContext:
         msg = str(exc.value)
         assert "证书" in msg
         assert "VPN" in msg
+
+
+class TestCache:
+    """检查结果的本地缓存。
+
+    GitHub 未登录 API 每小时 60 次，用户看到「检查失败」会反复点，
+    几次就烧光额度然后进入「一直失败」的循环。缓存是唯一的出路。
+    但缓存用错了比没有更糟 —— 报一个一年前的「最新版」给用户。
+    """
+
+    def _write_install(self, tmp_path, version="3.88"):
+        (tmp_path / "VERSION").write_text(version, encoding="utf-8")
+
+    def test_round_trip(self, tmp_path):
+        info = {"version": "3.99", "url": "https://x/y.exe",
+                "notes": "n", "published": "2026-11-02"}
+        updater._write_cache(tmp_path, info)
+        got = updater._read_cache(tmp_path)
+        assert got is not None
+        assert got["version"] == "3.99"
+        assert got["_cached_at"] > 0
+
+    def test_missing_file_returns_none(self, tmp_path):
+        assert updater._read_cache(tmp_path) is None
+
+    def test_corrupt_file_returns_none(self, tmp_path):
+        f = tmp_path / "cache" / "update-check.json"
+        f.parent.mkdir(parents=True)
+        f.write_text("{not json", encoding="utf-8")
+        assert updater._read_cache(tmp_path) is None
+
+    def test_stale_cache_expires(self, tmp_path, monkeypatch):
+        """超过 _CACHE_MAX_AGE 的缓存不再采用 —— 老数据比没数据更误导。"""
+        updater._write_cache(tmp_path, {"version": "1.0", "url": ""})
+        f = tmp_path / "cache" / "update-check.json"
+        d = json.loads(f.read_text(encoding="utf-8"))
+        d["_cached_at"] = int(__import__("time").time()) - updater._CACHE_MAX_AGE - 60
+        f.write_text(json.dumps(d), encoding="utf-8")
+        assert updater._read_cache(tmp_path) is None
+
+    def test_check_falls_back_to_cache_on_error(self, tmp_path, monkeypatch):
+        self._write_install(tmp_path, "3.88")
+        updater._write_cache(tmp_path, {
+            "version": "3.99", "url": "https://x/y.exe",
+            "notes": "", "published": "2026-11-02"})
+
+        def boom(timeout=8.0):
+            raise RuntimeError("GitHub 接口限流")
+
+        monkeypatch.setattr(updater, "fetch_latest", boom)
+        out = updater.check(tmp_path)
+        assert out["error"] == ""          # 用上了缓存就不算「没查成」
+        assert out["latest"] == "3.99"
+        assert out["has_update"] is True
+        assert out["stale"] is True
+
+    def test_check_reports_error_when_no_cache(self, tmp_path, monkeypatch):
+        self._write_install(tmp_path, "3.88")
+
+        def boom(timeout=8.0):
+            raise RuntimeError("GitHub 接口限流")
+
+        monkeypatch.setattr(updater, "fetch_latest", boom)
+        out = updater.check(tmp_path)
+        assert out["error"]
+        assert out["latest"] == ""
+        assert out["stale"] is False
+
+    def test_successful_check_writes_cache(self, tmp_path, monkeypatch):
+        self._write_install(tmp_path, "3.88")
+        monkeypatch.setattr(updater, "fetch_latest", lambda timeout=8.0: {
+            "version": "3.99", "url": "https://x/y.exe",
+            "notes": "", "published": "2026-11-02"})
+        out = updater.check(tmp_path)
+        assert out["has_update"] is True
+        assert updater._read_cache(tmp_path)["version"] == "3.99"

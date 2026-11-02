@@ -96,7 +96,19 @@ TEMPLATE = """\
 \t\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
 \t\t\theader_up X-Forwarded-Proto https
 \t\t\theader_up X-Real-IP {{remote_host}}
-\t\t\theader_up Host {{host}}
+\t\t\t# 🔴 不要写 header_up Host {{host}}。
+\t\t\t#
+\t\t\t# Caddy 的 {{host}} 是**不含端口**的主机名。写成 {{host}} 会把
+\t\t\t# Host: <主机>:<端口> 改写成 Host: <主机>，而浏览器发的 Origin
+\t\t\t# 带着端口 —— 后端 CSRF 中间件比对 netloc 时两边不相等，
+\t\t\t# 于是所有 POST 一律
+\t\t\t# 403 "CSRF check failed"。
+\t\t\t#
+\t\t\t# 2026-11-02 用户实机：装完 3.88 注册管理员直接 403，就是这条。
+\t\t\t# 本地开发机用的老 Caddyfile 没有这行，所以从来没复现过。
+\t\t\t#
+\t\t\t# 默认行为就是原样透传 Host，正是我们要的，这里不写即可。
+\t\t\t# 真要显式写，正确占位符是 {{http.request.hostport}}（含端口）。
 \t\t}}
 \t}}
 

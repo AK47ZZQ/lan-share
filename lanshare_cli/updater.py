@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -111,7 +112,22 @@ def fetch_latest(timeout: float = TIMEOUT) -> dict:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 403:
-            raise RuntimeError("GitHub 限流了（一小时 60 次），过一会儿再试") from exc
+            # GitHub 会给出重置时间（UTC epoch 秒）。能读到就说人话，
+            # 读不到才退回笼统的一句 —— 「过一会儿再试」用户没法安排。
+            hint = ""
+            try:
+                reset = exc.headers.get("X-RateLimit-Reset") if exc.headers else None
+                if reset:
+                    import time as _t
+                    wait = max(0, int(reset) - int(_t.time()))
+                    if wait > 0:
+                        mins = (wait + 59) // 60
+                        hint = f"，约 {mins} 分钟后恢复"
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"GitHub 接口限流（未登录每小时 60 次）{hint}。"
+                "这是 GitHub 的免费额度限制，不是软件故障。") from exc
         raise RuntimeError(f"GitHub 返回 {exc.code}") from exc
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
@@ -162,6 +178,53 @@ def fetch_latest(timeout: float = TIMEOUT) -> dict:
     raise RuntimeError(f"GitHub 上没找到 {PREFIX}* 的 Release（是不是都删了？）")
 
 
+# ── 检查结果缓存 ──────────────────────────────────────────────
+#
+# 为什么要缓存：GitHub 未登录 API 每小时只有 60 次。用户看到「检查失败」
+# 会反复点，几次就把额度烧光，然后进入「一直失败」的恶性循环——2026-11-02
+# 实机反馈正是「检查更新一直都是失败，显示被限流了」。
+#
+# 有了缓存：成功过一次，之后即使 GitHub 不可达也能给出上次的结果，
+# 并在 UI 上标注「这是几小时前的数据」，而不是干脆报错。
+#
+# 注意这里是**可信上限**，不是刷新间隔：每次 check() 都会先尝试真的去查，
+# 查失败才退回缓存。超过这个时限的缓存不再采用 —— 一年前的「最新版」
+# 报给用户比报错更误导。
+_CACHE_MAX_AGE = 7 * 86400
+
+
+def _cache_file(install_dir: Path) -> Path:
+    return Path(install_dir) / "cache" / "update-check.json"
+
+
+def _read_cache(install_dir: Path) -> dict | None:
+    """读缓存；超过 _CACHE_MAX_AGE 视为没有。"""
+    try:
+        f = _cache_file(install_dir)
+        if not f.is_file():
+            return None
+        d = json.loads(f.read_text(encoding="utf-8"))
+        if not isinstance(d, dict) or not d.get("version"):
+            return None
+        age = time.time() - float(d.get("_cached_at") or 0)
+        if age > _CACHE_MAX_AGE:
+            return None          # 太旧了，不如老实说「没查成」
+        return d
+    except Exception:
+        return None
+
+
+def _write_cache(install_dir: Path, info: dict) -> None:
+    try:
+        f = _cache_file(install_dir)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        payload = dict(info)
+        payload["_cached_at"] = int(time.time())
+        f.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass   # 缓存写不进去不影响主流程
+
+
 def check(install_dir: Path, timeout: float = TIMEOUT) -> dict:
     """完整的一次检查。永远返回字典，绝不抛异常 —— 调用方是 UI。
 
@@ -181,10 +244,29 @@ def check(install_dir: Path, timeout: float = TIMEOUT) -> dict:
         "notes": "",
         "published": "",
         "error": "",
+        "stale": False,      # True = 这是缓存结果，不是刚查的
+        "stale_hours": 0,
     }
     try:
         info = fetch_latest(timeout)
+        _write_cache(install_dir, info)
     except RuntimeError as exc:
+        # 查不成时退回缓存：有旧结果就给旧结果 + 标注新鲜度，
+        # 让用户至少知道「上次看到的最新版是什么」。
+        cached = _read_cache(install_dir)
+        if cached:
+            age = max(0, int(time.time()) - int(cached.get("_cached_at") or 0))
+            hours = age // 3600
+            out.update(
+                latest=cached.get("version", ""),
+                url=cached.get("url", ""),
+                notes=cached.get("notes", ""),
+                published=cached.get("published", ""),
+                stale=True,
+                stale_hours=hours,
+            )
+            out["has_update"] = is_newer(out["latest"], cur)
+            return out
         out["error"] = str(exc)
         return out
 

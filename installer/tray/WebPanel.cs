@@ -491,6 +491,57 @@ namespace LanShare
         }
 
         /// <summary>
+        /// 保存公网访问地址。
+        ///
+        /// 2026-11-02 用户反馈「公网访问没有配置栏、没法填 URL」—— 查下来这个
+        /// 输入框从 WebView2 面板第一版起就是 readonly，一直没有写入口。
+        /// 之前能填的地方是网页端的管理页，不是托盘面板。
+        /// </summary>
+        /// <summary>
+        /// 读当前的备用公网地址，保存主地址时原样带回去。
+        ///
+        /// 🔴 POST /local/public-url 是**整体覆盖** url 和 url_alt 两个字段的。
+        /// 第一版保存时把 url_alt 写死成 ""，等于用户点一次「保存地址」就把
+        /// 他配置的备用入口清掉（sakuraFrp 主备两条隧道是常见配法）。
+        /// 这是回归，不是新功能取舍。
+        /// </summary>
+        private string KeepAltUrl()
+        {
+            try
+            {
+                var cur = ApiGet<Dictionary<string, object>>("/local/public-url", d => d, null);
+                if (cur != null && cur.ContainsKey("url_alt"))
+                    return Str(cur, "url_alt") ?? "";
+            }
+            catch (Exception)
+            {
+                // 读不到就不传 —— 至少不要让保存本身失败
+            }
+            return "";
+        }
+
+        private void SaveWanUrl(string url)
+        {
+            url = (url ?? "").Trim();
+            if (url.Length > 0
+                && !url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                SendToast("地址要以 http:// 或 https:// 开头");
+                return;
+            }
+            string json = "{\"url\": " + Quote(url) + ", \"url_alt\": " + Quote(KeepAltUrl()) + "}";
+            if (!ApiPost("/local/public-url", json))
+            {
+                SendToast("保存失败：服务没有响应");
+                return;
+            }
+            AppendLog("公网地址已保存: " + (url.Length > 0 ? url : "(清空)"));
+            SendToast(url.Length > 0 ? "公网地址已保存" : "公网地址已清除");
+            PushStateAsync(true);
+        }
+
+        /// <summary>
         /// 让用户选备份目录，然后写进服务端配置。
         ///
         /// 为什么必须让用户能改：默认备份落在数据目录里（同一块盘），
@@ -959,7 +1010,16 @@ namespace LanShare
                     break;
 
                 case "restartService":
-                    RestartOne(Convert.ToInt32(msg.ContainsKey("index") ? msg["index"] : 0));
+                    {
+                        int idx = 0;
+                        try
+                        {
+                            idx = msg.ContainsKey("index")
+                                ? Convert.ToInt32(msg["index"]) : 0;
+                        }
+                        catch (Exception) { idx = 0; }
+                        RestartOne(idx);
+                    }
                     break;
 
                 case "restartAll":
@@ -974,6 +1034,12 @@ namespace LanShare
                     StopAll();
                     break;
 
+                case "exportDiag":
+                    ExportDiag();
+                    break;
+                case "setWanUrl":
+                    SaveWanUrl(msg.ContainsKey("url") ? Str(msg, "url") : "");
+                    break;
                 case "pickBackupDir":
                     PickBackupDir();
                     break;
@@ -1080,6 +1146,12 @@ namespace LanShare
                     p["notes"] = Str(d, "notes");
                     p["published"] = Str(d, "published");
                     p["error"] = Str(d, "error");
+                    // stale = 这是缓存结果（GitHub 限流/断网时的降级），
+                    // 前端要标出来，否则用户会以为刚查的是最新状态
+                    object st;
+                    p["stale"] = d.TryGetValue("stale", out st)
+                        && st is bool && (bool)st;
+                    p["staleHours"] = Int(d, "stale_hours");
                     _updateUrl = Str(d, "url");
                 }
                 catch (Exception ex)
@@ -1088,6 +1160,54 @@ namespace LanShare
                 }
                 Send("update", p);
             }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        /// <summary>
+        /// 导出诊断包并打开所在文件夹。
+        ///
+        /// 用户出故障时不用再教他开 PowerShell 跑哪几条命令 —— 点一下，
+        /// 得到一个能直接发出来的 txt。2026-11-02 定位 PG 起不来时，
+        /// 就是这么来回问了三轮。
+        /// </summary>
+        private void ExportDiag()
+        {
+            RunBusy("正在收集诊断信息…", () =>
+            {
+                string err;
+                string json = RunCli("diagnose --json", 90000, out err);
+                if (string.IsNullOrEmpty(json))
+                    return "诊断包生成失败：" + (err ?? "命令没有输出");
+
+                string path = "";
+                try
+                {
+                    var d = new JavaScriptSerializer()
+                        .Deserialize<Dictionary<string, object>>(json);
+                    if (d != null && d.ContainsKey("path"))
+                        path = Str(d, "path");
+                    if (d != null && d.ContainsKey("ok"))
+                    {
+                        object ok;
+                        if (d.TryGetValue("ok", out ok) && ok is bool && !(bool)ok)
+                            return "诊断包生成失败：" + Str(d, "error");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return "诊断包解析失败：" + ex.Message;
+                }
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    return "诊断包生成失败：文件没落地";
+
+                AppendLog("诊断包已导出: " + path);
+                try
+                {
+                    // /select 打开资源管理器并选中该文件，用户直接拖进聊天窗口
+                    System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + path + "\"");
+                }
+                catch (Exception) { /* 打不开文件夹不算失败，路径已在 toast 里 */ }
+                return "诊断包已生成并打开文件夹：" + path;
+            });
         }
 
         private void DownloadUpdate()
@@ -1195,6 +1315,15 @@ namespace LanShare
                                   + " | " + (error.Length > 300 ? error.Substring(0, 300) : error));
                         return null;
                     }
+                    // 成功也留一条精简痕：出问题时能看出「命令跑过了、
+                    // 退出码多少、回了多长」，而不是什么都没有。
+                    if (stderr.Trim().Length > 0)
+                    {
+                        string se = stderr.Trim();
+                        AppendLog("RunCli stderr（exit " + proc.ExitCode + "，"
+                                  + args + "）："
+                                  + (se.Length > 400 ? se.Substring(0, 400) : se));
+                    }
                     return stdout.Trim();
                 }
             }
@@ -1281,9 +1410,26 @@ namespace LanShare
             {
                 string err;
                 // 子命令只认 enable / disable（写 lan-on 会 argparse 报错）
-                AppendLog("ToggleLan: " + (turnOn ? "enable" : "disable") + " 开始");
-                _cli.RunLan(turnOn ? "enable" : "disable", 30000, out err);
-                AppendLog("ToggleLan: CLI 返回 err=" + (err ?? "(null)"));
+                string sub = turnOn ? "enable" : "disable";
+                AppendLog("ToggleLan: " + sub + " 开始");
+                var ret = _cli.RunLan(sub, 30000, out err);
+
+                // 🔴 把 CLI 的真实返回记下来。
+                //
+                // 2026-11-02 用户报「局域网启动失败」，而 tray.log 里只有
+                // 「CLI 返回 err=(null)」—— 完全看不出 CLI 是成功了没生效、
+                // 还是根本没返回数据。诊断信息不足本身就是缺陷。
+                string dump;
+                try
+                {
+                    dump = ret == null
+                        ? "null"
+                        : new JavaScriptSerializer { MaxJsonLength = int.MaxValue }
+                            .Serialize(ret);
+                }
+                catch (Exception ex) { dump = "<序列化失败：" + ex.Message + ">"; }
+                if (dump.Length > 1200) dump = dump.Substring(0, 1200) + "…(截断)";
+                AppendLog("ToggleLan: CLI 返回 err=" + (err ?? "(null)") + " data=" + dump);
 
                 // 🔴 不能只看 err。
                 //
@@ -1293,6 +1439,16 @@ namespace LanShare
                 //
                 // 这里等状态真的切过来（最多 10 秒），并把结果如实说出来。
                 bool wantAll = turnOn;
+
+                // 先看一次现状。CLI 有时判断「已经是目标状态」就直接返回，
+                // 这时候本来就不用等 —— 否则用户白等满 10 秒，而且这 10 秒里
+                // 整个面板是禁用的（_busy 挡着），体感就是卡死。
+                if (LanListeningOnAll() == wantAll)
+                {
+                    AppendLog("ToggleLan: 已经是目标状态，无需等待");
+                    return turnOn ? "局域网已开启" : "局域网已关闭";
+                }
+
                 bool switched = false;
                 for (int i = 0; i < 20; i++)
                 {
@@ -1314,10 +1470,39 @@ namespace LanShare
         }
 
         /// <summary>跑一个后台动作，期间遮罩，结束后 toast + 刷新。</summary>
+        private DateTime _busySince = DateTime.MinValue;
+
+        // 世代号：强制放弃一个卡住的操作后，旧任务的 ContinueWith 仍然会跑完。
+        // 如果它傻乎乎地去清 _busy，就会把**新**任务的状态一起清掉 —— 表现为
+        // 界面提前解禁、按钮可以重复点。所以每个任务记下自己是第几代，
+        // 收尾时只在「我还是最新一代」的情况下才动共享状态。
+        private int _busySeq = 0;
+
         private void RunBusy(string hint, Func<string> work)
         {
-            if (_busy) return;
+            // 🔴 这里原来只有一句 `if (_busy) return;`。
+            //
+            // 后果：上一个操作一旦因为异常/极慢没走完，_busy 永远是 true，
+            // 面板上所有按钮从此**静默失效** —— 点下去毫无反应，也没有任何
+            // 提示。2026-11-02 用户报「单独点服务重启，GUI 界面没反应，
+            // 貌似也没正确执行重启」，就是这个。
+            //
+            // 现在：超过 2 分钟强制复位（自愈），没超时就明确告诉用户
+            // 「上一个操作还在跑」，而不是装作没听见。
+            if (_busy && (DateTime.Now - _busySince).TotalSeconds > 120)
+            {
+                AppendLog("上一个操作超过 120 秒未结束，强制放弃并放行新的操作"
+                          + "（旧任务的进程可能仍在跑，它的结果会被丢弃）");
+                _busy = false;
+            }
+            if (_busy)
+            {
+                SendToast("上一个操作还在进行中，请等它结束");
+                return;
+            }
             _busy = true;
+            _busySince = DateTime.Now;
+            int mySeq = ++_busySeq;
             SendBusy(true, hint);
 
             Task.Run(() =>
@@ -1326,10 +1511,35 @@ namespace LanShare
                 catch (Exception ex) { return "出错：" + ex.Message; }
             }).ContinueWith(t =>
             {
-                _busy = false;
-                SendBusy(false, null);
-                SendToast(t.Result);
-                PushStateAsync(true);
+                // 只有最新一代才有权改共享状态。被强制放弃的旧任务跑完时
+                // _busySeq 已经变了，它只留一条日志，不碰任何界面。
+                bool isCurrent = (mySeq == _busySeq);
+                try
+                {
+                    if (!isCurrent)
+                    {
+                        AppendLog("RunBusy 旧任务结束（已被放弃），结果丢弃");
+                        return;
+                    }
+                    string msg = (t.Status == TaskStatus.RanToCompletion && t.Result != null)
+                        ? t.Result
+                        : "操作已结束（没有返回信息）";
+                    SendToast(msg);
+                    PushStateAsync(true);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("RunBusy 收尾失败：" + ex.Message);
+                }
+                finally
+                {
+                    if (isCurrent)
+                    {
+                        // 放开 —— 这是「所有按钮突然失灵」的唯一开关
+                        _busy = false;
+                        SendBusy(false, null);
+                    }
+                }
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
@@ -1446,7 +1656,10 @@ namespace LanShare
             try
             {
                 var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(url);
-                req.Timeout = 8000;
+                // 3 秒足够：本机回环 + 服务在就该毫秒级返回。原来 8 秒是为了
+                // 容忍 TLS 握手慢，但代价是服务没起来时一整轮探测要 16 秒，
+                // 和 5 秒的 Timer 叠加成死循环（见 Probe 的防重叠注释）。
+                req.Timeout = 3000;
                 req.Proxy = null;
                 req.ServerCertificateValidationCallback = (a, b, c, d) => true;
                 using (var resp = (System.Net.HttpWebResponse)req.GetResponse())

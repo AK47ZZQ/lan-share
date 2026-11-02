@@ -37,7 +37,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from app.config import BACKUP_DIR as _DEFAULT_BACKUP_DIR
-from app.config import BACKUP_HOUR, BACKUP_KEEP, DB_PATH, PG_BIN_FALLBACK
+from app.config import BACKUP_HOUR, BACKUP_KEEP, DB_PATH
 from app.db import DATABASE_URL, USE_PG, _db
 from app.settings import get_setting, set_setting
 from app.services import cleanup
@@ -50,18 +50,29 @@ _NO_DUMP = object()   # dump 阶段"引擎不支持/工具缺失"哨兵
 
 
 def _resolve_tool(name: str) -> str | None:
-    """PG 客户端工具解析：PATH → 部署回退目录（config.PG_BIN_FALLBACK）。
+    """PG 客户端工具解析：PATH → 候选回退目录（见 config._PG_BIN_CANDIDATES）。
 
     服务进程 PATH 不可依赖——NSSM 环境随重启刷新（2026-09-12 实录：旧实例
     靠残留环境跑成 dump，重启后系统 PATH 已无 pgsql bin，当晚备份险些断链）。
-    返回可执行文件路径；两处都找不到返回 None（调用方按"工具缺失"语义处理）。
+    返回可执行文件路径；全部找不到返回 None（调用方按"工具缺失"语义处理）。
     """
     from shutil import which
+
+    from app import config as cfg
+
     p = which(name)
     if p:
         return p
-    cand = Path(PG_BIN_FALLBACK) / f"{name}.exe"
-    return str(cand) if cand.is_file() else None
+
+    # 环境变量显式指定时只认它（排查用，优先级高于自动探测）
+    explicit = (cfg.PG_BIN_FALLBACK or "").strip()
+    dirs = [Path(explicit)] if explicit else list(cfg._PG_BIN_CANDIDATES)
+
+    for d in dirs:
+        cand = Path(d) / f"{name}.exe"
+        if cand.is_file():
+            return str(cand)
+    return None
 
 
 BACKUP_DIR_KEY = "backup_dir"

@@ -57,9 +57,42 @@ async def security_middleware(request: Request, call_next):
     except Exception:
         set_audit_user("")
     # CSRF：带 Origin 的请求必须与 Host 同源（SameSite=Lax 之外的第二道防线）
+    #
+    # 报错必须带实际值。
+    #
+    # 2026-11-02 用户装完 3.88 注册时 403 "CSRF check failed"，日志里只有这四个
+    # 字，完全看不出 origin 和 host 分别是什么。我先猜是 Caddy 的
+    # `header_up Host {host}` 把端口吃掉了，实测发现**猜错了** —— 那个写法在
+    # 本机 Caddy 上后端收到的仍是带端口的 Host。没有证据的根因就是赌博。
+    #
+    # 现在把两个值原样回显（攻击者只发得出自己那份 origin，不构成泄露），
+    # 下次一眼就能定位：是 Origin 为 null，还是端口不一致。
     origin = request.headers.get("origin")
-    if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
-        return JSONResponse({"detail": "CSRF check failed"}, status_code=403)
+    host_header = request.headers.get("host", "")
+    if origin:
+        o_netloc = urlsplit(origin).netloc
+        # 同一主机、端口一方缺省时按浏览器习惯补默认端口再比。
+        # 这一步不放松安全性：补的只是 HTTPS→443 / HTTP→80，不会把
+        # 不同主机的请求放进来。
+        def _norm(nl: str) -> str:
+            if not nl:
+                return ""
+            if ":" in nl.rsplit("]", 1)[-1]:      # IPv6 字面量要绕开
+                return nl.lower()
+            scheme = urlsplit(origin).scheme or "https"
+            return nl.lower() if nl.count(":") else f"{nl.lower()}:{443 if scheme == 'https' else 80}"
+
+        if _norm(o_netloc) != _norm(host_header):
+            return JSONResponse(
+                {
+                    "detail": "CSRF check failed",
+                    "origin": origin[:200],
+                    "host": host_header[:200],
+                    "hint": "Origin 的站点和 Host 不一致。如果不是你自己发起的请求，"
+                            "这就是被人跨站利用了 —— 请关掉那个页面再试。",
+                },
+                status_code=403,
+            )
     path = request.url.path
     ip = client_ip(request)
     # 公网入口管控：healthz 不对公网暴露（磁盘水位信息泄露 + 探测面）。

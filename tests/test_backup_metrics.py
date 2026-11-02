@@ -14,6 +14,8 @@ import pytest
 from conftest import MEMBER_PASS
 
 from app.config import PG_BIN_FALLBACK
+
+from app import config as app_cfg
 from app.services import backup as backup_svc
 from app.services import metrics as metrics_svc
 from app.settings import get_setting, set_setting
@@ -159,7 +161,7 @@ def test_backup_verify_skipped_when_tool_missing(tmp_path, monkeypatch):
     诚实呈现 verified=None，不假装通过也不误报。"""
     _fresh_env(tmp_path, monkeypatch)
     monkeypatch.setattr(backup_svc, "_verify_dump", _REAL_VERIFY)
-    monkeypatch.setattr(backup_svc, "PG_BIN_FALLBACK", str(tmp_path / "no-such-bin"))
+    monkeypatch.setattr(app_cfg, "PG_BIN_FALLBACK", str(tmp_path / "no-such-bin"))
 
     def _no_restore(name):
         return None if name == "pg_restore" else "/fake/bin/pg_dump"
@@ -185,14 +187,14 @@ def test_resolve_tool_falls_back_to_deploy_dir(tmp_path, monkeypatch):
     bin_dir.mkdir()
     (bin_dir / "pg_dump.exe").write_bytes(b"fake")
     monkeypatch.setattr("shutil.which", lambda name: None)
-    monkeypatch.setattr(backup_svc, "PG_BIN_FALLBACK", str(bin_dir))
+    monkeypatch.setattr(app_cfg, "PG_BIN_FALLBACK", str(bin_dir))
     got = backup_svc._resolve_tool("pg_dump")
     assert got is not None and got.endswith("pg_dump.exe")
 
 
 def test_resolve_tool_none_when_neither_available(tmp_path, monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: None)
-    monkeypatch.setattr(backup_svc, "PG_BIN_FALLBACK", str(tmp_path / "no-such-bin"))
+    monkeypatch.setattr(app_cfg, "PG_BIN_FALLBACK", str(tmp_path / "no-such-bin"))
     assert backup_svc._resolve_tool("pg_dump") is None
 
 

@@ -79,6 +79,30 @@ def port_in_use(port: int, host: str = "127.0.0.1") -> bool:
             return True
 
 
+
+def port_owner(port: int) -> str:
+    """谁占着这个端口 —— 返回 "进程名 (PID 1234)"，查不到返回空串。
+
+    装上时端口冲突是常见故障（别的软件先占了）。让用户自己跑
+    `netstat -ano | findstr :8766` 再拿 PID 去任务管理器里对，是很烦的
+    一件事；这里直接给答案。
+    """
+    if sys.platform != "win32":
+        return ""
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             f"$c=Get-NetTCPConnection -LocalPort {port} -State Listen "
+             f"-ErrorAction SilentlyContinue | Select-Object -First 1;"
+             f"if($c){{$p=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue;"
+             f"if($p){{$p.ProcessName + ' (PID ' + $p.Id + ')'}}}}"],
+            capture_output=True, timeout=12,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return (r.stdout or b"").decode("utf-8", "replace").strip()
+    except Exception:
+        return ""
+
 def probe(url: str, timeout: float = 10.0) -> tuple[bool, str]:
     """探针：请求一个 URL，返回 (是否成功, 描述)。全部走标准库，不依赖 httpx。
 
@@ -452,16 +476,18 @@ def cmd_install(args: argparse.Namespace) -> int:
     conflict = False
     for port, label in ((api_port, "API"), (web_port, "Web"), (pg_port, "数据库")):
         if port_in_use(port):
-            fail(f"{label} 端口 {port} 已被占用")
+            who = port_owner(port)
+            fail(f"{label} 端口 {port} 已被占用" + (f"：{who}" if who else ""))
             conflict = True
         else:
             ok(f"{label} 端口 {port} 空闲")
     if conflict:
         # 提示要带上实际冲突的端口，别写死 8766（换端口后提示就对不上了）
         say(f"\n    换个端口重试，例如：--api-port {api_port + 1} --web-port {web_port + 1}")
-        busy = [str(p) for p, lbl in ((api_port, "API"), (web_port, "Web"))
+        busy = [str(p) for p, _lbl in ((api_port, "API"), (web_port, "Web"))
                 if port_in_use(p)]
-        say(f"    查看谁占用了：netstat -ano | findstr \":{'|:'.join(busy)}\"")
+        if busy:
+            say(f"    想自己查：netstat -ano | findstr \":{'|:'.join(busy)}\"")
         return 1
 
     if dry:
@@ -1142,6 +1168,39 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diagnose(args: argparse.Namespace) -> int:
+    """导出诊断包。只读，不碰任何服务。
+
+    设计目标：用户点一下就能得到一个「能直接发人」的文件，不用再教他
+    开 PowerShell 跑哪三条命令 —— 2026-11-02 定位 PG 起不来时就是这么
+    来回问了三轮。
+    """
+    from . import diagnose as diag
+
+    layout = Layout(
+        root=Path(args.root),
+        data_dir=Path(args.data_dir) if args.data_dir else default_data_dir(),
+        service_prefix=resolve_prefix(args.service_prefix),
+        python_override=Path(args.python) if args.python else None,
+    )
+    out_arg = Path(args.out) if getattr(args, "out", "") else None
+    try:
+        path = diag.export(layout, out_arg)
+    except Exception as exc:
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            fail(f"生成诊断包失败：{exc}")
+        return 2
+
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "path": str(path)}, ensure_ascii=False))
+    else:
+        say(f"  诊断包已生成：{path}")
+        say("  这个文件可以直接发出去，口令已隐藏。")
+    return 0
+
+
 def cmd_check_update(args: argparse.Namespace) -> int:
     """查服务端有没有新版本。只查不装 —— 装交给安装器。
 
@@ -1207,6 +1266,55 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         say("    OK")
     except OSError as exc:
         say(f"    FAIL {exc}")
+
+    # ── 环境契约 ────────────────────────────────────────────
+    #
+    # 这几条不是「错了」，是「会给你添麻烦」。装之前就知道，比装完之后
+    # 撞上一个看不懂的报错好得多 —— 2026-11-02 那批问题全出在这类环境
+    # 差异上（Program Files 权限、空格路径、pg_dump 找不到）。
+    say("")
+    say("  环境提示")
+
+    problems = 0
+    root_s = str(Path(args.root))
+    data_s = str(layout.data_dir)
+
+    if " " in root_s:
+        say("    ⚠ 程序目录含空格 —— Caddyfile 和命令行参数有切错 token 的风险")
+        problems += 1
+    if any(ord(c) > 127 for c in root_s):
+        say("    ⚠ 程序目录含非 ASCII 字符 —— 个别组件处理中文路径不稳")
+        problems += 1
+    pf = os.environ.get("ProgramFiles", "")
+    if pf and root_s.lower().startswith(pf.lower()):
+        say("    ⚠ 程序目录在 Program Files —— ACL 严格，PG 初始化容易失败")
+        say("      （3.83 修过一次：initdb 要独占 ACL，服务又要能读，两头都得对）")
+        problems += 1
+    if data_s.lower().startswith(pf.lower()):
+        say("    ⚠ 数据目录也在 Program Files —— 建议换到独立目录，卸载时更安全")
+        problems += 1
+
+    # PG 客户端工具：备份全靠它
+    try:
+        from . import backup as _bk  # noqa: F401 —— 这里只借用解析逻辑
+    except Exception:
+        pass
+    try:
+        from app.services.backup import _resolve_tool
+        dump = _resolve_tool("pg_dump")
+        if dump:
+            say(f"    pg_dump       OK  {dump}")
+        else:
+            say("    pg_dump       MISSING —— 备份会失败（每日备份等于没做）")
+            problems += 1
+    except Exception as exc:
+        say(f"    pg_dump       检查失败：{exc}")
+        problems += 1
+
+    if problems == 0:
+        say("    没有发现问题")
+    else:
+        say(f"    {problems} 条提示 —— 不影响安装，但可能影响以后的使用")
 
     return 0
 
@@ -1421,6 +1529,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", parents=[common], help="环境自检（只读）")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_diag = sub.add_parser(
+        "diagnose", parents=[common],
+        help="导出诊断包（只读，含日志/权限/端口，可直接发给别人）")
+    p_diag.add_argument("--out", default="", help="输出文件路径，默认写到临时目录")
+    p_diag.add_argument("--json", action="store_true",
+                        help="只输出 JSON（路径 + 是否成功），给 GUI 用")
+    p_diag.set_defaults(func=cmd_diagnose)
 
     p_update = sub.add_parser(
         "check-update", parents=[common], help="检查服务端有没有新版本（只查不装）"
