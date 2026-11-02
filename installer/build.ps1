@@ -307,6 +307,40 @@ robocopy (Join-Path $pgSrc "share") (Join-Path $pgDst "share") /E /NFL /NDL /NJH
 # 不复制：postgres-windows-x86_64.txz（22MB 原始包，解压后的东西才是我们要的）
 #         META-INF（Java 包的元数据，对 Windows 服务无用）
 
+# ── 客户端工具（pg_dump / pg_restore / psql）──
+# 🔴 2026-11-02 实机：v3.90 装完备份永远失败，诊断包里写着「找不到 pg_dump」。
+#
+# 根因：上面那段 robocopy 拷的是 zonky 解包目录，而那个 txz **本身是裁剪过的**
+# —— bin 里只有 postgres / initdb / pg_ctl 三个 exe，压根没有任何客户端工具。
+# 真正的 pg_dump 只存在于开发机的 env\pgsql-bin。
+#
+# 放 pgsql\pgclient\ 而不是塞进 bin：pgsql-bin 是 PG 17 的客户端，服务端是
+# 16.4，同目录会覆盖 libpq/libssl/libcrypto，postgres.exe 直接加载失败。
+# 子目录里 exe 优先加载自己目录的 DLL，两边互不干扰（已实测三个工具都能跑）。
+$clientSrc = Join-Path $Root "env\pgsql-bin"
+$clientDst = Join-Path $pgDst "pgclient"
+if (-not (Test-Path $clientSrc)) {
+    Fail "找不到 PG 客户端工具：$clientSrc`n  pg_dump 是备份的唯一实现，缺了它装出来的包备份一定失败。`n  需要 env\pgsql-bin（PG 客户端工具解包产物）。"
+}
+New-Item -ItemType Directory -Path $clientDst -Force | Out-Null
+$clientTools = @("pg_dump.exe", "pg_restore.exe", "psql.exe")
+# 依赖 DLL：ldd 实测这三个 exe 的全部非系统依赖，缺一个就报 0xc0000135
+$clientDlls = @(
+    "libpq.dll", "libintl-9.dll", "liblz4.dll", "libzstd.dll",
+    "libwinpthread-1.dll", "libiconv-2.dll",
+    "libcrypto-3-x64.dll", "libssl-3-x64.dll"
+)
+$clientMissing = @()
+foreach ($f in ($clientTools + $clientDlls)) {
+    $src = Join-Path $clientSrc $f
+    if (Test-Path $src) { Copy-Item $src $clientDst -Force }
+    else { $clientMissing += $f }
+}
+if ($clientMissing.Count -gt 0) {
+    Fail ("PG 客户端工具不完整，缺少：" + ($clientMissing -join ", "))
+}
+Ok "pgsql/pgclient/（pg_dump / pg_restore / psql + 依赖 DLL）"
+
 # ── VC++ 运行库（app-local 部署）──
 # PostgreSQL 的 Windows 二进制是 MSVC 编译的，依赖 vcruntime140 / msvcp140。
 # 这两样不在 Windows 里，属于 VC++ Redistributable。
@@ -340,7 +374,9 @@ Ok ("VC++ 运行库已随包分发（" + $vcRuntime.Count + " 个 DLL）")
 $pgRequired = @(
     "bin\postgres.exe", "bin\initdb.exe", "bin\pg_ctl.exe",
     "share\postgresql.conf.sample",
-    "bin\vcruntime140.dll", "bin\msvcp140.dll"
+    "bin\vcruntime140.dll", "bin\msvcp140.dll",
+    # 备份链路：少了这几个，装出来的包「备份」功能直接是死的
+    "pgclient\pg_dump.exe", "pgclient\pg_restore.exe", "pgclient\libpq.dll"
 )
 $pgMissing = @()
 foreach ($f in $pgRequired) {

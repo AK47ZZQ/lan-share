@@ -318,8 +318,34 @@ Get-NetTCPConnection -LocalPort {int(port)} -State Listen |
     return seen
 
 
+_LOOPBACK_ADDRS = ("127.0.0.1", "::1", "localhost")
+
+
+def listens_on_lan(port: int) -> bool:
+    """这个端口有没有在**非回环**地址上监听 = 局域网能不能连到。
+
+    🔴 不能用「有没有绑 0.0.0.0/::」当判据（2026-11-02 实机踩到）。
+
+    v3.90 起，站点块把每个网卡 IP 分别写进去（证书 SAN 需要它们）：
+
+        https://localhost:8765, https://192.168.89.118:8765, ...
+
+    Caddy 对具体 IP host 的做法是**逐个建 listener 绑到那个 IP**，
+    永远不会出现 0.0.0.0。于是只认通吃地址的判定在这种布局下永远返回
+    False —— 服务明明开着，界面和 CLI 都坚持说没开。
+
+    判据换成最朴素的一条：存在任一个不是回环的监听地址，就是局域网可达。
+    """
+    return any(a not in _LOOPBACK_ADDRS for a in listen_addresses(port))
+
+
 def listens_on_all_interfaces(port: int) -> bool:
-    """是否监听在所有接口上（= 局域网可达的前置条件）。"""
+    """是否监听在通吃地址上（0.0.0.0 / ::）。
+
+    只有「完全不列 IP、裸 :port 监听」的布局才会是这个形态。
+    判断局域网可达请用 :func:`listens_on_lan` —— 这个函数对本项目
+    当前的 Caddyfile 布局恒为 False。
+    """
     addrs = listen_addresses(port)
     return any(a in ("0.0.0.0", "::") for a in addrs)
 

@@ -524,14 +524,20 @@ def collect_status(
             return status
 
         # 2. 监听地址（判断开/关的唯一依据）
-        if network.listens_on_loopback_only(info.web_port):
-            status.bind_host = caddyfile.BIND_LOOPBACK
-            status.state = LanState.OFF
-        elif network.listens_on_all_interfaces(info.web_port):
+        #
+        # ⚠️ 判据是「有没有非回环地址在监听」，不是「有没有绑 0.0.0.0」。
+        # v3.90 起站点块把每个网卡 IP 分别列进去（证书 SAN 需要），Caddy 于是
+        # 给每个 IP 建独立 socket，永远不会出现通吃地址 —— 只认 0.0.0.0 的话，
+        # 明明开着也会被判成没开（2026-11-02 实机）。
+        if network.listens_on_lan(info.web_port):
             status.bind_host = caddyfile.BIND_ALL
             status.state = LanState.ON          # 待自检确认
+        elif network.listens_on_loopback_only(info.web_port):
+            status.bind_host = caddyfile.BIND_LOOPBACK
+            status.state = LanState.OFF
         else:
-            # 绑在某个具体网卡地址上（罕见，可能是手动改的）
+            # 端口在监听、却既没非回环地址也不全是回环 —— 理论上不可达，
+            # 留着当兜底：按“开着但状态可疑”处理，让它走自检暴露问题。
             status.bind_host = status.listening[0]
             status.state = LanState.ON
 
@@ -934,15 +940,16 @@ def disable_lan(info: InstallInfo, *, dry_run: bool = False) -> ActionReport:
 
     time.sleep(1.0)
 
-    # 验证一：端口只在回环上监听
-    if not network.listens_on_loopback_only(info.web_port):
+    # 验证一：已经没有非回环地址在监听了（＝局域网真的断开）
+    if network.listens_on_lan(info.web_port):
         report.add(
             "验证监听",
             False,
-            f"端口 {info.web_port} 仍监听在 {', '.join(network.listen_addresses(info.web_port))}",
+            f"端口 {info.web_port} 仍在局域网地址上监听："
+            f"{', '.join(network.listen_addresses(info.web_port))}",
         )
         return report
-    report.add("验证监听", True, "只监听 127.0.0.1")
+    report.add("验证监听", True, "只监听回环地址")
 
     # 验证二：本机还能用（关掉局域网不该影响本机访问）
     local_ok, local_msg, _ = probe_lan("127.0.0.1", info.web_port, windows=2)

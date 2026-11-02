@@ -1395,8 +1395,10 @@ def cmd_lan(args: argparse.Namespace) -> int:
         say()
         if report.success:
             say("  局域网访问已开启。")
+            # 一律打印 https —— App 端只接受 https 开头的地址（明文上送口令
+            # 是被明确拒绝的），这里给 http 会让用户照抄后卡在登录页。
             for addr in lan.collect_status(info, skip_probe=True).addresses:
-                say(f"    http://{addr['ip']}:{info.web_port}")
+                say(f"    https://{addr['ip']}:{info.web_port}")
         elif report.cancelled:
             say("  已取消（需要管理员权限才能配置防火墙）。局域网仍为关闭状态。")
         else:

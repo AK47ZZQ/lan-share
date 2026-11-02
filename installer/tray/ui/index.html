@@ -79,7 +79,8 @@ body {
   min-height: 0;
 }
 
-.col { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+/* 列内万一还是放不下，让它自己滚动，而不是把内容顶到卡片外面 */
+.col { display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; }
 
 .card {
   background: var(--card);
@@ -92,6 +93,13 @@ body {
 }
 
 .card.grow { flex: 1; }
+
+/* 🔴 卡片里的固定行不参与压缩（2026-11-02 实机）。
+   .card 是 flex 纵向容器，子项默认 flex-shrink:1 —— 面板高度一矮，
+   「公网访问」卡片里的「● 未配置」就被压出卡片边框（标题还在，状态掉到
+   线下面去了）。这几行本来就该按内容高度占位，不该被挤。
+   .qr-row 单独写了 flex:1，它在后面定义、特异性相同，照样能伸缩。 */
+.card > * { flex: none; }
 
 .card-title {
   font-size: 11.5px; font-weight: 700; color: var(--faint);

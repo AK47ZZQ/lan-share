@@ -1383,7 +1383,9 @@ namespace LanShare
             string[] names = { _cfg.ApiServiceName, _cfg.CaddyServiceName, _cfg.DbServiceName };
             string[] labels = { "API", "Caddy", "数据库" };
 
-            // caddy 的监听地址从 lan status 里拿（可能是 :: 或 127.0.0.1）
+            // caddy 的监听地址从 lan status 里拿。
+            // ⚠️ v3.90 起站点块逐 IP 绑定，监听地址里通常**没有** 0.0.0.0，
+            // 而是一串具体网卡 IP。以前只认通吃地址，卡片上地址就显示成「—」。
             string caddyBind = "";
             if (statusDict != null)
             {
@@ -1392,6 +1394,8 @@ namespace LanShare
                     string s0 = Convert.ToString(a);
                     if (s0 == "0.0.0.0" || s0 == "::") { caddyBind = "0.0.0.0"; break; }
                     if (s0 == "127.0.0.1") caddyBind = "127.0.0.1";
+                    // 具体网卡 IP 也算有效绑定，直接显示它（比一律缩成 0.0.0.0 准）
+                    else if (caddyBind.Length == 0 || caddyBind == "127.0.0.1") caddyBind = s0;
                 }
             }
 

@@ -222,23 +222,32 @@ def _sec_services(layout) -> list[str]:
         f"ForEach-Object {{ "
         f"  $_.Name + '|' + $_.State + '|' + $_.StartMode + '|' "
         f"+ $(if($_.PathName){{$_.PathName}}else{{''}}) + '|' "
-        f"+ $(if($_.StartName){{$_.StartName}}else{{''}}) }}",
+        f"+ $(if($_.StartName){{$_.StartName}}else{{''}}) + '|' "
+        # ExitCode：服务上一次退出的 win32 代码。PG 起不来时这是唯一直接证据
+        # （2026-11-02 实机：报告里只有 State=Stopped，起不来的原因全靠猜）
+        f"+ $(if($null -ne $_.ExitCode){{$_.ExitCode}}else{{''}}) }}",
         20)
 
-    found: dict[str, tuple[str, str, str, str]] = {}
+    found: dict[str, tuple] = {}
     for line in raw.splitlines():
         parts = line.strip().split("|")
-        if len(parts) >= 5:
-            found[parts[0]] = (parts[1], parts[2], parts[3], parts[4])
+        if len(parts) >= 6:
+            found[parts[0]] = (parts[1], parts[2], parts[3], parts[4], parts[5])
 
     for name in services:
         if name in found:
-            state, start_mode, path_name, account = found[name]
+            state, start_mode, path_name, account = found[name][:4]
+            exit_code = found[name][4] if len(found[name]) > 4 else ""
             out.append(f"  {name:28s} State={state} StartType={start_mode}")
             if path_name:
                 out.append(f"  {'':28s} Path={path_name}")
             if account:
                 out.append(f"  {'':28s} Account={account}")
+            if exit_code not in ("", "0", "1077"):
+                # 1077 = 服务从未启动过，不算异常
+                out.append(
+                    f"  {'':28s} ExitCode={exit_code}  ← 非 0 就是启动失败的直接原因"
+                )
         else:
             out.append(f"  {name:28s} NOT INSTALLED")
 
@@ -431,19 +440,39 @@ def _sec_pg(layout) -> list[str]:
             out.append("  判定：PG_BAD_CLUSTER（这个目录不是有效的数据目录）")
 
     # PG 自己的日志最能说明问题
+    #
+    # ⚠️ 三个位置都得看：
+    #   pgdata/log、pgdata/pg_log  —— PG 自己按 log_directory 写的
+    #   root/logs/postgres.log     —— lanshare_cli 用 pg_ctl -l 指定的
+    #   data/logs/postgres.log     —— 同上，但数据目录在 ProgramData 时
+    #
+    # 2026-11-02 实机踩到：诊断包只翻了前两个（那时 PG 的日志其实写在
+    # 第三个位置），于是「PG 起不来」这一条在报告里**一条日志都没有**，
+    # 只能靠猜。诊断工具缺证据就是缺陷。
+    log_files: list[Path] = []
     for log_dir in (pgdata / "log", pgdata / "pg_log"):
         if log_dir.is_dir():
-            logs = sorted(log_dir.glob("*.log"), key=lambda f: f.stat().st_mtime,
-                          reverse=True)[:2]
-            for lf in logs:
-                out.append(f"  日志尾部 {lf.name}：")
-                try:
-                    lines = lf.read_text(encoding="utf-8", errors="replace").splitlines()
-                    for line in lines[-25:]:
-                        out.append("    " + line)
-                except Exception as exc:
-                    out.append(f"    读取失败：{exc}")
-            break
+            log_files += sorted(log_dir.glob("*.log"),
+                                key=lambda f: f.stat().st_mtime, reverse=True)[:2]
+    for log_dir in (Path(layout.root) / "logs", Path(layout.data_dir) / "logs"):
+        cand = log_dir / "postgres.log"
+        if cand.is_file():
+            log_files.append(cand)
+
+    if not log_files:
+        out.append("  ⚠ 没找到 PG 日志文件（pgdata/log、logs/postgres.log 都没有）")
+        out.append("     若第 3 节显示 PG 服务 Stopped，说明它连日志都来不及写就退出了，")
+        out.append("     重点看那里的 ExitCode 和服务账户。")
+    for lf in log_files:
+        out.append(f"  日志尾部 {lf}：")
+        try:
+            lines = lf.read_text(encoding="utf-8", errors="replace").splitlines()
+            if not lines:
+                out.append("    （文件为空）")
+            for line in lines[-30:]:
+                out.append("    " + _redact(line))
+        except Exception as exc:
+            out.append(f"    读取失败：{exc}")
     out.append("")
     return out
 

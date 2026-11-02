@@ -58,6 +58,9 @@ namespace LanShare
         private bool _busy;
         private DateTime _lastPush = DateTime.MinValue;
         private string _lastQrSrc;
+        // 二维码对应的地址。IP 变了（换网卡/换 WiFi）就得重画 —— 只按“空不空”
+        // 判断缓存会让二维码一直指向旧地址，扫出来是全屋谁都连不上的 IP。
+        private string _lastQrUrl;
         // 上一次完整状态（CLI 结果），用于首帧沿用、避免地址和二维码闪没
         private Dictionary<string, object> _lastPayload;
         // 状态查询是否在途，防止定时器和 force 刷新叠加出两个 Python 进程
@@ -298,7 +301,7 @@ namespace LanShare
             }
 
             // 局域网开关：本地判断，不等 CLI
-            bool? listeningAll = LanListeningOnAll();
+            bool? listeningAll = LanReachable();
             if (listeningAll == true)
             {
                 p["lanOn"] = true;
@@ -311,8 +314,12 @@ namespace LanShare
                     string url = "https://" + ip + ":" + _cfg.WebPort + "/";
                     p["lanUrl"] = url;
                     // 二维码也别等 CLI —— 直接从本地 API 端点取，顺便把结果缓存住
-                    if (string.IsNullOrEmpty(_lastQrSrc))
+                    // 缓存按地址校验：换了网卡/IP 就得重画
+                    if (_lastQrSrc == null || _lastQrUrl != url)
+                    {
                         _lastQrSrc = FetchQrFor(url);
+                        _lastQrUrl = url;
+                    }
                     if (!string.IsNullOrEmpty(_lastQrSrc))
                         p["qr"] = _lastQrSrc;
                 }
@@ -327,16 +334,39 @@ namespace LanShare
                 p["lanHint"] = "服务好像没在运行，稍后重试或点「重启服务」";
             }
 
-            // 有上一次的完整结果就沿用它，避免第一帧把地址/二维码闪没
+            // 上一次的完整结果只用来补「本地判断不出来」的字段。
+            //
+            // 🔴 以前这里把 lanOn / lanUrl / qr 也一起覆盖了回去。
+            //
+            // 上面的代码刚根据真实监听状态算出「局域网开着 / 地址是 xxx  /
+            // 二维码已取到」，紧接着就被上一次的 false / "" / null 盖掉。
+            // 只要曾经有过一次 CLI status 超时（那条路径里 lanOn 恒为 false），
+            // 这个假状态就永久粘在 _lastPayload 上 ——
+            // 表现正是「服务明明起来了，GUI 状态一直不变、二维码也不生成」
+            // （2026-11-02 实机）。
+            //
+            // 现在：局域网四件套一律以本地实时判断为准，只有本地判断不出来
+            // （listeningAll == null，端口没在监听）时才回落旧值，
+            // 既不会再粘住假状态，也保住了「第一帧不把地址闪没」的初衷。
             if (_lastPayload != null)
             {
                 foreach (var key in new[]
                 {
-                    "healthy", "lanOn", "lanUrl", "lanHint", "wanUrl", "qr",
-                    "certTrusted", "lanBlocked", "noNetwork",
+                    "wanUrl", "certTrusted", "lanBlocked", "noNetwork",
                 })
                 {
                     if (_lastPayload.ContainsKey(key)) p[key] = _lastPayload[key];
+                }
+
+                if (listeningAll == null)
+                {
+                    foreach (var key in new[]
+                    {
+                        "healthy", "lanOn", "lanUrl", "lanHint", "qr",
+                    })
+                    {
+                        if (_lastPayload.ContainsKey(key)) p[key] = _lastPayload[key];
+                    }
                 }
             }
             return p;
@@ -348,6 +378,36 @@ namespace LanShare
         /// </summary>
         private static string LocalLanIp()
         {
+            // 先问路由表：「手机该连哪个 IP」的答案就是本机默认路由的出口地址。
+            //
+            // UDP Connect 不会真的发包，只是让系统按路由表选出口并绑定本地地址。
+            // 2026-11-02 实机：机器上同时挂着以太网 192.168.89.118 和另一块
+            // 带网关的网卡（Clash/VPN 一类），按 metric 挑会挑到后者 ——
+            // 地址框和二维码就指向一个手机根本连不上的 IP。
+            try
+            {
+                using (var sock = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Dgram,
+                    System.Net.Sockets.ProtocolType.Udp))
+                {
+                    sock.Connect("223.5.5.5", 53);
+                    var ep = sock.LocalEndPoint as System.Net.IPEndPoint;
+                    if (ep != null)
+                    {
+                        string routed = ep.Address.ToString();
+                        if (!string.IsNullOrEmpty(routed)
+                            && routed != "0.0.0.0"
+                            && !routed.StartsWith("127.")
+                            && !routed.StartsWith("169.254."))
+                        {
+                            return routed;
+                        }
+                    }
+                }
+            }
+            catch (Exception) { /* 没有默认路由（纯内网/没联网）就退回网卡枚举 */ }
+
             try
             {
                 string best = null;
@@ -611,18 +671,24 @@ namespace LanShare
         }
 
         /// <summary>
-        /// 局域网开关状态 —— 直接看 8765 端口监听在哪。
+        /// 局域网能不能连到 —— 判据是 8765 端口有没有在**非回环**地址上监听。
+        /// true=能连（开），false=只有本机能连（关），null=端口根本没监听。
         ///
-        /// 这是 CLI `lan status` 里唯一的权威判据（它自己也这么判断：
-        /// listens_on_loopback_only → 关，listens_on_all_interfaces → 开），
-        /// 只是它顺带要做防火墙检查、HTTPS 自检，慢的时候要十几秒。
-        /// GUI 每次刷新都跑一遍那个，必然超时。
+        /// 🔴 以前这里只认「监听地址是 0.0.0.0 / ::」（通吃所有网卡），
+        /// 而且把 IPv6Loopback(::1) 也当成“通吃” —— 两个方向都错：
         ///
-        /// 返回值：true = 所有网卡都在听（局域网开着）
-        ///         false = 只有环回在听（只本机）
-        ///         null = 端口根本没监听（服务没起来）
+        ///   v3.90 起，站点块把每个网卡 IP 分别列进去（证书 SAN 需要）：
+        ///     https://localhost:8765, https://192.168.89.118:8765, ...
+        ///   Caddy 对具体 IP host 的做法是逐个建 listener 绑到那个 IP，
+        ///   **永远不会出现 0.0.0.0**。于是判断永远是 false → 界面报
+        ///   「命令执行了，但服务 10 秒内没切到局域网模式」→ 用户看到的
+        ///   是“启动失败”，而 CLI 自检明明 200 OK（2026-11-02 实机）。
+        ///
+        ///   ::1 是回环，把它算成“所有网卡”会让关闭局域网时误报成功。
+        ///
+        /// 现在只有一个判据：有没有任一个非回环地址在监听。
         /// </summary>
-        private bool? LanListeningOnAll()
+        private bool? LanReachable()
         {
             try
             {
@@ -630,27 +696,28 @@ namespace LanShare
                     .GetIPGlobalProperties()
                     .GetActiveTcpListeners();
                 bool any = false;
-                bool all = false;
                 foreach (var ep in listeners)
                 {
                     if (ep.Port != _cfg.WebPort) continue;
                     any = true;
-                    if (ep.Address.Equals(System.Net.IPAddress.Any) ||
-                        ep.Address.Equals(System.Net.IPAddress.IPv6Any) ||
-                        ep.Address.Equals(System.Net.IPAddress.IPv6Loopback) ||
-                        ep.Address.ToString() == "::")
-                    {
-                        all = true;
-                    }
+                    if (!IsLoopbackAddress(ep.Address)) return true;
                 }
-                if (!any) return null;
-                // Caddy 在 Windows 上通常监听 ::（IPv6 通吃），这等价于所有网卡
-                return all;
+                if (!any) return null;      // 端口没监听：服务没起来
+                return false;               // 只在回环上监听：局域网关着
             }
             catch (Exception)
             {
                 return null;
             }
+        }
+
+        /// <summary>回环地址判断（含 IPv4-mapped 的 ::ffff:127.0.0.1）。</summary>
+        private static bool IsLoopbackAddress(System.Net.IPAddress addr)
+        {
+            if (addr == null) return false;
+            if (System.Net.IPAddress.IsLoopback(addr)) return true;
+            string s = addr.ToString();
+            return s == "::ffff:127.0.0.1" || s == "::1";
         }
 
         /// <summary>把 CLI 的 status 字典整理成前端要的形状。</summary>
@@ -746,7 +813,8 @@ namespace LanShare
             // 二维码：只在局域网开着时才取，取不到就不显示（不阻断其它信息）
             if (lanOn && lanUrl.Length > 0)
             {
-                if (_lastQrSrc != null)
+                // 缓存要和地址绑定：地址变了（换网卡）就重画
+                if (_lastQrSrc != null && _lastQrUrl == lanUrl)
                 {
                     p["qr"] = _lastQrSrc;
                 }
@@ -767,6 +835,7 @@ namespace LanShare
                                     img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
                                     _lastQrSrc = "data:image/png;base64,"
                                                + Convert.ToBase64String(ms.ToArray());
+                                    _lastQrUrl = lanUrl;
                                     p["qr"] = _lastQrSrc;
                                 }
                             }
@@ -778,6 +847,7 @@ namespace LanShare
             else
             {
                 _lastQrSrc = null;
+                _lastQrUrl = null;
             }
 
             // 公网地址：走本地 HTTP 端点。
@@ -1443,7 +1513,7 @@ namespace LanShare
                 // 先看一次现状。CLI 有时判断「已经是目标状态」就直接返回，
                 // 这时候本来就不用等 —— 否则用户白等满 10 秒，而且这 10 秒里
                 // 整个面板是禁用的（_busy 挡着），体感就是卡死。
-                if (LanListeningOnAll() == wantAll)
+                if (LanReachable() == wantAll)
                 {
                     AppendLog("ToggleLan: 已经是目标状态，无需等待");
                     return turnOn ? "局域网已开启" : "局域网已关闭";
@@ -1452,7 +1522,7 @@ namespace LanShare
                 bool switched = false;
                 for (int i = 0; i < 20; i++)
                 {
-                    if (LanListeningOnAll() == wantAll) { switched = true; break; }
+                    if (LanReachable() == wantAll) { switched = true; break; }
                     System.Threading.Thread.Sleep(500);
                 }
                 AppendLog("ToggleLan: 监听状态切换 switched=" + switched);

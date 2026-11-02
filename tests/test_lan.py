@@ -280,6 +280,33 @@ def info(tmp_path):
     )
 
 
+class TestListensOnLan:
+    """lan 可达性判据本身（不是 state 机）。
+
+    2026-11-02 立的规矩：判据是「有没有非回环地址在监听」，不是
+    「有没有绑 0.0.0.0」—— 逐 IP 绑定的布局永远不会出现通吃地址。
+    """
+
+    def test_per_ip_binding_counts_as_lan(self, monkeypatch):
+        monkeypatch.setattr(
+            network, "listen_addresses",
+            lambda p: ["127.0.0.1", "::1", "192.168.89.118"],
+        )
+        assert network.listens_on_lan(8765) is True
+
+    def test_loopback_only_is_not_lan(self, monkeypatch):
+        monkeypatch.setattr(network, "listen_addresses", lambda p: ["127.0.0.1", "::1"])
+        assert network.listens_on_lan(8765) is False
+
+    def test_nothing_listening_is_not_lan(self, monkeypatch):
+        monkeypatch.setattr(network, "listen_addresses", lambda p: [])
+        assert network.listens_on_lan(8765) is False
+
+    def test_wildcard_still_counts_as_lan(self, monkeypatch):
+        monkeypatch.setattr(network, "listen_addresses", lambda p: ["0.0.0.0"])
+        assert network.listens_on_lan(8765) is True
+
+
 class TestCollectStatus:
     def test_no_service_is_uninstalled(self, info, monkeypatch):
         monkeypatch.setattr(firewall, "service_image_path", lambda name: "")
@@ -292,12 +319,43 @@ class TestCollectStatus:
         status = lan.collect_status(info)
         assert status.state == lan.LanState.UNINSTALLED
 
+    def test_per_ip_hosts_is_on(self, info, monkeypatch):
+        """逐 IP 绑定必须判成「开着」。
+
+        v3.90 起站点块把每个网卡 IP 分别列进去（证书 SAN 需要），Caddy 于是
+        给每个 IP 建独立 socket，监听地址里**不会出现 0.0.0.0**。旧判据只认
+        通吃地址，于是服务明明开着也判成没开 —— 2026-11-02 实机：
+        CLI 自检 200 OK，界面报「10 秒内没切到局域网模式」。
+
+        这里故意不 patch listens_on_lan，让真实逻辑跑。
+        """
+        monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
+        monkeypatch.setattr(
+            network, "listen_addresses",
+            lambda p: ["127.0.0.1", "192.168.89.118", "192.168.88.125"],
+        )
+        monkeypatch.setattr(network, "list_lan_addresses", lambda: [
+            network.LanAddress("192.168.89.118", "以太网", 24, True, 1)
+        ])
+        monkeypatch.setattr(network, "list_network_profiles", lambda: [
+            network.NetworkProfile("home", "以太网", "Private")
+        ])
+        monkeypatch.setattr(firewall, "rule_state", lambda p, e: "ok")
+        monkeypatch.setattr(
+            lan, "probe_lan",
+            lambda *a, **k: (True, "ok", "https://192.168.89.118:8765/healthz"),
+        )
+
+        status = lan.collect_status(info)
+        assert status.state == lan.LanState.ON
+        assert status.listening == ["127.0.0.1", "192.168.89.118", "192.168.88.125"]
+
     def test_loopback_only_is_off(self, info, monkeypatch):
         """只绑回环 = 未开启，且不需要做自检。"""
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "listen_addresses", lambda p: ["127.0.0.1"])
         monkeypatch.setattr(network, "listens_on_loopback_only", lambda p: True)
-        monkeypatch.setattr(network, "listens_on_all_interfaces", lambda p: False)
+        monkeypatch.setattr(network, "listens_on_lan", lambda p: False)
         monkeypatch.setattr(network, "list_lan_addresses", lambda: [
             network.LanAddress("192.168.1.100", "以太网", 24, True, 1)
         ])
@@ -314,7 +372,7 @@ class TestCollectStatus:
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "listen_addresses", lambda p: ["0.0.0.0"])
         monkeypatch.setattr(network, "listens_on_loopback_only", lambda p: False)
-        monkeypatch.setattr(network, "listens_on_all_interfaces", lambda p: True)
+        monkeypatch.setattr(network, "listens_on_lan", lambda p: True)
         monkeypatch.setattr(network, "list_lan_addresses", lambda: [
             network.LanAddress("192.168.1.100", "以太网", 24, True, 1)
         ])
@@ -336,7 +394,7 @@ class TestCollectStatus:
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "listen_addresses", lambda p: ["0.0.0.0"])
         monkeypatch.setattr(network, "listens_on_loopback_only", lambda p: False)
-        monkeypatch.setattr(network, "listens_on_all_interfaces", lambda p: True)
+        monkeypatch.setattr(network, "listens_on_lan", lambda p: True)
         monkeypatch.setattr(network, "list_lan_addresses", lambda: [
             network.LanAddress("192.168.1.100", "以太网", 24, True, 1)
         ])
@@ -354,7 +412,7 @@ class TestCollectStatus:
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "listen_addresses", lambda p: ["0.0.0.0"])
         monkeypatch.setattr(network, "listens_on_loopback_only", lambda p: False)
-        monkeypatch.setattr(network, "listens_on_all_interfaces", lambda p: True)
+        monkeypatch.setattr(network, "listens_on_lan", lambda p: True)
         monkeypatch.setattr(network, "list_lan_addresses", lambda: [])
         monkeypatch.setattr(firewall, "rule_state", lambda p, e: "ok")
 
@@ -366,7 +424,7 @@ class TestCollectStatus:
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "listen_addresses", lambda p: ["0.0.0.0"])
         monkeypatch.setattr(network, "listens_on_loopback_only", lambda p: False)
-        monkeypatch.setattr(network, "listens_on_all_interfaces", lambda p: True)
+        monkeypatch.setattr(network, "listens_on_lan", lambda p: True)
         monkeypatch.setattr(network, "list_lan_addresses", lambda: [
             network.LanAddress("10.0.0.5", "WiFi", 24, True, 1)
         ])

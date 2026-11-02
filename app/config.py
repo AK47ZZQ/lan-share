@@ -33,6 +33,12 @@ BACKUP_HOUR = 4                        # 每日备份时刻（小时；清理循
 #   安装：{app}\pgsql\bin        （iss 把 build\dist\pgsql 铺到 {app}\pgsql）
 #   开发：<repo>\env\pgsql-bin   （开发仓库里 zonky 解出来的客户端工具）
 _PG_BIN_CANDIDATES = [
+    # 安装布局：pg_dump 等客户端工具单独放子目录（2026-11-02 起）。
+    #
+    # 为什么不在 pgsql\bin\ 里：服务端是 PG 16.4，而可用的客户端工具是
+    # PG 17.4，同目录会覆盖 libpq/libssl 让 postgres.exe 起不来。分开放，
+    # pg_dump.exe 加载自己目录的 DLL，互不干扰。
+    PROJECT_ROOT / "pgsql" / "pgclient",
     PROJECT_ROOT / "pgsql" / "bin",
     PROJECT_ROOT / "env" / "pgsql-bin",
 ]
