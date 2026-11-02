@@ -519,8 +519,48 @@ def collect_status(
             return status
 
         if not status.listening:
+            # ⚠️ 端口枚举不到 ≠ 服务没在跑（2026-11-02 第三台实机）。
+            #
+            # Caddy 开了 HTTP/3（UDP 8765）+ 内部 socket 池，这台机器上
+            # Get-NetTCPConnection 和 netstat 都拿不到 8765 的 LISTENING 行
+            # —— netstat 只给了一条 `0.0.0.0:8765 → 0.0.0.0:0 CLOSED`。
+            # 而 https 请求完全正常（healthz 每 5 秒 200、手机扫码能登录）。
+            # 结果 CLI 判「未安装」，界面显示「局域网未开启」、二维码消失，
+            # 用户看到的就是「明明能用，界面说没开」。
+            #
+            # 判据换成「真连一下」：能从局域网地址连上就是开着。
+            addrs_probe = network.list_lan_addresses()
+
+            # 调用方明确说「别探测」（enable 成功后只是要打印一行地址）时
+            # 不要为了这个再等好几秒 —— 那时服务刚自检过，肯定是开的。
+            if skip_probe:
+                status.addresses = addrs_probe
+                if addrs_probe:
+                    status.listening = [addrs_probe[0].ip]
+                    status.bind_host = caddyfile.BIND_ALL
+                    status.state = LanState.ON
+                return status
+
+            for addr in addrs_probe[:2]:
+                ok_p, msg_p, url_p = probe_lan(addr.ip, info.web_port, windows=3)
+                if ok_p:
+                    status.listening = [addr.ip]
+                    status.bind_host = caddyfile.BIND_ALL
+                    status.state = LanState.ON
+                    status.probe_ok = True
+                    status.probe_msg = msg_p
+                    status.probe_url = url_p
+                    status.addresses = addrs_probe
+                    status.hints.append(
+                        "端口枚举不到监听记录（Windows socket 查询异常），"
+                        f"但实测 {url_p} 可连，按开启处理"
+                    )
+                    return status
+
             status.state = LanState.UNINSTALLED
-            status.hints.append(f"端口 {info.web_port} 没有监听，Caddy 服务可能没在运行")
+            status.hints.append(
+                f"端口 {info.web_port} 没有监听且连不上，Caddy 服务可能没在运行"
+            )
             return status
 
         # 2. 监听地址（判断开/关的唯一依据）
@@ -1018,6 +1058,20 @@ def disable_lan(info: InstallInfo, *, dry_run: bool = False) -> ActionReport:
             f"{', '.join(network.listen_addresses(info.web_port))}",
         )
         return report
+
+    # 端口枚举不到时不能直接算「关掉了」—— 同一台机器上枚举 API 本来就
+    # 看不到 Caddy 的监听（见 collect_status 里的长注释）。实连一次确认。
+    if not network.listen_addresses(info.web_port):
+        for addr in network.list_lan_addresses()[:2]:
+            still_ok, _msg, _url = probe_lan(addr.ip, info.web_port, windows=2)
+            if still_ok:
+                report.add(
+                    "验证监听",
+                    False,
+                    f"枚举不到监听但实测仍能从 {addr.ip} 连上，局域网没关掉",
+                )
+                return report
+
     report.add("验证监听", True, "只监听回环地址")
 
     # 验证二：本机还能用（关掉局域网不该影响本机访问）

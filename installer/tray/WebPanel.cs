@@ -61,6 +61,10 @@ namespace LanShare
         // 二维码对应的地址。IP 变了（换网卡/换 WiFi）就得重画 —— 只按“空不空”
         // 判断缓存会让二维码一直指向旧地址，扫出来是全屋谁都连不上的 IP。
         private string _lastQrUrl;
+        // 上次取二维码的时间。取失败（API 没起来）时也要退避 ——
+        // FetchQrFor 是同步 HTTP（4 秒超时）且跑在 UI 线程，不留退避的话
+        // 每 4 秒的刷新都会卡一次，面板又变成「点不动」。
+        private DateTime _lastQrAt = DateTime.MinValue;
         // 上一次完整状态（CLI 结果），用于首帧沿用、避免地址和二维码闪没
         private Dictionary<string, object> _lastPayload;
         // 状态查询是否在途，防止定时器和 force 刷新叠加出两个 Python 进程
@@ -314,11 +318,14 @@ namespace LanShare
                     string url = "https://" + ip + ":" + _cfg.WebPort + "/";
                     p["lanUrl"] = url;
                     // 二维码也别等 CLI —— 直接从本地 API 端点取，顺便把结果缓存住
-                    // 缓存按地址校验：换了网卡/IP 就得重画
-                    if (_lastQrSrc == null || _lastQrUrl != url)
+                    // 缓存按地址校验（换网卡/IP 就得重画）；失败退避 30 秒，
+                    // 否则 API 没起来时每帧都卡一次同步 HTTP（UI 线程）
+                    bool needQr = _lastQrSrc == null || _lastQrUrl != url;
+                    if (needQr && (DateTime.Now - _lastQrAt).TotalSeconds >= 30)
                     {
                         _lastQrSrc = FetchQrFor(url);
                         _lastQrUrl = url;
+                        _lastQrAt = DateTime.Now;
                     }
                     if (!string.IsNullOrEmpty(_lastQrSrc))
                         p["qr"] = _lastQrSrc;
@@ -331,7 +338,9 @@ namespace LanShare
             }
             else
             {
-                p["lanHint"] = "服务好像没在运行，稍后重试或点「重启服务」";
+                // 刚装完 / 刚重启的那几秒，Caddy 还在起，这里如实说「正在启动」
+                // 而不是「没在运行」—— 后者会让人以为装坏了
+                p["lanHint"] = "服务正在启动或暂时不可用（刚装完等几秒）；一直这样点「重启服务」";
             }
 
             // 上一次的完整结果只用来补「本地判断不出来」的字段。
@@ -670,44 +679,122 @@ namespace LanShare
             });
         }
 
-        /// <summary>
-        /// 局域网能不能连到 —— 判据是 8765 端口有没有在**非回环**地址上监听。
-        /// true=能连（开），false=只有本机能连（关），null=端口根本没监听。
-        ///
-        /// 🔴 以前这里只认「监听地址是 0.0.0.0 / ::」（通吃所有网卡），
-        /// 而且把 IPv6Loopback(::1) 也当成“通吃” —— 两个方向都错：
-        ///
-        ///   v3.90 起，站点块把每个网卡 IP 分别列进去（证书 SAN 需要）：
-        ///     https://localhost:8765, https://192.168.89.118:8765, ...
-        ///   Caddy 对具体 IP host 的做法是逐个建 listener 绑到那个 IP，
-        ///   **永远不会出现 0.0.0.0**。于是判断永远是 false → 界面报
-        ///   「命令执行了，但服务 10 秒内没切到局域网模式」→ 用户看到的
-        ///   是“启动失败”，而 CLI 自检明明 200 OK（2026-11-02 实机）。
-        ///
-        ///   ::1 是回环，把它算成“所有网卡”会让关闭局域网时误报成功。
-        ///
-        /// 现在只有一个判据：有没有任一个非回环地址在监听。
-        /// </summary>
+        // 局域网可达性缓存。
+        //
+        // 🔴 为什么必须缓存（第一轮 review 自己抓到的）：
+        // `BuildLocalPayload()` 跑在 **UI 线程**（Send 的那一帧），而
+        // LanReachable() 现在要做真实 TCP 连接 —— 服务挂着时最坏要等
+        // 1.2s（本地）+ 2.5s（局域网），足以让面板每 4 秒冻一次。
+        // 这正是「GUI 卡死」的老病从另一个门又进来了
+        // （AGENTS/备份卡片那段注释里记过一次，同一类错误）。
+        //
+        // 所以：UI 线程只读缓存；过期就让后台线程去探，探完下个刷新周期生效。
+        // 需要「立刻要答案」的地方（切换按钮的轮询）走 LanReachableNow()，
+        // 那个本来就在 Task.Run 里跑，不在 UI 线程。
+        private int _lanReachState;          // 0=未知 1=可连 2=不可连
+        private DateTime _lanReachAt = DateTime.MinValue;
+        private int _lanReachBusy;           // 0=空闲 1=在探，防重入
+
+        /// <summary>局域网能不能连到（UI 线程安全：只读缓存，后台刷新）。</summary>
         private bool? LanReachable()
+        {
+            if ((DateTime.Now - _lanReachAt).TotalSeconds >= 4
+                && System.Threading.Interlocked.CompareExchange(ref _lanReachBusy, 1, 0) == 0)
+            {
+                Task.Run(delegate
+                {
+                    try { LanReachableNow(); }
+                    catch (Exception) { }
+                    finally { System.Threading.Interlocked.Exchange(ref _lanReachBusy, 0); }
+                });
+            }
+
+            int st = System.Threading.Interlocked.CompareExchange(ref _lanReachState, 0, 0);
+            if (st == 1) return true;
+            if (st == 2) return false;
+            return null;                     // 还没探出来
+        }
+
+        /// <summary>
+        /// 同步探测并刷新缓存。**不要在 UI 线程调用**（会卡）。
+        /// 切换按钮在 Task.Run 里轮询用这个，因为那时用户正在等结果。
+        /// </summary>
+        private bool? LanReachableNow()
+        {
+            bool? result = LanReachableProbe();
+            System.Threading.Interlocked.Exchange(
+                ref _lanReachState, result == null ? 0 : (result.Value ? 1 : 2));
+            _lanReachAt = DateTime.Now;
+            return result;
+        }
+
+        /// <summary>
+        /// 局域网能不能连到。
+        /// true=能连（开），false=连不上（关），null=服务本身没在跑。
+        ///
+        /// 🔴 判据演进（2026-11-02 两次实机）：
+        ///
+        /// 第一版只认「监听地址是 0.0.0.0 或 ::」。但 3.90 起站点块逐 IP 绑定，
+        /// Caddy 给每个 IP 单独建 listener，永远不会出现通吃地址 —— 于是永远
+        /// 判 false，界面报「10 秒内没切到局域网模式」。
+        ///
+        /// 第二版改成「有非回环地址在监听就算开」，逻辑对了，但**仍然依赖
+        /// 端口枚举**。第三台机器上直接翻车：Caddy 明明在正常服务（healthz
+        /// 每 5 秒 200、手机扫码能登录），可 GetActiveTcpListeners() 和
+        /// netstat 都拿不到 8765 的 LISTENING 行 —— netstat 只给了一条
+        ///   0.0.0.0:8765 → 0.0.0.0:0 CLOSED
+        /// 于是托盘判「端口没监听」→ 界面显示「服务好像没在运行」、
+        /// 二维码一闪就没。典型的「判断功能好没好」的部分坏了。
+        ///
+        /// 现在：服务活着时，**直接从局域网 IP 连一次 8765**。连得上就是开，
+        /// 这个判据不依赖任何本机 socket 查询，也正是用户真正关心的问题
+        /// （手机能不能连）。
+        /// </summary>
+        private bool? LanReachableProbe()
         {
             try
             {
-                var listeners = System.Net.NetworkInformation.IPGlobalProperties
-                    .GetIPGlobalProperties()
-                    .GetActiveTcpListeners();
-                bool any = false;
-                foreach (var ep in listeners)
+                // ① 服务本身活着吗？连不上 = 服务没跑，交给上层显示「正在启动/未运行」
+                if (!TcpConnects("127.0.0.1", _cfg.WebPort, 1200)) return null;
+
+                // ② 有非回环地址在监听 → 直接就是开着（快路径，常见情况）
+                foreach (var ep in System.Net.NetworkInformation.IPGlobalProperties
+                             .GetIPGlobalProperties().GetActiveTcpListeners())
                 {
                     if (ep.Port != _cfg.WebPort) continue;
-                    any = true;
                     if (!IsLoopbackAddress(ep.Address)) return true;
                 }
-                if (!any) return null;      // 端口没监听：服务没起来
-                return false;               // 只在回环上监听：局域网关着
+
+                // ③ 枚举不到非回环监听 ≠ 没开（见方法注释）。
+                //    直接连一次真实的局域网地址，这是最终判据。
+                string ip = LocalLanIp();
+                if (ip != null && TcpConnects(ip, _cfg.WebPort, 2500)) return true;
+
+                // ④ 连不上 → 确实是关的（服务活着但只对本机开放）
+                return false;
             }
             catch (Exception)
             {
                 return null;
+            }
+        }
+
+        /// <summary>能不能建立到 host:port 的 TCP 连接（带超时，不抛异常）。</summary>
+        private static bool TcpConnects(string host, int port, int timeoutMs)
+        {
+            try
+            {
+                using (var tcp = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = tcp.BeginConnect(host, port, null, null);
+                    if (!ar.AsyncWaitHandle.WaitOne(timeoutMs)) return false;
+                    tcp.EndConnect(ar);
+                    return tcp.Connected;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
             }
         }
 
@@ -1513,15 +1600,28 @@ namespace LanShare
                 // 先看一次现状。CLI 有时判断「已经是目标状态」就直接返回，
                 // 这时候本来就不用等 —— 否则用户白等满 10 秒，而且这 10 秒里
                 // 整个面板是禁用的（_busy 挡着），体感就是卡死。
-                if (LanReachable() == wantAll)
+                // 这里在 RunBusy 的 Task.Run 里，不在 UI 线程 —— 可以同步探
+                if (LanReachableNow() == wantAll)
                 {
                     AppendLog("ToggleLan: 已经是目标状态，无需等待");
                     return turnOn ? "局域网已开启" : "局域网已关闭";
                 }
 
+                // 切换动作刚做完，缓存里还是动作前的值 —— 标记过期，
+                // 让轮询第一轮就触发后台重探
+                _lanReachAt = DateTime.MinValue;
                 bool switched = false;
                 for (int i = 0; i < 20; i++)
                 {
+                    // 🔴 这里必须读缓存（LanReachable），不能用 LanReachableNow。
+                    //
+                    // Now 每次最坏 1.2s(本地) + 2.5s(局域网超时) = 3.7 秒，
+                    // 20 次轮询就是 74 秒 —— 开启失败时用户要对着冻结的面板
+                    // 等一分多钟（_busy 期间什么都不刷）。第一版就是这么写的，
+                    // 第二轮 review 抓到的。
+                    //
+                    // 读缓存：每 4 秒后台刷一次，10 秒窗口里能刷到 2 次，
+                    // 判断切换是否完成完全够用。
                     if (LanReachable() == wantAll) { switched = true; break; }
                     System.Threading.Thread.Sleep(500);
                 }

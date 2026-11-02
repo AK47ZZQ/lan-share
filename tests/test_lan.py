@@ -321,8 +321,34 @@ class TestCollectStatus:
     def test_no_listener_is_uninstalled(self, info, monkeypatch):
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "listen_addresses", lambda p: [])
+        # 端口枚举不到时会再「实连一次」兜底（见 collect_status 注释），
+        # 这里给个空地址表，避免测试真的去打网络
+        monkeypatch.setattr(network, "list_lan_addresses", lambda: [])
         status = lan.collect_status(info)
         assert status.state == lan.LanState.UNINSTALLED
+
+    def test_listener_enumeration_empty_but_probe_ok_is_on(self, info, monkeypatch):
+        """枚举不到监听 ≠ 没开（Windows socket 查询异常时的兜底）。
+
+        2026-11-02 第三台实机：healthz 每 5 秒 200、手机能扫码登录，但
+        Get-NetTCPConnection / netstat 都拿不到 8765 的 LISTENING 行
+        （只有一条 CLOSED）。旧逻辑直接判「未安装」→ 界面显示「局域网未开启」
+        + 二维码消失，用户看到的正是「明明能用，界面说没开」。
+        """
+        monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
+        monkeypatch.setattr(network, "listen_addresses", lambda p: [])
+        monkeypatch.setattr(network, "list_lan_addresses", lambda: [
+            network.LanAddress("192.168.1.100", "WLAN", 24, True, 1)
+        ])
+        monkeypatch.setattr(
+            lan, "probe_lan",
+            lambda *a, **k: (True, "ok", "https://192.168.1.100:8765/healthz"),
+        )
+
+        status = lan.collect_status(info)
+        assert status.state == lan.LanState.ON
+        assert status.probe_ok
+        assert any("枚举不到" in h for h in status.hints)
 
     def test_per_ip_hosts_is_on(self, info, monkeypatch):
         """逐 IP 绑定必须判成「开着」。

@@ -305,6 +305,21 @@ def _sec_ports(layout) -> list[str]:
     for line in raw.splitlines():
         if f":{api} " in line or f":{web} " in line:
             out.append("    " + " ".join(line.split()))
+
+    # 端口被占着、netstat 里却没有 LISTENING 行 —— 2026-11-03 实机见过：
+    # Caddy（HTTP/3 + 内部 socket 池）在这台机器上就是这样，netstat 只给
+    # 一条 `0.0.0.0:8765 → 0.0.0.0:0 CLOSED`，而 HTTPS 请求完全正常。
+    # 靠「枚举端口」判断服务状态的逻辑在这种机器上必然误报，把话说明白。
+    listening_web = any(
+        f":{web} " in ln and "LISTENING" in ln.upper()
+        for ln in raw.splitlines()
+    )
+    if not listening_web and owner_by_port.get(web):
+        out.append("")
+        out.append("  ⚠ 端口被占用，但 netstat 里没有 LISTENING 行。")
+        out.append("     这是 Windows 对某些监听 socket 的盲区（Caddy 的 HTTP/3 +")
+        out.append("     socket 池会触发）。此时不要用「查端口」判断服务是否在跑，")
+        out.append("     以 healthz 探测结果为准。")
     out.append("")
     return out
 
