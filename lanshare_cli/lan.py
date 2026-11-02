@@ -825,6 +825,53 @@ def _write_caddyfile_and_restart(
     return True
 
 
+def _make_profiles_private(
+    aliases: list[str], *, dry_run: bool = False
+) -> tuple[bool, str]:
+    """把指定网卡上的网络类别改成「专用」。
+
+    为什么需要这个：家用 WiFi 被 Windows 判成「公用网络」极其常见 —— 换过
+    路由器、首次连接、网关 MAC 变了都会。以前的做法是直接拒绝开启局域网，
+    用户看到的只有一句「启动失败」，真正的原因埋在 steps 里没人看。
+
+    2026-11-02 主人指令：别拦，直接改。改不动也不许拦（上层会继续开，
+    并让防火墙规则一并覆盖公用网络）。
+
+    需要管理员权限（改的是机器级设置），走 UAC 提权。
+    """
+    names = [a for a in aliases if a]
+    if not names:
+        return False, "没有需要修改的网卡"
+    if dry_run:
+        return True, "[dry-run] " + "、".join(names)
+
+    quoted = ", ".join("'" + a.replace("'", "''") + "'" for a in names)
+    script = f"""
+$ErrorActionPreference = 'Continue'
+$ok = @(); $bad = @()
+foreach ($a in @({quoted})) {{
+    try {{
+        Set-NetConnectionProfile -InterfaceAlias $a -NetworkCategory Private -ErrorAction Stop
+        $ok += $a
+    }} catch {{
+        $bad += ($a + '：' + $_.Exception.Message)
+    }}
+}}
+if ($ok.Count -gt 0) {{ Write-Output ('OK:' + ($ok -join '、')) }}
+if ($bad.Count -gt 0) {{ Write-Output ('FAIL:' + ($bad -join '；')) }}
+"""
+    try:
+        _code, out = firewall.run_elevated(script, timeout=120)
+    except Exception as exc:                      # 改不动不该拖垮整个流程
+        return False, f"调用提权进程失败：{exc}"
+
+    if "OK:" in out:
+        return True, out.split("OK:", 1)[1].splitlines()[0].strip()
+    if "FAIL:" in out:
+        return False, out.split("FAIL:", 1)[1].splitlines()[0].strip()[:200]
+    return False, (out or "无法修改网络类别（可能取消了 UAC 授权）").strip()[:200]
+
+
 def enable_lan(
     info: InstallInfo,
     *,
@@ -840,7 +887,10 @@ def enable_lan(
       4. 改 Caddyfile + 重启 Caddy
       5. 局域网自检
 
-    allow_public=True 表示调用方已经跟用户确认过「我知道是公用网络」。
+    allow_public: 历史参数，保留只为兼容 CLI 的 --allow-public 开关。
+        2026-11-02 起「公用网络」不再拦人：enable_lan 会先尝试自动把网络
+        改成专用（Set-NetConnectionProfile），改不动也照常继续，并让防火墙
+        规则一并覆盖 Public。所以这个参数目前不影响行为。
     """
     report = ActionReport(success=False)
 
@@ -858,27 +908,46 @@ def enable_lan(
     report.add("检查网络", True, f"可用地址：{', '.join(a.ip for a in addrs[:3])}")
 
     # ── 2. 网络类别 ──
+    #
+    # 2026-11-02 主人指令：**别再拿「公用网络」拦人**。
+    #
+    # 家用 WiFi 被 Windows 判成「公用网络」太常见（换过路由器、首次连接、
+    # 网关 MAC 变了都会）。以前直接 return 失败，用户只看到一句「启动失败」，
+    # 真实原因藏在 steps 里没人看 —— 2026-11-02 实机正是这样。
+    #
+    # 现在两条腿走路：
+    #   a) 先自动把公用网络改成专用（Set-NetConnectionProfile，走 UAC）
+    #   b) 改不动也不拦 —— 继续开，并让防火墙规则一并覆盖公用网络
     profiles = network.list_network_profiles()
     public = [p for p in profiles if p.is_public]
     private = [p for p in profiles if p.is_private]
 
-    if public and not private and not allow_public:
-        report.add(
-            "检查网络类别",
-            False,
-            f"当前只有公用网络（{'、'.join(p.name for p in public)}），"
-            f"防火墙规则不覆盖公用网络。改成专用网络后重试，或强制继续。",
+    if public and not private:
+        fixed, net_msg = _make_profiles_private(
+            [p.alias or p.name for p in public], dry_run=dry_run
         )
-        return report
-    report.add(
-        "检查网络类别",
-        True,
-        f"专用：{'、'.join(p.name for p in private) or '无'}"
-        + (f"；公用：{'、'.join(p.name for p in public)}" if public else ""),
-    )
+        if fixed:
+            report.add("网络类别", True, f"公用网络已自动改为专用：{net_msg}")
+            public = []                     # 规则按专用网络建即可
+        else:
+            report.add(
+                "网络类别",
+                True,
+                f"仍是公用网络（{net_msg}）；照常继续，防火墙规则将一并覆盖公用网络",
+            )
+    else:
+        report.add(
+            "网络类别",
+            True,
+            f"专用：{'、'.join(p.name for p in private) or '无'}"
+            + (f"；公用：{'、'.join(p.name for p in public)}" if public else ""),
+        )
 
     # ── 3. 防火墙规则 ──
-    ok_flag, msg = firewall.ensure_rule(info.web_port, caddy_exe, dry_run=dry_run)
+    # 还有公用网络没改成专用时，规则必须覆盖 Public，否则手机照样连不上。
+    ok_flag, msg = firewall.ensure_rule(
+        info.web_port, caddy_exe, dry_run=dry_run, include_public=bool(public)
+    )
     report.add("防火墙规则", ok_flag, msg)
     if not ok_flag:
         if "取消" in msg:

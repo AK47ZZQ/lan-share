@@ -191,17 +191,21 @@ class FirewallRule:
     def as_dict(self) -> dict:
         return asdict(self)
 
-    def matches(self, port: int, exe_path: str) -> bool:
-        """是否符合我们期望的形态：端口对、程序对、允许、已启用、不含 Public。
+    def matches(self, port: int, exe_path: str, include_public: bool = False) -> bool:
+        """是否符合我们期望的形态：端口对、程序对、允许、已启用、Public 覆盖对。
 
         这是「规则是否需要重建」的判断依据。任何一项不符都重建，
         因为规则被手动改过的话，我们无法预判它的实际效果。
+
+        include_public：还有公用网络时，规则必须覆盖 Public（否则手机连不上）。
         """
         if not self.enabled or self.action != "Allow":
             return False
         if str(port) not in self.local_ports:
             return False
-        if "Public" in self.profiles:
+        has_public = "Public" in self.profiles
+        if has_public != include_public:
+            # 该覆盖没覆盖、不该覆盖却覆盖了，都算形态不符
             return False
         if exe_path and self.program:
             # 路径比较忽略大小写和正反斜杠
@@ -280,19 +284,19 @@ foreach ($r in $rules) {{
     return result
 
 
-def rule_state(port: int, exe_path: str) -> str:
+def rule_state(port: int, exe_path: str, include_public: bool = False) -> str:
     """规则对我们的期望形态的满足程度。
 
     返回：
         "ok"        — 存在且形态正确
         "missing"   — 不存在
-        "stale"     — 存在但形态不对（路径变了 / 被禁用 / 被改成 Public / 端口不符）
+        "stale"     — 存在但形态不对（路径变了 / 被禁用 / Public 覆盖不符 / 端口不符）
     """
     rules = find_rules(port)
     if not rules:
         return "missing"
     for rule in rules:
-        if rule.matches(port, exe_path):
+        if rule.matches(port, exe_path, include_public):
             return "ok"
     return "stale"
 
@@ -301,21 +305,29 @@ def rule_state(port: int, exe_path: str) -> str:
 # 规则写入（需要提权）
 # ──────────────────────────────────────────────────────────────
 
-def ensure_rule(port: int, exe_path: str, dry_run: bool = False) -> tuple[bool, str]:
+def ensure_rule(
+    port: int, exe_path: str, dry_run: bool = False, include_public: bool = False
+) -> tuple[bool, str]:
     """确保存在一条符合期望的规则。已存在且正确则什么都不做。
 
     返回 (成功?, 消息)。用户取消 UAC 时返回 (False, "已取消")。
 
     幂等：先删掉所有同名/同端口前缀规则再建新的 —— 避免出现多条冲突规则。
+
+    include_public：当这台机器还挂着公用网络（改成专用失败/被取消）时传 True，
+    规则一并放行 Public —— 否则手机连不上，用户只会看到「开了但没用」。
+    2026-11-02 主人指令：不再拿公用网络拦人，改不动就覆盖它。
     """
-    state = rule_state(port, exe_path)
+    state = rule_state(port, exe_path, include_public)
     if state == "ok":
         return True, "防火墙规则已存在且正确，无需改动"
 
     if dry_run:
         action = "创建" if state == "missing" else "重建（现有规则形态不符）"
-        return True, f"[dry-run] 将{action}防火墙规则：TCP {port} → {exe_path}"
+        prof = "Private,Domain,Public" if include_public else "Private,Domain"
+        return True, f"[dry-run] 将{action}防火墙规则：TCP {port} → {exe_path}（{prof}）"
 
+    _profiles = "Private,Domain,Public" if include_public else "Private,Domain"
     script = rf"""
 $ErrorActionPreference = 'Stop'
 try {{
@@ -325,15 +337,15 @@ try {{
         Remove-NetFirewallRule -ErrorAction SilentlyContinue
 
     # 2. 建新规则
-    #    Profile 只含 Private,Domain —— 绝不含 Public。
-    #    公用网络（咖啡厅/机场 WiFi）下不开放，这是安全底线。
+    #    Profile 默认只含 Private,Domain。只有在「公用网络改不成专用」时才
+    #    追加 Public —— 那意味着不覆盖就真的连不上，而主人的指令是不许拦。
     New-NetFirewallRule `
         -DisplayName '{RULE_PREFIX} (TCP {port})' `
         -Direction Inbound `
         -Protocol TCP `
         -LocalPort {int(port)} `
         -Action Allow `
-        -Profile Private,Domain `
+        -Profile {_profiles} `
         -Program '{exe_path}' `
         -Description '{RULE_DESCRIPTION}' `
         -ErrorAction Stop | Out-Null

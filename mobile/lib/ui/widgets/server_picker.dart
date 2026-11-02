@@ -33,6 +33,27 @@ String shortHost(String raw) {
   }
 }
 
+/// 把用户输入的服务器地址规范化成可用 URL。
+///
+/// 2026-11-02 主人指令：**别让用户手打 `https://`**。手机上敲这几个字符又慢
+/// 又容易错，而本部署（Caddy）本来就只有 https 入口 —— 输入
+/// `192.168.1.100:8765` 就该直接能连。
+///
+/// 规则：
+///   没写协议   → 补 `https://`
+///   写了 http  → 原样保留（主人明确要求取掉这个限制），由调用方提示风险
+///   结尾斜杠   → 去掉，避免拼出 `//api/...`
+String normalizeServerUrl(String raw) {
+  var s = raw.trim();
+  if (s.isEmpty) return s;
+  // 用 '://' 判断协议，避免把 `192.168.1.100:8765` 里的冒号误当成协议分隔符
+  if (!s.contains('://')) s = 'https://$s';
+  while (s.endsWith('/') && s.length > 'https://'.length) {
+    s = s.substring(0, s.length - 1);
+  }
+  return s;
+}
+
 Future<void> showServerPicker(
   BuildContext context, {
   required String current,

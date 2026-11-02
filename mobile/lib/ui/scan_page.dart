@@ -23,8 +23,13 @@ class _ScanPageState extends State<ScanPage> {
 
   bool _accept(String v) {
     if (widget.mode == ScanMode.otpauth) return v.startsWith('otpauth://totp/');
-    // 只收 https（红队 P2-1）：http 二维码 = 明文上送账密，无任何告警
-    return v.startsWith('https://');
+    // 2026-11-02 主人指令：二维码里没写协议头也要收。
+    // 以前只认 `https://` 开头，结果没有协议前缀的地址扫不动 —— 补全交给
+    // normalizeServerUrl，这里只判断「看起来像个地址」。
+    final raw = v.trim();
+    if (raw.isEmpty) return false;
+    final u = Uri.tryParse(raw.contains('://') ? raw : 'https://$raw');
+    return u != null && u.host.isNotEmpty;
   }
 
   String get _hint => widget.mode == ScanMode.otpauth

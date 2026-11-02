@@ -25,7 +25,8 @@ import 'scan_page.dart';
 import 'theme/app_theme.dart';
 import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
-import 'widgets/server_picker.dart' show shortHost, showServerPicker;
+import 'widgets/server_picker.dart'
+    show normalizeServerUrl, shortHost, showServerPicker;
 
 enum _Probe { idle, probing, ok, fail }
 
@@ -99,20 +100,22 @@ class _LoginPageState extends ConsumerState<LoginPage>
   /// 只有连接超时/失败才算不可达。探测本体在 data 层 probeAddress
   /// （登录前置探测发生在 ApiClient 建立之前，独立 Dio + 自签放行）。
   Future<void> _runProbe() async {
-    final addr = _server.text.trim();
-    if (!addr.startsWith('https://')) {
-      // 只认 https（红队 P2-1）：http 地址在提交闸与探针两处都会被拒
+    // 手输的地址可能是 `192.168.1.100:8765`（没协议）—— 自动补全再探，
+    // 而不是当没填（2026-11-02 主人指令：不许再让用户手打 https://）。
+    final addr = normalizeServerUrl(_server.text);
+    if (addr.isEmpty) {
       if (mounted) setState(() => _probe = _Probe.idle);
       return;
     }
+    if (_server.text.trim() != addr) _server.text = addr;
     if (mounted) setState(() => _probe = _Probe.probing);
     final ok = await probeAddress(addr);
-    if (!mounted || _server.text.trim() != addr) return; // 地址已被改，丢弃过期结果
+    if (!mounted || normalizeServerUrl(_server.text) != addr) return; // 地址已被改，丢弃过期结果
     if (!ok) {
       // 公网兜底（v0.15）：局域网地址连不上时试缓存的公网入口——
       // "出门冷启动 App"是这个功能最典型场景，不能让用户自己想起来换地址
       final fallback = await AutoSwitch.cachedPublicFallback(exclude: addr);
-      if (!mounted || _server.text.trim() != addr) return;
+      if (!mounted || normalizeServerUrl(_server.text) != addr) return;
       if (fallback != null) {
         _server.text = fallback; // 只改输入框不落盘：用户仍可改回自己的地址
         if (mounted) {
@@ -142,15 +145,17 @@ class _LoginPageState extends ConsumerState<LoginPage>
   }
 
   Future<void> _applyAddress(String url) async {
-    _server.text = url;
-    await Prefs.rememberAddress(url);
+    // 规范化：扫码/选择器给来的可能是无协议形式的 192.168.x.x:8765
+    final normalized = normalizeServerUrl(url);
+    _server.text = normalized;
+    await Prefs.rememberAddress(normalized);
     if (!mounted) return;
     setState(() {});
     // 信任闸（红队 P1-1）：选择器里的"公网入口"可能被链路内攻击者注入。
     // 切换前对真实证书做同源裁决：已信任直通 / 同源指纹静默信任 /
     // 陌生指纹弹 TOFU。探测失败（不可达）不阻断——后续 _runProbe 与登录
     // 提交路径仍会如实呈现连接结果
-    await ensureAddressTrusted(context, url);
+    await ensureAddressTrusted(context, normalized);
     _runProbe();
   }
 
@@ -545,18 +550,27 @@ class _LoginPageState extends ConsumerState<LoginPage>
   }
 
   void _submit() {
-    // 明文 http 拒绝（红队 P2-1）：本部署无合法 http 入口（LAN= Caddy https），
-    // 恶意二维码/诱导手输 http 地址会让账密全明文上送且无任何 TLS 层告警
-    if (!_server.text.trim().startsWith('https://')) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('地址必须以 https:// 开头（明文 http 会泄露密码）')));
+    // 2026-11-02 主人指令：不再要求用户手打 https://。
+    //   输入 192.168.1.100:8765 → 自动补成 https://192.168.1.100:8765
+    //   显式写 http://        → 放行，只提示一次风险，不拦
+    // （旧的硬拦是红队 P2-1 立的，但代价是每个新用户第一次都卡在这一步。）
+    final addr = normalizeServerUrl(_server.text);
+    if (addr.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('请先填写服务器地址')));
       return;
+    }
+    // 把补全结果写回输入框，让用户看见到底连的是哪个地址
+    if (_server.text.trim() != addr) _server.text = addr;
+    if (addr.startsWith('http://')) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('当前是明文 http 连接，密码会明文传输（同一网络里的人可能看到）')));
     }
     final s = ref.read(sessionProvider);
     if (_pairMode) {
       if (_lastCode.length == 6) {
         ref.read(sessionProvider.notifier)
-            .loginByPair(_lastCode, server: _server.text.trim());
+            .loginByPair(_lastCode, server: addr);
       }
       return;
     }
@@ -565,15 +579,15 @@ class _LoginPageState extends ConsumerState<LoginPage>
         final rc = _rcCtrl.text.trim();
         if (rc.isNotEmpty) {
           ref.read(sessionProvider.notifier)
-              .loginTotp(rc, server: _server.text.trim());
+              .loginTotp(rc, server: addr);
         }
       } else if (_lastCode.length == 6) {
         ref.read(sessionProvider.notifier)
-            .loginTotp(_lastCode, server: _server.text.trim());
+            .loginTotp(_lastCode, server: addr);
       }
     } else {
       ref.read(sessionProvider.notifier).login(
-          server: _server.text.trim(),
+          server: addr,
           username: _username.text.trim(),
           password: _password.text);
     }

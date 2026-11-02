@@ -171,13 +171,18 @@ class TestRuleMatches:
         assert rule.matches(8765, "C:\\lan-share\\bin\\caddy.exe")
 
     def test_public_profile_never_matches(self):
-        """含 Public 的规则一律判不合格 —— 安全底线。
+        """含 Public 的规则在「不该覆盖公用网络」时判不合格。
 
-        公用网络（咖啡厅 WiFi）下放行整个网盘是绝对不能接受的状态，
-        哪怕端口和程序都对，也要重建。
+        公用网络（咖啡厅 WiFi）下默认不放行整个网盘 —— 只有主人明确要求
+        无视限制、且自动改专用失败时，才会用 include_public=True 重建规则。
         """
         rule = self._rule(profiles=["Private", "Public"])
         assert not rule.matches(8765, "C:\\lan-share\\bin\\caddy.exe")
+
+    def test_public_profile_matches_when_explicitly_allowed(self):
+        """include_public=True 时，覆盖 Public 的规则才算正确形态。"""
+        rule = self._rule(profiles=["Private", "Domain", "Public"])
+        assert rule.matches(8765, "C:\\lan-share\\bin\\caddy.exe", include_public=True)
 
     def test_disabled_rule_matches_nothing(self):
         rule = self._rule(enabled=False)
@@ -444,10 +449,15 @@ class TestCollectStatus:
 # ──────────────────────────────────────────────────────────────
 
 
-class TestEnableRejectsPublicOnly:
-    """只有公用网络时必须停下来 —— 规则对公用网络不生效，硬开等于假装成功。"""
+class TestEnableAutoPrivateNetwork:
+    """公用网络不再拦人（2026-11-02 主人指令）。
 
-    def test_public_only_rejected_without_flag(self, info, monkeypatch):
+    家用 WiFi 被 Windows 判成「公用网络」极常见，以前直接失败，用户只看到
+    一句「启动失败」。现在：先自动改专用；改不动也照常开，让防火墙一并覆盖
+    公用网络。
+    """
+
+    def test_public_only_is_auto_converted_to_private(self, info, monkeypatch):
         monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
         monkeypatch.setattr(network, "list_lan_addresses", lambda: [
             network.LanAddress("10.0.0.5", "WiFi", 24, True, 1)
@@ -455,25 +465,38 @@ class TestEnableRejectsPublicOnly:
         monkeypatch.setattr(network, "list_network_profiles", lambda: [
             network.NetworkProfile("Cafe", "WiFi", "Public")
         ])
-
-        report = lan.enable_lan(info)
-        assert not report.success
-        assert any("公用" in detail for _, _, detail in report.steps)
-
-    def test_public_only_allowed_with_flag(self, info, monkeypatch):
-        """用户明确确认后可以继续（allow_public=True）。"""
-        monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
-        monkeypatch.setattr(network, "list_lan_addresses", lambda: [
-            network.LanAddress("10.0.0.5", "WiFi", 24, True, 1)
-        ])
-        monkeypatch.setattr(network, "list_network_profiles", lambda: [
-            network.NetworkProfile("Cafe", "WiFi", "Public")
-        ])
+        monkeypatch.setattr(lan, "_make_profiles_private", lambda *a, **k: (True, "WiFi"))
         monkeypatch.setattr(firewall, "ensure_rule", lambda *a, **k: (True, "ok"))
         monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "ok"))
 
-        report = lan.enable_lan(info, dry_run=True, allow_public=True)
+        report = lan.enable_lan(info, dry_run=True)
         assert report.success
+        assert any("已自动改为专用" in detail for _, _, detail in report.steps)
+
+    def test_conversion_failure_still_continues(self, info, monkeypatch):
+        """改不动也不许拦 —— 但防火墙必须覆盖 Public 才可能真的通。"""
+        monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
+        monkeypatch.setattr(network, "list_lan_addresses", lambda: [
+            network.LanAddress("10.0.0.5", "WiFi", 24, True, 1)
+        ])
+        monkeypatch.setattr(network, "list_network_profiles", lambda: [
+            network.NetworkProfile("Cafe", "WiFi", "Public")
+        ])
+        monkeypatch.setattr(lan, "_make_profiles_private",
+                            lambda *a, **k: (False, "取消了 UAC"))
+        seen = {}
+
+        def fake_rule(port, exe, **kw):
+            seen["include_public"] = kw.get("include_public")
+            return True, "ok"
+
+        monkeypatch.setattr(firewall, "ensure_rule", fake_rule)
+        monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "ok"))
+
+        report = lan.enable_lan(info, dry_run=True)
+        assert report.success
+        assert seen["include_public"] is True
+        assert any("覆盖公用网络" in detail for _, _, detail in report.steps)
 
 
 class TestEnableFailureStops:
