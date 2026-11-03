@@ -46,9 +46,26 @@ class TestEffectiveClientIp:
         req = _fake_request("127.0.0.1", {"x-real-ip": "192.168.1.99"})
         assert _effective_client_ip(req) == "192.168.1.99"
 
-    def test_proxy_falls_back_to_forwarded_for(self):
+    def test_proxy_falls_back_to_forwarded_for_takes_last_hop(self):
+        """XFF 是**追加链**：尾值才是我们自己的 Caddy 追加的。
+
+        2026-11-04 纠正：原测试断言首值，其「Caddy 会替换 XFF」的心智
+        模型是错的 —— reverse_proxy 默认追加，安装模板也没有剥外部 XFF
+        的 request_header 行。首值恰好是客户端可伪造的部分。
+        """
         req = _fake_request("127.0.0.1", {"x-forwarded-for": "192.168.1.99, 10.0.0.1"})
-        assert _effective_client_ip(req) == "192.168.1.99"
+        assert _effective_client_ip(req) == "10.0.0.1"
+
+    def test_spoofed_xff_prefix_does_not_pass_loopback_guard(self):
+        """P0 攻击用例：伪造 XFF 首段经 Caddy 追加后不能冒充本机。
+
+        攻击者发 `X-Forwarded-For: 127.0.0.1`，Caddy 追加真实来源后
+        API 收到 `127.0.0.1, <真实IP>` —— 取首值就会放行 /local/* 整组
+        免登录接口（改公网入口、改备份目录、免登录二维码）。
+        """
+        req = _fake_request(
+            "127.0.0.1", {"x-forwarded-for": "127.0.0.1, 203.0.113.50"})
+        assert _effective_client_ip(req) == "203.0.113.50"
 
     def test_direct_external_ip_ignores_spoofed_header(self):
         """**最关键的一条**：非回环直连时，X-Real-IP 一律不信。
