@@ -415,12 +415,29 @@ class Postgres:
 
         同盘 move 走 rename，原子且瞬间完成；跨盘会退化成「复制 + 删除」，
         所以搬完必须校验 PG_VERSION 真的落地了，再让调用方重建服务定义。
+
+        2026-11-04 加固（对抗式审查）：
+          · 老位置没有 PG_VERSION → 在搬**之前**响亮失败。老布局下 pgdata
+            在用户文件区里、对用户可见，用户可能往里放过文件 —— 先搬后验
+            等于把用户文件夹悄悄挪出网盘列表。
+          · move 抛异常 → 清掉本次调用留下的残缺副本（跨盘 move = 复制 +
+            删除，中断必留半截），老位置原样保留，可以安全重试；否则重试
+            会落进「两套库」响亮失败，用户被卡死在没做错任何事的路径上。
         """
         old = self.data_dir / "pgdata"
         new = self.pgdata
 
         if old.resolve() == new.resolve() or not old.is_dir():
             return False
+
+        if not (old / "PG_VERSION").is_file():
+            raise PostgresError(
+                f"{old} 存在，但里面没有 PG_VERSION —— 它可能不是数据库目录"
+                "（老布局下 pgdata 在用户文件区，用户可能往里放过文件）。\n"
+                "为避免把用户文件误当数据库搬走，没有搬。请人工确认这个目录"
+                "里是什么：是普通文件夹就改名或移走；确实是库（PG_VERSION 被误删）"
+                "说明数据库已损坏，先按备份恢复再升级。"
+            )
 
         if new.is_dir():
             raise PostgresError(
@@ -430,7 +447,20 @@ class Postgres:
             )
 
         new.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(old), str(new))
+        try:
+            shutil.move(str(old), str(new))
+        except OSError as exc:
+            # 清掉本次调用留下的残缺副本，让重试是安全的。
+            # 只清「这次刚建、且没有 PG_VERSION」的 —— 万一里头已经有
+            # PG_VERSION（复制其实完成了）就保留现场，别把搬成的删了。
+            try:
+                if new.is_dir() and not (new / "PG_VERSION").exists():
+                    shutil.rmtree(new)
+            except OSError:
+                pass            # 清不掉就留着现场，错误信息里已说明老位置未动
+            raise PostgresError(
+                f"数据库目录搬迁失败：{exc}\n"
+                f"老位置 {old} 未动，可以重试。") from exc
 
         if not (new / "PG_VERSION").is_file():
             raise PostgresError(

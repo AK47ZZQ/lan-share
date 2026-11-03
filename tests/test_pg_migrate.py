@@ -69,8 +69,13 @@ class TestMigrateLegacyPgdata:
         自动挑一套看起来「聪明」，实际是在替用户丢数据。宁可让他自己确认。
         """
         pg = _make(tmp_path, monkeypatch)
-        (pg.data_dir / "pgdata").mkdir(parents=True)
+        # 两边都得是「真库」（有 PG_VERSION）—— 老位置没有 PG_VERSION 的
+        # 情况走的是另一条「可能不是库」的响亮失败，见上面的专用测试
+        old = pg.data_dir / "pgdata"
+        old.mkdir(parents=True)
+        (old / "PG_VERSION").write_text("16\n", encoding="utf-8")
         pg.pgdata.mkdir(parents=True)
+        (pg.pgdata / "PG_VERSION").write_text("16\n", encoding="utf-8")
 
         with pytest.raises(PostgresError) as exc:
             pg.migrate_legacy_pgdata()
@@ -88,3 +93,51 @@ class TestMigrateLegacyPgdata:
         with pytest.raises(PostgresError) as exc:
             pg.migrate_legacy_pgdata()
         assert "PG_VERSION" in str(exc.value)
+
+    def test_user_folder_named_pgdata_is_not_moved(self, tmp_path, monkeypatch):
+        """老位置没有 PG_VERSION → 它可能不是库。
+
+        老布局下 pgdata 就在用户文件区里、对用户可见 —— 用户完全可能往里
+        放过自己的文件。这种目录必须在搬**之前**响亮失败，而不是先搬走
+        （用户文件从网盘列表里消失）然后才报错。
+        """
+        pg = _make(tmp_path, monkeypatch)
+        old = pg.data_dir / "pgdata"
+        old.mkdir(parents=True)
+        (old / "家人照片.txt").write_text("x", encoding="utf-8")
+
+        with pytest.raises(PostgresError) as exc:
+            pg.migrate_legacy_pgdata()
+        assert "PG_VERSION" in str(exc.value)
+        # 用户文件必须原地不动，目标位置什么都不该出现
+        assert (old / "家人照片.txt").is_file()
+        assert not pg.pgdata.exists()
+
+    def test_failed_move_keeps_old_and_cleans_partial_copy(self, tmp_path, monkeypatch):
+        """跨盘 move 中断（复制阶段挂了）→ 老位置原样、残缺副本清掉。
+
+        否则重试必落进「两套库」响亮失败：用户被卡死在一条
+        自己没做错任何事的路径上。
+        """
+        from lanshare_cli import pg as pg_module
+
+        pg = _make(tmp_path, monkeypatch)
+        old = pg.data_dir / "pgdata"
+        old.mkdir(parents=True)
+        (old / "PG_VERSION").write_text("16\n", encoding="utf-8")
+
+        def broken_move(src, dst):
+            # 模拟跨盘复制中途断电：目标有残缺内容、还没有 PG_VERSION
+            Path(dst).mkdir(parents=True, exist_ok=True)
+            (Path(dst) / "base.tar.tmp").write_text("x", encoding="utf-8")
+            raise OSError("模拟复制中断")
+
+        monkeypatch.setattr(pg_module.shutil, "move", broken_move)
+
+        with pytest.raises(PostgresError) as exc:
+            pg.migrate_legacy_pgdata()
+        assert "搬迁失败" in str(exc.value)
+        # 老位置原样保留，可以安全重试
+        assert (old / "PG_VERSION").is_file()
+        # 残缺副本（本次调用创建、无 PG_VERSION）必须清掉
+        assert not pg.pgdata.exists()
