@@ -88,8 +88,10 @@ class TestManifestUrl:
 
 class TestFetchCustom:
     def _patch(self, monkeypatch, payload):
+        # **_：生产代码的 _http_json 后来加了 extra_ca 关键字参数，
+        # 桩必须照单全收，不然测试自己先 TypeError（2026-11-04 基线红灯根因）
         monkeypatch.setattr(updater, "_http_json",
-                            lambda url, t, label: payload)
+                            lambda url, t, label, **_: payload)
 
     def test_ok(self, monkeypatch):
         self._patch(monkeypatch, _manifest(
@@ -164,7 +166,7 @@ class TestCheckFallback:
     def test_first_source_wins(self, tmp_path, monkeypatch):
         calls = []
 
-        def fake(base, timeout):
+        def fake(base, timeout, extra_ca=None):
             calls.append(base)
             return {"latest": {
                 "version": "3.96", "build": 396, "url": base + "/x.exe",
@@ -184,7 +186,7 @@ class TestCheckFallback:
     def test_falls_through_to_second_source(self, tmp_path, monkeypatch):
         calls = []
 
-        def fake(base, timeout):
+        def fake(base, timeout, extra_ca=None):
             calls.append(base)
             if "lan" in base:
                 raise RuntimeError("连不上")
@@ -203,7 +205,7 @@ class TestCheckFallback:
         assert "lan" in out["source_error"]
 
     def test_falls_back_to_github_and_says_so(self, tmp_path, monkeypatch):
-        def boom(base, timeout):
+        def boom(base, timeout, extra_ca=None):
             raise RuntimeError("TLS 失败")
 
         monkeypatch.setattr(updater, "fetch_custom", boom)
@@ -245,7 +247,7 @@ class TestCheckFallback:
 
         (tmp_path / "VERSION").write_text("3.95", encoding="utf-8")
         # 先成功一次写入缓存
-        monkeypatch.setattr(updater, "fetch_custom", lambda base, timeout: {
+        monkeypatch.setattr(updater, "fetch_custom", lambda base, timeout, extra_ca=None: {
             "latest": {"version": "3.96", "build": 396, "url": "https://lan/x.exe",
                        "size": 1, "sha256": SHA, "notes": "", "published": ""},
             "history": [],
