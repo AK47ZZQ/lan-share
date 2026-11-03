@@ -250,6 +250,7 @@ API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 | 完整 API | [docs/API.md](docs/API.md) |
 | 安全模型 | [docs/SECURITY.md](docs/SECURITY.md) |
 | 运维（服务 / 备份 / 证书 / 故障） | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
+| **公网访问（内网穿透 / 樱花 FRP）** | [docs/公网访问与内网穿透.md](docs/公网访问与内网穿透.md) |
 | 开发环境与命令 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | 目录结构 | [docs/PROJECT-LAYOUT.md](docs/PROJECT-LAYOUT.md) |
 | App 视觉规范 | [docs/DESIGN-v3/APP-VISUAL-SPEC.md](docs/DESIGN-v3/APP-VISUAL-SPEC.md) |

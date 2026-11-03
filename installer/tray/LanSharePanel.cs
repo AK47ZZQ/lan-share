@@ -50,7 +50,8 @@ namespace LanShare
         /// 跑一个 lan 子命令，返回解析后的字典。失败返回 null 并给出 error。
         /// 超时设得比较长：enable 可能弹 UAC 等用户点，还要重启 Caddy。
         /// </summary>
-        public Dictionary<string, object> RunLan(string action, int timeoutMs, out string error)
+        public Dictionary<string, object> RunLan(string action, int timeoutMs, out string error,
+                                                string arg = null)
         {
             error = null;
 
@@ -63,7 +64,9 @@ namespace LanShare
             var psi = new ProcessStartInfo
             {
                 FileName = _python,
-                Arguments = "-m lanshare_cli lan " + action + " --json --service-prefix " + _servicePrefix,
+                Arguments = "-m lanshare_cli lan " + action
+                          + (string.IsNullOrEmpty(arg) ? "" : " " + QuoteArg(arg))
+                          + " --json --service-prefix " + _servicePrefix,
                 WorkingDirectory = _installDir,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -119,6 +122,28 @@ namespace LanShare
                 error = ex.Message;
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 把参数包成 Windows 命令行安全的形式。
+        ///
+        /// 为什么必须有：`Arguments` 是**字符串拼接**，不是数组。用户填的
+        /// 隧道地址里出现空格、&amp;、引号就会被 shell 重新切词 —— 轻则参数错位，
+        /// 重则能塞进额外的命令行选项。地址本身只该是 host:port，但校验在
+        /// 远端做，本地这层也要先挡住。
+        /// </summary>
+        private static string QuoteArg(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "\"\"";
+            var sb = new StringBuilder("\"");
+            foreach (char c in s)
+            {
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else sb.Append(c);
+            }
+            sb.Append('"');
+            return sb.ToString();
         }
 
         /// <summary>下载二维码 PNG（走本机免认证接口）。失败返回 null。</summary>

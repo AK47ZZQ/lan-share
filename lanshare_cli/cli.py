@@ -1382,6 +1382,25 @@ def cmd_lan(args: argparse.Namespace) -> int:
         say()
         return 0 if status.state in (lan.LanState.ON, lan.LanState.OFF) else 1
 
+    if action == "wan":
+        # 把内网穿透的域名接进 Caddy —— GUI 的「一键接入」就是调这个
+        addr_arg = getattr(args, "wan_addr", "") or ""
+        report = lan.set_public_host(info, addr_arg, dry_run=args.dry_run)
+        if args.json:
+            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
+            return 0 if report.success else 1
+
+        say()
+        _print_report(report)
+        say()
+        if report.success:
+            say(f"  公网地址已就绪：{report.public_url}")
+            say("  填进托盘「公网访问」即可（一键接入会自动填）。")
+        else:
+            say("  接入失败，上面是失败的那一步。")
+        say()
+        return 0 if report.success else 1
+
     if action == "enable":
         report = lan.enable_lan(
             info, dry_run=args.dry_run, allow_public=getattr(args, "allow_public", False)
@@ -1556,8 +1575,14 @@ def build_parser() -> argparse.ArgumentParser:
         "lan_action",
         nargs="?",
         default="status",
-        choices=["status", "enable", "disable", "diagnose"],
-        help="默认 status",
+        choices=["status", "enable", "disable", "diagnose", "wan"],
+        help="默认 status；wan = 接入内网穿透域名",
+    )
+    p_lan.add_argument(
+        "wan_addr",
+        nargs="?",
+        default="",
+        help="wan 子命令的隧道地址，形如 cn-bj.frp.one:35123",
     )
     p_lan.add_argument("--json", action="store_true", help="输出 JSON（给 GUI 用）")
     p_lan.add_argument("--dry-run", action="store_true", help="只检查不执行")

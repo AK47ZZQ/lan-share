@@ -60,7 +60,7 @@ TEMPLATE = """\
 \t# 证书和内部 CA 存在安装目录里，不要用 Caddy 的默认位置。
 \t#
 \t# 默认位置是「当前用户的 AppData」。Caddy 作为 Windows 服务跑在 SYSTEM
-\t# 账户下，于是落到 C:\Windows\system32\config\systemprofile\AppData\Roaming\Caddy
+\t# 账户下，于是落到 C:/Windows/system32/config/systemprofile/AppData/Roaming/Caddy
 \t# —— 那是全机共用的一个坑：卸载重装、装第二个实例、换个安装目录，全都
 \t# 挤在同一个 storage 里，旧 CA 残留会让新证书签不出来，客户端握手直接
 \t# SEC_E_ILLEGAL_MESSAGE。2026-10-31 在虚拟机里踩到（同一台机器重装后才

@@ -689,3 +689,108 @@ class TestLoadInstallInfo:
         monkeypatch.setattr(lan, "detect_service_prefix", lambda *a: "x")
         info = lan.load_install_info()
         assert info.api_port == 8766
+
+
+# ──────────────────────────────────────────────────────────────
+# 公网接入：把内网穿透域名写进 Caddyfile
+# ──────────────────────────────────────────────────────────────
+
+
+class TestPublicHost:
+    """2026-11-03 实测背景：Caddy 只对站点块里写明的 host 签证书，
+    穿透工具给的陌生域名不在名单里 → 客户端 TLS 握手直接被掐断
+    （SEC_E_INTERNAL_ERROR / HTTP 000）。所以「界面里填地址」远远不够，
+    必须先把域名接进配置。
+    """
+
+    def _seed(self, info, text=None):
+        info.caddyfile_path.parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            text = caddyfile.render(
+                info.api_port,
+                info.web_port,
+                caddyfile.BIND_LOOPBACK,
+                ["localhost", "127.0.0.1", "192.168.1.100"],
+                storage_dir=str(info.root / "certs" / "caddy"),
+                web_root=str(info.root / "web" / "dist"),
+            )
+        info.caddyfile_path.write_text(text, encoding="utf-8")
+        return text
+
+    @pytest.mark.parametrize(
+        "raw,host,port",
+        [
+            ("cn-bj.frp.one:35123", "cn-bj.frp.one", 35123),
+            ("https://cn-bj.frp.one:35123", "cn-bj.frp.one", 35123),
+            ("http://cn-bj.frp.one", "cn-bj.frp.one", None),
+            ("CN-BJ.FRP.ONE", "cn-bj.frp.one", None),
+            ("https://a.example.com:123/x/y", "a.example.com", 123),
+            ("   ", "", None),
+        ],
+    )
+    def test_parse_forms(self, raw, host, port):
+        assert lan.parse_tunnel_addr(raw) == (host, port)
+
+    def test_injection_rejected(self, info):
+        """域名要拼进配置行，带空格/花括号的一律拒绝（防注入）。"""
+        self._seed(info)
+        report = lan.set_public_host(info, "evil.com {} ", dry_run=True)
+        assert not report.success
+
+    def test_refuses_foreign_config(self, info):
+        """不是本程序生成的 Caddyfile 一律不动 —— 里面可能有用户手写的 FRP 配置。"""
+        self._seed(info, text="example.com {\n\trespond hi\n}\n")
+        report = lan.set_public_host(info, "cn-bj.frp.one:35123")
+        assert not report.success
+        assert any("不是本程序生成" in d for _, _, d in report.steps)
+
+    def test_adds_host_and_returns_public_url(self, info, monkeypatch):
+        self._seed(info)
+        monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "restarted"))
+        monkeypatch.setattr(
+            lan, "probe_tunnel_host", lambda *a, **k: (True, "HTTP/1.1 200 OK")
+        )
+
+        report = lan.set_public_host(info, "cn-bj.frp.one:35123")
+
+        assert report.success
+        # GUI 直接拿这个地址去填输入框
+        assert report.public_url == "https://cn-bj.frp.one:35123"
+
+        new = info.caddyfile_path.read_text(encoding="utf-8")
+        assert "cn-bj.frp.one" in new
+        # 原有的主机名一个都不能丢
+        assert "localhost" in new and "127.0.0.1" in new
+
+        backup = info.caddyfile_path.with_name(info.caddyfile_path.name + ".wanbak")
+        assert backup.is_file()
+
+    def test_keeps_lan_bind_state(self, info, monkeypatch):
+        """已打开的局域网不能被公网接入重置成只绑回环。"""
+        text = caddyfile.render(
+            info.api_port,
+            info.web_port,
+            caddyfile.BIND_ALL,
+            ["localhost", "127.0.0.1", "192.168.1.100"],
+            storage_dir=str(info.root / "certs" / "caddy"),
+            web_root=str(info.root / "web" / "dist"),
+        )
+        self._seed(info, text=text)
+        monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "ok"))
+        monkeypatch.setattr(lan, "probe_tunnel_host", lambda *a, **k: (True, "200"))
+
+        assert lan.set_public_host(info, "cn-bj.frp.one:35123").success
+        assert "bind " not in info.caddyfile_path.read_text(encoding="utf-8")
+
+    def test_probe_failure_fails_report(self, info, monkeypatch):
+        """域名加进去了但自检不过 → 必须如实失败，不能假装成功。"""
+        self._seed(info)
+        monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "ok"))
+        monkeypatch.setattr(
+            lan, "probe_tunnel_host", lambda *a, **k: (False, "TLS 握手失败：boom")
+        )
+
+        report = lan.set_public_host(info, "cn-bj.frp.one:35123")
+
+        assert not report.success
+        assert any(name == "域名自检" and not ok for name, ok, _ in report.steps)

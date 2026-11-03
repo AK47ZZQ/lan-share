@@ -310,7 +310,23 @@ class TestNssmServiceRun:
 
 class TestPortInUse:
     def test_free_port(self):
-        assert cli.port_in_use(59999) is False
+        """空闲端口要判成空闲。
+
+        ⚠️ 不能用固定端口（原来写死 59999）：Windows 的动态端口保留段
+        （Hyper-V / WSL 会占掉成片区间）里 bind 会直接 EACCES，被误判成
+        「占用」，测试在那种机器上必然假红 —— 2026-11-03 本机正是如此
+        （59998/59999 都在保留段里，bind 报 errno 13）。
+        改成让系统临时分配一个再释放：它一定不在保留段。
+        """
+        import socket
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        finally:
+            probe.close()
+        assert cli.port_in_use(port) is False
 
     def test_occupied_port(self):
         import socket

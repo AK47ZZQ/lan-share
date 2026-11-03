@@ -292,6 +292,14 @@ button.link {
           <span class="dot"></span><span id="wanstatetext">读取中…</span>
         </div>
         <div class="hint" id="wanhint"></div>
+
+        <!-- 一键接入：穿透工具给你的是一个陌生域名，Caddy 本来不认它。
+             填进来由程序写进 Caddyfile + 重签证书 + 自检，成功后自动填下面的地址。 -->
+        <div class="addr">
+          <input id="wanhost" value="" placeholder="隧道域名，如 cn-bj.frp.one:35123">
+          <button class="mini primary" id="wanattach">一键接入</button>
+        </div>
+
         <div class="addr">
           <input id="wanaddr" value="" placeholder="https://你的域名:端口">
           <button class="mini" data-copy="wan">复制</button>
@@ -603,6 +611,14 @@ document.getElementById('lantoggle').onclick = () =>
 document.getElementById('wansave').onclick = () => {
   var el = document.getElementById('wanaddr');
   post({ action: 'setWanUrl', url: (el && el.value || '').trim() });
+};
+
+// 一键接入：把穿透域名交给后端写进 Caddyfile（成功会自动填上面的地址）
+document.getElementById('wanattach').onclick = () => {
+  var el = document.getElementById('wanhost');
+  var v = (el && el.value || '').trim();
+  if (!v) { if (el) el.focus(); return; }
+  post({ action: 'wanAttach', host: v });
 };
 
 // 备份：选目录 / 立即备份

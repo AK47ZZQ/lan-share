@@ -611,6 +611,81 @@ namespace LanShare
         }
 
         /// <summary>
+        /// 一键接入公网：把穿透工具的域名写进 Caddyfile，让这个域名真能被访问。
+        ///
+        /// 🔴 为什么光填地址不够：Caddy 只对站点块里写明的**主机名**签证书。
+        /// 穿透工具给的是陌生域名，不在名单里 —— 客户端用这个域名访问时
+        /// TLS 握手就被直接掐断（2026-11-03 实测：HTTP 000 /
+        /// SEC_E_INTERNAL_ERROR），连 HTTP 层都到不了。
+        ///
+        /// 所以这里要：改配置 → 重启 Caddy（重签证书）→ 自检 → 自动填地址。
+        /// </summary>
+        private void AttachWan(string host)
+        {
+            host = (host ?? "").Trim();
+            if (host.Length == 0)
+            {
+                SendToast("先填穿透工具给的地址，比如 cn-bj.frp.one:35123");
+                return;
+            }
+
+            RunBusy("正在接入公网域名（改配置 + 重签证书，约 20 秒）…", () =>
+            {
+                string err;
+                var ret = _cli.RunLan("wan", 90000, out err, host);
+
+                string dump;
+                try
+                {
+                    dump = ret == null
+                        ? "null"
+                        : new JavaScriptSerializer { MaxJsonLength = int.MaxValue }
+                            .Serialize(ret);
+                }
+                catch (Exception ex) { dump = "<序列化失败：" + ex.Message + ">"; }
+                if (dump.Length > 1200) dump = dump.Substring(0, 1200) + "…(截断)";
+                AppendLog("WanAttach: addr=" + host + " err=" + (err ?? "(null)") + " data=" + dump);
+
+                if (ret == null) return "接入失败：" + (err ?? "命令没有返回");
+
+                bool ok = false;
+                try { ok = Convert.ToBoolean(ret["success"]); } catch (Exception) { }
+                string pub = ret.ContainsKey("public_url") ? Str(ret, "public_url") : "";
+
+                if (!ok)
+                {
+                    // 把失败那一步点名 —— 「接入失败」四个字帮不了用户
+                    string detail = "";
+                    foreach (var s in List(ret, "steps"))
+                    {
+                        var d = s as Dictionary<string, object>;
+                        if (d == null) continue;
+                        bool sok = false;
+                        try { sok = Convert.ToBoolean(d["ok"]); } catch (Exception) { }
+                        if (!sok)
+                        {
+                            detail = Str(d, "name") + "：" + Str(d, "detail");
+                            break;
+                        }
+                    }
+                    return "接入失败" + (detail.Length > 0 ? "（" + detail + "）" : "");
+                }
+
+                // 成功就地保存，省掉用户再点一次「保存」
+                if (pub.Length > 0)
+                {
+                    string json = "{\"url\": " + Quote(pub)
+                                + ", \"url_alt\": " + Quote(KeepAltUrl()) + "}";
+                    if (ApiPost("/local/public-url", json))
+                        AppendLog("WanAttach: 已自动写入公网地址 " + pub);
+                    else
+                        AppendLog("WanAttach: 自动保存失败（接口没响应），地址请手工点保存");
+                }
+                return "公网地址已接入：" + pub;
+            });
+        }
+
+        /// <summary>
         /// 让用户选备份目录，然后写进服务端配置。
         ///
         /// 为什么必须让用户能改：默认备份落在数据目录里（同一块盘），
@@ -1197,6 +1272,10 @@ namespace LanShare
                 case "setWanUrl":
                     SaveWanUrl(msg.ContainsKey("url") ? Str(msg, "url") : "");
                     break;
+
+                case "wanAttach":
+                    AttachWan(msg.ContainsKey("host") ? Str(msg, "host") : "");
+                    break;
                 case "pickBackupDir":
                     PickBackupDir();
                     break;
@@ -1717,12 +1796,27 @@ namespace LanShare
         {
             var NL = Environment.NewLine;
             MessageBox.Show(
-                "公网访问需要一个内网穿透工具（比如 SakuraFrp、frp、花生壳）。" + NL + NL +
-                "步骤：" + NL +
-                "1. 在穿透工具里建一条隧道，指向本机 8765 端口" + NL +
-                "2. 工具会给你一个公网地址，形如 xxx.frp-any.com:35391" + NL +
-                "3. 把那个地址填进来，点「验证连通性」" + NL + NL +
-                "注意：程序没法替你建隧道 —— 那需要登录你自己的穿透服务账号。",
+                "公网访问 = 内网穿透：把一个公网地址映射到这台电脑的 8765 端口。" + NL + NL +
+                "【以樱花 FRP 为例】" + NL +
+                "1. 注册 sakurafrp.com，下载客户端并登录" + NL +
+                "2. 建隧道：" + NL +
+                "     · 类型：TCP" + NL +
+                "     · 本地地址：127.0.0.1" + NL +
+                "     · 本地端口：8765（就是本机 Web 端口）" + NL +
+                "     · 远程端口：随便挑一个没被占的，比如 35123" + NL +
+                "3. 启动隧道，记下节点域名，拼起来形如：" + NL +
+                "     cn-bj.frp.one:35123" + NL + NL +
+                "【回到这个面板】" + NL +
+                "4. 把上面那串粘进「隧道域名」，点「一键接入」" + NL +
+                "     —— 程序会写配置、重签证书、自检，成功后自动填好公网地址" + NL +
+                "5. 用手机流量（别连家里 WiFi）打开那个地址验证" + NL + NL +
+                "⚠ 为什么不能只填地址：" + NL +
+                "   本机证书只对 localhost / 局域网 IP 签发。陌生域名直接填进去，" + NL +
+                "   客户端在 TLS 握手阶段就被拒，连错误页都看不到。" + NL +
+                "   所以必须先用「一键接入」让本机认这个域名。" + NL + NL +
+                "⚠ 自签证书：公网地址会提示不受信任，家庭自建属正常。" + NL +
+                "   手机 App 第一次连接会弹「信任此服务器」，核对后点信任即可。" + NL + NL +
+                "⚠ 换了节点/换了隧道 → 域名变了，要重新接入一次。",
                 "怎么配置公网访问", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 

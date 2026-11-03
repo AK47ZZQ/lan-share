@@ -659,6 +659,8 @@ class ActionReport:
     success: bool
     steps: list[tuple[str, bool, str]] = field(default_factory=list)
     cancelled: bool = False
+    # 公网接入用：接好之后该填进界面的完整地址（GUI 直接拿去填输入框）
+    public_url: str = ""
 
     def add(self, name: str, ok_flag: bool, detail: str = "") -> None:
         self.steps.append((name, ok_flag, detail))
@@ -667,6 +669,7 @@ class ActionReport:
         return {
             "success": self.success,
             "cancelled": self.cancelled,
+            "public_url": self.public_url,
             "steps": [
                 {"name": n, "ok": o, "detail": d} for n, o, d in self.steps
             ],
@@ -910,6 +913,198 @@ if ($bad.Count -gt 0) {{ Write-Output ('FAIL:' + ($bad -join '；')) }}
     if "FAIL:" in out:
         return False, out.split("FAIL:", 1)[1].splitlines()[0].strip()[:200]
     return False, (out or "无法修改网络类别（可能取消了 UAC 授权）").strip()[:200]
+
+
+# ──────────────────────────────────────────────────────────────
+# 公网接入（内网穿透）
+# ──────────────────────────────────────────────────────────────
+
+def parse_tunnel_addr(raw: str) -> tuple[str, int | None]:
+    """把用户填的隧道地址解析成 (域名, 公网端口)。
+
+    穿透工具给的地址形式各家不同，别让用户背语法：
+
+        cn-bj.frp.one:35123
+        https://cn-bj.frp.one:35123
+        cn-bj.frp.one
+        https://cn-bj.frp.one:35123/some/path      ← 路径丢掉
+    """
+    from urllib.parse import urlsplit
+
+    s = (raw or "").strip()
+    if not s:
+        return "", None
+    if "://" not in s:
+        s = "https://" + s
+    try:
+        u = urlsplit(s)
+    except ValueError:
+        return "", None
+    return (u.hostname or "").strip().lower(), u.port
+
+
+def probe_tunnel_host(
+    info: InstallInfo, host: str, *, timeout: float = 5.0
+) -> tuple[bool, str]:
+    """用「SNI=域名、目标=本机 8765」验证 Caddy 认不认这个域名。
+
+    这是唯一可靠的判据。穿透隧道把公网流量原样送进本机 8765，效果等价于
+    这里做的：连 127.0.0.1:8765，但 TLS 的 SNI 和 HTTP 的 Host 都填域名。
+    站点块没加这个域名、或者证书还没签好，都会在这里失败。
+    """
+    import socket
+    import ssl
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE   # 只看「认不认」，证书信任交给客户端裁决
+
+    try:
+        raw = socket.create_connection(("127.0.0.1", info.web_port), timeout=timeout)
+    except OSError as exc:
+        return False, f"连不上本机 {info.web_port}：{exc}"
+
+    try:
+        with ctx.wrap_socket(raw, server_hostname=host) as ssock:
+            req = f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+            ssock.sendall(req.encode("ascii"))
+            data = ssock.recv(256)
+        first = data.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
+        if not first:
+            return False, "服务端没有响应（站点块可能没匹配到这个域名）"
+        return " 200" in first, first
+    except Exception as exc:                     # 握手失败/超时都按「不认」处理
+        # Caddy 对未知 SNI 是直接断连（客户端侧 SEC_E_INTERNAL_ERROR），
+        # 所以这里失败基本等于「站点块里没有这个域名」
+        return False, f"TLS 握手失败：{exc}"
+    finally:
+        try:
+            raw.close()
+        except Exception:
+            pass
+
+
+def set_public_host(
+    info: InstallInfo, raw_addr: str, *, dry_run: bool = False
+) -> ActionReport:
+    """把内网穿透的域名接进 Caddy 站点块，让公网域名能真正访问。
+
+    🔴 为什么必须动 Caddyfile：
+    Caddy 只对站点块里写明的**主机名**签证书。穿透工具给的是一个陌生域名，
+    不在那个名单里 —— 客户端用这个域名访问时 TLS 握手就被直接掐断
+    （2026-11-03 实测：SEC_E_INTERNAL_ERROR / HTTP 000），连 HTTP 层都到不了。
+    所以「在界面里填一下地址」远远不够，得先让 Caddy 认这个域名。
+
+    这一步只改自己的配置文件（没有我们的标记就拒绝），不碰防火墙、
+    不需要 UAC、也不依赖局域网开关（隧道从本机连 127.0.0.1 就够）。
+    """
+    report = ActionReport(success=False)
+
+    host, pub_port = parse_tunnel_addr(raw_addr)
+    if not host:
+        report.add(
+            "解析地址",
+            False,
+            f"看不懂这个地址：{raw_addr!r}（应形如 cn-bj.frp.one:35123）",
+        )
+        return report
+    try:
+        caddyfile._safe_host(host)               # 域名要拼进配置行，必须防注入
+    except ValueError as exc:
+        report.add("解析地址", False, str(exc))
+        return report
+    report.add(
+        "解析地址",
+        True,
+        f"域名 {host}" + (f"（公网端口 {pub_port}）" if pub_port else ""),
+    )
+
+    target = info.caddyfile_path
+    if not target.is_file():
+        report.add("检查配置", False, f"找不到配置文件 {target}")
+        return report
+    try:
+        old = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        report.add("检查配置", False, str(exc))
+        return report
+    if not _is_ours(old):
+        report.add(
+            "检查配置",
+            False,
+            f"{target.name} 不是本程序生成的（缺标记），不敢自动改。"
+            f"请手工把 https://{host}:{info.web_port} 加进站点地址行。",
+        )
+        return report
+
+    # 保持用户当前的局域网开关状态，只把域名追加进主机名列表
+    bind_host = (
+        caddyfile.detect_bind_host(target, info.web_port) or caddyfile.BIND_LOOPBACK
+    )
+    hosts = caddyfile.default_hosts()
+    if host not in hosts:
+        hosts.append(host)
+
+    public_url = f"https://{host}:{pub_port or info.web_port}"
+    report.public_url = public_url
+
+    if dry_run:
+        report.add("更新 Caddyfile", True, f"[dry-run] 站点地址会包含 {host}")
+        report.success = True
+        return report
+
+    try:
+        target.with_suffix(target.suffix + ".wanbak").write_text(
+            old, encoding="utf-8", newline=""
+        )
+    except OSError:
+        pass                                  # 备份失败不阻断，回滚靠内存里的 old
+
+    try:
+        caddyfile.write(
+            target,
+            info.api_port,
+            info.web_port,
+            bind_host,
+            hosts,
+            storage_dir=str(info.root / "certs" / "caddy"),
+            web_root=str(info.root / "web" / "dist"),
+        )
+    except (OSError, ValueError) as exc:
+        report.add("更新 Caddyfile", False, str(exc))
+        return report
+    report.add("更新 Caddyfile", True, f"站点地址已加入 {host}")
+
+    ok_flag, msg = _restart_service(info.caddy_service)
+    report.add("重启 Caddy 服务", ok_flag, msg)
+    if not ok_flag:
+        try:
+            target.write_text(old, encoding="utf-8", newline="")
+            _restart_service(info.caddy_service)
+            report.add("回滚配置", True, "已恢复原 Caddyfile 并重启")
+        except OSError as exc:
+            report.add("回滚配置", False, f"回滚也失败了：{exc}")
+        return report
+
+    # 给 Caddy 签新证书的时间，再验「域名能不能被认出来」
+    ok_cert, last = False, ""
+    for _ in range(12):                       # 最多等约 18 秒
+        ok_cert, last = probe_tunnel_host(info, host, timeout=4.0)
+        if ok_cert:
+            break
+        time.sleep(1.5)
+
+    report.add(
+        "域名自检",
+        ok_cert,
+        f"https://{host}:{info.web_port}/healthz → {last}"
+        + ("" if ok_cert else "（服务端还不认这个域名，看上面的 TLS 报错）"),
+    )
+    if not ok_cert:
+        return report
+
+    report.success = True
+    return report
 
 
 def enable_lan(
