@@ -83,6 +83,72 @@ class TestManifestUrl:
         assert updater._manifest_url(given) == expected
 
 
+class TestAbsUrl:
+    """清单里的相对下载地址怎么解析（契约：按清单地址解析）。"""
+
+    def test_relative_against_dir_base(self):
+        assert (updater._abs_url("pkg.exe", "https://h/updates")
+                == "https://h/updates/pkg.exe")
+
+    def test_relative_against_manifest_file_base(self):
+        """base 直接填 index.json 时，相对地址要按它**所在目录**解析 ——
+        拼成 .../index.json/pkg.exe 是错的。"""
+        assert (updater._abs_url("pkg.exe", "https://h/updates/index.json")
+                == "https://h/updates/pkg.exe")
+
+    def test_absolute_passes_through(self):
+        assert (updater._abs_url("https://cdn.example/x.exe", "https://h/updates")
+                == "https://cdn.example/x.exe")
+
+    def test_http_absolute_passes_through(self):
+        assert (updater._abs_url("http://127.0.0.1:9000/x.exe", "https://h/updates")
+                == "http://127.0.0.1:9000/x.exe")
+
+    def test_empty_url_stays_empty(self):
+        assert updater._abs_url("", "https://h/updates") == ""
+
+
+class TestProxyKeepsTlsContext:
+    """开了系统代理时，TLS 上下文（certifi + 自签根证书）不能被丢掉。
+
+    _http_json 的代理分支用 build_opener(ProxyHandler(...))，旧实现不带
+    HTTPSHandler(context)，等于自定义源的 extra_ca 和 certifi 全部失效
+    —— 开着 Clash 的机器查自家自签更新源必然 CERTIFICATE_VERIFY_FAILED。
+    """
+
+    def test_opener_carries_context_when_proxy_set(self, monkeypatch):
+        import urllib.request as _ur
+
+        captured: dict = {}
+        real = _ur.HTTPSHandler
+
+        class _SpyHandler(_ur.HTTPSHandler):
+            def __init__(self, *a, **kw):
+                captured["ctx"] = kw.get("context")
+                super().__init__(*a, **kw)
+
+        # 用子类而不是普通函数替换：build_opener 内部有 isinstance 检查
+        monkeypatch.setattr(_ur, "HTTPSHandler", _SpyHandler)
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7897")
+        monkeypatch.delenv("https_proxy", raising=False)
+        # Windows 上 getproxies() 还会读注册表代理，一并打掉
+        monkeypatch.setattr(_ur, "getproxies", lambda: {})
+
+        op = updater._opener(extra_ca=Path("ca.crt"))
+        assert op is not None
+        # 代理 opener 也必须带着 TLS 上下文
+        assert captured.get("ctx") is not None
+
+    def test_no_proxy_returns_none(self, monkeypatch):
+        import urllib.request as _ur
+
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(_ur, "getproxies", lambda: {})
+        monkeypatch.setattr(updater, "_system_proxy", lambda: None)
+        assert updater._opener(extra_ca=None) is None
+
+
 # ── 清单解析 ──────────────────────────────────────────────────
 
 

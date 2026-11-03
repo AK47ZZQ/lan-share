@@ -189,11 +189,17 @@ def _system_proxy() -> str | None:
     return server
 
 
-def _opener():
+def _opener(extra_ca: Path | None = None):
     """带代理的 opener。
 
     优先级：环境变量 > Windows 系统代理。环境变量是显式指定的，应当尊重；
     系统代理只是「用户以为它在生效」的那一个。
+
+    2026-11-04 修：opener 分支原先只装 ProxyHandler，TLS 上下文
+    （certifi 的 CA bundle + 自定义源的自签根证书）只给了无代理的
+    urlopen(context=...) 那条路 —— 开着系统代理（Clash 之类）的机器，
+    自定义更新源的证书校验必挂。现在给 opener 显式装一个带上下文的
+    HTTPSHandler（build_opener 会用它顶掉默认的那个）。
     """
     proxies = urllib.request.getproxies() or {}
     if not proxies.get("https") and not proxies.get("http"):
@@ -202,7 +208,14 @@ def _opener():
             proxies = {"http": sysproxy, "https": sysproxy}
     if not proxies:
         return None
-    return urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+    handlers: list = [urllib.request.ProxyHandler(proxies)]
+    try:
+        ctx = _ssl_context(extra_ca)
+        if ctx is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    except Exception:
+        pass            # 上下文建不出来就退回默认 TLS 行为，代理照用
+    return urllib.request.build_opener(*handlers)
 
 
 def _http_json(url: str, timeout: float, *, label: str,
@@ -404,13 +417,21 @@ def _manifest_url(base: str) -> str:
 
 
 def _abs_url(u: str, base: str) -> str:
-    """清单里的下载地址可以是相对路径，按清单所在目录解析。"""
+    """清单里的下载地址可以是相对路径，按清单所在目录解析。
+
+    2026-11-04 修：base 直接填了 index.json 文件时，基准必须是它**所在的
+    目录** —— 原实现拼出 `.../index.json/pkg.exe`，下载 404。契约明确
+    支持填文件形式（docs/更新源协议.md 的地址表）。
+    """
     if not u:
         return ""
     if re.match(r"^https?://", u, re.I):
         return u
-    # 以清单所在目录为基准（base 本身可能是 index.json 文件）
-    return urljoin(base.strip().rstrip("/") + "/", u)
+    b = base.strip().rstrip("/")
+    if b.lower().endswith(".json"):
+        # 清单文件 → 所在目录；连目录都没有的裸文件名就无从解析
+        b = b[: b.rfind("/")] if "/" in b else ""
+    return urljoin(b + "/", u)
 
 
 def _norm_item(raw: object, base: str, *, need_file: bool) -> dict:
