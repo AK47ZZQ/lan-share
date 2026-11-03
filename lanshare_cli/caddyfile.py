@@ -91,6 +91,23 @@ TEMPLATE = """\
 \t\tfile_server
 \t}}
 
+\t# 更新包目录（3.96）：程序自己的东西，不放进用户文件区。
+\t#
+\t# 为什么需要：自定义更新地址指向本机时，清单和安装包得有个地方放。
+\t# 放 <数据目录>/updates 会跟 pgdata 犯同一个错 —— 网盘把它当用户文件
+\t# 列给用户看。所以放程序目录下，由 Caddy 直接发文件。
+\t#
+\t# 结构：
+\t#   updates/index.json             服务端（.exe）
+\t#   updates/app/index.json         App（.apk）
+\t# 用 handle_path 而不是 handle：handle 不会剥掉匹配到的前缀，
+\t# 请求 /updates/index.json 会被拼成 <root>/updates/index.json（404）。
+\t# handle_path 先剥掉 /updates 再找文件，root 直接指到更新目录。
+\thandle_path /updates/* {{
+\t\troot * "{updates_root}"
+\t\tfile_server
+\t}}
+
 \thandle {{
 \t\treverse_proxy 127.0.0.1:{api_port} {{
 \t\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
@@ -210,6 +227,7 @@ def render(
     hosts: list[str] | None = None,
     storage_dir: str = "",
     web_root: str = "",
+    updates_root: str = "",
 ) -> str:
     """渲染 Caddyfile 内容（不落盘，方便单测）。
 
@@ -239,6 +257,9 @@ def render(
         storage_dir=(storage_dir or "${HOME}/.local/share/caddy").replace(chr(92), "/"),
         # 同样要换正斜杠 + 不能带引号问题（模板里已经加了一对引号）
         web_root=(web_root or "../web/dist").replace(chr(92), "/"),
+        # 更新包目录（3.96）。放在程序目录下而不是数据目录里 ——
+        # 数据目录是用户文件根，网盘会把里面的东西列给用户看。
+        updates_root=(updates_root or "../updates").replace(chr(92), "/"),
     )
 
 
@@ -250,11 +271,13 @@ def write(
     hosts: list[str] | None = None,
     storage_dir: str = "",
     web_root: str = "",
+    updates_root: str = "",
 ) -> Path:
     """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = render(api_port, web_port, bind_host, hosts, storage_dir, web_root)
+    content = render(api_port, web_port, bind_host, hosts, storage_dir, web_root,
+                     updates_root)
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     return target

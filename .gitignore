@@ -136,3 +136,6 @@ installer/tray/bin/
 Caddyfile.lanbak
 conf/Caddyfile.lanbak
 /VERSION
+
+# 3.96 起 pgdata 落在数据目录同级；这台机器数据目录在源码内，所以它会出现在这里
+/pgdata/

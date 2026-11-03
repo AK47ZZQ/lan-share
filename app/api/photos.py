@@ -55,7 +55,17 @@ def _media_type(rel: str) -> str:
     return "video" if Path(rel).suffix.lower() in VID_EXTS else "photo"
 
 
-_FFPROBE_FALLBACKS = ("C:/lan-share/env/ffmpeg/bin/ffprobe.exe",)   # NSSM 服务 PATH 常不带 ffmpeg
+# ffprobe 候选路径。
+#
+# 🔴 优先找**本安装目录**下的。2026-11-03 源码仓库和生产安装分家之后，写死
+#    "C:/lan-share/env/ffmpeg/..." 就等于「删了/挪了源码仓库，视频缩略图就没了」
+#    —— 而这两件事本来毫无关系。开发机那种布局只作为最后的兜底。
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_FFPROBE_FALLBACKS = (
+    str(_PROJECT_ROOT / "env" / "ffmpeg" / "bin" / "ffprobe.exe"),  # 安装目录（推荐）
+    str(_PROJECT_ROOT / "bin" / "ffprobe.exe"),                     # 安装目录 bin（备选）
+    "C:/lan-share/env/ffmpeg/bin/ffprobe.exe",                      # 开发机老布局，仅兜底
+)
 
 
 def _ffprobe_exe() -> str | None:

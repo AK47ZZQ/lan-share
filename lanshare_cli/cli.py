@@ -533,6 +533,9 @@ def cmd_install(args: argparse.Namespace) -> int:
             storage_dir=str(layout.root / "certs" / "caddy"),
             # 静态资源由 Caddy 直接发（绕开 API 中间件，避免 /assets 403 白屏）
             web_root=str(layout.root / "web" / "dist"),
+            # 更新包目录（3.96）：放程序目录下，不放数据目录 ——
+            # 数据目录是用户文件根，网盘会把里面的东西列给用户看
+            updates_root=str(layout.root / "updates"),
         )
         ok(str(layout.caddyfile))
         # 用 caddy 自己校验，别等启动才发现语法错

@@ -62,7 +62,7 @@ MAX_HISTORY = 20
 # TLS / 代理
 # ──────────────────────────────────────────────────────────────
 
-def _ssl_context() -> ssl.SSLContext | None:
+def _ssl_context(extra_ca: Path | None = None) -> ssl.SSLContext | None:
     """给 urlopen 用的 TLS 上下文；拿不到可用 CA 时返回 None（用默认）。
 
     为什么需要这个：embedded Python 不带 CA bundle，
@@ -77,12 +77,29 @@ def _ssl_context() -> ssl.SSLContext | None:
     certifi 万一没打进包（老版本残留、手工部署），退回默认上下文，
     至少还有系统那条路。
     """
+    ctx: ssl.SSLContext | None = None
     try:
         import certifi
 
-        return ssl.create_default_context(cafile=certifi.where())
+        ctx = ssl.create_default_context(cafile=certifi.where())
     except Exception:
-        return None
+        ctx = None
+
+    # 自定义更新源常常就是自己这台服务器 —— 它用的是 Caddy 内部 CA 签的自签
+    # 证书。certifi 里当然没有这张 CA，于是「检查更新」会报证书校验失败，
+    # 而浏览器却是正常的（系统信任库里有）。
+    #
+    # 这里只把**本安装自己的那张根证书**加进校验链，不做「跳过验证」：
+    # 信任范围仍然是一个具体的 CA 文件，不是「什么都信」。
+    if extra_ca is not None:
+        try:
+            if extra_ca.is_file():
+                base_ctx = ctx or ssl.create_default_context()
+                base_ctx.load_verify_locations(cafile=str(extra_ca))
+                return base_ctx
+        except Exception:
+            pass        # 加载失败就退回原上下文，至少公共 CA 那条路还在
+    return ctx
 
 
 # 版本号形如 3.77 / 3.78.1 —— 只在 tag 里取这一段
@@ -188,7 +205,8 @@ def _opener():
     return urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
 
 
-def _http_json(url: str, timeout: float, *, label: str) -> object:
+def _http_json(url: str, timeout: float, *, label: str,
+               extra_ca: Path | None = None) -> object:
     """GET 一个 URL 并解析 JSON。所有失败都转成带人话的 RuntimeError。
 
     抽出来是因为现在有两个源（自定义清单 / GitHub API）要走同一套代理、
@@ -205,7 +223,7 @@ def _http_json(url: str, timeout: float, *, label: str) -> object:
             resp_ctx = op.open(req, timeout=timeout)
         else:
             resp_ctx = urllib.request.urlopen(req, timeout=timeout,
-                                              context=_ssl_context())
+                                              context=_ssl_context(extra_ca))
         with resp_ctx as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
@@ -429,7 +447,8 @@ def _norm_item(raw: object, base: str, *, need_file: bool) -> dict:
     return item
 
 
-def fetch_custom(base: str, timeout: float = TIMEOUT) -> dict:
+def fetch_custom(base: str, timeout: float = TIMEOUT,
+                 extra_ca: Path | None = None) -> dict:
     """从一个自定义源拉清单。返回 {"latest": {...}, "history": [...]}。
 
     清单不合格（缺 version / url / sha256、schema 不认识）→ 整个源作废，
@@ -437,7 +456,7 @@ def fetch_custom(base: str, timeout: float = TIMEOUT) -> dict:
     不明的 exe。
     """
     url = _manifest_url(base)
-    data = _http_json(url, timeout, label=f"更新源 {base}")
+    data = _http_json(url, timeout, label=f"更新源 {base}", extra_ca=extra_ca)
 
     if not isinstance(data, dict):
         raise RuntimeError("清单根节点不是 JSON 对象")
@@ -616,6 +635,10 @@ def check(install_dir: Path, timeout: float = TIMEOUT,
     cur = current_version(install_dir)
     out = _empty_result(cur)
 
+    # 本安装自己的 Caddy 根证书。自定义源很可能就是这台机器，它的证书
+    # 就是这张 CA 签的 —— 不加进来的话，指向本机的更新源永远报证书错误。
+    extra_ca = Path(install_dir) / "certs" / "caddy" / "pki" / "authorities" / "local" / "root.crt"
+
     bases = configured_sources() if sources is None else list(sources)
     failures: list[str] = []
 
@@ -623,7 +646,7 @@ def check(install_dir: Path, timeout: float = TIMEOUT,
     for base in bases:
         try:
             norm = normalize_source(base)
-            got = fetch_custom(norm, timeout)
+            got = fetch_custom(norm, timeout, extra_ca=extra_ca)
         except (ValueError, RuntimeError) as exc:
             failures.append(f"{base}（{exc}）")
             continue

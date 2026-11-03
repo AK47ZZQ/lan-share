@@ -841,6 +841,7 @@ def _write_caddyfile_and_restart(
                     target, info.api_port, info.web_port, bind_host,
                     storage_dir=str(info.root / "certs" / "caddy"),
                     web_root=str(info.root / "web" / "dist"),
+                    updates_root=str(info.root / "updates"),
                 )
             report.add(
                 "更新 Caddyfile",
@@ -1069,6 +1070,7 @@ def set_public_host(
             hosts,
             storage_dir=str(info.root / "certs" / "caddy"),
             web_root=str(info.root / "web" / "dist"),
+            updates_root=str(info.root / "updates"),
         )
     except (OSError, ValueError) as exc:
         report.add("更新 Caddyfile", False, str(exc))
