@@ -7,6 +7,7 @@
 // fail-closed 的，没有校验值就拒装，提前在这里挡掉能给出更清楚的行为。
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lanshare_app/data/update_service.dart';
+import 'package:lanshare_app/data/update_source.dart';
 
 /// 造一个形似 GitHub Release 的 map
 Map<String, dynamic> gh({
@@ -273,6 +274,61 @@ void _changelogTests() {
       final items = UpdateService.parseChangelog(md);
       expect(items.first.version, '1.1.22');
       expect(items.last.version, '1.1.20');
+    });
+  });
+
+  group('UpdateInfo.fromManifest 相对地址（契约：按清单地址解析）', () {
+    final sha = 'a' * 64;
+    Map<String, dynamic> entry(String url) => {
+          'version': '3.96',
+          'url': url,
+          'sha256': sha,
+        };
+
+    test('目录形式 base：相对地址拼在清单目录下', () {
+      final info = UpdateInfo.fromManifest(
+          entry('pkg.apk'),
+          base: 'https://192.168.1.100:8765/updates')!;
+      expect(info.url, 'https://192.168.1.100:8765/updates/pkg.apk');
+      expect(info.source, 'custom');
+    });
+
+    test('文件形式 base（index.json）：按所在目录解析，不拼成 index.json/xxx',
+        () {
+      final info = UpdateInfo.fromManifest(
+          entry('pkg.apk'),
+          base: 'https://192.168.1.100:8765/updates/index.json')!;
+      expect(info.url, 'https://192.168.1.100:8765/updates/pkg.apk');
+    });
+
+    test('绝对地址原样保留', () {
+      const abs = 'https://cdn.example.com/x/pkg.apk';
+      final info =
+          UpdateInfo.fromManifest(entry(abs), base: 'https://h/updates')!;
+      expect(info.url, abs);
+    });
+
+    test('带尾斜杠的 base 不产生双斜杠', () {
+      final info = UpdateInfo.fromManifest(
+          entry('pkg.apk'),
+          base: 'https://192.168.1.100:8765/updates/')!;
+      expect(info.url, 'https://192.168.1.100:8765/updates/pkg.apk');
+    });
+
+    test('没传 base 时相对地址无法落地 → 条目作废（fail-closed）', () {
+      expect(UpdateInfo.fromManifest(entry('pkg.apk')), isNull);
+    });
+
+    test('resolveUrl：空地址返回空', () {
+      expect(UpdateSourceClient.resolveUrl('', 'https://h/updates'), '');
+    });
+
+    test('resolveUrl：绝对 http 地址原样（回环调试源）', () {
+      expect(
+        UpdateSourceClient.resolveUrl(
+            'http://127.0.0.1:9000/x.apk', 'https://h/updates'),
+        'http://127.0.0.1:9000/x.apk',
+      );
     });
   });
 }

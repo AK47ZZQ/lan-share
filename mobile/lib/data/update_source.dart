@@ -95,6 +95,27 @@ class UpdateSourceClient {
     return '$b/index.json';
   }
 
+  /// 清单里的相对下载地址按清单所在目录解析（契约与服务端
+  /// `lanshare_cli/updater.py::_abs_url` 一致，两边必须同步改）。
+  ///
+  /// 2026-11-04 修：原实现直接用清单里的 url 字段，相对路径会原样传给
+  /// 下载器 —— 服务端支持、App 不支持，等于契约只有一半活的。base 直接
+  /// 填 index.json 文件时按它**所在目录**解析，和服务端同一条规则。
+  static String resolveUrl(String u, String base) {
+    final u0 = u.trim();
+    if (u0.isEmpty) return '';
+    if (RegExp(r'^https?://', caseSensitive: false).hasMatch(u0)) return u0;
+    var b = base.trim().replaceAll(RegExp(r'/+$'), '');
+    if (b.toLowerCase().endsWith('.json')) {
+      final i = b.lastIndexOf('/');
+      b = i < 0 ? '' : b.substring(0, i);
+    }
+    // 相对地址没有基准目录 = 无法落地。返回空让上层按「缺 url」作废
+    // （fail-closed 提前），而不是把一个坏地址塞给下载器。
+    if (b.isEmpty) return '';
+    return '$b/$u0';
+  }
+
   /// 返回清单 Map；任何失败都抛异常（调用方决定是「这个源挂了」还是「整体挂了」）。
   ///
   /// 证书：复用 [TrustStore.createHttpClient]，也就是 App 连自家服务器那套

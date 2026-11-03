@@ -11,6 +11,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'api/api_client.dart';
 import 'api/appver_api.dart';
+import 'api/trust.dart';
+import 'package:dio/io.dart';
 import 'update_source.dart';
 
 class UpdateInfo {
@@ -123,13 +125,17 @@ class UpdateInfo {
   /// **fail-closed**：没有下载地址、或 sha256 不是 64 位十六进制，一律当作
   /// 「这条不能用」。服务端那边是整份清单作废，这里只是单条丢弃 —— 因为
   /// 「有一条不能用」和「这个源坏了」的区别由调用方判断（null 就走下一个源）。
-  static UpdateInfo? fromManifest(Object? raw) {
+  ///
+  /// [base] 是清单所在地址：清单里的相对 url 按它解析（契约原文
+  /// 「相对路径也接受，按清单地址解析」），不传时相对地址无法落地、
+  /// 条目作废 —— 和缺 url 同罪。
+  static UpdateInfo? fromManifest(Object? raw, {String base = ''}) {
     if (raw is! Map) return null;
     final j = Map<String, dynamic>.from(raw);
 
     final version = '${j['version'] ?? ''}'.trim();
-    final url = '${j['url'] ?? ''}'.trim();
     final sha = '${j['sha256'] ?? ''}'.trim().toLowerCase();
+    final url = UpdateSourceClient.resolveUrl('${j['url'] ?? ''}'.trim(), base);
     if (version.isEmpty || url.isEmpty) return null;
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha)) return null;
 
@@ -324,7 +330,7 @@ class UpdateService {
       }
       try {
         final manifest = await UpdateSourceClient.fetch(base);
-        final info = UpdateInfo.fromManifest(manifest['latest']);
+        final info = UpdateInfo.fromManifest(manifest['latest'], base: base);
         if (info == null) {
           // 清单拿到了但 latest 不合格（缺 url / sha256）—— 这个源不能用
           failures.add('$base（清单里的 latest 缺少 url 或 sha256）');
@@ -572,11 +578,21 @@ class UpdateService {
     if (info.url != null && info.url!.isNotEmpty) {
       // 第三方源（GitHub Release asset）：直链下载，不带自家会话凭据。
       // 独立 Dio——不要为了图省事复用 ApiClient，那会把 Bearer token 一并
-      // 发到 github.com，等于把登录凭据交给第三方。
+      // 发到 github.com，等于把登录凭据给第三方。
       final raw = Dio(BaseOptions(
         connectTimeout: const Duration(seconds: 15),
         receiveTimeout: const Duration(minutes: 30),
       ));
+      if (info.source == 'custom') {
+        // 自定义源的下载地址多半就是自家服务器（Caddy 内部 CA 自签）——
+        // 裸 Dio 过不了证书校验，会出现「清单拉到了、包下不动」的怪病
+        // （清单走 TrustStore、下载走裸 Dio，两条链的 TLS 策略不一致）。
+        // 统一成和清单拉取同一套 TOFU 钉扎；公共 CA 的地址不受影响
+        //（回调根本不会被触发）。
+        raw.httpClientAdapter =
+            IOHttpClientAdapter(createHttpClient: TrustStore.createHttpClient);
+        await TrustStore.I.warmup();
+      }
       await raw.download(info.url!, path, onReceiveProgress: onProgress);
     } else {
       final dio = await ApiClient.I.dio();

@@ -431,6 +431,8 @@ def _abs_url(u: str, base: str) -> str:
     if b.lower().endswith(".json"):
         # 清单文件 → 所在目录；连目录都没有的裸文件名就无从解析
         b = b[: b.rfind("/")] if "/" in b else ""
+    if not b:
+        return ""       # 相对地址没有基准目录 = 无法落地，交给上层 fail-closed
     return urljoin(b + "/", u)
 
 
