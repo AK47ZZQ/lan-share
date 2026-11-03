@@ -213,6 +213,12 @@ class TestFetchCustom:
         with pytest.raises(RuntimeError):
             updater.fetch_custom("https://h/u")
 
+    def test_huge_notes_truncated(self, monkeypatch):
+        """超长 notes 截到 4000 —— 不能把返回体撑爆，也不能原样透传。"""
+        self._patch(monkeypatch, _manifest(latest={"notes": "长" * 5000}))
+        got = updater.fetch_custom("https://h/u")
+        assert len(got["latest"]["notes"]) == 4000
+
 
 # ── 回退链 ────────────────────────────────────────────────────
 
@@ -327,6 +333,34 @@ class TestCheckFallback:
         assert out["stale"] is True
         assert out["source"] == "cache"
         assert out["latest"] == "3.96"
+
+    def test_cache_survives_source_config_change(self, tmp_path, monkeypatch):
+        """缓存跨配置复用必须显眼标注 —— 缓存里带着旧源的 url。
+
+        用户从「自定义源 A」切回「只走 GitHub」之后 GitHub 挂了：给他的
+        缓存结果是 A 的清单。stale + source=cache + source_url=A 三个都
+        要在，UI 才能说清「这是 N 小时前从 A 查的」。
+        """
+        def boom(*a, **k):
+            raise RuntimeError("全挂了")
+
+        (tmp_path / "VERSION").write_text("3.95", encoding="utf-8")
+        monkeypatch.setattr(updater, "fetch_custom", lambda base, timeout, extra_ca=None: {
+            "latest": {"version": "3.96", "build": 396, "url": "https://old-source/x.exe",
+                       "size": 1, "sha256": SHA, "notes": "", "published": ""},
+            "history": [],
+        })
+        updater.check(tmp_path, sources=["https://old-source/u"])
+
+        # 切成 GitHub-only，GitHub 也挂 → 只剩缓存
+        monkeypatch.setattr(updater, "fetch_custom", boom)
+        monkeypatch.setattr(updater, "fetch_github", boom)
+        out = updater.check(tmp_path, sources=[])
+        assert out["stale"] is True
+        assert out["source"] == "cache"
+        assert out["source_url"] == "https://old-source/u"
+        assert out["latest"] == "3.96"
+        assert out["has_update"] is True
 
 
 class TestConfiguredSources:
