@@ -280,3 +280,37 @@ def test_facets_media_and_dir_filters(client):
         assert sum(x["count"] for x in fwall["months"]) == wall["total"]
     finally:
         _cleanup(tag)
+
+
+
+# ── fid 路径穿越（2026-11-04 值守批）──────────────────────
+
+
+def test_feedback_fid_backslash_traversal_blocked(auth, client):
+    """fid 是服务器生成的 <时间戳>-<hex>。FastAPI 的 path 段挡住正斜杠，
+    但**反斜杠不在其列**：Windows 上 Path 把它当分隔符，原始 HTTP 请求
+    （curl --path-as-is 之类）带 fid=两个点加反斜杠反斜杠outside-target
+    能让 _find_file 逃出反馈目录 —— append 端点可覆写盘上任意 .md。
+
+    走 TestClient 测不了（httpx 按 WHATWG 把反斜杠规范化成正斜杠，
+    攻击在客户端就被洗掉了）——必须单元级直测 _find_file。
+    """
+    from app.api import feedback as fb
+
+    BS = chr(92)
+    outside = SHARE_ROOT / "outside-target.md"
+    outside.write_text("原始内容，不许被改", encoding="utf-8")
+
+    # 修复前：_find_file 会把 "..加反斜杠加反斜杠outside-target" 解析到
+    # SHARE_ROOT/outside-target.md 并返回存在的 Path
+    # 待处理 目录到 SHARE_ROOT 根是两级（待处理 → 反馈 → 根）；
+    # 反斜杠必须逐级构造，连续两个反斜杠在 Windows 上只算一层
+    got = fb._find_file((".." + BS) * 2 + "outside-target")
+    assert got is None, f"fid 穿越未被拦截：_find_file 返回 {got}"
+    assert outside.read_text(encoding="utf-8") == "原始内容，不许被改"
+
+    # 合法 fid 仍然找得到（fixtures 建好的反馈走真实路由验证）
+    m, _ = _member(client)
+    real = _post_feedback(m, f"穿越回归-{_rand()}", body="正常反馈").json()["id"]
+    assert m.get(f"/api/feedback/{real}").status_code == 200
+    assert fb._find_file(real) is not None

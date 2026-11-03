@@ -92,7 +92,17 @@ def _parse(text: str) -> dict | None:
 
 
 def _find_file(fid: str) -> Path | None:
-    """在三个状态子目录里定位反馈文件（状态流转=移动文件，位置不定）。"""
+    """在三个状态子目录里定位反馈文件（状态流转=移动文件，位置不定）。
+
+    2026-11-04 修：fid 来自 URL 路径参数，FastAPI 的 path 段挡住正斜杠
+    却**不挡反斜杠** —— Windows 上 Path 把它当分隔符，原始 HTTP 请求
+    （不经浏览器/httpx 的 WHATWG 规范化）带 `..\\..\\x` 能让本函数逃出
+    反馈目录，append 端点因此可覆写盘上任意 .md。fid 本来就是服务器
+    生成的 <时间戳>-<hex>，按白名单清洗即可。
+    """
+    fid = re.sub(r"[^0-9A-Za-z-]", "", str(fid or ""))[:64]
+    if not fid:
+        return None
     for sub in STATUS_DIRS:
         p = _dir() / sub / f"{fid}.md"
         if p.is_file():
