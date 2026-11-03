@@ -856,12 +856,15 @@ def _write_caddyfile_and_restart(
     ok_flag, msg = _restart_service(info.caddy_service, dry_run=dry_run)
     report.add("重启 Caddy 服务", ok_flag, msg)
     if not ok_flag:
-        # 回滚：把旧内容写回去 + 再重启一次
+        # 回滚：把旧内容写回去 + 再重启一次。第二次重启的结果必须上报
+        #（2026-11-04 值守批修：原实现把返回值丢掉，回滚成功与否全靠猜）
         if old_content is not None and not dry_run:
             try:
                 target.write_text(old_content, encoding="utf-8", newline="")
-                _restart_service(info.caddy_service)
-                report.add("回滚配置", True, "已恢复原 Caddyfile 并重启")
+                ok2, msg2 = _restart_service(info.caddy_service)
+                report.add("回滚配置", ok2,
+                           "已恢复原 Caddyfile 并重启" if ok2
+                           else f"配置已恢复原样，但重启仍失败：{msg2}")
             except OSError as exc:
                 report.add("回滚配置", False, f"回滚也失败了：{exc}")
         return False
@@ -1080,10 +1083,14 @@ def set_public_host(
     ok_flag, msg = _restart_service(info.caddy_service)
     report.add("重启 Caddy 服务", ok_flag, msg)
     if not ok_flag:
+        # 回滚：恢复旧配置 + 再重启。第二次重启的结果必须上报
+        #（2026-11-04 值守批修：原实现把返回值丢掉，回滚成功与否全靠猜）
         try:
             target.write_text(old, encoding="utf-8", newline="")
-            _restart_service(info.caddy_service)
-            report.add("回滚配置", True, "已恢复原 Caddyfile 并重启")
+            ok2, msg2 = _restart_service(info.caddy_service)
+            report.add("回滚配置", ok2,
+                       "已恢复原 Caddyfile 并重启" if ok2
+                       else f"配置已恢复原样，但重启仍失败：{msg2}")
         except OSError as exc:
             report.add("回滚配置", False, f"回滚也失败了：{exc}")
         return report

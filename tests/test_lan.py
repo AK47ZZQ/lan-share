@@ -626,6 +626,39 @@ class TestRollback:
         restored = (tmp_path / "conf" / "Caddyfile").read_text(encoding="utf-8")
         assert restored == original, "重启失败后 Caddyfile 必须回滚"
 
+    def test_rollback_restart_result_is_reported(self, info, monkeypatch, tmp_path):
+        """回滚时的第二次重启，结果必须进报告 —— 原实现把返回值丢掉，
+        「配置恢复了但服务还挂着」这种状态会被谎报成回滚成功。"""
+        monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
+
+        (tmp_path / "conf").mkdir(parents=True, exist_ok=True)
+        original = caddyfile.render(8766, 8765, caddyfile.BIND_ALL)
+        (tmp_path / "conf" / "Caddyfile").write_text(original, encoding="utf-8", newline="")
+
+        calls = {"n": 0}
+
+        def _restart(name, *, dry_run=False):
+            calls["n"] += 1
+            # 第一次 = 改完配置的重启（失败触发回滚）；第二次 = 回滚后的重启
+            return (calls["n"] == 2, "重启成功" if calls["n"] == 2 else "启动失败")
+
+        monkeypatch.setattr(lan, "_restart_service", _restart)
+        report = lan.disable_lan(info)
+        assert not report.success
+        step = next(s for s in report.steps if s[0] == "回滚配置")
+        assert step[1] is True, "第二次重启成功 → 回滚步骤必须报成功"
+        assert "已恢复原 Caddyfile 并重启" in step[2]
+
+        # 第二次重启也失败时，报告必须说实话
+        def _restart2(name, *, dry_run=False):
+            return (False, "一直起不来")
+
+        monkeypatch.setattr(lan, "_restart_service", _restart2)
+        report2 = lan.disable_lan(info)
+        step2 = next(s for s in report2.steps if s[0] == "回滚配置")
+        assert step2[1] is False
+        assert "重启仍失败" in step2[2]
+
 
 class TestDryRun:
     def test_enable_dry_run_reports_without_side_effects(self, info, monkeypatch, tmp_path):
