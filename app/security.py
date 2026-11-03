@@ -325,8 +325,13 @@ def clear_login_fails(username: str, public: bool = False):
 
 
 def client_ip(request: Request) -> str:
-    """取 XFF 的最后一个值——那才是我们自己的 Caddy 追加的、不可被客户端伪造的；
-    配合 Caddyfile 的 request_header -X-Forwarded-For（剥离外部传入的 XFF）双保险。"""
+    """取 XFF 的最后一个值——那才是我们自己的 Caddy 追加的、不可被客户端伪造的。
+
+    注意：安装模板的 Caddyfile 里**没有**剥外部 XFF 的 request_header 行
+    （曾以为有），所以首值是客户端可伪造的 —— 本函数取尾值是唯一的防线，
+    别依赖「上游会帮我们剥头」。（2026-11-04 核实并修正注释；同一结论
+    也修进了 qr._effective_client_ip，见 e7775f5。）
+    """
     xff = request.headers.get("x-forwarded-for", "")
     values = [v.strip() for v in xff.split(",") if v.strip()]
     if values:
