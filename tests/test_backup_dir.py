@@ -117,6 +117,31 @@ class TestPruneSafety:
         assert not tmpf.exists()
         assert list(tmp_path.iterdir()) == []
 
+    def test_keeps_user_temp_files(self, monkeypatch, tmp_path):
+        """用户自己的 .tmp/.part 不是我们的半成品 —— 绝不能删。
+
+        备份目录是用户自选的，里面可能有下载一半的 .part、编辑器临时
+        文件 .tmp。原实现「后缀匹配就删」会把它们静默清掉 —— 违反
+        「只删自己产的」红线。自家的半成品永远带 meta-/settings- 前缀。
+        """
+        mine = [
+            tmp_path / "旅行记录.vlog.part",
+            tmp_path / "notes.tmp",
+            tmp_path / "download.part",
+        ]
+        for f in mine:
+            f.write_text("user data", encoding="utf-8")
+        # 自家半成品仍要被清
+        own = tmp_path / "settings-20260101-040000.tmp"
+        own.write_text("half", encoding="utf-8")
+
+        monkeypatch.setattr(backup_svc, "backup_dir", lambda: tmp_path)
+        backup_svc._prune_old()
+
+        for f in mine:
+            assert f.exists(), f"{f.name} 被误删了"
+        assert not own.exists()
+
     def test_keeps_only_recent_groups(self, monkeypatch, tmp_path):
         # 造 12 组，只有最近 BACKUP_KEEP 组该留下
         keep = backup_svc.BACKUP_KEEP

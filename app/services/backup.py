@@ -378,8 +378,10 @@ def _prune_old() -> None:
         m = pat.match(f.name)
         if m:
             groups.setdefault(m.group(2), []).append(f)
-        elif f.name.endswith((".tmp", ".part")):
-            orphans.append(f)               # 我们自己写坏的半成品
+        elif f.name.endswith((".tmp", ".part")) and f.name.startswith(("meta-", "settings-")):
+            orphans.append(f)               # 我们自己写坏的半成品（必带自家前缀；
+                                            # 2026-11-04 收紧——原来只看后缀，
+                                            # 用户目录里自己的 .tmp/.part 会被误删）
         elif f.name.endswith(("-shm", "-wal")) and not (
             dest / f.name.rsplit("-", 1)[0]
         ).exists():
