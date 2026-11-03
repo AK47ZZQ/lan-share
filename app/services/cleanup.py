@@ -78,31 +78,34 @@ _cleanup_task: asyncio.Task | None = None
 
 
 def _cleanup_tmp():
+    # 2026-11-04 修：tmp 子段不存在时绝不能短路后面的孤儿回收段 ——
+    # data/tmp 是历史遗迹（现版上传走同目录 .uploading-* 中间态，全仓
+    # 没有任何写手），全新部署上它永远不存在，孤儿清理整段失明。
     tmp = SHARE_ROOT / "tmp"
-    if not tmp.exists():
-        return
-    cutoff = time.time() - TMP_MAX_AGE_DAYS * 86400
-    for f in tmp.rglob("*"):
-        try:
-            if not f.is_file() or f.stat().st_mtime >= cutoff:
-                continue
-            f.unlink(missing_ok=True)
-            if f.parent != tmp and not any(f.parent.iterdir()):
-                f.parent.rmdir()
-        except OSError:
-            continue   # 竞态（并发删/占用）跳过，下轮再收
-    # 孤儿上传临时文件（崩溃残留）：超过 1 天的 .uploading/.dav-uploading/
-    # .dedup/.tmp-* 一律回收。上传临时名已唯一化（.uploading-<pid>-<ns>），
-    # endswith 匹配不到——必须同时按中缀匹配（R2-P1 回归修复）
+    if tmp.is_dir():
+        cutoff = time.time() - TMP_MAX_AGE_DAYS * 86400
+        for f in tmp.rglob("*"):
+            try:
+                if not f.is_file() or f.stat().st_mtime >= cutoff:
+                    continue
+                f.unlink(missing_ok=True)
+                if f.parent != tmp and not any(f.parent.iterdir()):
+                    f.parent.rmdir()
+            except OSError:
+                continue   # 竞态（并发删/占用）跳过，下轮再收
+    # 孤儿上传临时文件（崩溃残留）：超过 1 天的一律回收。
+    # 上传临时名已唯一化（.uploading-<pid>-<ns>），锚定正则只收精确仿造
+    # 临时名格式（ns 为 15 位以上时间戳量级）的（R2-P1 回归修复）。
+    # 2026-11-04 收紧：去掉裸 .uploading/.dav-uploading 后缀档 ——
+    # 当前代码已无写手（全部唯一化），留着只会误删用户合法文件
+    # （my.uploading / video.dav-uploading）；裸 .dedup 仍是活跃中间态
+    # （uploads.py 去重），保留。
     orphan_cutoff = time.time() - 86400
-    # 锚定正则而非任意中缀：用户可能合法拥有 "a.uploading-1-2" 这类文件名
-    # （红队 P1），只有精确仿造临时名格式（.uploading-<pid>-<ns>，ns 为
-    # 15 位以上时间戳量级）才回收
     orphan_re = re.compile(r"\.(?:uploading|dav-uploading)-\d+-\d{15,}$")
     for f in SHARE_ROOT.rglob("*"):
         # 全树扫描对竞态不设防会杀掉整轮清理（R1-P2-3，与函数头部注释同源）
         try:
-            if f.is_file() and (f.name.endswith((".uploading", ".dav-uploading", ".dedup"))
+            if f.is_file() and (f.name.endswith(".dedup")
                                 or orphan_re.search(f.name)
                                 or f.name.startswith(".tmp-")) \
                     and f.stat().st_mtime < orphan_cutoff:
