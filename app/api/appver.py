@@ -155,6 +155,15 @@ def _github_app_releases(force: bool = False) -> list:
 
 
 
+def _safe_apk_name(name: object) -> str:
+    """只留 basename：文件名可能来自网络响应（GitHub asset 名）或手编的
+    version.json，不能带路径分隔符 —— 带 `../` 或 `C:\\` 就能读写
+    DIST_DIR 之外。本地分支原来有这条防线（内联），GitHub 分支漏了；
+    现在三处路径拼接受口（本地 version.json / _find_local_apk /
+    _mirror_apk_async）统一走这一个函数。"""
+    return str(name or "").replace("\\", "/").split("/")[-1]
+
+
 def _load_version_local() -> dict:
     """本地 `App安装包/version.json`（GitHub 不可达时的兜底）。"""
     f = SHARE_ROOT / DIST_DIR / "version.json"
@@ -170,9 +179,7 @@ def _load_version_local() -> dict:
         data["build"] = int(data["build"])
     except (TypeError, ValueError):
         raise HTTPException(status_code=500, detail="version.json 的 build 必须是整数")
-    # 只取 basename：filename 被写成 ../x 或 C:\x 时打回原形
-    name = str(data.get("filename") or "lanshare.apk").replace("\\", "/").split("/")[-1]
-    data["filename"] = name
+    data["filename"] = _safe_apk_name(data.get("filename") or "lanshare.apk")
     data["_source"] = "local"
     return data
 
@@ -348,6 +355,7 @@ def _find_local_apk(name: str, want_size) -> Path | None:
 
     版本号可能被手改、文件名可能被改，但 100 MB 的字节数改不了。
     """
+    name = _safe_apk_name(name)
     for cand in (SHARE_ROOT / DIST_DIR / name,
                  SHARE_ROOT / DIST_DIR / "lanshare.apk"):
         if not cand.is_file():
@@ -379,6 +387,7 @@ def _mirror_apk_async(name: str, url: str, size) -> None:
     """
     if not name or not url.startswith("https://"):
         return
+    name = _safe_apk_name(name)
 
     with _apk_sync_lock:
         if name in _apk_syncing:

@@ -284,6 +284,27 @@ class TestMirrorApk:
         got = appver._find_local_apk("任何名字.apk", 300)
         assert got is not None and got.name == "lanshare.apk"
 
+    def test_find_local_apk_rejects_path_traversal_name(self, tmp_path, monkeypatch):
+        """GitHub 响应里的文件名带 `../` 或盘符 → 不能逃出 App安装包/。"""
+        dist = tmp_path / "App安装包"
+        dist.mkdir()
+        escaped = tmp_path / "evil.apk"
+        escaped.write_bytes(b"z" * 100)
+
+        monkeypatch.setattr(appver, "SHARE_ROOT", tmp_path)
+        # 清洗后名字不存在于 dist → 返回 None；绝不指向 dist 之外
+        got = appver._find_local_apk("../evil.apk", 100)
+        assert got is None
+        got2 = appver._find_local_apk("C:\\evil.apk", 100)
+        assert got2 is None
+
+    def test_safe_apk_name(self):
+        assert appver._safe_apk_name("../../evil.apk") == "evil.apk"
+        assert appver._safe_apk_name("C:\\evil.apk") == "evil.apk"
+        assert appver._safe_apk_name("a/b/c.apk") == "c.apk"
+        assert appver._safe_apk_name("") == ""
+        assert appver._safe_apk_name(None) == ""
+
     def test_mirror_writes_file_and_is_atomic(self, tmp_path, monkeypatch):
         """镜像成功后本地有完整文件，且不残留 .part。"""
         import threading
