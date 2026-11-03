@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'api/api_client.dart';
 import 'api/appver_api.dart';
+import 'update_source.dart';
 
 class UpdateInfo {
   final String version;
@@ -116,6 +117,33 @@ class UpdateInfo {
       source: 'github',
     );
   }
+
+  /// 从自定义更新源的清单条目构造（协议见 docs/更新源协议.md）。
+  ///
+  /// **fail-closed**：没有下载地址、或 sha256 不是 64 位十六进制，一律当作
+  /// 「这条不能用」。服务端那边是整份清单作废，这里只是单条丢弃 —— 因为
+  /// 「有一条不能用」和「这个源坏了」的区别由调用方判断（null 就走下一个源）。
+  static UpdateInfo? fromManifest(Object? raw) {
+    if (raw is! Map) return null;
+    final j = Map<String, dynamic>.from(raw);
+
+    final version = '${j['version'] ?? ''}'.trim();
+    final url = '${j['url'] ?? ''}'.trim();
+    final sha = '${j['sha256'] ?? ''}'.trim().toLowerCase();
+    if (version.isEmpty || url.isEmpty) return null;
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha)) return null;
+
+    return UpdateInfo(
+      version: version,
+      build: (j['build'] as num?)?.toInt() ?? 0,
+      notes: '${j['notes'] ?? ''}'.trim(),
+      sha256: sha,
+      available: true,
+      size: (j['size'] as num?)?.toInt(),
+      url: url,
+      source: 'custom',
+    );
+  }
 }
 
 /// 更新历史条目（/api/app/history，服务端 App安装包/versions.json）
@@ -168,6 +196,21 @@ class UpdateHistoryItem {
         date: rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate,
         notes: '${j['body'] ?? ''}');
   }
+
+  /// 从自定义源的清单条目构造（字段少，缺什么就空着）。
+  static UpdateHistoryItem? fromManifest(Object? raw) {
+    if (raw is! Map) return null;
+    final j = Map<String, dynamic>.from(raw);
+    final version = '${j['version'] ?? ''}'.trim();
+    if (version.isEmpty) return null;
+    final d = '${j['published'] ?? ''}'.trim();
+    return UpdateHistoryItem(
+      version: version,
+      build: (j['build'] as num?)?.toInt() ?? 0,
+      date: d.length >= 10 ? d.substring(0, 10) : d,
+      notes: '${j['notes'] ?? ''}'.trim(),
+    );
+  }
 }
 
 /// 检查更新的结果 —— **三态**，不是「有/没有」两态。
@@ -195,11 +238,30 @@ class UpdateCheckResult {
   final bool serverReachable;
   final bool githubReachable;
 
+  /// 这次结果来自哪一路：'custom' | 'server' | 'github' | ''（没查成）。
+  ///
+  /// 界面要显示它。自定义源连不上却静默回落 GitHub，用户会以为
+  /// 「我的源里没有新版」，实际是源挂了 —— 那比报错难查得多。
+  final String source;
+
+  /// source == 'custom' 时具体是哪个地址答的。
+  final String sourceUrl;
+
+  /// 自定义源为什么没用上（回落时非空）。可能有多条，用「；」连起来。
+  final String sourceError;
+
+  /// 更新历史。自定义源来自清单的 history，默认源来自 GitHub Releases。
+  final List<UpdateHistoryItem> history;
+
   const UpdateCheckResult({
     this.info,
     required this.reachable,
     this.serverReachable = false,
     this.githubReachable = false,
+    this.source = '',
+    this.sourceUrl = '',
+    this.sourceError = '',
+    this.history = const [],
   });
 
   bool get hasUpdate => info != null;
@@ -245,7 +307,45 @@ class UpdateService {
   /// **排序必须按 version 字符串，不能按 build 数字**：两个源的编号体系
   /// 可能不一致（真实 versionCode 126 vs 没有 build 号时的推算值 10119），
   /// 按数字排会把 1.1.18 排在 1.1.19 前面。
-  static Future<UpdateCheckResult> check() async {
+  static Future<UpdateCheckResult> check({List<String>? sources}) async {
+    // ── ① 自定义源：按配置顺序逐个试，第一个能用的就用 ──
+    //
+    // 顺序就是优先级：局域网地址写第一条、樱花隧道第二条，在家不绕公网。
+    // sources 传 null = 读本地配置；传 [] = 强制走默认双源（设置页「恢复默认」
+    // 保存成空之后就是这状态）。
+    final custom = sources ?? await UpdateSourceStore.load();
+    final failures = <String>[];
+
+    for (final base in custom) {
+      final bad = UpdateSourceStore.validate(base);
+      if (bad != null) {
+        failures.add('$base（$bad）');
+        continue;
+      }
+      try {
+        final manifest = await UpdateSourceClient.fetch(base);
+        final info = UpdateInfo.fromManifest(manifest['latest']);
+        if (info == null) {
+          // 清单拿到了但 latest 不合格（缺 url / sha256）—— 这个源不能用
+          failures.add('$base（清单里的 latest 缺少 url 或 sha256）');
+          continue;
+        }
+        return UpdateCheckResult(
+          info: info,
+          reachable: true,
+          serverReachable: false,
+          githubReachable: false,
+          source: 'custom',
+          sourceUrl: base,
+          sourceError: failures.join('；'),
+          history: _historyFromManifest(manifest),
+        );
+      } catch (e) {
+        failures.add('$base（${_short(e)}）');
+      }
+    }
+
+    // ── ② 默认双源（服务端 + GitHub 并发，取版本高的那个）──
     final results = await Future.wait<_SourceResult>([
       _checkServer(),
       _checkGitHub(),
@@ -261,12 +361,18 @@ class UpdateService {
     // 两个都要带上，UI 靠它们给出针对性的 VPN 建议。
     final serverOk = results[0].reachable;
     final githubOk = results[1].reachable;
+    final customErr = failures.join('；');
+
     if (candidates.isNotEmpty) {
       return UpdateCheckResult(
         info: candidates.first,
         reachable: true,
         serverReachable: serverOk,
         githubReachable: githubOk,
+        // 回落到默认源了，但必须说清为什么没用自定义源 ——
+        // 否则用户以为「我的源里没有新版」
+        source: candidates.first.source,
+        sourceError: customErr,
       );
     }
     return UpdateCheckResult(
@@ -274,7 +380,28 @@ class UpdateService {
       reachable: anyReachable,
       serverReachable: serverOk,
       githubReachable: githubOk,
+      sourceError: customErr,
     );
+  }
+
+  /// 清单里的 history 数组 → 历史条目。坏一条跳过，不影响整份。
+  static List<UpdateHistoryItem> _historyFromManifest(Map<String, dynamic> m) {
+    final raw = m['history'];
+    if (raw is! List) return const <UpdateHistoryItem>[];
+    final out = <UpdateHistoryItem>[];
+    for (final item in raw.take(20)) {
+      final h = UpdateHistoryItem.fromManifest(item);
+      if (h != null) out.add(h);
+    }
+    return out;
+  }
+
+  /// 把异常压成一句能塞进界面的说明。DioException.toString() 有几十行，
+  /// 原样丢给用户等于没给信息。
+  static String _short(Object e) {
+    var s = '$e'.replaceAll('\n', ' ').trim();
+    if (s.length > 80) s = '${s.substring(0, 80)}…';
+    return s;
   }
 
   /// 服务端源。404（服务端没配版本信息）算「应答了但没有」，网络异常算不可达。

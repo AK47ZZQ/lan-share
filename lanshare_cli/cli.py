@@ -1255,6 +1255,47 @@ def cmd_check_update(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_update_source(args: argparse.Namespace) -> int:
+    """查看 / 设置自定义更新源。
+
+    自定义源是「多行、按顺序尝试」：局域网地址写第一条、樱花隧道写第二条，
+    在家就不用绕一圈公网。全部连不上才回落 GitHub —— 回落时 UI 会标注来源，
+    免得你以为「源里没有新版」。
+    """
+    from . import updater
+
+    try:
+        if args.clear:
+            updater.set_sources([])
+            if not args.json:
+                say("  已清除自定义更新源 —— 以后只从 GitHub 检查")
+        elif args.save:
+            updater.set_sources(args.save)
+            if not args.json:
+                say(f"  已保存 {len(args.save)} 条更新源（上面的优先）")
+        urls = updater.configured_sources()
+    except (RuntimeError, ValueError) as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        else:
+            fail(str(exc))
+        return 1
+
+    if args.json:
+        print(json.dumps({"ok": True, "urls": urls, "is_default": not urls},
+                         ensure_ascii=False))
+        return 0
+
+    if not urls:
+        say("  当前：默认（GitHub Releases）")
+    else:
+        say(f"  当前 {len(urls)} 条，按顺序尝试：")
+        for i, u in enumerate(urls, 1):
+            say(f"    {i}. {u}")
+        say("  全部连不上才回落到 GitHub")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """环境自检。只读，不改任何东西。"""
     layout = Layout(
@@ -1584,6 +1625,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout", type=float, default=8.0, help="GitHub 请求超时秒数，默认 8"
     )
     p_update.set_defaults(func=cmd_check_update)
+
+    p_src = sub.add_parser(
+        "update-source", parents=[common],
+        help="查看 / 设置自定义更新源（多行，先写的优先）"
+    )
+    p_src.add_argument(
+        "--save", nargs="+", metavar="URL",
+        help="覆盖保存若干地址，顺序即优先级（局域网放前面）"
+    )
+    p_src.add_argument(
+        "--clear", action="store_true", help="清除自定义源，恢复只走 GitHub"
+    )
+    p_src.add_argument("--json", action="store_true", help="输出 JSON（给 GUI 用）")
+    p_src.set_defaults(func=cmd_update_source)
 
     p_lan = sub.add_parser(
         "lan", parents=[common], help="局域网访问开关（status/enable/disable/diagnose）"

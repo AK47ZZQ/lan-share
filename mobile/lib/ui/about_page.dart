@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../data/local/prefs.dart';
 import '../data/net.dart';
 import '../data/update_service.dart';
+import 'update_source_page.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
@@ -29,6 +30,12 @@ class _AboutPageState extends State<AboutPage> {
   double? _progress; // null=未在下载
   List<UpdateHistoryItem> _history = [];
   bool _historyLoaded = false;
+
+  // 这次结果来自哪一路（3.96 自定义更新源）。回落时必须显示 ——
+  // 自定义源连不上却静默回落，用户会以为「我的源里没有新版」。
+  String _source = '';
+  String _sourceUrl = '';
+  String _sourceError = '';
 
   @override
   void initState() {
@@ -74,6 +81,15 @@ class _AboutPageState extends State<AboutPage> {
         // 还是 GitHub 挂了，因为这两个源的 VPN 诉求是相反的（一个要关一个要开）。
         _checkError = result.reachable ? null : result.failureHint;
         _checking = false;
+        _source = result.source;
+        _sourceUrl = result.sourceUrl;
+        _sourceError = result.sourceError;
+        // 自定义源带了历史就用它的（协议里和 latest 在同一个文件），
+        // 否则保留原先从 GitHub Releases 拉的
+        if (result.history.isNotEmpty) {
+          _history = result.history;
+          _historyLoaded = true;
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -321,6 +337,51 @@ class _AboutPageState extends State<AboutPage> {
                                 ? '下载并安装'
                                 : '服务端 APK 未上传')),
                     ],
+                    // ── 来源标注 + 更新地址入口（3.96）──
+                    const Divider(height: 22),
+                    if (_checked && _sourceError.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(children: [
+                          Icon(Icons.warning_amber_rounded,
+                              size: 13,
+                              color: Theme.of(context).colorScheme.error),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              '自定义更新地址连不上：$_sourceError',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(context).colorScheme.error),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    if (_checked && _source.isNotEmpty)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          _source == 'custom'
+                              ? '来源：自定义地址 $_sourceUrl'
+                              : '来源：${_source == 'github' ? 'GitHub' : '自家服务端'}',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(context).colorScheme.outline),
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          await Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const UpdateSourcePage()));
+                          // 回来之后不自动重查 —— 用户可能只是进去看一眼，
+                          // 主动点「检查更新」更符合预期
+                        },
+                        icon: const Icon(Icons.tune, size: 16),
+                        label: const Text('更新地址'),
+                      ),
+                    ),
                   ]))),
           if (showHistory) ...[
             const SizedBox(height: Gap.md),

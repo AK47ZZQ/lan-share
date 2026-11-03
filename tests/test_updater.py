@@ -120,7 +120,7 @@ class TestFetchLatest:
         payload = [_rel("server-v3.78"), _rel("server-v3.77"), _rel("app-v1.1.21")]
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen(payload))
-        info = updater.fetch_latest()
+        info = updater.fetch_github()["latest"]
         assert info["tag"] == "server-v3.78"
         assert info["version"] == "3.78"
         assert info["size"] == 56005272
@@ -133,19 +133,19 @@ class TestFetchLatest:
         ]
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen(payload))
-        assert updater.fetch_latest()["version"] == "3.78"
+        assert updater.fetch_github()["latest"]["version"] == "3.78"
 
     def test_ignores_app_releases(self, monkeypatch):
         payload = [_rel("app-v9.9.9"), _rel("server-v3.78")]
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen(payload))
-        assert updater.fetch_latest()["version"] == "3.78"
+        assert updater.fetch_github()["latest"]["version"] == "3.78"
 
     def test_no_server_release_raises(self, monkeypatch):
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen([_rel("app-v1.1.21")]))
         with pytest.raises(RuntimeError, match="没找到"):
-            updater.fetch_latest()
+            updater.fetch_github()["latest"]
 
     def test_network_error_is_human_readable(self, monkeypatch):
         import urllib.error
@@ -154,7 +154,7 @@ class TestFetchLatest:
             updater.urllib.request, "urlopen",
             _fake_urlopen(None, raises=urllib.error.URLError("timed out")))
         with pytest.raises(RuntimeError, match="连不上 GitHub"):
-            updater.fetch_latest()
+            updater.fetch_github()["latest"]
 
     def test_rate_limit_message(self, monkeypatch):
         import urllib.error
@@ -163,7 +163,7 @@ class TestFetchLatest:
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen(None, raises=exc))
         with pytest.raises(RuntimeError, match="限流"):
-            updater.fetch_latest()
+            updater.fetch_github()["latest"]
 
 
 class TestCheck:
@@ -177,7 +177,7 @@ class TestCheck:
         (tmp_path / "VERSION").write_text("3.77\n", encoding="utf-8")
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen([_rel("server-v3.78")]))
-        r = updater.check(tmp_path)
+        r = updater.check(tmp_path, sources=[])
         assert r["current"] == "3.77"
         assert r["latest"] == "3.78"
         assert r["has_update"] is True
@@ -188,7 +188,7 @@ class TestCheck:
         (tmp_path / "VERSION").write_text("3.78\n", encoding="utf-8")
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen([_rel("server-v3.78")]))
-        r = updater.check(tmp_path)
+        r = updater.check(tmp_path, sources=[])
         assert r["has_update"] is False
         assert r["error"] == ""
 
@@ -200,7 +200,7 @@ class TestCheck:
         monkeypatch.setattr(
             updater.urllib.request, "urlopen",
             _fake_urlopen(None, raises=urllib.error.URLError("no route")))
-        r = updater.check(tmp_path)
+        r = updater.check(tmp_path, sources=[])
         assert r["error"] != ""          # 明说了没查成
         assert r["has_update"] is False
         assert r["latest"] == ""         # 不能编一个 latest 出来
@@ -212,14 +212,14 @@ class TestCheck:
         monkeypatch.setattr(
             updater.urllib.request, "urlopen",
             _fake_urlopen(None, raises=ValueError("怪错")))
-        r = updater.check(tmp_path)      # 不该炸
+        r = updater.check(tmp_path, sources=[])      # 不该炸
         assert r["error"] != ""
 
     def test_unknown_install_does_not_claim_update(self, tmp_path, monkeypatch):
         """没 VERSION 的老安装：查到最新版也不说「有新版本」。"""
         monkeypatch.setattr(updater.urllib.request, "urlopen",
                             _fake_urlopen([_rel("server-v3.78")]))
-        r = updater.check(tmp_path)
+        r = updater.check(tmp_path, sources=[])
         assert r["current"] == ""
         assert r["has_update"] is False
         assert r["latest"] == "3.78"     # 还是告诉用户 GitHub 上是几版
@@ -278,7 +278,7 @@ class TestSslContext:
 
         monkeypatch.setattr(urllib.request, "urlopen", boom)
         with pytest.raises(RuntimeError) as exc:
-            up.fetch_latest()
+            up.fetch_github()["latest"]
         msg = str(exc.value)
         assert "证书" in msg
         assert "VPN" in msg
@@ -331,8 +331,8 @@ class TestCache:
         def boom(timeout=8.0):
             raise RuntimeError("GitHub 接口限流")
 
-        monkeypatch.setattr(updater, "fetch_latest", boom)
-        out = updater.check(tmp_path)
+        monkeypatch.setattr(updater, "fetch_github", boom)
+        out = updater.check(tmp_path, sources=[])
         assert out["error"] == ""          # 用上了缓存就不算「没查成」
         assert out["latest"] == "3.99"
         assert out["has_update"] is True
@@ -344,20 +344,24 @@ class TestCache:
         def boom(timeout=8.0):
             raise RuntimeError("GitHub 接口限流")
 
-        monkeypatch.setattr(updater, "fetch_latest", boom)
-        out = updater.check(tmp_path)
+        monkeypatch.setattr(updater, "fetch_github", boom)
+        out = updater.check(tmp_path, sources=[])
         assert out["error"]
         assert out["latest"] == ""
         assert out["stale"] is False
 
     def test_successful_check_writes_cache(self, tmp_path, monkeypatch):
         self._write_install(tmp_path, "3.88")
-        monkeypatch.setattr(updater, "fetch_latest", lambda timeout=8.0: {
-            "version": "3.99", "url": "https://x/y.exe",
-            "notes": "", "published": "2026-11-02"})
-        out = updater.check(tmp_path)
+        monkeypatch.setattr(updater, "fetch_github", lambda timeout=8.0: {
+            "latest": {"version": "3.99", "url": "https://x/y.exe",
+                       "notes": "", "published": "2026-11-02", "sha256": "",
+                       "size": 0, "build": 0, "tag": "server-v3.99"},
+            "history": []})
+        out = updater.check(tmp_path, sources=[])
         assert out["has_update"] is True
-        assert updater._read_cache(tmp_path)["version"] == "3.99"
+        # 3.96 起缓存存的是整份结果（latest 字段），老版本存的是 version
+        cached = updater._read_cache(tmp_path)
+        assert (cached.get("latest") or cached.get("version")) == "3.99"
 
 
 class TestSystemProxy:

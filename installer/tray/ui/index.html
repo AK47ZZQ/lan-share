@@ -192,6 +192,52 @@ button.link {
 .btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
 .btnrow .mini { flex: 1 1 auto; min-width: 76px; white-space: nowrap; }
 
+/* ── 自定义更新地址（3.96） ──
+   一条一行：序号 + 输入框 + 删除。序号不是装饰 —— 顺序就是优先级，
+   第一行是局域网地址，通了就不再试后面的。 */
+.srcsec {
+  border-top: 1px solid var(--border);
+  margin-top: 4px; padding-top: 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  flex: none;
+}
+.srchead { display: flex; align-items: baseline; gap: 8px; }
+.srctitle { font-size: 11.5px; font-weight: 700; color: var(--faint); letter-spacing: 0.06em; }
+.srchint { font-size: 11px; color: var(--muted); }
+.srcrow { display: flex; align-items: center; gap: 6px; }
+.srcrow .srcidx {
+  width: 15px; flex: none; text-align: right;
+  font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+.srcrow input {
+  flex: 1 1 0; min-width: 0;
+  font-family: Consolas, monospace; font-size: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; color: var(--text);
+}
+.srcrow input:focus { outline: none; border-color: var(--accent); }
+.srcrow .del {
+  flex: none; width: 26px; height: 26px; padding: 0;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1;
+}
+.srcrow .del:hover { color: var(--danger); border-color: var(--danger); }
+.srcempty { font-size: 11.5px; color: var(--muted); padding: 1px 0 2px; }
+
+/* 更新结果里的来源标注 / 历史 */
+.updsrc { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.updsrc b { color: var(--text); font-weight: 600; }
+.updhist {
+  font-size: 11px; color: var(--muted);
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  line-height: 1.7;
+  max-height: 132px; overflow-y: auto;
+}
+.updhist .v { color: var(--text); font-weight: 600; margin-right: 6px; }
+
 /* ── 二维码 ── */
 .qr-row { display: flex; align-items: center; gap: 14px; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .qr-row img {
@@ -375,8 +421,26 @@ button.link {
         <div class="hint" id="verline">点右边「检查更新」查一下</div>
         <div id="updbox" style="display:none">
           <div class="hint" id="updtext" style="margin-top:4px"></div>
+          <div class="updsrc" id="updsrc"></div>
+          <div class="updhist" id="updhist"></div>
           <div style="display:flex;justify-content:flex-end;margin-top:8px">
             <button class="mini primary" id="updget" style="display:none">下载安装包</button>
+          </div>
+        </div>
+
+        <!-- 自定义更新地址（2026-11-04）。
+             不填 = 从 GitHub 拉；填了 = 按顺序试，第一个通的就用。
+             家里把局域网地址写第一条、樱花隧道写第二条，在家不绕公网。 -->
+        <div class="srcsec">
+          <div class="srchead">
+            <span class="srctitle">自定义更新地址</span>
+            <span class="srchint" id="srchint">不填就用 GitHub</span>
+          </div>
+          <div id="srclist"></div>
+          <div class="btnrow">
+            <button class="mini" id="srcadd">+ 添加更新地址</button>
+            <button class="mini primary" id="srcsave">保存</button>
+            <button class="mini" id="srcclear">恢复默认</button>
           </div>
         </div>
       </div>
@@ -428,6 +492,7 @@ if (host) {
     else if (m && m.type === 'busy') setBusy(m.on, m.text);
     else if (m && m.type === 'updateState') setUpdateBusy(m.payload && m.payload.busy);
     else if (m && m.type === 'update') onUpdate(m.payload);
+    else if (m && m.type === 'updateSource') renderUpdateSource(m.payload);
   });
 }
 
@@ -481,7 +546,124 @@ function onUpdate(u) {
     if (staleNote && u.stale) text.textContent += staleNote;
     get.style.display = 'none';
   }
+
+  // ── 来源标注 ──
+  // 回落了必须说出来。静默回落会让用户以为「我的源里没有新版」，
+  // 而实际是源挂了 —— 那比报错难查得多。
+  const src = document.getElementById('updsrc');
+  if (u.source === 'custom') {
+    src.innerHTML = '来源：自定义更新地址 <b>' + esc(u.sourceUrl || '') + '</b>';
+  } else if (u.source === 'github') {
+    src.innerHTML = '来源：<b>GitHub</b>'
+      + (u.sourceError ? '<br>自定义地址连不上：' + esc(u.sourceError) : '');
+  } else if (u.source === 'cache') {
+    src.innerHTML = '来源：<b>' + (u.staleHours || 0) + ' 小时前的缓存</b>'
+      + (u.sourceError ? '<br>这次没查成：' + esc(u.sourceError) : '');
+  } else {
+    src.innerHTML = '';
+  }
+
+  // ── 更新历史 ──
+  // 填了自定义地址就从自定义源的历史拉；没填就是 GitHub Releases 列表。
+  const hist = document.getElementById('updhist');
+  const items = (u.history || []).slice(0, 10);
+  if (!items.length) {
+    hist.style.display = 'none';
+    hist.innerHTML = '';
+  } else {
+    hist.style.display = '';
+    hist.innerHTML = items.map(function (h) {
+      // 说明只取第一行前 60 字：这里是个小卡片，不是 CHANGELOG 阅读器
+      const n = (h.notes || '').split('\n')[0].slice(0, 60);
+      return '<div><span class="v">v' + esc(h.version) + '</span>'
+        + esc(h.published || '') + (n ? ' · ' + esc(n) : '') + '</div>';
+    }).join('');
+  }
 }
+
+/** HTML 转义。更新源地址和远端清单里的文字都会进 innerHTML，
+ *  不转义等于把「别人写的内容」当代码执行。 */
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── 自定义更新地址 ─────────────────────────────────────────
+// 列表顺序就是优先级：第一条（通常局域网）通了就不试第二条。
+var _srcRows = [];
+
+function paintSources() {
+  const box = document.getElementById('srclist');
+  box.innerHTML = '';
+  const hint = document.getElementById('srchint');
+
+  if (!_srcRows.length) {
+    hint.textContent = '不填就用 GitHub';
+    const empty = document.createElement('div');
+    empty.className = 'srcempty';
+    empty.textContent = '还没有自定义地址 —— 检查更新会直接问 GitHub。';
+    box.appendChild(empty);
+    return;
+  }
+
+  hint.textContent = '按顺序试，上面优先';
+  _srcRows.forEach(function (u, i) {
+    const row = document.createElement('div');
+    row.className = 'srcrow';
+
+    const idx = document.createElement('span');
+    idx.className = 'srcidx';
+    idx.textContent = String(i + 1);
+    idx.title = i === 0 ? '第一优先' : '第 ' + (i + 1) + ' 优先';
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.value = u;
+    inp.placeholder = 'https://192.168.1.100:8765/updates';
+    inp.spellcheck = false;
+    inp.oninput = function () { _srcRows[i] = inp.value; };
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '×';
+    del.title = '删除这一条';
+    del.onclick = function () {
+      _srcRows.splice(i, 1);
+      paintSources();
+    };
+
+    row.appendChild(idx);
+    row.appendChild(inp);
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+function renderUpdateSource(payload) {
+  // payload.urls 是当前保存的地址（来自注册表）
+  _srcRows = (payload && payload.urls ? payload.urls : []).slice();
+  paintSources();
+}
+
+document.getElementById('srcadd').onclick = function () {
+  _srcRows.push('');
+  paintSources();
+  const inputs = document.querySelectorAll('#srclist input');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+};
+
+document.getElementById('srcsave').onclick = function () {
+  const urls = _srcRows
+    .map(function (x) { return (x || '').trim(); })
+    .filter(function (x) { return x.length > 0; });
+  post({ action: 'saveUpdateSource', urls: urls });
+};
+
+document.getElementById('srcclear').onclick = function () {
+  // 恢复默认 = 清空配置，等价于「从现在起只问 GitHub」
+  post({ action: 'saveUpdateSource', urls: [] });
+};
 
 document.getElementById('chkupdate').onclick = () => post({ action: 'checkUpdate' });
 document.getElementById('updget').onclick = () => post({ action: 'downloadUpdate' });

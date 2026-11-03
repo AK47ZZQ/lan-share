@@ -1235,6 +1235,8 @@ namespace LanShare
                 case "ready":
                     _pageReady = true;
                     PushStateAsync(true);
+                    // 更新地址不是状态的一部分（它是配置），单独推一次
+                    PushUpdateSource();
                     break;
 
                 case "copy":
@@ -1317,7 +1319,135 @@ namespace LanShare
                 case "downloadUpdate":
                     DownloadUpdate();
                     break;
+
+                case "saveUpdateSource":
+                    SaveUpdateSource(msg);
+                    break;
             }
+        }
+
+        // ──────────────────────────────────────────────────────
+        // 自定义更新地址（3.96）
+        //
+        // 存注册表 HKLM\SOFTWARE\LANShare 的 UpdateUrls（多行文本）。
+        // 读写都走 CLI —— 只有一份实现，GUI 和命令行不会各存一套配置。
+        // ──────────────────────────────────────────────────────
+
+        /// <summary>把已保存的更新地址推给界面（面板打开、保存成功后各一次）。</summary>
+        private void PushUpdateSource()
+        {
+            if (_web == null) return;
+
+            Task.Run(() =>
+            {
+                string error;
+                string json = RunCli("update-source --json", 20000, out error);
+                return string.IsNullOrEmpty(json) ? "" : json;
+            }).ContinueWith(t =>
+            {
+                if (IsDisposed || _web == null) return;
+
+                var payload = new Dictionary<string, object>();
+                var urls = new List<string>();
+                try
+                {
+                    var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                    var d = ser.Deserialize<Dictionary<string, object>>(t.Result);
+                    if (d != null && d.ContainsKey("urls") && d["urls"] != null)
+                    {
+                        foreach (var x in (System.Collections.IEnumerable)d["urls"])
+                            urls.Add(Convert.ToString(x) ?? "");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("读取更新地址失败：" + ex.Message);
+                }
+                payload["urls"] = urls;
+                Send("updateSource", payload);
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        /// <summary>
+        /// 给命令行参数加引号。更新地址里可能带 &amp; ? 空格这些 cmd 特殊字符，
+        /// 不包起来会被 cmd 吃掉一半 —— 表现是「保存了但存进去的是前半段」。
+        ///
+        /// 刻意**不**转义反斜杠：网上流传的「\\ → \\\\」是给 C 风格解析器用的，
+        /// cmd 不认，照着写会把 URL / 路径里的 \ 变成俩。这里只处理双引号。
+        /// </summary>
+        private static string QuoteArg(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "\"\"";
+            var sb = new StringBuilder("\"");
+            foreach (char c in s)
+            {
+                if (c == '"') sb.Append("\\\"");
+                else sb.Append(c);
+            }
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// 保存自定义更新地址。传空列表 = 清除，恢复「只走 GitHub」。
+        ///
+        /// 命令行参数统一走 QuoteArg：地址里可能有 & ? 这些 cmd 特殊字符，
+        /// 拼错一次就是「保存了但存进去的是前半段」。
+        /// </summary>
+        private void SaveUpdateSource(Dictionary<string, object> msg)
+        {
+            var urls = new List<string>();
+            if (msg != null && msg.ContainsKey("urls") && msg["urls"] != null)
+            {
+                foreach (var x in (System.Collections.IEnumerable)msg["urls"])
+                {
+                    string s = (Convert.ToString(x) ?? "").Trim();
+                    if (s.Length > 0) urls.Add(s);
+                }
+            }
+
+            RunBusy("正在保存更新地址…", () =>
+            {
+                var sb = new StringBuilder("update-source --json");
+                if (urls.Count == 0)
+                {
+                    sb.Append(" --clear");
+                }
+                else
+                {
+                    sb.Append(" --save");
+                    foreach (var u in urls)
+                        sb.Append(' ').Append(QuoteArg(u));
+                }
+
+                string error;
+                string json = RunCli(sb.ToString(), 30000, out error);
+                if (string.IsNullOrEmpty(json))
+                    return "保存失败：" + (error ?? "命令没有输出");
+
+                try
+                {
+                    var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                    var d = ser.Deserialize<Dictionary<string, object>>(json);
+                    object ok;
+                    if (d != null && d.TryGetValue("ok", out ok)
+                        && ok is bool && !(bool)ok)
+                    {
+                        return "保存失败：" + Str(d, "error");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return "保存失败：" + ex.Message;
+                }
+
+                AppendLog("更新地址已保存：" + urls.Count + " 条");
+                // 立刻刷新界面上的列表（保存是后台线程，这里只是发起推送）
+                PushUpdateSource();
+                return urls.Count == 0
+                    ? "已恢复默认：以后只从 GitHub 检查更新"
+                    : "已保存 " + urls.Count + " 条更新地址（上面的优先）";
+            });
         }
 
         // ──────────────────────────────────────────────────────
@@ -1388,6 +1518,15 @@ namespace LanShare
                     p["stale"] = d.TryGetValue("stale", out st)
                         && st is bool && (bool)st;
                     p["staleHours"] = Int(d, "stale_hours");
+                    // 更新源相关（3.96）：结果是谁给的、地址是什么、
+                    // 自定义源为什么没成 —— 回落必须在界面上说清楚，
+                    // 否则用户以为「我的源里没有新版」。
+                    p["source"] = Str(d, "source");
+                    p["sourceUrl"] = Str(d, "source_url");
+                    p["sourceError"] = Str(d, "source_error");
+                    object hist;
+                    p["history"] = d.TryGetValue("history", out hist)
+                        ? hist : new List<object>();
                     _updateUrl = Str(d, "url");
                 }
                 catch (Exception ex)
