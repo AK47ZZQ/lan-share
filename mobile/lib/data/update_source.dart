@@ -73,7 +73,12 @@ class UpdateSourceStore {
 
     if (scheme == 'https') return null;
     if (scheme == 'http') {
-      if (host == '127.0.0.1' || host == 'localhost') return null;
+      // 回环例外与服务端 _LOOPBACK_HOSTS 一致（127.0.0.1 / localhost / ::1）。
+      // Dart 的 Uri.host 对 [::1] 返回不带方括号的 '::1' —— 白名单漏了它，
+      // 服务端允许的地址 App 会拒绝，两端行为分歧。
+      if (host == '127.0.0.1' || host == 'localhost' || host == '::1') {
+        return null;
+      }
       return '只支持 https://（http 是明文传输，安装包可能被中间人替换）';
     }
     return '不支持的协议 ${uri.scheme}://（只支持 https）';
