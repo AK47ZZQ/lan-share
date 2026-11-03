@@ -68,39 +68,11 @@ async def generic_qr(text: str = Query(..., min_length=1, max_length=512),
 # ──────────────────────────────────────────────────────────────
 
 def _effective_client_ip(request: Request) -> str:
-    """判断请求的真实来源 IP —— 反代场景下绕开 127.0.0.1 的假象。
+    """已归位 app/security.py::effective_client_ip（2026-11-04 解耦）。
+    保留别名：local_config 老代码与既有测试仍按本模块引用。"""
+    from app.security import effective_client_ip
 
-    陷阱：请求经过 Caddy 反代后，`request.client.host` 永远是 127.0.0.1
-    （Caddy 的地址），拿它做「是否本机」判断会把整个局域网都放进来。
-
-    规则：
-      - 直连且不是回环 → 就是真实 IP，**不信任任何 X- 头**
-        （否则公网攻击者伪造 X-Real-IP: 127.0.0.1 就能绕过）
-      - 直连且是回环 → 可能来自 Caddy，看 X-Real-IP 拿真实来源
-
-    XFF 取**尾值**（2026-11-04 修，原取首值是 P0）：
-    `reverse_proxy` 对 X-Forwarded-For 是**追加**不是替换 —— 攻击者自带
-    `X-Forwarded-For: 127.0.0.1` 时，API 收到的是
-    `127.0.0.1, <真实IP>`，首值恰好是伪造值。安装模板也没有
-    `request_header -X-Forwarded-For` 剥外部传入（security.py 注释声称的
-    那行不存在）。尾值才是我们自己的 Caddy 追加的、不可被客户端伪造的
-    —— 与 `security.client_ip()`（审计用）同一结论，两边此前方向相反。
-    """
-    direct = request.client.host if request.client else ""
-    loopbacks = ("127.0.0.1", "::1", "localhost")
-
-    if direct not in loopbacks:
-        return direct
-
-    # 只有从本机进来的请求才信反代头。
-    # X-Real-IP 被 Caddy 的 header_up {remote_host} 整头替换，单值可信；
-    # XFF 是追加链，取尾值（最后一跳 = 我们的 Caddy 看到的地址）。
-    forwarded = request.headers.get("x-real-ip", "").strip()
-    if not forwarded:
-        xff = [v.strip() for v in
-               request.headers.get("x-forwarded-for", "").split(",") if v.strip()]
-        forwarded = xff[-1] if xff else ""
-    return forwarded or direct
+    return effective_client_ip(request)
 
 
 @router.get("/local/qr")

@@ -324,6 +324,40 @@ def clear_login_fails(username: str, public: bool = False):
         _login_fails.pop(_lock_key(username, public), None)
 
 
+def effective_client_ip(request: Request) -> str:
+    """「本机判定」用的真实来源 IP —— /local/* 免登录组的环回防线。
+
+    与 client_ip 的区别：这条还要处理「请求经 Caddy 反代后
+    request.client.host 永远是 127.0.0.1」的假象 —— 规则：
+      - 直连且不是回环 → 就是真实 IP，**不信任任何 X- 头**
+        （否则公网攻击者伪造 X-Real-IP: 127.0.0.1 就能绕过）
+      - 直连且是回环 → 可能来自 Caddy，看 X-Real-IP 拿真实来源
+
+    XFF 取**尾值**（2026-11-04 修，原取首值是 P0，见 e7775f5）：
+    reverse_proxy 对 X-Forwarded-For 是**追加**不是替换，尾值才是我们
+    自己的 Caddy 追加的、不可被客户端伪造的。
+
+    2026-11-04 从 qr.py 挪进来（解耦）：环回判定是安全原语，原来是
+    QR 端点模块的私有函数、被 local_config/local_backup 跨模块借用
+    —— 谁改安全逻辑就该只看 security.py 一个地方。qr 侧保留同名
+    别名，老测试不用改。
+    """
+    direct = request.client.host if request.client else ""
+    loopbacks = ("127.0.0.1", "::1", "localhost")
+
+    if direct not in loopbacks:
+        return direct
+
+    # X-Real-IP 被 Caddy 的 header_up {remote_host} 整头替换，单值可信；
+    # XFF 是追加链，取尾值（最后一跳 = 我们的 Caddy 看到的地址）。
+    forwarded = request.headers.get("x-real-ip", "").strip()
+    if not forwarded:
+        xff = [v.strip() for v in
+               request.headers.get("x-forwarded-for", "").split(",") if v.strip()]
+        forwarded = xff[-1] if xff else ""
+    return forwarded or direct
+
+
 def client_ip(request: Request) -> str:
     """取 XFF 的最后一个值——那才是我们自己的 Caddy 追加的、不可被客户端伪造的。
 

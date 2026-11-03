@@ -3,7 +3,7 @@
 存在的理由和 /local/qr 一样：桌面端没有登录态，调不动 /admin/* 那套接口，
 但它确实需要读写几个「服务层」的配置（不是用户数据，是这台机器怎么对外）。
 
-所有端点都只允许本机访问，判定逻辑复用 qr.py 的 _effective_client_ip ——
+所有端点都只允许本机访问，判定逻辑用 security.effective_client_ip ——
 那套逻辑处理了「经 Caddy 反代后 client.host 全是 127.0.0.1」这个陷阱。
 
 内容范围刻意收得很窄：只有公网入口地址。别的东西（账号、权限、文件）
@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app import settings
-from app.api.qr import _effective_client_ip
+from app.security import effective_client_ip
 
 router = APIRouter()
 
@@ -27,7 +27,7 @@ _LOOPBACKS = ("127.0.0.1", "::1", "localhost")
 
 def _require_local(request: Request) -> None:
     """非本机一律 403。"""
-    ip = _effective_client_ip(request)
+    ip = effective_client_ip(request)
     if ip not in _LOOPBACKS:
         raise HTTPException(status_code=403, detail="该接口仅限本机访问")
 
