@@ -172,10 +172,10 @@ class Layout:
         self.caddy_service = f"{service_prefix}-caddy"
         self.pg_service = f"{service_prefix}-postgresql"
 
-        # PostgreSQL 二进制跟着程序走（安装包自带），数据跟着 data_dir 走
-        # —— 这样用户把数据目录放到 D 盘时，库和文件一起搬。
+        # PostgreSQL 二进制跟着程序走（安装包自带），数据放在 data_dir **同级**
+        # —— data_dir 是用户文件根，网盘会把里面的东西列给用户看（见 pg.pgdata）。
         self.pgsql_dir = self.root / "pgsql"
-        self.pgdata = self.data_dir / "pgdata"
+        self.pgdata = self.data_dir.parent / "pgdata"
 
     def required_files(self) -> list[tuple[Path, str]]:
         return [
@@ -563,6 +563,23 @@ def cmd_install(args: argparse.Namespace) -> int:
     )
 
     try:
+        # 3.95：pgdata 从 data_dir 里面搬到了同级。
+        #
+        # 必须放在「判断是否已初始化」**之前** —— 老版本装机的库在
+        # data_dir\pgdata，新代码只看同级，不看老位置就会判成「没初始化」，
+        # 然后直接 initdb，等于把用户的库盖掉。
+        #
+        # 服务定义里的 -D 还指着老路径，pg_ctl 按新路径停不掉它，所以先让
+        # NSSM 按服务名停（服务不存在/本来就停着都不算错）。
+        try:
+            nssm.stop(layout.pg_service, timeout=60)
+            say("    已停止旧的 PostgreSQL 服务，准备迁移数据目录")
+        except ServiceError:
+            pass
+
+        if pg.migrate_legacy_pgdata():
+            ok(f"数据库目录已迁出用户文件区 → {pg.pgdata}")
+
         if pg.is_initialized():
             ok(f"数据目录已存在（PG {pg.installed_version()}）：{pg.pgdata}")
         else:

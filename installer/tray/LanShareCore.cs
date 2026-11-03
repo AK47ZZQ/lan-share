@@ -200,27 +200,43 @@ namespace LanShare
         {
             get
             {
-                try
+                // 依次找 postgresql.conf 的几个落点。安装版和开发版布局不一样，
+                // 而且 3.95 起 pgdata 从「数据目录里」搬到了「数据目录的同级」，
+                // 少列一个候选就会在升级后的机器上读到 0 —— 于是「重启服务」
+                // 没法等数据库真正可连，只能干等 30 秒再报超时。
+                string[] candidates =
                 {
-                    string conf = Path.Combine(
-                        InstallFolder, "env", "pginstall", "data", "postgresql.conf");
-                    if (!File.Exists(conf)) return 0;
+                    // 3.95+：pgdata 在数据目录同级（不跟用户文件混在一起）
+                    Path.Combine(
+                        Path.GetDirectoryName(
+                            DataFolder.TrimEnd('\\', '/')), "pgdata", "postgresql.conf"),
+                    // 3.94 及以前：pgdata 就在数据目录里面
+                    Path.Combine(DataFolder, "pgdata", "postgresql.conf"),
+                    // 开发机布局
+                    Path.Combine(InstallFolder, "env", "pginstall", "data", "postgresql.conf"),
+                };
 
-                    foreach (string raw in File.ReadAllLines(conf))
+                foreach (string conf in candidates)
+                {
+                    if (string.IsNullOrEmpty(conf) || !File.Exists(conf)) continue;
+                    try
                     {
-                        string t = raw.Trim();
-                        if (t.Length == 0 || t[0] == '#') continue;
-                        if (!t.StartsWith("port", StringComparison.OrdinalIgnoreCase)) continue;
+                        foreach (string raw in File.ReadAllLines(conf))
+                        {
+                            string t = raw.Trim();
+                            if (t.Length == 0 || t[0] == '#') continue;
+                            if (!t.StartsWith("port", StringComparison.OrdinalIgnoreCase)) continue;
 
-                        int eq = t.IndexOf('=');
-                        if (eq < 0) continue;
+                            int eq = t.IndexOf('=');
+                            if (eq < 0) continue;
 
-                        string val = t.Substring(eq + 1).Trim();
-                        int port;
-                        if (int.TryParse(val, out port)) return port;
+                            string val = t.Substring(eq + 1).Trim();
+                            int port;
+                            if (int.TryParse(val, out port) && port > 0) return port;
+                        }
                     }
+                    catch (Exception) { }
                 }
-                catch (Exception) { }
                 return 0;
             }
         }
@@ -279,21 +295,84 @@ namespace LanShare
             }
         }
 
-        /// <summary>重启 api 和 caddy。返回 null 表示成功，否则是错误说明。</summary>
+        /// <summary>
+        /// 按 数据库 → API → Web 的顺序重启，每一步都等到「端口真的在听」为止。
+        ///
+        /// 3.94 及以前这里只重启了 caddy 和 api，压根没碰 PG。用户点「关闭服务」
+        /// 把三个服务一起停了，再点「重启」时 PG 永远躺平 —— API 一启动就连库，
+        /// 等 30 秒 psycopg ConnectionTimeout 直接崩，Caddy 反代过去得到 502。
+        /// 界面还显示「重启成功」，实际整个网盘是死的（2026-11-03 实机踩到）。
+        ///
+        /// 顺序原来是反的（先 caddy 后 api），中间那段时间端口在听、后端没起，
+        /// 用户正好刷新页面就是 502。现在从底层往上起。
+        /// </summary>
         public static string Restart(InstallConfig cfg)
         {
-            var errors = new List<string>();
-
-            // 先重启 caddy（它是入口），再确认 api 活着
-            // 顺序反了会有一小段「端口在听但后端没起来」的窗口
-            foreach (var name in new[] { cfg.CaddyServiceName, cfg.ApiServiceName })
+            // ── 1. 数据库 ──
+            // PG 起不来后面全是白搭，直接失败返回，别让用户以为重启成功了
+            if (cfg.HasDatabaseService)
             {
-                string err = RestartOne(name);
-                if (err != null) errors.Add(err);
+                string err = RestartOne(cfg.DbServiceName, 60, 60);
+                if (err != null) return "重启失败：\n\n" + err;
+
+                int pgPort = cfg.PgPort;
+                if (pgPort > 0 && !WaitTcp(pgPort, 60))
+                {
+                    return "重启失败：\n\nPostgreSQL 服务显示在运行，但 " + pgPort
+                        + " 端口 60 秒内没有开始监听。\n\n看日志："
+                        + Path.Combine(cfg.LogFolder, "postgres.log");
+                }
             }
 
-            if (errors.Count == 0) return null;
-            return "重启失败：\n\n" + string.Join("\n", errors.ToArray());
+            // ── 2. API ──
+            string apiErr = RestartOne(cfg.ApiServiceName, 30, 40);
+            if (apiErr != null) return "重启失败：\n\n" + apiErr;
+
+            if (!WaitTcp(cfg.ApiPort, 60))
+            {
+                return "重启失败：\n\nAPI 服务显示在运行，但 " + cfg.ApiPort
+                    + " 端口 60 秒内没有开始监听（多半是连不上数据库崩了）。\n\n看日志："
+                    + Path.Combine(cfg.LogFolder, "api-stderr.log");
+            }
+
+            // ── 3. Web ──
+            string caddyErr = RestartOne(cfg.CaddyServiceName, 30, 40);
+            if (caddyErr != null) return "重启失败：\n\n" + caddyErr;
+
+            if (!WaitTcp(cfg.WebPort, 60))
+            {
+                return "重启失败：\n\nCaddy 服务显示在运行，但 " + cfg.WebPort
+                    + " 端口 60 秒内没有开始监听。\n\n看日志："
+                    + Path.Combine(cfg.LogFolder, "caddy-stderr.log");
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 轮询等某个本机端口开始监听。连上就 true。
+        /// 端口传 0（读不到配置）时直接放过 —— 宁可少等，也不要因为读不到
+        /// 端口号就误判重启失败。
+        /// </summary>
+        private static bool WaitTcp(int port, int seconds)
+        {
+            if (port <= 0) return true;
+
+            DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    using (var tcp = new System.Net.Sockets.TcpClient())
+                    {
+                        IAsyncResult ar = tcp.BeginConnect("127.0.0.1", port, null, null);
+                        if (ar.AsyncWaitHandle.WaitOne(800) && tcp.Connected) return true;
+                    }
+                }
+                catch (Exception) { }
+                System.Threading.Thread.Sleep(700);
+            }
+            return false;
         }
 
         public static string RestartOnePublic(string name) { return RestartOne(name); }
@@ -311,24 +390,40 @@ namespace LanShare
             int started = 0;
             // PG 必须先起 —— api 启动就连库，库不在会直接崩
             string[] order = { cfg.DbServiceName, cfg.ApiServiceName, cfg.CaddyServiceName };
+
+            // 端口一次读好。PgPort 每次 get 都要翻 postgresql.conf，别在循环里反复问。
+            int pgPort = cfg.PgPort;
+
             foreach (var name in order)
             {
                 try
                 {
                     using (var sc = new ServiceController(name))
                     {
-                        if (sc.Status == ServiceControllerStatus.Running) continue;
-                        if (sc.Status == ServiceControllerStatus.StartPending) continue;
-                        sc.Start();
-                        sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(25));
-                        started++;
+                        if (sc.Status != ServiceControllerStatus.Running
+                            && sc.Status != ServiceControllerStatus.StartPending)
+                        {
+                            sc.Start();
+                            sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(25));
+                            started++;
+                        }
                     }
                 }
                 catch (Exception)
                 {
                     // 服务不存在（还没装）或没权限 —— 都不是致命问题，
                     // 后续 Probe 会把真实状态反映到界面上，不在这里打断
+                    continue;
                 }
+
+                // 🔴 服务 RUNNING 不等于端口在听。
+                // PG 启动要 replay WAL、API 启动要先连库再 bind，都需要几秒。
+                // 不等就返回的话，界面第一次探测必然失败 —— 用户看到「服务未启动」
+                // 而其实只是还没就绪（2026-11-03 实机：刚开机点托盘就是这景象）。
+                int port = name == cfg.DbServiceName ? pgPort
+                         : name == cfg.ApiServiceName ? cfg.ApiPort
+                         : cfg.WebPort;
+                WaitTcp(port, 60);
             }
             return started;
         }
@@ -346,7 +441,11 @@ namespace LanShare
                     {
                         if (sc.Status == ServiceControllerStatus.Stopped) continue;
                         sc.Stop();
-                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(25));
+                        // PG 停止时要做一次 checkpoint，还要等客户端断开连接 ——
+                        // 25 秒经常不够，超时后就卡在 StopPending，下一次 Start
+                        // 直接失败。给它 90 秒。
+                        int wait = name == cfg.DbServiceName ? 90 : 25;
+                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(wait));
                     }
                 }
                 catch (InvalidOperationException ex)
@@ -381,6 +480,16 @@ namespace LanShare
 
         private static string RestartOne(string name)
         {
+            return RestartOne(name, 20, 30);
+        }
+
+        /// <summary>
+        /// 停/启一个服务，等它到目标状态。超时时间可调 —— PostgreSQL 停止时
+        /// 要做一次 checkpoint + 等客户端断开，20 秒经常不够；给它更长的窗口
+        /// 比用 20 秒硬等然后误报「重启失败」强。
+        /// </summary>
+        private static string RestartOne(string name, int stopSeconds, int startSeconds)
+        {
             try
             {
                 using (var sc = new ServiceController(name))
@@ -388,10 +497,10 @@ namespace LanShare
                     if (sc.Status != ServiceControllerStatus.Stopped)
                     {
                         sc.Stop();
-                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(20));
+                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(stopSeconds));
                     }
                     sc.Start();
-                    sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(30));
+                    sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(startSeconds));
                     return null;
                 }
             }

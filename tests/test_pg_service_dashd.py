@@ -83,7 +83,8 @@ class TestInstallServiceDashD:
 
     def test_keeps_service_when_dash_d_matches(self, tmp_path, monkeypatch):
         """服务指向的就是当前 pgdata → 保持不动，不要删重建。"""
-        runner = FakeRunner(exists=True, qc_path=str(tmp_path / "data" / "pgdata"))
+        # Postgres(data_dir=tmp/data) 的 pgdata = tmp/pgdata（数据目录的同级）
+        runner = FakeRunner(exists=True, qc_path=str(tmp_path / "pgdata"))
         pg = _make(tmp_path, monkeypatch, runner)
         pg.install_service()
         assert not any("delete" in " ".join(c) for c in runner.calls)

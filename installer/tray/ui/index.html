@@ -92,7 +92,18 @@ body {
   min-height: 0;
 }
 
-.card.grow { flex: 1; }
+.card.grow { flex: 1; min-height: 0; }
+
+/* 🔴 卡片在 .col 里不许被压缩（2026-11-03 实机第二次踩）。
+   .col 是 flex 纵向容器 + overflow-y:auto，卡片作为 flex item 默认可
+   收缩（flex: 0 1 auto）。内容一多，卡片被压到只剩标题高度，里面那些
+   flex:none 的行就直接溢出边框 —— 「● 未配置」跑到线外面、地址输入框
+   更是被挤到卡片外压根看不见。上次只给卡片子项加了 flex:none，漏了
+   卡片本身。
+   正确做法：卡片一律按内容高度占位，卡片多了让整列滚，别压卡片。
+   特异性 0,3,0 高于 .card.grow 的 0,2,0，能压住它。 */
+.col > .card,
+.col > .card.grow { flex: 0 0 auto; }
 
 /* 🔴 卡片里的固定行不参与压缩（2026-11-02 实机）。
    .card 是 flex 纵向容器，子项默认 flex-shrink:1 —— 面板高度一矮，

@@ -227,7 +227,8 @@ class TestPgdataResolution:
         """两份 pgdata 都存在 → 服务定义和注册表打架，这是真故障。"""
         svc = layout.root / "svcdb"
         svc.mkdir()
-        reg = layout.data_dir / "pgdata"
+        # 3.95 起 pgdata 在数据目录同级（数据目录是用户文件根）
+        reg = layout.data_dir.parent / "pgdata"
         reg.mkdir()
         monkeypatch.setattr(diag, "_run", lambda cmd, timeout=12.0: self._qc(str(svc)))
         monkeypatch.setattr(diag, "_ps", lambda s, timeout=15.0: "False")

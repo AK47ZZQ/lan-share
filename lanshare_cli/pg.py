@@ -80,8 +80,15 @@ class Postgres:
 
     @property
     def pgdata(self) -> Path:
-        """PG 数据目录。跟着 data_dir 走，这样迁移数据目录时一起搬。"""
-        return self.data_dir / "pgdata"
+        """PG 数据目录 = 数据目录的**同级** pgdata。
+
+        🔴 不能放在 data_dir 里面（2026-11-03 实机）。data_dir 是**用户文件根**，
+        网盘会把里面的东西原样列给用户看。pgdata 混进去之后，用户在手机端
+        发现自己网盘里凭空多了一个叫 pgdata 的目录，里面全是 PostgreSQL 的
+        二进制文件，既看不懂也不敢删。程序自己的状态（数据库、CA 证书、日志）
+        都不该出现在用户文件列表里。
+        """
+        return self.data_dir.parent / "pgdata"
 
     @property
     def service_name(self) -> str:
@@ -397,6 +404,46 @@ class Postgres:
         # 已经停了不算错误
         if res.returncode != 0 and "is not running" not in (res.stdout + res.stderr):
             raise PostgresError(f"停止 PG 失败：{res.stderr or res.stdout}")
+
+    def migrate_legacy_pgdata(self) -> bool:
+        """把 3.94 及以前塞在 ``<data_dir>\\pgdata`` 的库搬到 ``<data_dir>`` 的同级。
+
+        返回 True 表示这次真的搬了。
+
+        调用前必须已经停掉 PG 服务：服务定义里的 -D 还指着老路径，
+        ``pg_ctl stop -D <新路径>`` 是找不到它的。
+
+        同盘 move 走 rename，原子且瞬间完成；跨盘会退化成「复制 + 删除」，
+        所以搬完必须校验 PG_VERSION 真的落地了，再让调用方重建服务定义。
+        """
+        old = self.data_dir / "pgdata"
+        new = self.pgdata
+
+        if old.resolve() == new.resolve() or not old.is_dir():
+            return False
+
+        if new.is_dir():
+            raise PostgresError(
+                "发现两套数据库目录，不知道该用哪一套：\n"
+                f"  {old}\n  {new}\n\n"
+                "请手工确认保留哪一套（另一套改名备份）之后再重装。"
+            )
+
+        new.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old), str(new))
+
+        if not (new / "PG_VERSION").is_file():
+            raise PostgresError(
+                f"数据库目录搬到了 {new}，但里面没有 PG_VERSION —— 搬迁可能没走完。\n"
+                f"老位置 {old} 已经不在，请先检查 {new} 再启动服务。"
+            )
+
+        # 换了一级目录，SYSTEM / NetworkService 的 ACL 可能不跟着过来
+        try:
+            self._grant_service_access()
+        except Exception:
+            pass        # 权限失败不该拦住搬迁本身，启动时还会再试
+        return True
 
     def _tail_log(self, log_dir: Path, lines: int = 8) -> str:
         """读 PG 日志尾部，用于失败时给人看。"""

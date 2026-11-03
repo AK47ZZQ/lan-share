@@ -358,26 +358,33 @@ def _sec_pg(layout) -> list[str]:
     except Exception as exc:
         out.append(f"  读取服务定义失败：{exc}")
 
-    expected_pgdata = data / "pgdata"
+    # 3.95 起 pgdata 在数据目录**同级**（数据目录是用户文件根，程序状态不能
+    # 混进去）。老位置 data\pgdata 仍作为兼容候选，让老装机的诊断照样能跑。
+    expected_pgdata = data.parent / "pgdata"
+    legacy_pgdata = data / "pgdata"
     pgdata: Path | None = None
 
     if service_pgdata and service_pgdata.is_dir():
         pgdata = service_pgdata
         out.append(f"  pgdata（服务 -D）  {service_pgdata}")
         if service_pgdata.resolve() != expected_pgdata.resolve():
-            # 只有「注册表指的那个位置也真的有一套 pgdata」才算冲突。
+            # 只有「注册表推出的那个位置也真的有一套 pgdata」才算冲突。
             # 开发机上服务指向 env\pginstall\data、注册表指向 data\pgdata
             # （后者根本不存在），这是正常的开发布局，不该报成故障 ——
             # 诊断工具误报比不报更糟。
             if expected_pgdata.is_dir():
                 out.append(f"  ⚠ 与数据目录不一致   注册表说 {expected_pgdata}")
                 out.append("  判定：PGDATA_MISMATCH")
+            elif legacy_pgdata.is_dir():
+                out.append(f"  ⚠ 还在老位置（3.94 及以前）   {legacy_pgdata}")
+                out.append("    下次安装会自动搬到数据目录同级")
             else:
                 out.append(f"   （注册表指向的 {expected_pgdata} 不存在，按开发布局忽略）")
     else:
         if service_pgdata:
             out.append(f"  服务 -D 指向        {service_pgdata}（该目录不存在）")
         for cand in (expected_pgdata,
+                     legacy_pgdata,
                      Path(layout.root) / "pgsql" / "data",
                      Path(layout.root) / "data" / "pgdata",
                      Path(layout.root) / "env" / "pginstall" / "data"):
