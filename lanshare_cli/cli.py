@@ -133,8 +133,18 @@ def resolve_prefix(value: str | None) -> str:
 
     None 的语义是「没指定」，此时用 DEFAULT_SERVICE_PREFIX。
     注意 lan 子命令不用这个 —— 它需要 None 来触发本机服务自动探测。
+
+    2026-11-04 收紧：前缀要拼进 Windows 服务名（sc/NSSM 命令行）和注册表
+    PowerShell 脚本 —— 空格、引号、shell 元字符写进去不是报错就是写坏半截
+    （`Wei's Server` 会让 Set-ItemProperty 的字符串断裂）。服务名组件本来
+    就只该有字母数字下划线连字符，白名单拒绝并说人话。
     """
-    return value or DEFAULT_SERVICE_PREFIX
+    v = value or DEFAULT_SERVICE_PREFIX
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,32}", v):
+        raise ValueError(
+            f"服务名前缀 {v!r} 不合法：只能用字母、数字、下划线、连字符"
+            "（最长 32）—— 它会拼进 Windows 服务名和注册表键。")
+    return v
 
 
 class Layout:
@@ -273,7 +283,11 @@ def write_registry_value(
     script = (
         f"$k='HKLM:\SOFTWARE\{key}'; "
         "if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }; "
-        f"Set-ItemProperty -Path $k -Name '{name}' -Value '{value}'"
+        # PowerShell 单引号字符串里的 ' 用双写转义 —— value 来自调用方，
+        # 现实调用都是受控值（生成的字母数字密码 / 数字端口 / 已校验前缀），
+        # 但这是个通用函数，转义是 2 行纵深，换来的纪律是「拼脚本必须转义」。
+        f"Set-ItemProperty -Path $k -Name '{name.replace(chr(39), chr(39)*2)}'"
+        f" -Value '{str(value).replace(chr(39), chr(39)*2)}'"
     )
     subprocess.run(
         ["powershell", "-NoProfile", "-Command", script],

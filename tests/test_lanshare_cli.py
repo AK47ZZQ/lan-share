@@ -667,3 +667,38 @@ class TestKillByName:
 
         monkeypatch.setattr(cli.subprocess, "run", boom)
         cli._kill_by_name("caddy")   # 不该抛
+
+
+class TestServicePrefixValidation:
+    """服务名前缀会拼进 Windows 服务名与注册表 PowerShell 脚本 ——
+    必须白名单校验；注册表值写入要对 PowerShell 单引号转义。"""
+
+    def test_rejects_quote_in_prefix(self):
+        with pytest.raises(ValueError) as e:
+            cli.resolve_prefix("Wei's Server")
+        assert "前缀" in str(e.value)
+
+    def test_rejects_shell_metachars(self):
+        for bad in ("a;b", "a b", "$(x)", "a\nb", "a;b'", 'a"b'):
+            with pytest.raises(ValueError):
+                cli.resolve_prefix(bad)
+
+    def test_accepts_normal_prefixes(self):
+        assert cli.resolve_prefix("lanshare") == "lanshare"
+        assert cli.resolve_prefix("lan-share") == "lan-share"
+        assert cli.resolve_prefix(None) == cli.DEFAULT_SERVICE_PREFIX
+
+    def test_registry_value_escapes_single_quotes(self, monkeypatch):
+        """值里的单引号必须双写转义 —— 否则 Set-ItemProperty 的字符串
+        断裂，写进去的是半截（或成为注入面）。"""
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["script"] = cmd[3] if len(cmd) > 3 else ""
+            class _R:
+                returncode = 0
+            return _R()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        cli.write_registry_value("ServicePrefix", "Wei's Server", "LANShare")
+        assert "'Wei''s Server'" in captured["script"], captured["script"]
