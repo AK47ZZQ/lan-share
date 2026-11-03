@@ -236,7 +236,12 @@ def render(
 
     web_root：前端产物目录（含 index.html / assets / static / icons）。
     Caddy 用它直接 file_server 发静态资源，不经过 API。传空串时退回相对路径
-    "../web/dist"（相对 Caddyfile 所在目录），只该在单测里出现。
+    "../web/dist"（**相对 Caddy 进程的工作目录**，不是 Caddyfile 所在目录 ——
+    服务模式下工作目录是 system32，相对 root 实际取不到文件，2026-11-03
+    生产部署踩过：/updates/* 全 404）。只该在单测里出现，CLI 必须传绝对路径。
+
+    updates_root：更新包目录（index.json + 安装包）。语义同 web_root，
+    空串退回 "../updates" 同样是相对进程 cwd 的陷阱值。
     """
     if not (1 <= api_port <= 65535):
         raise ValueError(f"api_port 越界: {api_port}")

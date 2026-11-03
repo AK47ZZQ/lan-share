@@ -64,3 +64,43 @@ class TestRenderCoversProbeHosts:
         assert "localhost" in text
         assert "127.0.0.1" in text
         assert "9900" in text
+
+
+class TestRenderPaths:
+    """路径参数（含空格 / 反斜杠）必须安全落进 Caddyfile。
+
+    安装目录含空格是常态（Windows 默认 Program Files、用户自选
+    "LAN Share"），Caddyfile 按空格切 token —— 模板里已经加了一对引号，
+    这里锁住「反斜杠必须转正斜杠 + 引号必须还在」这条底线。
+    """
+
+    ROOT = "C:\\Program Files\\LAN Share"
+
+    def test_paths_with_spaces_and_backslashes(self):
+        text = caddyfile.render(
+            api_port=8766, web_port=8765, hosts=["localhost", "127.0.0.1"],
+            storage_dir=self.ROOT + "\\certs\\caddy",
+            web_root=self.ROOT + "\\web\\dist",
+            updates_root=self.ROOT + "\\updates",
+        )
+        # 反斜杠全部转正斜杠（Caddy 对 Windows 反斜杠不稳妥）
+        assert "\\" not in text
+        # 模板的引号必须包住带空格的路径，不能被吃掉
+        assert 'root * "C:/Program Files/LAN Share/web/dist"' in text
+        assert 'root * "C:/Program Files/LAN Share/updates"' in text
+        assert 'storage file_system "C:/Program Files/LAN Share/certs/caddy"' in text
+
+    def test_updates_block_present_with_handle_path(self):
+        """更新目录必须用 handle_path（剥前缀）而不是 handle（不剥 → 404）。"""
+        text = caddyfile.render(
+            api_port=8766, web_port=8765, hosts=["localhost"],
+            updates_root="C:/Program Files/LAN Share/updates",
+        )
+        assert "handle_path /updates/*" in text
+        assert 'root * "C:/Program Files/LAN Share/updates"' in text
+
+    def test_static_blocks_present(self):
+        """/assets /static /icons 三块静态托管是「assets 403 白屏」事故的修复。"""
+        text = caddyfile.render(api_port=8766, web_port=8765, hosts=["localhost"])
+        for prefix in ("/assets/*", "/static/*", "/icons/*"):
+            assert f"handle {prefix}" in text
