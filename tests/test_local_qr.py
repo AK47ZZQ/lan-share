@@ -21,6 +21,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+
 from app.api.qr import _effective_client_ip, router
 
 
@@ -178,3 +181,45 @@ class TestIPv4MappedLoopback:
         返回值统一为归一后的 IPv4 字面量（判定与审计展示一致）。"""
         req = _fake_request("::ffff:203.0.113.50", {"x-real-ip": "127.0.0.1"})
         assert _effective_client_ip(req) == "203.0.113.50"
+
+
+class TestLocalGuardEndToEnd:
+    """组合效应：P0 尾值修复 + 解耦重构后，_require_local 在完整请求栈上
+    的行为 —— 伪造 XFF 经「Caddy 形态」的请求必须 403，本机直连必须 200。
+
+    （探针 app 建在模块级：FastAPI 解析端点注解要求类型可导入，
+    函数内定义的局部 Request 会 422。）
+    """
+
+    @staticmethod
+    def _app() -> FastAPI:
+        from app.api.local_config import _require_local
+
+        app = FastAPI()
+
+        @app.get("/probe")
+        def probe(request: Request):
+            _require_local(request)
+            return {"ok": True}
+
+        return app
+
+    def test_loopback_direct_allowed_via_endpoint(self):
+        c = TestClient(self._app(), client=("127.0.0.1", 51000))
+        assert c.get("/probe").status_code == 200
+
+    def test_spoofed_xff_via_proxy_shape_denied(self):
+        """伪造段在前、真实来源在尾（Caddy 追加形态）→ 尾值非回环 → 403。"""
+        c = TestClient(self._app(), client=("127.0.0.1", 51000))
+        r = c.get("/probe", headers={
+            "X-Forwarded-For": "127.0.0.1, 203.0.113.50"})
+        assert r.status_code == 403
+
+    def test_real_proxy_chain_allowed(self):
+        """真实链路形态：尾值 = 我们 Caddy 看到的本机请求来源。托盘经
+        Caddy 的场景不存在（托盘直连 8766），但局域网浏览器经 Caddy 的
+        尾值 = 局域网 IP → 应 403；只有真本机才 200。"""
+        c = TestClient(self._app(), client=("127.0.0.1", 51000))
+        r = c.get("/probe", headers={
+            "X-Forwarded-For": "192.168.1.99, 127.0.0.1"})
+        assert r.status_code == 200

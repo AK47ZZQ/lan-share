@@ -331,4 +331,45 @@ void _changelogTests() {
       );
     });
   });
+
+
+  group('resolveUrl 对抗变体（与服务端 _abs_url 同规则）', () {
+    test('双斜杠路径折叠为单斜杠拼接（不产生空段）', () {
+      expect(
+        UpdateSourceClient.resolveUrl('pkg.apk', 'https://h/updates/'),
+        'https://h/updates/pkg.apk',
+      );
+    });
+
+    test('大写 HTTPS 协议的绝对地址原样', () {
+      expect(
+        UpdateSourceClient.resolveUrl('HTTPS://cdn.example/x.apk', 'https://h/u'),
+        'HTTPS://cdn.example/x.apk',
+        reason: '与服务端正则 case-insensitive 一致',
+      );
+    });
+
+    test('带空白的输入先 trim', () {
+      expect(
+        UpdateSourceClient.resolveUrl('  pkg.apk  ', '  https://h/updates  '),
+        'https://h/updates/pkg.apk',
+      );
+    });
+
+    test('relative 到子目录的地址直接拼接（不含 ../ 语义）', () {
+      // 与服务端一致的已知差异：不做 ../ 规范化 —— 清单不会用，
+      // 双方同规则即可预测
+      expect(
+        UpdateSourceClient.resolveUrl('sub/pkg.apk', 'https://h/updates'),
+        'https://h/updates/sub/pkg.apk',
+      );
+    });
+
+    test('base 只有根（无路径）也能拼', () {
+      expect(
+        UpdateSourceClient.resolveUrl('pkg.apk', 'https://h'),
+        'https://h/pkg.apk',
+      );
+    });
+  });
 }
