@@ -70,8 +70,15 @@ namespace LanShare
         // 状态查询是否在途，防止定时器和 force 刷新叠加出两个 Python 进程
         private bool _stateInFlight;
 
-        public WebPanel(InstallConfig cfg, CliRunner cli)
+        // T7：托盘图标的气球提示回调（托盘和面板是两个类，图标在托盘手里）。
+        // SendToast 只活在 WebView2 面板里，面板最小化时等于没提示；
+        // 气球是系统级通知，不依赖面板可见性。
+        private readonly Action<string, string, int> _balloon;
+
+        public WebPanel(InstallConfig cfg, CliRunner cli,
+                        Action<string, string, int> balloon = null)
         {
+            _balloon = balloon;
             _cfg = cfg;
             _cli = cli;
 
@@ -1189,6 +1196,20 @@ namespace LanShare
             _web.CoreWebView2.PostWebMessageAsJson(json);
         }
 
+        // T7：系统级气球提示。_balloon 为 null（WinForms 回退面板 / 测试环境）
+        // 就静默跳过 —— 气球是「尽力而为」的增强，不是关键路径。
+        private void ShowBalloon(string title, string text, int timeoutMs)
+        {
+            try
+            {
+                if (_balloon != null) _balloon(title, text, timeoutMs);
+            }
+            catch (Exception)
+            {
+                // 通知失败不值得让业务路径跟着失败
+            }
+        }
+
         private void SendToast(string text)
         {
             if (_web == null || _web.CoreWebView2 == null) return;
@@ -1481,7 +1502,7 @@ namespace LanShare
             // 说「有新版本」，于是用户再点一次、又装一遍（2026-11-04 实机
             // 装了两次就是这么来的）。直接告诉界面「在装」比给个错误的
             // 「有新版本」好得多。
-            if (UpdateMarker.IsPending())
+            if (UpdateMarker.IsPending(_cfg != null ? _cfg.Version : ""))
             {
                 AppendLog("检查更新已跳档：有一个更新正在进行中");
                 var busyP = new Dictionary<string, object>();
@@ -1743,19 +1764,28 @@ namespace LanShare
                 // 东西。没有这个标记，托盘下次启动根本不知道自己是被更新关掉的，
                 // 用户看到的就是「点了没反应、然后图标自己回来了」——
                 // 2026-11-04 实机反馈原话：「直接就程序退出了，然后没有任何动静」。
-                UpdateMarker.Write(wantVer);
+                // T8-②：标记写不进去还照旧退出去更新 = 40 秒黑洞 + 重复更新
+                // 风险（IsPending 失去依据）双重重现。取消本次更新，托盘留下。
+                if (!UpdateMarker.Write(wantVer))
+                {
+                    AppendLog("更新标记写入失败，已取消本次一键更新");
+                    SendBusy(false, null);
+                    SendToast("更新标记写入失败，已取消更新。请重试或查看日志。");
+                    return;
+                }
 
+                Process installer = null;
                 try
                 {
                     // /VERYSILENT：全静默；/NORESTART：不重启机器。
                     // 安装器自己会停服务、覆盖、再起服务（iss 的 ssInstall /
                     // ssPostInstall 两段），这里不需要额外动作。
-                    Process.Start(new ProcessStartInfo(file)
+                    installer = Process.Start(new ProcessStartInfo(file)
                     {
                         Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
                         UseShellExecute = true
                     });
-                    AppendLog("更新安装器已启动，托盘即将退出");
+                    AppendLog("更新安装器已启动，托盘转入看护模式");
                 }
                 catch (Exception ex)
                 {
@@ -1765,18 +1795,62 @@ namespace LanShare
                 }
 
                 // 明确告诉用户接下来会发生什么：托盘会消失，这是正常的。
-                SendToast("正在安装 " + (string.IsNullOrEmpty(wantVer) ? "新版本" : "v" + wantVer)
-                          + "，约 40 秒。托盘会自动回来，不用管它。");
+                // T7：toast 只在 WebView2 面板内可见（面板最小化时等于没提示），
+                // 气球是系统级通知，双通道一起发。安装器几秒内就会 taskkill
+                // 托盘，所以这条必须**立即**发 —— 旧实现的 3 秒自杀定时器
+                // 已被 T1 的看护取代，托盘现在能活多久由安装器/看护决定。
+                string installingText = "正在安装 "
+                    + (string.IsNullOrEmpty(wantVer) ? "新版本" : "v" + wantVer)
+                    + "，约 40 秒。托盘会自动回来，不用管它。";
+                SendToast(installingText);
+                ShowBalloon("LAN Share 正在更新", installingText, 8000);
 
-                // 3 秒：900 毫秒时提示还没被看见窗口就没了，等于没提示
-                var timer = new Timer { Interval = 3000 };
-                timer.Tick += delegate
-                {
-                    timer.Stop();
-                    timer.Dispose();
-                    Application.Exit();
-                };
-                timer.Start();
+                // ── 看护：托盘先别急着退出 ──
+                //
+                // 旧逻辑是 3 秒后 Application.Exit()。如果安装器在 ssInstall 之前
+                // 就中止（降级拦截 exit=1、包损坏、架构不符 —— PrepareToInstall
+                // 阶段几秒内就失败），ssPostInstall 里「拉起托盘」那行永远执行
+                // 不到，用户从此没托盘，也不知道为什么。
+                //
+                // 现在托盘自己当看护（UpdateWatchdog.Watch，UI 线程每秒巡检）：
+                //   · 非零退出 → 托盘不退：清 UpdateMarker、弹回面板、把退出码
+                //     说清楚，用户当场知道更新没成、系统没被改坏；
+                //   · 退出码 0 / 被 ssInstall 的 taskkill 杀掉（正常路径）
+                //     → 一切照旧，ssPostInstall 会拉起新托盘；
+                //   · 120 秒兜底：安装器还在跑 → 本托盘自行退出让出文件句柄，
+                //     成败交给安装器（成功它自己会拉起新托盘）。
+                UpdateWatchdog.Watch(installer,
+                    delegate(int exitCode)
+                    {
+                        if (IsDisposed) return;   // 用户中途关了面板，别再碰 UI
+                        // 提前中止：托盘不许退出，就地救回
+                        UpdateMarker.Take();   // 清掉「进行中」，检查更新才能恢复
+                        AppendLog("更新中止：安装器退出码 " + exitCode + "，托盘保留");
+                        SendBusy(false, null);
+                        SendToast("更新没有完成：安装器退出码 " + exitCode
+                                  + "。系统未做任何更改，可关闭本窗口稍后再试。");
+                        ShowBalloon("LAN Share 更新未完成",
+                                    "安装器退出码 " + exitCode + "，系统未做任何更改。",
+                                    10000);
+                        if (WindowState == FormWindowState.Minimized)
+                            WindowState = FormWindowState.Normal;
+                        Show();
+                        Activate();
+                    },
+                    delegate
+                    {
+                        // 退出码 0：正常路径走不到这里（ssInstall 的 taskkill 会先杀掉
+                        // 本托盘进程，Tick 不会再触发）。万一走到，照旧退出让位。
+                        AppendLog("安装器退出码 0，托盘按原计划退出");
+                        Application.Exit();
+                    },
+                    delegate
+                    {
+                        // 120 秒兜底：还在跑就放手，交给安装器
+                        AppendLog("安装器 120 秒仍在运行，托盘按原计划退出");
+                        Application.Exit();
+                    },
+                    120);
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 

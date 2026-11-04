@@ -385,6 +385,14 @@ namespace LanShare
         /// </summary>
         private void HandlePostUpdate()
         {
+            // T8-①：安装器还在跑（更新期间手动开托盘）就先别消费标记 ——
+            // 这时读到的 VERSION 还是旧的，Take() 掉会误报「更新没有生效」。
+            // 不消费 = 复述推迟；标记 15 分钟内未取自然过期，不会死循环。
+            if (UpdateInstallerRunning())
+            {
+                Log("检测到 LANShare-Setup-* 进程仍在运行，更新后复述推迟");
+                return;
+            }
             string[] mark = UpdateMarker.Take();
             if (mark == null || mark.Length == 0) return;
 
@@ -450,7 +458,11 @@ namespace LanShare
                             if (DateTime.TryParse(mark[1], out started))
                                 stillRunning = (DateTime.Now - started) < TimeSpan.FromMinutes(3);
                         }
-                        if (stillRunning) UpdateMarker.Write(want);
+                        if (stillRunning)
+                        {
+                            if (!UpdateMarker.Write(want))
+                                Log("更新标记重写失败（不阻塞，等下次启动自然过期）");
+                        }
 
                         _icon.ShowBalloonTip(8000, "更新没有生效",
                             "目标 v" + (want.Length > 0 ? want : "?")
@@ -462,6 +474,27 @@ namespace LanShare
                 catch (Exception ex) { Log("更新后处理失败: " + ex.Message); }
             };
             t.Start();
+        }
+
+        /// <summary>有没有正在跑的 LANShare-Setup-*.exe（T8-①）。</summary>
+        private static bool UpdateInstallerRunning()
+        {
+            try
+            {
+                foreach (Process p in Process.GetProcesses())
+                {
+                    try
+                    {
+                        if (p.ProcessName.StartsWith("LANShare-Setup-",
+                                                     StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                    catch (Exception) { }   // 退出中/无权限的进程读不到名字
+                    finally { p.Dispose(); }
+                }
+            }
+            catch (Exception) { }
+            return false;
         }
 
         /// <summary>读安装目录里的 VERSION 文件，读不到返回空串。</summary>
@@ -885,7 +918,9 @@ namespace LanShare
             {
                 try
                 {
-                    var web = new WebPanel(_cfg, _cli);
+                    var web = new WebPanel(_cfg, _cli,
+                        (title, text, ms) => _icon.ShowBalloonTip(
+                            ms, title, text, ToolTipIcon.Info));
                     Log("使用 WebView2 面板");
                     return web;
                 }

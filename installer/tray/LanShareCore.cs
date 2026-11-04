@@ -30,14 +30,95 @@ namespace LanShare
     /// </summary>
     internal static class UpdateMarker
     {
-        private static string FilePath
+        private static string DirPath
         {
             get
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                // T6：标记从 %LOCALAPPDATA% 搬到 %ProgramData%。
+                // %LOCALAPPDATA%\LANShare\ 同用户任何进程都能写 —— 伪造一个
+                // 「4.0.6」就能每次开机弹「更新没生效」、每 5 分钟挡检查更新。
+                // ProgramData 下的目录由 EnsureSecureDir 收紧成 Users 只读。
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "LANShare");
-                return Path.Combine(dir, "update-in-progress.txt");
+            }
+        }
+
+        private static string FilePath
+        {
+            get { return Path.Combine(DirPath, "update-in-progress.txt"); }
+        }
+
+        /// <summary>版本形态校验：只收 x.y / x.y.z。</summary>
+        public static bool IsValidVersion(string v)
+        {
+            if (string.IsNullOrEmpty(v)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                v, @"^\d+\.\d+(\.\d+)?$");
+        }
+
+        /// <summary>
+        /// 逐段数值比较 x.y.z。解析失败返回 0（当相等 —— 上层按「不比当前新」处理，
+        /// 宁可少报一次状态也不被垃圾输入牵着走）。
+        /// </summary>
+        private static int CompareVersion(string a, string b)
+        {
+            try
+            {
+                string[] pa = a.Split('.');
+                string[] pb = b.Split('.');
+                int n = Math.Max(pa.Length, pb.Length);
+                for (int i = 0; i < n; i++)
+                {
+                    int xa = i < pa.Length ? int.Parse(pa[i]) : 0;
+                    int xb = i < pb.Length ? int.Parse(pb[i]) : 0;
+                    if (xa != xb) return xa < xb ? -1 : 1;
+                }
+                return 0;
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>只读第一行（流式，不整份读入 —— 文件内容不可信）。</summary>
+        private static string ReadFirstLine()
+        {
+            using (var reader = new StreamReader(FilePath))
+            {
+                return reader.ReadLine();
+            }
+        }
+
+        /// <summary>
+        /// 建目录并收紧 ACL：Users 只读、管理员/SYSTEM 全权。
+        /// 不带 /T —— v4.0.1 的教训：递归 ACL 把波及面搞到不可控。
+        /// 用 SID 而不是组名：中文 Windows 的组名本地化，SID 全世界一样。
+        /// </summary>
+        private static void EnsureSecureDir()
+        {
+            try
+            {
+                string dir = DirPath;
+                if (!Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+                var psi = new ProcessStartInfo(
+                    "icacls.exe",
+                    "\"" + dir + "\" /grant *S-1-5-32-545:(R) *S-1-5-32-544:(F) *S-1-5-18:(F)")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (Process p = Process.Start(psi))
+                {
+                    if (p != null) p.WaitForExit(10000);
+                }
+            }
+            catch (Exception)
+            {
+                // ACL 收不紧不挡更新本体 —— 标记文件没有机密，伪造的代价
+                // 只是「多弹一次提示」，真正的防线是 Take/IsPending 的校验。
             }
         }
 
@@ -48,14 +129,29 @@ namespace LanShare
     /// 用途：安装器跑着的时候，各路「检查更新」必须闭嘴 —— 否则它读到的
     /// 还是旧 VERSION，于是又提示有新版本、用户再点一次、装第二遍。
     /// 2026-11-04 实机就装了两遍。
+    ///
+    /// T6 伪造防御：版本形态不对 → 当垃圾清掉；形态对但不比 currentVersion 新
+    /// → 同样不算「进行中」（伪造现版本/旧版本挡检查更新的路被堵死）。
     /// </summary>
-    public static bool IsPending()
+    public static bool IsPending(string currentVersion)
     {
         try
         {
             if (!File.Exists(FilePath)) return false;
             if (File.GetLastWriteTimeUtc(FilePath) < DateTime.UtcNow.AddMinutes(-5))
                 return false;
+
+            string first = ReadFirstLine();
+            if (!IsValidVersion(first))
+            {
+                try { File.Delete(FilePath); } catch (Exception) { }
+                return false;
+            }
+            if (!string.IsNullOrEmpty(currentVersion)
+                && CompareVersion(first, currentVersion) <= 0)
+            {
+                return false;
+            }
             return true;
         }
         catch (Exception)
@@ -64,24 +160,30 @@ namespace LanShare
         }
     }
 
-    /// <summary>发起更新前调用。targetVersion 是我们期望装成的版本。</summary>
-        public static void Write(string targetVersion)
+    /// <summary>
+    /// 发起更新前调用。targetVersion 是我们期望装成的版本。
+    /// T8-②：返回是否写成功 —— 写失败而托盘照旧退出，等于 40 秒黑洞 +
+    /// 重复更新风险（IsPending 失去依据）双重重现。调用方必须处理 false。
+    /// </summary>
+        public static bool Write(string targetVersion)
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                EnsureSecureDir();
                 File.WriteAllText(FilePath, (targetVersion ?? "") + "\n"
                                             + DateTime.Now.ToString("o"));
+                return true;
             }
             catch (Exception)
             {
-                // 标记写不进去不能挡住更新本身
+                return false;
             }
         }
 
         /// <summary>
         /// 读取并删除标记，返回 [目标版本, 时间戳]。没标记返回 null。
         /// 一次性的：读完即删，避免下次正常启动还误报「刚更新过」。
+        /// T6：版本形态不对（伪造/损坏）→ 当垃圾删掉返回 null。
         /// </summary>
         public static string[] Take()
         {
@@ -103,6 +205,11 @@ namespace LanShare
                 }
 
                 string[] lines = File.ReadAllLines(FilePath);
+                if (lines.Length == 0 || !IsValidVersion(lines[0]))
+                {
+                    try { File.Delete(FilePath); } catch (Exception) { }
+                    return null;
+                }
                 try { File.Delete(FilePath); } catch (Exception) { }
                 return lines;
             }
@@ -110,6 +217,72 @@ namespace LanShare
             {
                 return null;
             }
+        }
+    }
+
+
+    /// <summary>
+    /// 一键更新看护（T1）。
+    ///
+    /// 正确性标准：安装器提前中止（ssInstall 前的降级拦截 exit=1、包损坏、
+    /// 架构不符）时，托盘必须「还在」——面板弹回、退出码说清楚、
+    /// UpdateMarker 清干净（否则 5 分钟内检查更新全被挡）。
+    ///
+    /// 为什么是 UI 线程 Timer 轮询而不是后台线程 WaitForExit：
+    /// 救回动作（弹面板）必须在 UI 线程做；后台线程 WaitForExit + 跨线程
+    /// Invoke 的组合在托盘半退出状态下是另一个雷区。1 秒粒度足够 ——
+    /// 安装器提前中止发生在秒级，不是毫秒级。
+    /// </summary>
+    internal static class UpdateWatchdog
+    {
+        /// <summary>
+        /// 盯住安装器进程直到有类结论。**不退出托盘** —— 退出决定权在回调里。
+        ///
+        /// 回调语义（全部在 UI 线程触发）：
+        ///   onAbort(exitCode) 安装器非 0 退出（提前中止）→ 托盘继续活
+        ///   onExitZero()      安装器 0 退出 → 正常路径，托盘自行退出
+        ///   onGiveUp()        giveUpSeconds 内没退出 → 托盘自行退出（兜底）
+        /// </summary>
+        public static void Watch(Process installer, Action<int> onAbort, Action onExitZero,
+                                 Action onGiveUp, int giveUpSeconds)
+        {
+            var watchdog = new System.Windows.Forms.Timer { Interval = 1000 };
+            int wdSeconds = 0;
+            Process wdTarget = installer;   // 闭包内只读，防后续误改写
+            watchdog.Tick += delegate
+            {
+                wdSeconds++;
+                bool exited = false;
+                int code = 0;
+                try
+                {
+                    exited = wdTarget.HasExited;
+                    if (exited) code = wdTarget.ExitCode;
+                }
+                catch (Exception)
+                {
+                    exited = false;   // 句柄失效当作「还没退」，走兜底
+                }
+
+                if (!exited)
+                {
+                    if (wdSeconds < giveUpSeconds) return;
+                    watchdog.Stop();
+                    watchdog.Dispose();
+                    onGiveUp();
+                    return;
+                }
+
+                watchdog.Stop();
+                watchdog.Dispose();
+                if (code != 0)
+                {
+                    onAbort(code);     // 提前中止：托盘不许退出，就地救回
+                    return;
+                }
+                onExitZero();      // 退出码 0：照旧退出让位（正常路径走不到）
+            };
+            watchdog.Start();
         }
     }
 
