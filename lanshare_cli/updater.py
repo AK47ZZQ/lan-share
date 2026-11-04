@@ -33,6 +33,7 @@ source_url / source_error 三个字段。
 from __future__ import annotations
 
 import json
+import os
 import re
 import ssl
 import sys
@@ -189,6 +190,32 @@ def _system_proxy() -> str | None:
     return server
 
 
+def _proxy_map() -> dict:
+    """当前该用的代理，没有就返回空 dict。
+
+    顺序：环境变量 → urllib 的 getproxies() → Windows 注册表。
+
+    🔴 为什么不直接 getproxies()：它会读环境变量**和**注册表，两者混在一起，
+    调用方分不清命中的是哪一个。而这两者的语义不同 —— 环境变量是用户显式
+    指定的（比如 `HTTPS_PROXY=... lanshare_cli`），必须优先；注册表只是系统上
+    碰巧开着的代理。混着用的后果 2026-11-04 在 CI 上炸了：
+    测试把 getproxies() 打成空字典想模拟「注册表没代理」，结果连环境变量
+    一起屏蔽，_opener 返回 None，而本机因为注册表里真有代理反而通过 ——
+    一个只在本机绿、在 CI 红的测试。
+    """
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        val = os.environ.get(var)
+        if val:
+            return {"http": val, "https": val}
+
+    proxies = urllib.request.getproxies() or {}
+    if proxies.get("https") or proxies.get("http"):
+        return proxies
+
+    sysproxy = _system_proxy()
+    return {"http": sysproxy, "https": sysproxy} if sysproxy else {}
+
+
 def _opener(extra_ca: Path | None = None):
     """带代理的 opener。
 
@@ -201,11 +228,7 @@ def _opener(extra_ca: Path | None = None):
     自定义更新源的证书校验必挂。现在给 opener 显式装一个带上下文的
     HTTPSHandler（build_opener 会用它顶掉默认的那个）。
     """
-    proxies = urllib.request.getproxies() or {}
-    if not proxies.get("https") and not proxies.get("http"):
-        sysproxy = _system_proxy()
-        if sysproxy:
-            proxies = {"http": sysproxy, "https": sysproxy}
+    proxies = _proxy_map()
     if not proxies:
         return None
     handlers: list = [urllib.request.ProxyHandler(proxies)]

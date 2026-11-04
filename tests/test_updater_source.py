@@ -129,10 +129,19 @@ class TestProxyKeepsTlsContext:
 
         # 用子类而不是普通函数替换：build_opener 内部有 isinstance 检查
         monkeypatch.setattr(_ur, "HTTPSHandler", _SpyHandler)
+        # 🔴 顺序很重要：先清、后设。
+        #
+        # Windows 的环境变量名**不区分大小写**，os.environ 也是这个语义 ——
+        # 先 setenv("HTTPS_PROXY") 再 delenv("https_proxy")，后者会把前者
+        # 一起删掉，测试里读到的就是 None。Linux 上大小写敏感、不会误删，
+        # 于是同一个测试在两边因为完全不同的原因变红（2026-11-04 CI）。
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+            monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7897")
-        monkeypatch.delenv("https_proxy", raising=False)
-        # Windows 上 getproxies() 还会读注册表代理，一并打掉
-        monkeypatch.setattr(_ur, "getproxies", lambda: {})
+        # 只隔离「系统代理」这一层。绝不能连 getproxies() 一起打成空 —
+        # 那会把环境变量也屏蔽掉，于是本机（注册表里有代理）通过、CI 上
+        # 返回 None 失败：一个只在本机绿的测试（2026-11-04 CI 红）。
+        monkeypatch.setattr(updater, "_system_proxy", lambda: None)
 
         op = updater._opener(extra_ca=Path("ca.crt"))
         assert op is not None

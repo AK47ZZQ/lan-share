@@ -1477,6 +1477,20 @@ namespace LanShare
 
         private void CheckUpdate()
         {
+            // 更新正跑到一半：这时候查到的「当前版本」还是旧的，一查就会
+            // 说「有新版本」，于是用户再点一次、又装一遍（2026-11-04 实机
+            // 装了两次就是这么来的）。直接告诉界面「在装」比给个错误的
+            // 「有新版本」好得多。
+            if (UpdateMarker.IsPending())
+            {
+                AppendLog("检查更新已跳档：有一个更新正在进行中");
+                var busyP = new Dictionary<string, object>();
+                busyP["installing"] = true;
+                busyP["notes"] = "正在安装更新，请稍候…";
+                Send("update", busyP);
+                return;
+            }
+
             Send("updateState", new Dictionary<string, object> { { "busy", true } });
 
             Task.Run(() =>
@@ -1722,6 +1736,15 @@ namespace LanShare
                 }
 
                 SendBusy(false, null);
+
+                // 先把「我要去更新了」写下来，再启动安装器。
+                //
+                // 托盘这一退要 40 秒才回来（安装器静默跑），期间屏幕上没有任何
+                // 东西。没有这个标记，托盘下次启动根本不知道自己是被更新关掉的，
+                // 用户看到的就是「点了没反应、然后图标自己回来了」——
+                // 2026-11-04 实机反馈原话：「直接就程序退出了，然后没有任何动静」。
+                UpdateMarker.Write(wantVer);
+
                 try
                 {
                     // /VERYSILENT：全静默；/NORESTART：不重启机器。
@@ -1736,12 +1759,17 @@ namespace LanShare
                 }
                 catch (Exception ex)
                 {
+                    UpdateMarker.Take();          // 起不来就没有「进行中」这回事了
                     SendToast("启动安装程序失败：" + ex.Message);
                     return;
                 }
 
-                // 给界面几百毫秒把提示送出去，然后退干净交还文件句柄
-                var timer = new Timer { Interval = 900 };
+                // 明确告诉用户接下来会发生什么：托盘会消失，这是正常的。
+                SendToast("正在安装 " + (string.IsNullOrEmpty(wantVer) ? "新版本" : "v" + wantVer)
+                          + "，约 40 秒。托盘会自动回来，不用管它。");
+
+                // 3 秒：900 毫秒时提示还没被看见窗口就没了，等于没提示
+                var timer = new Timer { Interval = 3000 };
                 timer.Tick += delegate
                 {
                     timer.Stop();

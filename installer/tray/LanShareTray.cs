@@ -367,6 +367,82 @@ namespace LanShare
                 t.Tick += (s, e) => { t.Stop(); t.Dispose(); ShowPanel(); };
                 t.Start();
             }
+
+            HandlePostUpdate();
+        }
+
+        /// <summary>
+        /// 如果这次启动是「一键更新」的结果，把结果说出来。
+        ///
+        /// 一键更新时托盘会自杀让出文件句柄，安装器静默跑约 40 秒，然后安装器
+        /// 再把自己拉起来 —— 新的托盘进程对这段经历一无所知。用户看到的现象就是
+        /// 图标消失、过一会儿图标回来，中间的 40 秒完全是个黑洞（2026-11-04 实机：
+        /// 「直接就程序退出了，然后没有任何动静」）。
+        ///
+        /// 所以发起更新的那一侧会留一个标记文件，这里读它、复述结果：
+        /// 版本对上了就报成功并直接把面板打开（用户立刻看到新版界面），
+        /// 对不上就说清楚还在旧版本、可以再点一次或去看日志。
+        /// </summary>
+        private void HandlePostUpdate()
+        {
+            string[] mark = UpdateMarker.Take();
+            if (mark == null || mark.Length == 0) return;
+
+            string want = (mark.Length > 0 && mark[0] != null) ? mark[0].Trim() : "";
+            string now = CurrentVersion();
+            bool ok = want.Length > 0 && now == want;
+
+            Log("更新后启动：期望 " + (want.Length > 0 ? want : "(未知)")
+                + " 实际 " + (now.Length > 0 ? now : "(读不到)") + (ok ? " → 成功" : " → 未生效"));
+
+            // 延到消息循环起来之后再弹：构造期间 ShowPanel 会得到一个没有
+            // 消息泵的窗口，看起来就是「点了没反应」。
+            var t = new Timer { Interval = 1500 };
+            t.Tick += delegate
+            {
+                t.Stop();
+                t.Dispose();
+                try
+                {
+                    if (ok)
+                    {
+                        _icon.ShowBalloonTip(6000, "已更新到 v" + now,
+                            "LAN Share 升级完成，正在打开控制面板。", ToolTipIcon.Info);
+                        ShowPanel();
+                    }
+                    else
+                    {
+                        // 还在装（安装器比托盘慢）就别急着报失败：
+                        // 把标记写回去，让这期间的「检查更新」保持沉默，
+                        // 免得又提示有新版本、用户再点一次、装第二遍。
+                        UpdateMarker.Write(want);
+                        _icon.ShowBalloonTip(8000, "更新没有生效",
+                            "目标 v" + (want.Length > 0 ? want : "?")
+                            + "，当前仍是 " + (now.Length > 0 ? "v" + now : "未知")
+                            + "。可以再点一次「立即更新」，或打开日志看原因。",
+                            ToolTipIcon.Warning);
+                    }
+                }
+                catch (Exception ex) { Log("更新后处理失败: " + ex.Message); }
+            };
+            t.Start();
+        }
+
+        /// <summary>读安装目录里的 VERSION 文件，读不到返回空串。</summary>
+        private string CurrentVersion()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_cfg.InstallFolder)) return "";
+                string path = Path.Combine(_cfg.InstallFolder, "VERSION");
+                if (!File.Exists(path)) return "";
+                string[] lines = File.ReadAllLines(path);
+                return lines.Length > 0 ? lines[0].Trim() : "";
+            }
+            catch (Exception)
+            {
+                return "";
+            }
         }
 
         // ── 状态探测 ──────────────────────────────────────────────

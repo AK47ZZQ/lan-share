@@ -17,6 +17,88 @@ using Microsoft.Win32;
 
 namespace LanShare
 {
+    /// <summary>
+    /// 一键更新的「过场状态」文件。
+    ///
+    /// 为什么需要：更新时托盘要主动退出（让出文件句柄给安装器），而安装器是
+    /// /VERYSILENT 静默跑的，约 40 秒。这段时间屏幕上什么都不会发生 —— 用户点完
+    /// 「立即更新」只看到图标消失、过一会儿图标又回来，完全不知道中间干了什么。
+    /// 2026-11-04 实机反馈就是：「点立即更新后直接就程序退出了，然后没有任何动静」。
+    ///
+    /// 于是在发起更新前留一个标记，托盘下次启动读到它就知道「我刚是被更新关掉的」，
+    /// 从而把结果说出来：成功了报新版本并直接打开面板，失败了说失败。
+    /// </summary>
+    internal static class UpdateMarker
+    {
+        private static string FilePath
+        {
+            get
+            {
+                string dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "LANShare");
+                return Path.Combine(dir, "update-in-progress.txt");
+            }
+        }
+
+        /// <summary>
+    /// 现在是不是还在一次更新里？5 分钟没结果就算过期。
+    ///
+    /// 判据是标记文件还在（发起更新时写、托盘启动复述结果时才删）。
+    /// 用途：安装器跑着的时候，各路「检查更新」必须闭嘴 —— 否则它读到的
+    /// 还是旧 VERSION，于是又提示有新版本、用户再点一次、装第二遍。
+    /// 2026-11-04 实机就装了两遍。
+    /// </summary>
+    public static bool IsPending()
+    {
+        try
+        {
+            if (!File.Exists(FilePath)) return false;
+            if (File.GetLastWriteTimeUtc(FilePath) < DateTime.UtcNow.AddMinutes(-5))
+                return false;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>发起更新前调用。targetVersion 是我们期望装成的版本。</summary>
+        public static void Write(string targetVersion)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
+                File.WriteAllText(FilePath, (targetVersion ?? "") + "\n"
+                                            + DateTime.Now.ToString("o"));
+            }
+            catch (Exception)
+            {
+                // 标记写不进去不能挡住更新本身
+            }
+        }
+
+        /// <summary>
+        /// 读取并删除标记，返回 [目标版本, 时间戳]。没标记返回 null。
+        /// 一次性的：读完即删，避免下次正常启动还误报「刚更新过」。
+        /// </summary>
+        public static string[] Take()
+        {
+            try
+            {
+                if (!File.Exists(FilePath)) return null;
+                string[] lines = File.ReadAllLines(FilePath);
+                File.Delete(FilePath);
+                return lines;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+    }
+
     /// <summary>安装信息，优先注册表，其次按已知约定探测。</summary>
     internal sealed class InstallConfig
     {
