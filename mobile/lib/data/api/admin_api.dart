@@ -82,11 +82,10 @@ class AdminInvite {
 /// 公网入口配置（空串=未配置）
 class PublicUrlInfo {
   final String base;
-  final String alt;
-  const PublicUrlInfo({required this.base, required this.alt});
+  const PublicUrlInfo({required this.base});
   factory PublicUrlInfo.fromJson(Map<String, dynamic> j) => PublicUrlInfo(
       base: j['public_base_url'] as String? ?? '',
-      alt: j['public_base_url_alt'] as String? ?? '');
+      );
 }
 
 /// 群发通知结果：sent=站内送达人数，webhook=站外是否同步发送
@@ -233,9 +232,8 @@ class AdminApi {
   }
 
   /// 公网入口保存
-  static Future<void> savePublicUrl(String url, String urlAlt) async {
-    await (await _dio()).post('/api/admin/public-url',
-        data: {'url': url, 'url_alt': urlAlt});
+  static Future<void> savePublicUrl(String url) async {
+    await (await _dio()).post('/api/admin/public-url', data: {'url': url});
   }
 
   /// 事件推送模板读取（GET 模板 URL，需含 {title}/{body} 占位符）

@@ -406,16 +406,52 @@ namespace LanShare
                 {
                     if (ok)
                     {
-                        _icon.ShowBalloonTip(6000, "已更新到 v" + now,
-                            "LAN Share 升级完成，正在打开控制面板。", ToolTipIcon.Info);
-                        ShowPanel();
+                        // 只对得上 VERSION 不等于装好了（审查点出来的）：
+                        // 安装器的 ssPostInstall 里 lanshare_cli install --force
+                        // 失败时，它照样会把托盘拉起来，而文件早就覆盖成新版了 ——
+                        // 于是「升级完成」弹得理直气壮，用户点开面板全是红的。
+                        //
+                        // 所以再等几秒看服务到底起没起来，把「文件更新了」和
+                        // 「升级成功了」分成两句话说。
+                        var t2 = new Timer { Interval = 6000 };
+                        t2.Tick += delegate
+                        {
+                            t2.Stop();
+                            t2.Dispose();
+                            string detail;
+                            bool healthy;
+                            try { healthy = TryProbe(_cfg.HealthUrl, out detail) == AppState.Healthy; }
+                            catch (Exception) { healthy = false; detail = "探测异常"; }
+
+                            if (healthy)
+                                _icon.ShowBalloonTip(6000, "已更新到 v" + now,
+                                    "LAN Share 升级完成，服务运行正常。", ToolTipIcon.Info);
+                            else
+                                _icon.ShowBalloonTip(10000, "文件已更新到 v" + now + "，但服务没起来",
+                                    "点开控制面板看「重启服务」，或查看日志。",
+                                    ToolTipIcon.Warning);
+                            ShowPanel();
+                        };
+                        t2.Start();
                     }
                     else
                     {
-                        // 还在装（安装器比托盘慢）就别急着报失败：
-                        // 把标记写回去，让这期间的「检查更新」保持沉默，
-                        // 免得又提示有新版本、用户再点一次、装第二遍。
-                        UpdateMarker.Write(want);
+                        // 还在装（安装器比托盘慢）就别急着报失败，也别急着
+                        // 宣布失败 —— 但**只有确实还可能在装时才把标记写回去**。
+                        //
+                        // 无条件下写回会造成死循环：那次更新要是根本没成
+                        // （用户取消了、包坏了），标记会一次次复活，每次开机
+                        // 都弹一句「更新没有生效」（审查实测）。
+                        // 判据用标记第二行记录的发起时间：3 分钟内才认为还在跑。
+                        bool stillRunning = false;
+                        if (mark.Length > 1 && !string.IsNullOrEmpty(mark[1]))
+                        {
+                            DateTime started;
+                            if (DateTime.TryParse(mark[1], out started))
+                                stillRunning = (DateTime.Now - started) < TimeSpan.FromMinutes(3);
+                        }
+                        if (stillRunning) UpdateMarker.Write(want);
+
                         _icon.ShowBalloonTip(8000, "更新没有生效",
                             "目标 v" + (want.Length > 0 ? want : "?")
                             + "，当前仍是 " + (now.Length > 0 ? "v" + now : "未知")

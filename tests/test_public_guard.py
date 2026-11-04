@@ -27,6 +27,46 @@ def _login(client, host: str, password: str, username: str = ADMIN_USER):
                        headers={"Host": host})
 
 
+def test_unknown_host_via_tunnel_is_treated_as_public(auth):
+    """P0 回归（2026-11-04 对抗性审查）：隧道把公网流量送进主入口端口时，
+    Host 是域名但 netloc 对不上 —— 绝不能因此判成 LAN。
+
+    攻击路径（审查员实测复现）：frpc 本地端口填 8765（文档推荐值）→
+    公网请求经隧道进 :8765 站点块 → Host 是任意域名、来源是 127.0.0.1 →
+    旧逻辑只看 Host 是否在 public_netlocs 里，不在就返回 False（LAN）→
+    免登录的 /local/* 整组对公网开放：能读备份目录绝对路径、
+    能 POST /local/public-url 把公网地址改成攻击者的。
+
+    判据是「域名 Host + 回环来源」—— 那是隧道的指纹，不是家人的手机。
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    _set_public(auth, f"http://{PUBLIC_HOST}")
+
+    # 模拟 frpc 转发：来源是回环，Host 是个我们没登记过的域名
+    with TestClient(app, client=("127.0.0.1", 12345)) as c:
+        r = c.get("/local/backup", headers={"Host": "attacker-or-any.example.com:80"})
+        assert r.status_code == 403, "未知域名 + 回环来源必须按公网处理，否则 /local/* 全开"
+
+        r = c.get("/healthz", headers={"Host": "attacker-or-any.example.com:80"})
+        assert r.status_code == 404, "healthz 不能对未知公网 Host 泄露磁盘水位"
+
+
+def test_lan_device_using_internal_dns_name_is_still_lan(auth):
+    """反过来：局域网设备用内网 DNS 名字访问，来源是真实内网 IP → 仍按 LAN。
+
+    没有这一条，改完 P0 会把「家里用 nas.home 访问」的家人一起判成公网。
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    _set_public(auth, f"http://{PUBLIC_HOST}")
+    with TestClient(app, client=("192.168.1.100", 12345)) as c:
+        r = c.get("/healthz", headers={"Host": "nas.home:8765"})
+        assert r.status_code == 200
+
+
 def test_healthz_hidden_on_public(client, auth):
     _set_public(auth, f"http://{PUBLIC_HOST}")
     # 公网入口：404（磁盘水位不外泄）

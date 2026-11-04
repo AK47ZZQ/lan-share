@@ -60,8 +60,9 @@ export const consoleApi = {
   testHealthReport: () => jpost('/api/admin/healthreport/test', {}).then(r => handle<{ ok: boolean; sent: boolean | null; warn: boolean; report: string; webhook_set: boolean }>(r)),
   // 运行指标（v3.52 B5；backup.verified = 兜底 dump 内联验证状态）
   getMetrics: () => fetch('/api/metrics').then(r => handle<MetricsSnapshot>(r)),
-  getPublicUrl: () => fetch('/api/public-url').then(r => handle<{ public_base_url: string; public_base_url_alt: string }>(r)),
-  setPublicUrl: (url: string, urlAlt = '') => jpost('/api/admin/public-url', { url, url_alt: urlAlt }).then(r => handle<{ ok: boolean }>(r)),
+  getPublicUrl: () => fetch('/api/public-url').then(r => handle<{ public_base_url: string }>(r)),
+  // 备用入口已删除（2026-11-04）：只发 url，服务端也只认 url。
+  setPublicUrl: (url: string) => jpost('/api/admin/public-url', { url }).then(r => handle<{ ok: boolean }>(r)),
 
   // 成员与权限 / 邀请 / 授权矩阵
   adminUsers: () => fetch('/api/admin/users').then(r => handle<AdminUser[]>(r)),

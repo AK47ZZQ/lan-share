@@ -1151,6 +1151,12 @@ def set_public_host(
             storage_dir=str(info.root / "certs" / "caddy"),
             web_root=str(info.root / "web" / "dist"),
             updates_root=str(info.root / "updates"),
+            # 用户在这一刻明确指定了新的公网域名 —— 旧的该被替换掉。
+            # 保留旧的会让「换域名」变成「加域名」，而旧的再也删不掉。
+            keep_existing_domains=False,
+            # 一键接入就是要用隧道，隧道端口必须开（自动判断在这条路上不可靠：
+            # 第一次接入时文件里既没有域名也没有 8767 条目）。
+            tunnel_port=caddyfile.TUNNEL_PORT,
         )
     except (OSError, ValueError) as exc:
         report.add("更新 Caddyfile", False, str(exc))

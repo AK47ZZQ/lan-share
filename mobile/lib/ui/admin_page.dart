@@ -36,7 +36,6 @@ class _AdminPageState extends ConsumerState<AdminPage>
   int _grantFilter = -1; // -1=全部
   // 设置卡
   final _pubUrl = TextEditingController();
-  final _pubAlt = TextEditingController();
   final _hookUrl = TextEditingController();
   bool _busy = false; // 保存/创建类按钮防连点（0.8.1 审查修复）
 
@@ -50,7 +49,6 @@ class _AdminPageState extends ConsumerState<AdminPage>
   void dispose() {
     _tab.dispose();
     _pubUrl.dispose();
-    _pubAlt.dispose();
     _hookUrl.dispose();
     super.dispose();
   }
@@ -70,7 +68,6 @@ class _AdminPageState extends ConsumerState<AdminPage>
         _invites = invites;
         _grants = grants;
         _pubUrl.text = pub.base;
-        _pubAlt.text = pub.alt;
         _hookUrl.text = hookUrl;
         _error = null;
       });
@@ -524,7 +521,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      await AdminApi.savePublicUrl(_pubUrl.text.trim(), _pubAlt.text.trim());
+      await AdminApi.savePublicUrl(_pubUrl.text.trim());
       showToast('公网地址已保存');
     } catch (e) {
       showToast(errDetail(e));
@@ -730,7 +727,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
             const Text('🌐 公网访问地址',
                 style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5)),
             const SizedBox(height: 2),
-            const Text('主/备公网入口（备用隧道同一服务器即可填）；保存后分享卡片和登录页会一并提供。',
+            const Text('公网入口；保存后分享卡片和登录页都会用它。',
                 style: TextStyle(fontSize: 11, color: Colors.grey)),
             const SizedBox(height: Gap.xs),
             Row(children: [
@@ -747,14 +744,6 @@ class _AdminPageState extends ConsumerState<AdminPage>
                   onPressed: _busy ? null : _savePubUrl,
                   child: const Text('保存')),
             ]),
-            const SizedBox(height: Gap.xs),
-            TextField(
-                controller: _pubAlt,
-                decoration: const InputDecoration(
-                    labelText: '备用隧道',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    hintText: '如 https://your-frp-domain.com:xxxxx')),
           ])),
       _card(
           child: Column(

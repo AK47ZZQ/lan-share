@@ -1,5 +1,6 @@
 """认证与安全：审计、scrypt 密码、会话、防爆破、限速、client_ip、公网入口判定。"""
 import hashlib
+import ipaddress
 import logging
 import hmac
 import secrets
@@ -250,6 +251,21 @@ def reset_netloc_cache():
     _netloc_cache[:] = ["", set(), 0]
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", ""}
+
+
+def _is_private_host(host_header: str) -> bool:
+    """Host 头是不是「本机/内网」形态 —— 空的、localhost、或私网 IP 字面量。"""
+    name = (host_header or "").split(":")[0].strip().strip("[]").lower()
+    if name in _LOOPBACK_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        return False            # 是个域名 → 不是内网形态
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
 def is_public_entry(request: Request) -> bool:
     """请求是否来自公网入口（主/备用任一命中）。防爆破/限速/healthz 管控的判定基础：
     公网侧的失败只锁公网侧，LAN 家人登录永不因公网攻击被锁（DoS 隔离）。
@@ -267,7 +283,36 @@ def is_public_entry(request: Request) -> bool:
             return True
         return False
     host = (request.headers.get("host") or "").lower()
-    return bool(host) and host in public_netlocs()
+    public = public_netlocs()
+    if host and host in public:
+        return True
+
+    # 🔴 失败关闭（fail-closed）。
+    #
+    # 已经配了公网入口，但来的 Host 不在名单里 —— 最可能的解释不是「家里内网
+    # 访问」，而是「穿透隧道把公网流量送进了主入口端口」。这时只看 Host 就会
+    # 把它判成 LAN，于是免登录的 /local/* 整组（读备份目录、改公网地址、
+    # 触发备份写 SMB）对公网敞开。
+    #
+    # 2026-11-04 对抗性审查实测复现：隧道本地端口填 8765（文档推荐值）时，
+    # Host=任意域名 → 返回 False → 当 LAN；GET /local/backup 返回 200，
+    # POST /local/public-url 直接把公网地址改成攻击者的。
+    #
+    # 判据反过来，但再加一条「来源必须是回环」。
+    #
+    # 域名 Host + 回环来源 = 隧道的指纹：frpc 从 127.0.0.1 连到 Caddy，
+    # 所以穿透进来的请求来源恒为回环。
+    #
+    # 而局域网设备用内网 DNS 域名（nas.home 之类）访问时，来源是真实内网 IP,
+    # 仍然按 LAN 处理 —— 家人不该因为我们用了个域名就突然被判成公网
+    # （healthz 消失、登录失败记到公网账上）。
+    if public and not _is_private_host(host):
+        try:
+            if effective_client_ip(request) in ("127.0.0.1", "::1", "localhost"):
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def allow_rate(key: str, limit: int, window: int = 60) -> bool:

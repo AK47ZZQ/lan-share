@@ -47,6 +47,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from pathlib import Path
 
@@ -260,6 +261,7 @@ def render(
     storage_dir: str = "",
     web_root: str = "",
     updates_root: str = "",
+    tunnel_port: "int | None" = TUNNEL_PORT,
 ) -> str:
     """渲染 Caddyfile 内容（不落盘，方便单测）。
 
@@ -287,7 +289,7 @@ def render(
     return TEMPLATE.format(
         api_port=api_port,
         web_port=web_port,
-        site_addrs=site_block(bind_host, web_port, names, tunnel_port=TUNNEL_PORT),
+        site_addrs=site_block(bind_host, web_port, names, tunnel_port=tunnel_port),
         bind_line=bind_line(bind_host),
         # Caddyfile 按空格切 token：路径含空格（"LAN Share"）必须加引号，
         # Windows 反斜杠在 Caddy 里也不稳妥，统一换正斜杠。
@@ -300,6 +302,74 @@ def render(
     )
 
 
+# 站点地址里的「主机名[:端口]」，前面的 scheme 可选 ——
+# Caddy 官方文档里 `example.com:443 {` 这种裸写法很常见，只认 https:// 会漏。
+_ADDR_HOST_RE = re.compile(r"^(?:https?://)?([A-Za-z0-9][A-Za-z0-9.-]*)(?::(\d+))?$")
+
+
+def _is_ip_literal(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def existing_domains(path: str | Path, ports: "list[int] | None" = None) -> list[str]:
+    """从现有 Caddyfile 的站点地址行里捞出「非 IP 的主机名」。
+
+    存在的唯一理由：**升级不能把公网域名弄丢**。
+
+    用户配好内网穿透后，那个域名只活在 Caddyfile 的站点地址里（settings 里也有，
+    但那是应用层的库，CLI 在安装早期根本读不到）。而 install / lan enable 都会
+    用 default_hosts() 整份重写 Caddyfile，那个函数只认本机网卡地址 ——
+    于是每次升级都把域名抹掉，证书 SAN 不再包含它，公网 TLS 直接失败。
+
+    2026-11-04 实机：4.0.4 → 4.0.5 一键更新完，公网立刻 000，用户以为更新把
+    网盘搞坏了。这种「升级顺手破坏另一个功能」的 bug 最难查，因为症状（公网打不开）
+    和操作（点了个更新）看起来毫无关系。
+
+    只保留长得像域名的东西：IP 字面量、localhost、解析不出的乱码一律丢弃 ——
+    这个函数会往场景里塞可能被手改过的文件，不能照单全收。
+    """
+    target = Path(path)
+    if not target.is_file():
+        return []
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    # 只认带我们自己的端口（或裸主机名）的那些段。
+    #
+    # 为什么要有这个过滤：整份文件扫「像地址的东西」会把用户另外配的站点
+    # （`https://admin.internal:9000 {...}`）的主机名一起吸收进网盘的站点块，
+    # Caddy 会给它签证书、把本该 respond 的路径变成反代到网盘 —— 等于凭空
+    # 多开一个入口。审查实测能复现。
+    want_ports = {str(p) for p in (ports or [])}
+
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()          # 去掉行尾注释
+        if not line:
+            continue
+        for part in line.split(","):
+            part = part.strip().rstrip("{").strip()
+            if not part:
+                continue
+            m = _ADDR_HOST_RE.match(part)
+            if not m:
+                continue                              # `:8765 {`、IPv6、乱码
+            host, port = m.group(1).lower(), m.group(2)
+            if not host or host == "localhost" or _is_ip_literal(host):
+                continue
+            if want_ports and port and port not in want_ports:
+                continue                              # 别的端口 = 别的站点
+            if _HOST_RE.fullmatch(host) and host not in out:
+                out.append(host)
+    return out
+
+
 def write(
     path: str | Path,
     api_port: int,
@@ -309,12 +379,47 @@ def write(
     storage_dir: str = "",
     web_root: str = "",
     updates_root: str = "",
+    keep_existing_domains: bool = True,
+    tunnel_port: "int | None | str" = "auto",
 ) -> Path:
-    """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。"""
+    """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。
+
+    会**自动保留**旧文件站点地址里的公网域名（见 existing_domains）。这一步放在
+    这里而不是各个调用点，是因为重写 Caddyfile 的地方有三处（install、
+    lan enable/disable、set_public_host 的前置重写），逐个补必然漏一个，
+    而漏掉的后果是「升级完公网静默失效」。
+
+    keep_existing_domains=False 是给「一键接入」用的：用户在那一刻明确指定了新的
+    公网域名，旧的就该被替换掉。否则他换域名时旧域名会被永久保留 ——
+    自己能加不能删的配置，迟早变成一团谁也不认识的 SAN。
+    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = render(api_port, web_port, bind_host, hosts, storage_dir, web_root,
-                     updates_root)
+
+    # 先决定隧道端口要不要监听。
+    #
+    # 🔴 默认「自动」= 这台机器本来就活在隧道里才开：
+    #    旧配置里已有域名，或已经有那个端口的站点地址。
+    #
+    # 为什么不能无条件开：8767 一旦被别的程序占住，Caddy 就是**整份配置加载失败**，
+    # 连 8765 都不监听 —— 局域网一起挂。审查实测（bind 冲突时报
+    # `listening on :8767: bind: Only one usage of each socket address`）。
+    # 没在用隧道的机器不该为这个硬编码端口冒风险。
+    _ftp = existing_domains(target, ports=[web_port, TUNNEL_PORT])
+    _saw_tunnel = f":{TUNNEL_PORT}" in target.read_text(encoding="utf-8", errors="replace")         if target.is_file() else False
+    if tunnel_port == "auto":
+        real_tunnel: "int | None" = TUNNEL_PORT if (_ftp or _saw_tunnel) else None
+    else:
+        real_tunnel = tunnel_port                      # type: ignore[assignment]
+
+    merged = list(hosts) if hosts is not None else default_hosts()
+    if keep_existing_domains:
+        for h in _ftp:
+            if h not in merged:
+                merged.append(h)
+
+    content = render(api_port, web_port, bind_host, merged, storage_dir, web_root,
+                     updates_root, tunnel_port=real_tunnel)
     with open(target, "w", encoding="utf-8", newline="") as fh:
         fh.write(content)
     return target

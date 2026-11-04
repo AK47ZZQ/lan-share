@@ -7,9 +7,8 @@ import { toast } from '../ui'
 const err = ref('')
 
 const pubUrl = ref('')
-const pubAlt = ref('')
 async function savePubUrl() {
-  try { await api.setPublicUrl(pubUrl.value.trim(), pubAlt.value.trim()); toast('公网地址已保存', 'ok') } catch (e) { toast((e as Error).message, 'err') }
+  try { await api.setPublicUrl(pubUrl.value.trim()); toast('公网地址已保存', 'ok') } catch (e) { toast((e as Error).message, 'err') }
 }
 
 // 事件推送（通知 bot）
@@ -50,7 +49,7 @@ async function testHr() {
 }
 
 onMounted(async () => {
-  try { const r = await api.getPublicUrl(); pubUrl.value = r.public_base_url; pubAlt.value = r.public_base_url_alt || '' } catch { /* */ }
+  try { const r = await api.getPublicUrl(); pubUrl.value = r.public_base_url } catch { /* */ }
   try { hookUrl.value = (await api.getWebhook()).url } catch { /* */ }
   try { const r = await api.getHealthReport(); hrEnabled.value = r.enabled; hrTime.value = r.time } catch { /* */ }
 })
@@ -69,10 +68,9 @@ onMounted(async () => {
       <div style="font-size:13.5px;font-weight:600">🌐 公网访问地址（主/备隧道）</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input v-model="pubUrl" placeholder="主隧道，如 https://your-frp-domain.com:xxxxx" style="flex:1;min-width:220px;font-size:14px" />
-        <input v-model="pubAlt" placeholder="备用隧道（可空），如 https://your-frp-domain.com:xxxxx" style="flex:1;min-width:220px;font-size:14px" />
         <button class="btn sm" @click="savePubUrl">保存</button>
       </div>
-      <p style="font-size:12px;color:var(--text-3);margin:0">保存后，分享卡片提供局域网/公网复制按钮，App 登录页展示主/备隧道快捷入口；备用入口的防爆破分账与 healthz 收敛同步生效。</p>
+      <p style="font-size:12px;color:var(--text-3);margin:0">保存后，分享卡片提供局域网/公网复制按钮，App 登录页展示公网入口快捷方式。公网入口的防爆破分账与 healthz 收敛同步生效。</p>
     </div>
 
     <!-- 事件推送（通知 bot） -->

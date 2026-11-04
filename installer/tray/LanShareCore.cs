@@ -88,8 +88,22 @@ namespace LanShare
             try
             {
                 if (!File.Exists(FilePath)) return null;
+
+                // 过期标记当垃圾清掉，返回 null。
+                //
+                // 这段是审查抓出来的死循环：失败分支会把标记写回去「等安装器
+                // 继续跑」，但如果那次更新根本没成（用户在安装器里取消、
+                // 磁盘满、包损坏），标记就永远留着 —— 之后每次开机都读它、
+                // 报一次「更新没有生效」、再写回去，无限循环。
+                // 时间戳比什么都可靠：15 分钟前的「正在进行」不可能还在进行。
+                if (File.GetLastWriteTimeUtc(FilePath) < DateTime.UtcNow.AddMinutes(-15))
+                {
+                    try { File.Delete(FilePath); } catch (Exception) { }
+                    return null;
+                }
+
                 string[] lines = File.ReadAllLines(FilePath);
-                File.Delete(FilePath);
+                try { File.Delete(FilePath); } catch (Exception) { }
                 return lines;
             }
             catch (Exception)
