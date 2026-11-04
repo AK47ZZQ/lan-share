@@ -218,9 +218,11 @@ def public_netloc() -> str:
 
 
 def public_netlocs() -> set:
-    """主 + 备用公网地址的 netloc 集合（is_public_entry 的判定域）。
-    备用隧道与主隧道指向同一 Caddy，Host 不同——入口判定必须同时覆盖，
-    否则备用入口的流量会被当成 LAN（healthz 泄露 + 防爆破不分账）。"""
+    """公网入口的 netloc 集合（is_public_entry 的判定域）。
+
+    备用入口已于 2026-11-04 按用户要求删除，集合里只剩主地址。
+    保留 set 形态而不是改成单值：判定和调用方都按集合写，将来若再加入口不用返工。
+    """
     return _netlocs_cached()[1]
 
 
@@ -230,13 +232,11 @@ def _netlocs_cached():
         return _netloc_cache[0], _netloc_cache[1]
     primary, allset = "", set()
     try:
-        for key in (settings.PUBLIC_BASE_URL, settings.PUBLIC_BASE_URL_ALT):
-            val = get_setting(key)
-            netloc = (urlsplit(val).netloc or "").lower() if val else ""
-            if netloc:
-                allset.add(netloc)
-                if key == settings.PUBLIC_BASE_URL:
-                    primary = netloc
+        val = get_setting(settings.PUBLIC_BASE_URL)
+        netloc = (urlsplit(val).netloc or "").lower() if val else ""
+        if netloc:
+            allset.add(netloc)
+            primary = netloc
     except Exception as e:
         # 不能静默：读不出来会退化成"没有公网入口"（healthz 裸奔 + 防爆破不分账），
         # 必须留痕才排得到障（11 号复审 P3）

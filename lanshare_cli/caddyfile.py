@@ -155,6 +155,13 @@ TEMPLATE = """\
 BIND_ALL = "0.0.0.0"
 BIND_LOOPBACK = "127.0.0.1"
 
+# 隧道端口：内网穿透工具把公网流量转进来时用的本机端口。
+#
+# 三个值的来历：8765 是主入口，8767 是历史上给「公网隧道」留的第二个入口
+# （早期设计文档里写过，用户照那个填了隧道本地端口），8767 因此必须有人听，
+# 否则那个配法永远「连接被拒绝」。用户也可以在面板里填 8765，两种都通。
+TUNNEL_PORT = 8767
+
 
 def default_hosts() -> list[str]:
     """站点该带哪些主机名。
@@ -209,7 +216,10 @@ def _safe_host(h: str) -> str:
 
 
 def site_block(
-    bind_host: str, web_port: int, hosts: list[str] | None = None
+    bind_host: str,
+    web_port: int,
+    hosts: list[str] | None = None,
+    tunnel_port: int | None = None,
 ) -> str:
     """生成站点块的地址行，形如：
 
@@ -219,7 +229,17 @@ def site_block(
     tls internal 就不生效了（2026-10-31 找到的真正原因）。
     """
     names = hosts or ["localhost"]
-    return ", ".join(f"https://{_safe_host(h)}:{web_port}" for h in names)
+    addrs = [f"https://{_safe_host(h)}:{web_port}" for h in names]
+
+    # 隧道端口：内网穿透工具把公网流量转到本机的另一个端口时，Caddy 得在那个
+    # 端口上也有 listener，否则 frpc 直接「连接被拒绝」，用户从外面看到的就是
+    # 打不开（2026-11-04 实机：隧道本地端口填了 8767，Caddy 只听 8765）。
+    #
+    # 端口号由用户在穿透面板里填，我们没法替他决定，所以干脆两个端口都监听。
+    # 同一个站点块、同一套 TLS 配置 —— 不是新入口，只是同一入口的备用口。
+    if tunnel_port and tunnel_port != web_port:
+        addrs += [f"https://{_safe_host(h)}:{tunnel_port}" for h in names]
+    return ", ".join(addrs)
 
 
 def bind_line(bind_host: str, indent: str = "\t") -> str:
@@ -267,7 +287,7 @@ def render(
     return TEMPLATE.format(
         api_port=api_port,
         web_port=web_port,
-        site_addrs=site_block(bind_host, web_port, names),
+        site_addrs=site_block(bind_host, web_port, names, tunnel_port=TUNNEL_PORT),
         bind_line=bind_line(bind_host),
         # Caddyfile 按空格切 token：路径含空格（"LAN Share"）必须加引号，
         # Windows 反斜杠在 Caddy 里也不稳妥，统一换正斜杠。

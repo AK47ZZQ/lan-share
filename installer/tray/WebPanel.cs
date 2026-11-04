@@ -566,29 +566,6 @@ namespace LanShare
         /// 输入框从 WebView2 面板第一版起就是 readonly，一直没有写入口。
         /// 之前能填的地方是网页端的管理页，不是托盘面板。
         /// </summary>
-        /// <summary>
-        /// 读当前的备用公网地址，保存主地址时原样带回去。
-        ///
-        /// 🔴 POST /local/public-url 是**整体覆盖** url 和 url_alt 两个字段的。
-        /// 第一版保存时把 url_alt 写死成 ""，等于用户点一次「保存地址」就把
-        /// 他配置的备用入口清掉（sakuraFrp 主备两条隧道是常见配法）。
-        /// 这是回归，不是新功能取舍。
-        /// </summary>
-        private string KeepAltUrl()
-        {
-            try
-            {
-                var cur = ApiGet<Dictionary<string, object>>("/local/public-url", d => d, null);
-                if (cur != null && cur.ContainsKey("url_alt"))
-                    return Str(cur, "url_alt") ?? "";
-            }
-            catch (Exception)
-            {
-                // 读不到就不传 —— 至少不要让保存本身失败
-            }
-            return "";
-        }
-
         private void SaveWanUrl(string url)
         {
             url = (url ?? "").Trim();
@@ -599,7 +576,7 @@ namespace LanShare
                 SendToast("地址要以 http:// 或 https:// 开头");
                 return;
             }
-            string json = "{\"url\": " + Quote(url) + ", \"url_alt\": " + Quote(KeepAltUrl()) + "}";
+            string json = "{\"url\": " + Quote(url) + "}";
             if (!ApiPost("/local/public-url", json))
             {
                 SendToast("保存失败：服务没有响应");
@@ -679,8 +656,7 @@ namespace LanShare
                     bool hasPub = ret.ContainsKey("public_url") && Str(ret, "public_url").Length > 0;
                     if (sawFail && onlyPublicFailed && hasPub)
                     {
-                        string j2 = "{\"url\": " + Quote(Str(ret, "public_url"))
-                                  + ", \"url_alt\": " + Quote(KeepAltUrl()) + "}";
+                        string j2 = "{\"url\": " + Quote(Str(ret, "public_url")) + "}";
                         if (ApiPost("/local/public-url", j2))
                             AppendLog("WanAttach: 地址已保存，等公网打通 " + Str(ret, "public_url"));
                         return "地址已保存，但公网还不通 —— " + detail;
@@ -691,8 +667,7 @@ namespace LanShare
                 // 成功就地保存，省掉用户再点一次「保存」
                 if (pub.Length > 0)
                 {
-                    string json = "{\"url\": " + Quote(pub)
-                                + ", \"url_alt\": " + Quote(KeepAltUrl()) + "}";
+                    string json = "{\"url\": " + Quote(pub) + "}";
                     if (ApiPost("/local/public-url", json))
                         AppendLog("WanAttach: 已自动写入公网地址 " + pub);
                     else

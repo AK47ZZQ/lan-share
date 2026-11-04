@@ -1061,7 +1061,7 @@ namespace LanShare
             _wanSave.Enabled = false;
             _wanSave.Text = "保存中";
 
-            string body = "{\"url\":" + JsonString(url) + ",\"url_alt\":\"\"}";
+            string body = "{\"url\":" + JsonString(url) + "}";
 
             Task.Run(() =>
             {
@@ -1101,7 +1101,7 @@ namespace LanShare
             {
                 string error;
                 var dict = _cli.PostLocal(
-                    "/local/public-url", "{\"url\":\"\",\"url_alt\":\"\"}", 15000, out error);
+                    "/local/public-url", "{\"url\":\"\"}", 15000, out error);
                 return new object[] { dict, error };
             }).ContinueWith(t =>
             {

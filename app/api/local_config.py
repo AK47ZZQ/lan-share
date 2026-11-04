@@ -55,8 +55,9 @@ def _require_local(request: Request) -> None:
 
 
 class PublicUrlBody(BaseModel):
+    # 备用入口已删除（2026-11-04 用户要求）。旧版托盘仍会多传一个 url_alt
+    # 字段，Pydantic 默认忽略未知字段，所以旧客户端不会因此报错。
     url: str = ""
-    url_alt: str = ""
 
 
 def _normalize(raw: str) -> tuple[str, str]:
@@ -97,16 +98,10 @@ async def get_public_url(request: Request):
     _require_local(request)
     try:
         primary = settings.get_setting(settings.PUBLIC_BASE_URL)
-        alt = settings.get_setting(settings.PUBLIC_BASE_URL_ALT)
     # 读不到要说出来，不能装作空配置（项目已 ignore BLE001，无需 noqa）
     except Exception as exc:
-        return {
-            "url": "",
-            "url_alt": "",
-            "available": False,
-            "error": f"读取配置失败：{exc}",
-        }
-    return {"url": primary or "", "url_alt": alt or "", "available": True, "error": ""}
+        return {"url": "", "available": False, "error": f"读取配置失败：{exc}"}
+    return {"url": primary or "", "available": True, "error": ""}
 
 
 @router.post("/local/public-url")
@@ -121,13 +116,13 @@ async def set_public_url(request: Request, body: PublicUrlBody):
     primary, err = _normalize(body.url)
     if err:
         raise HTTPException(status_code=422, detail=err)
-    alt, err2 = _normalize(body.url_alt)
-    if err2:
-        raise HTTPException(status_code=422, detail=err2)
 
     try:
         settings.set_setting(settings.PUBLIC_BASE_URL, primary)
-        settings.set_setting(settings.PUBLIC_BASE_URL_ALT, alt)
+        # 顺手清掉历史备用地址：这个字段已经没有读取方，留着只会在
+        # App 的入口清单里冒出一个连不上的旧地址（2026-11-04 实机见过
+        # 一个指向另一条隧道端口的僵尸值）。
+        settings.set_setting(settings.PUBLIC_BASE_URL_ALT, "")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
 
@@ -140,4 +135,4 @@ async def set_public_url(request: Request, body: PublicUrlBody):
     except Exception:
         pass
 
-    return {"ok": True, "url": primary, "url_alt": alt}
+    return {"ok": True, "url": primary}

@@ -716,11 +716,6 @@
       "default": "",
       "title": "Url",
       "type": "string"
-     },
-     "url_alt": {
-      "default": "",
-      "title": "Url Alt",
-      "type": "string"
      }
     },
     "title": "PublicUrlBody",

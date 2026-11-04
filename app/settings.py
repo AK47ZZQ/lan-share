@@ -15,6 +15,9 @@ from app.db import _db, _db_lock
 
 # ── key 常量（唯一事实源，新 key 必须加在这里）──────────
 PUBLIC_BASE_URL = "public_base_url"
+# 遗留字段：备用公网入口已于 2026-11-04 删除，没有任何读取方。
+# 保留常量只为一件事 —— 保存主地址时把它写成空串，清掉历史残留值
+# （那条值曾被填成另一条隧道的地址，App 会把它当成能连的备用入口）。
 PUBLIC_BASE_URL_ALT = "public_base_url_alt"
 NOTIFY_WEBHOOK_URL = "notify_webhook_url"
 NOTIFY_PREFS_PREFIX = "notify_prefs_user_"   # + uid（每用户一个 key）

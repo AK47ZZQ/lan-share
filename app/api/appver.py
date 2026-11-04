@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from app.config import PROJECT_ROOT, SHARE_ROOT
 from app.filetools import human_size
 from app.security import audit, client_ip, require_user
-from app.settings import PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT, get_setting
+from app.settings import PUBLIC_BASE_URL, get_setting
 
 DIST_DIR = "App安装包"
 APK_MIME = "application/vnd.android.package-archive"
@@ -514,7 +514,8 @@ def app_entries():
     if _ENTRIES_CACHE and now - _ENTRIES_CACHE[0][0] < _ENTRIES_TTL:
         return _ENTRIES_CACHE[0][1]
     resp = {"public": get_setting(PUBLIC_BASE_URL) or None,
-            "public_alt": get_setting(PUBLIC_BASE_URL_ALT) or None,
+            # 备用入口已删除（2026-11-04）。字段不再下发，App 拿不到就只显示
+            # 一个入口，不需要重新发版。
             "lan": _lan_addresses(),
             "cert_sha256": _cert_fingerprint()}
     _ENTRIES_CACHE[:] = [(now, resp)]

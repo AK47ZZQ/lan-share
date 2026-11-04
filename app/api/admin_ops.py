@@ -1,6 +1,5 @@
 """管理 API · 运维配置域（B2 自 admin.py 按域拆出）：公网地址、webhook 通知配置与测试、家庭动态流（审计水位）、成员数据导出。URL 与行为不变；admin.py 仍是聚合门面。"""
 import secrets
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -28,32 +27,27 @@ router = APIRouter()
 
 @router.get("/api/admin/public-url")
 def get_public_url(_admin=Depends(require_admin)):
-    return {"public_base_url": get_setting(PUBLIC_BASE_URL),
-            "public_base_url_alt": get_setting(PUBLIC_BASE_URL_ALT)}
+    return {"public_base_url": get_setting(PUBLIC_BASE_URL)}
 
 
 @router.get("/api/public-url")
 def get_public_url_user(_user=Depends(require_user)):
     """公网访问地址：全员可读（分享/直传多地址复制用，非敏感）。"""
-    return {"public_base_url": get_setting(PUBLIC_BASE_URL),
-            "public_base_url_alt": get_setting(PUBLIC_BASE_URL_ALT)}
+    return {"public_base_url": get_setting(PUBLIC_BASE_URL)}
 
 
 @router.post("/api/admin/public-url")
 def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
     url = (body.get("url") or "").strip().rstrip("/")
-    url_alt = (body.get("url_alt") or "").strip().rstrip("/")
-    for u in (url, url_alt):
-        if u and not u.startswith(("https://", "http://")):
-            raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
-    if url and url_alt and urlsplit(url).netloc.lower() == urlsplit(url_alt).netloc.lower():
-        raise HTTPException(status_code=400, detail="备用地址不能与主地址相同")
+    if url and not url.startswith(("https://", "http://")):
+        raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
     set_setting(PUBLIC_BASE_URL, url)
-    set_setting(PUBLIC_BASE_URL_ALT, url_alt)
+    # 备用入口已删除，历史残留值一并清掉（它没有读取方了）
+    set_setting(PUBLIC_BASE_URL_ALT, "")
     reset_netloc_cache()   # 入口判定即时生效
     reset_entries_cache()   # entries 端点 60s 缓存同样即时失效
-    audit("public_url_set", f"{url} | alt={url_alt}", ip=client_ip(request))
-    return {"ok": True, "public_base_url": url, "public_base_url_alt": url_alt}
+    audit("public_url_set", url, ip=client_ip(request))
+    return {"ok": True, "public_base_url": url}
 
 
 # ─── 事件推送（通知 bot）──────────────────────────────────

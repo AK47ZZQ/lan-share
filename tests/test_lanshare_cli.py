@@ -30,8 +30,23 @@ from lanshare_cli.service import NssmService, ServiceError, _decode
 class TestCaddyfile:
     def test_renders_both_ports(self):
         text = caddyfile.render(api_port=9911, web_port=9912)
-        assert ":9912 {" in text
+        # 站点块最后一个地址是隧道端口，所以不能断言「行尾是 :9912 {」
+        assert "https://localhost:9912" in text
         assert "reverse_proxy 127.0.0.1:9911" in text
+
+    def test_listens_on_tunnel_port_too(self):
+        """隧道端口也必须在站点地址里。
+
+        内网穿透把公网流量转到本机的哪个端口，是用户在穿透面板里填的
+        （历史文档里写过 8767）。Caddy 不在那个端口监听，frpc 就会
+        「连接被拒绝」，用户从公网看到的是打不开 —— 2026-11-04 实机。
+        """
+        text = caddyfile.render(api_port=8766, web_port=8765)
+        site_line = [ln for ln in text.splitlines() if ln.startswith("https://")][0]
+        assert f":{caddyfile.TUNNEL_PORT} " in site_line
+        assert f"https://localhost:{caddyfile.TUNNEL_PORT}" in site_line
+        # 同一个站点块：TLS 配置、反向代理都共用，不是开了第二个入口
+        assert site_line.count("{") == 1
 
     def test_no_hardcoded_default_ports(self):
         """换端口时不能残留默认值 —— 这是之前 PowerShell 版踩过的坑。"""

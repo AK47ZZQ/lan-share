@@ -251,9 +251,10 @@ share/admin/system 三组开关，存 settings `notify_prefs_user_<uid>`），�
 
 ### 公网入口清单（免登录，App v0.10.0+）
 
-`GET /api/app/entries` → `{"public": url|null, "public_alt": url|null, "cert_sha256": "AA:BB:…"}`
+`GET /api/app/entries` → `{"public": url|null, "cert_sha256": "AA:BB:…"}`
 
-- 主/备隧道地址来自管理面板「公网访问地址」（settings 表 `public_base_url` / `public_base_url_alt`）
+- 公网地址来自管理面板「公网访问地址」（settings 表 `public_base_url`）。
+  备用入口已于 2026-11-04 删除，那条 `public_base_url_alt` 只会在保存时被清空
 - 证书指纹与本机 `certs/cert.pem` 的 SHA256（DER）一致，App 端 TOFU 预校验逐字可比
 - 免登录是有意设计（App 认证前就要拿入口清单）；两项均非机密，healthz 等敏感面仍按 Host 收敛
 

@@ -162,26 +162,30 @@ class TestRoundTrip:
 
         resp = client.post(
             "/local/public-url",
+            # 旧版托盘还会多传 url_alt：必须被安静忽略，不能报 422
             json={"url": "xxx.frp-any.com:35391", "url_alt": "yyy.frp-any.com:40000"},
         )
         assert resp.status_code == 200
         assert resp.json()["url"] == "https://xxx.frp-any.com:35391"
+        assert "url_alt" not in resp.json()
 
         got = client.get("/local/public-url")
         assert got.status_code == 200
         body = got.json()
         assert body["url"] == "https://xxx.frp-any.com:35391"
-        assert body["url_alt"] == "https://yyy.frp-any.com:40000"
+        # 备用入口已删除：字段不再返回，旧客户端的多余输入也不会被存下
+        assert "url_alt" not in body
+        assert store.get("public_base_url_alt", "") == ""
         assert body["available"] is True
 
     def test_clear(self, local_client):
         client, store = local_client
         client.post("/local/public-url", json={"url": "https://a.com:1"})
-        client.post("/local/public-url", json={"url": "", "url_alt": ""})
+        client.post("/local/public-url", json={"url": ""})
 
         body = client.get("/local/public-url").json()
         assert body["url"] == ""
-        assert body["url_alt"] == ""
+        assert "url_alt" not in body
 
     def test_read_failure_is_reported(self, local_client, monkeypatch):
         """读库失败要明确说出来，不能装作「没配置」。

@@ -974,7 +974,7 @@ def probe_tunnel_host(
 
     try:
         with ctx.wrap_socket(raw, server_hostname=host) as ssock:
-            req = f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+            req = f"GET /up HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
             ssock.sendall(req.encode("ascii"))
             data = ssock.recv(256)
         first = data.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
@@ -1003,6 +1003,9 @@ def probe_public_url(host: str, port: int, *, timeout: float = 6.0) -> tuple[boo
 
     返回 (ok, 说明)。失败时尽量说清楚是哪一种失败，因为用户看到「接入失败」
     四个字根本不知道下一步该干嘛。
+
+    探的是 `/up` 而不是 `/healthz`：后者在公网入口被 asgi.py 有意收敛成 404
+    （磁盘水位不外泄）。用 healthz 当判据，会在公网其实已经通了的时候报失败。
     """
     import socket
     import ssl
@@ -1019,7 +1022,7 @@ def probe_public_url(host: str, port: int, *, timeout: float = 6.0) -> tuple[boo
     tls_err = ""
     try:
         with ctx.wrap_socket(raw, server_hostname=host) as ssock:
-            req = f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+            req = f"GET /up HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
             ssock.sendall(req.encode("ascii"))
             data = ssock.recv(256)
         first = data.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
@@ -1038,7 +1041,7 @@ def probe_public_url(host: str, port: int, *, timeout: float = 6.0) -> tuple[boo
     hint = ""
     try:
         with socket.create_connection((host, port), timeout=timeout) as s:
-            s.sendall(f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+            s.sendall(f"GET /up HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
                       .encode("ascii"))
             head = s.recv(512).decode("latin-1", "replace")
         server = ""

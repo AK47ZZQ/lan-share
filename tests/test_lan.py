@@ -58,11 +58,11 @@ class TestRender:
     def test_default_is_all_interfaces(self):
         """默认（不传 bind_host）必须和改造前一致，不能悄悄改变现有部署行为。"""
         content = caddyfile.render(api_port=8766, web_port=8765)
-        assert ":8765 {" in content
+        assert "https://localhost:8765" in content
 
     def test_loopback_render_uses_bind_directive(self):
         content = caddyfile.render(8766, 8765, caddyfile.BIND_LOOPBACK)
-        assert ":8765 {" in content
+        assert "https://localhost:8765" in content
         assert "	bind 127.0.0.1" in content
         # 必须带 scheme：裸 `127.0.0.1:8765 {` 会被 Caddy 当 HTTP 站点，
         # tls internal 就不生效了（2026-10-31 找到的真原因）。
