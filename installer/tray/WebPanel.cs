@@ -1383,11 +1383,25 @@ namespace LanShare
         {
             if (string.IsNullOrEmpty(s)) return "\"\"";
             var sb = new StringBuilder("\"");
-            foreach (char c in s)
+            // 尾部反斜杠必须成对加倍（2026-11-04 审查）。
+            //
+            // Windows 命令行解析规则：引号前连续 N 个反斜杠，其中
+            // N/2 对是字面反斜杠，剩下的用来转义引号。所以参数以反斜杠
+            // 结尾时，如果不额外补一个，收尾那个引号会被转义掉 ——
+            //   QuoteArg(@"https://a/b\")  →  "https://a/b\"
+            //   CommandLineToArgvW 解析成：https://a/b" --clear   ← 后一个
+            //   开关整个被并进同一个参数，静默丢失。
+            // 用户把更新源粘成以 \ 结尾（UNC 路径、手滑）就会撞上，
+            // 表现是「保存了但没生效」，很难联想到引号。
+            int trailing = 0;
+            for (int i = s.Length - 1; i >= 0 && s[i] == '\\'; i--) trailing++;
+            for (int i = 0; i < s.Length - trailing; i++)
             {
+                char c = s[i];
                 if (c == '"') sb.Append("\\\"");
                 else sb.Append(c);
             }
+            sb.Append('\\', trailing * 2);   // 每个尾部反斜杠加倍
             sb.Append('"');
             return sb.ToString();
         }
@@ -1620,10 +1634,40 @@ namespace LanShare
                 SendToast("更新地址必须是 https");
                 return;
             }
+            // fail closed：没有校验值就不许一键更新。
+            //
+            // 这条链路本质是「下载一个 exe 然后静默安装」，而托盘是提权进程。
+            // 之前 GitHub 源固定给空 sha256，于是唯一的默认来源永远跳过校验 ——
+            // 代码里写着「sha256 必须对得上」，实际一次都没对过。
+            // 现在 GitHub 的 assets[].digest 会被取出来；只有老 Release 没有，
+            // 那种情况下让用户走「打开发布页」手动下载，不在这里静默放行。
+            if (string.IsNullOrEmpty(_updateSha256))
+            {
+                SendToast("这个版本没有校验值，已停止一键更新。请点「打开发布页」手动下载安装。");
+                return;
+            }
 
             SendBusy(true, "正在下载更新…");
 
-            string ver = string.IsNullOrEmpty(_updateVersion) ? "new" : _updateVersion;
+            // 进后台线程前把要用的字段拷成局部变量。
+            //
+            // _updateUrl / _updateSha256 / _updateVersion 由 UI 线程的
+            // CheckUpdate 随时改写，而下载要跑几十秒。中间用户再点一次
+            // 「检查更新」（或定时刷新）就会出现：下载的是 A 版本的包、
+            // 校验用的是 B 版本的 sha256 → 必然报「校验失败，已丢弃」，
+            // 而文件其实是好的。查这种偶发问题极其费劲。
+            string wantUrl = _updateUrl;
+            string wantSha = _updateSha256;
+            string wantVer = _updateVersion;
+
+            // 版本号来自更新源清单，不能直接拼进文件路径。
+            //
+            // 托盘是提权进程，Path.Combine 遇到 "..\..\" 会真的穿出临时目录
+            // —— 也就是「更新源里写一个带路径的版本号，就能把任意 exe 落到
+            // 系统目录并执行」。App 端早就做了同样的清洗（safeVer），
+            // 这边一直漏着。
+            string ver = string.IsNullOrEmpty(wantVer) ? "new" : wantVer;
+            ver = System.Text.RegularExpressions.Regex.Replace(ver, @"[^0-9A-Za-z._-]", "_");
             string dir = Path.Combine(Path.GetTempPath(), "LANShareUpdate");
             string file = Path.Combine(dir, "LANShare-Setup-" + ver + ".exe");
 
@@ -1639,7 +1683,7 @@ namespace LanShare
                     {
                         // 自签证书：这台机器上装过我们的根证书，系统信任库认它；
                         // WebClient 走 schannel，读的就是系统信任库。
-                        wc.DownloadFile(new Uri(_updateUrl), file);
+                        wc.DownloadFile(new Uri(wantUrl), file);
                     }
 
                     var info = new FileInfo(file);
@@ -1648,7 +1692,7 @@ namespace LanShare
 
                     // sha256 必须对得上。更新链路上「差不多就行」等于装一个
                     // 来路不明的 exe —— 这个校验是最后一公里。
-                    if (!string.IsNullOrEmpty(_updateSha256))
+                    if (!string.IsNullOrEmpty(wantSha))
                     {
                         string actual;
                         using (var sha = System.Security.Cryptography.SHA256.Create())
@@ -1659,7 +1703,7 @@ namespace LanShare
                             foreach (byte b in hash) sb.Append(b.ToString("x2"));
                             actual = sb.ToString();
                         }
-                        if (!string.Equals(actual, _updateSha256.Trim(),
+                        if (!string.Equals(actual, wantSha.Trim(),
                                            StringComparison.OrdinalIgnoreCase))
                         {
                             try { File.Delete(file); } catch (Exception) { }

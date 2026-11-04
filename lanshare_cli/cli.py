@@ -361,6 +361,35 @@ def read_pg_password(data_dir: Path, reg_key: str) -> str:
     return generate_password()
 
 
+def lock_certs_acl(certs: Path) -> None:
+    r"""把证书目录的 ACL 收紧到 SYSTEM + Administrators。
+
+    `certs/caddy/pki/authorities/local/root.key` 是**根 CA 私钥**，而这
+    张 CA 已经被写进 `LocalMachine\Root` 信任库 —— 也就是说：谁能读到这个
+    私钥，谁就能给任意域名（内网域名、github.com、任何 HTTPS）签发被本机
+    信任的证书，做完美的中间人。
+
+    安装目录默认在 `Program Files`，从父目录继承下来的 ACL 是
+    `BUILTIN\Users:(RX)` + `Authenticated Users:(M)` —— 本机**任何账号**都能
+    读走它。装了自签根证书本来是「信任自己」，结果变成「谁都能当 CA」。
+
+    Caddy 跑在 SYSTEM 下，收紧后读写不受影响。失败只警告不中止：
+    权限没改掉比装不上强。
+    """
+    try:
+        import subprocess
+
+        subprocess.run(
+            ["icacls", str(certs), "/inheritance:r",
+             "/grant:r", "SYSTEM:(OI)(CI)F",
+             "/grant:r", "Administrators:(OI)(CI)F",
+             "/T", "/C", "/Q"],
+            capture_output=True, text=True, timeout=180,
+        )
+    except Exception as exc:                       # noqa: BLE001
+        warn(f"收紧证书目录权限失败（不影响运行，但建议手动处理）：{exc}")
+
+
 def write_pg_password(data_dir: Path, reg_key: str, password: str) -> None:
     """密码写两处：注册表（快查）+ 数据目录（跟着数据走，卸载也不丢）。"""
     write_registry_value("PgPassword", password, reg_key)
@@ -410,6 +439,21 @@ def cmd_install(args: argparse.Namespace) -> int:
     # 每次安装都换密码会让 PG 里的旧角色对不上，库直接连不上。
     reg_key = getattr(args, "registry_key", None) or REGISTRY_KEY_DEFAULT
     pg_password = read_pg_password(layout.data_dir, reg_key)
+
+    # 🔴 立刻落盘，不能等装完再写（2026-11-04 审查 P0）。
+    #
+    # 下游第 4 步 initdb 就会用这个密码建 postgres 角色，而原来的写法是
+    # 等全部 11 步成功之后（原代码 cli.py:797）才 write_pg_password。
+    # 于是中间任何一步失败退出 —— 端口冲突重试、ensure_database 报错、
+    # API 探针 30 秒超时、Caddy 探针超时、用户不耐烦关窗口 ——
+    # 库里已经用了密码 P，而 P 既不在注册表也不在 .lanshare-pgpass。
+    #
+    # 用户按提示「重试一次」：新密码 P2 → 认证失败 → 死循环，
+    # 且磁盘上再也找不到 P。除了删库重装没有别的出路。
+    #
+    # write_pg_password 本身幂等（同样的值覆盖写），早写没有任何副作用。
+    if not dry:
+        write_pg_password(layout.data_dir, reg_key, pg_password)
 
     say("=" * 64)
     say("  LAN Share 安装")
@@ -522,6 +566,11 @@ def cmd_install(args: argparse.Namespace) -> int:
             fail(f"建不了 {d}: {exc}")
             say("\n    数据目录如果选在 C 盘以外，确认那个盘存在且有写权限。")
             return 1
+
+    # 证书目录里有根 CA 私钥，而那张 CA 已在系统信任库里 ——
+    # 继承来的 ACL 会让本机任何账号都能读，等于谁都能当 CA。
+    if not dry:
+        lock_certs_acl(layout.certs)
 
     # ── 6. Caddyfile ──
     step(6, total, "生成 Caddyfile")
@@ -1160,10 +1209,24 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         if layout.data_dir.is_dir():
             say("")
             say(f"  即将永久删除数据目录: {layout.data_dir}")
+            # pgdata 是 data_dir 的**同级**目录（3.95 起），不在它里面。
+            # 只删 data_dir 会留下整个数据库（账号、口令哈希、文件索引），
+            # 而 PG 的密码锚点 .lanshare-pgpass 恰恰在 data_dir 里 ——
+            # 结果就是：数据看起来删了，几百 MB 的库还在盘上，而且密码没了。
+            # 下次重装到这个路径，is_initialized() 因为 PG_VERSION 还在返回
+            # True → 跳过 initdb → 新密码对不上旧库 → 认证失败 →
+            # 卡在「PostgreSQL 在 30 秒内没有接受连接」，装多少次都失败。
+            pgdata = layout.data_dir.parent / "pgdata"
+            if pgdata.is_dir():
+                say(f"  以及数据库目录: {pgdata}")
             answer = input("  确认删除输入 yes（其他任何输入都会保留数据）: ").strip()
             if answer.lower() == "yes":
                 shutil.rmtree(layout.data_dir, ignore_errors=True)
-                ok("数据已删除")
+                if pgdata.is_dir():
+                    shutil.rmtree(pgdata, ignore_errors=True)
+                    if pgdata.exists():
+                        warn(f"数据库目录没删干净，请手动删除：{pgdata}")
+                ok("数据与数据库已删除")
             else:
                 ok("数据已保留")
         else:
@@ -1370,10 +1433,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         problems += 1
 
     # PG 客户端工具：备份全靠它
-    try:
-        from . import backup as _bk  # noqa: F401 —— 这里只借用解析逻辑
-    except Exception:
-        pass
     try:
         from app.services.backup import _resolve_tool
         dump = _resolve_tool("pg_dump")

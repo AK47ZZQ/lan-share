@@ -680,7 +680,13 @@ class UpdateService {
     }
   }
 
-  static Future<void> install(String apkPath) async {
-    await OpenFilex.open(apkPath, type: 'application/vnd.android.package-archive');
+  /// 拉起系统安装器。
+  ///
+  /// 返回值必须让界面看见。Android 8+ 没给「安装未知应用」权限时
+  /// OpenFilex 返回 permissionDenied；ROM 没有安装器时返回 noAppToOpen。
+  /// 原来这里直接 `await` 把结果丢了，用户看到的就是「进度条走完，
+  /// 然后什么都没发生」—— 没有报错、没有提示，只能靠猜。
+  static Future<OpenResult> install(String apkPath) async {
+    return OpenFilex.open(apkPath, type: 'application/vnd.android.package-archive');
   }
 }

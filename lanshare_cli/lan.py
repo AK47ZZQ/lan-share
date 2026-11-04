@@ -534,7 +534,11 @@ def collect_status(
             # 调用方明确说「别探测」（enable 成功后只是要打印一行地址）时
             # 不要为了这个再等好几秒 —— 那时服务刚自检过，肯定是开的。
             if skip_probe:
-                status.addresses = addrs_probe
+                # 🔴 必须 as_dict()。status.addresses 的声明是 list[dict]，
+                # 下游（lan.py 的 stepss/JSON 组装）一律按 a["ip"] 取值。
+                # 直接塞 LanAddress 对象会让那条兜底路径本身崩掉 ——
+                # 而它恰恰是为「端口枚举异常」准备的，等于是安全网自己破了。
+                status.addresses = [a.as_dict() for a in addrs_probe]
                 if addrs_probe:
                     status.listening = [addrs_probe[0].ip]
                     status.bind_host = caddyfile.BIND_ALL
@@ -550,7 +554,7 @@ def collect_status(
                     status.probe_ok = True
                     status.probe_msg = msg_p
                     status.probe_url = url_p
-                    status.addresses = addrs_probe
+                    status.addresses = [a.as_dict() for a in addrs_probe]
                     status.hints.append(
                         "端口枚举不到监听记录（Windows socket 查询异常），"
                         f"但实测 {url_p} 可连，按开启处理"

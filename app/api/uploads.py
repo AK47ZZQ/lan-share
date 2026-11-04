@@ -57,7 +57,14 @@ def register_blob(path: Path, sha: str, size: int) -> bool:
     if row and row["sample_path"] != str(path):
         sample = Path(row["sample_path"])
         if sample.is_file():
-            tmp_link = path.with_name(path.name + ".dedup")
+            # 临时名必须唯一化。
+            #
+            # 原来固定叫 `<name>.dedup`，而清理循环是按「后缀 .dedup」识别
+            # 孤儿临时文件的 —— 于是用户自己放进网盘的 foo.dedup
+            # （clean_filename 不拦这个后缀）满 24 小时就会被静默物理删除，
+            # 不进回收站、无审计，用户只看到文件凭空消失。
+            # 加上 pid+纳秒后缀后，清理规则可以只认自己产出的那种。
+            tmp_link = path.with_name(f"{path.name}.dedup-{os.getpid()}-{time.time_ns()}")
             try:
                 os.link(sample, tmp_link)
                 os.replace(tmp_link, path)
@@ -369,7 +376,16 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
     try:
-        enforce_quota(owner, dest, size)
+        # 第三个参数传 0，不能传 size（2026-11-04 审查）。
+        #
+        # enforce_quota 的 used 是 `private/<user>` 全树 rglob 求和，而这时
+        # 重组出来的 tmp 文件**已经躺在那个目录里**了 —— 再传 size 等于把它
+        # 算两遍：判据退化成 base + 2*size > quota。
+        # 后果：单次上传超过剩余配额一半的文件必被 409 拒掉（覆盖上传还要
+        # 叠加旧文件大小，几乎必失败），而同一个文件走直传却能成功 ——
+        # 两条路径口径不一致，用户只会觉得「配额坏了」。
+        # webdav 的 _dav_put 早就传的是 0，这里对齐。
+        enforce_quota(owner, dest, 0)
     except BaseException:
         # 重组后的校验失败同样要清 tmp（U1b）：此前 409 直接上抛，
         # .uploading-* 残留私人目录最长 1 天才被孤儿回收——配额超限者

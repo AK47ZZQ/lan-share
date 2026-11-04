@@ -101,7 +101,12 @@ def _cleanup_tmp():
     # （my.uploading / video.dav-uploading）；裸 .dedup 仍是活跃中间态
     # （uploads.py 去重），保留。
     orphan_cutoff = time.time() - 86400
-    orphan_re = re.compile(r"\.(?:uploading|dav-uploading)-\d+-\d{15,}$")
+    # .dedup 也收进「带唯一后缀」的家族（2026-11-04 审查）。
+    # 之前这里是 `f.name.endswith(".dedup")` —— 按纯后缀判断等于承认
+    # 「用户文件只要叫 xxx.dedup 就算我们的临时文件」，满 24h 删掉。
+    # 裸 .dedup 的用户文件现在不会再被碰，识别范围收窄到我们自己产出的
+    # `<name>.dedup-<pid>-<ns>`。
+    orphan_re = re.compile(r"\.(?:uploading|dav-uploading|dedup)-\d+-\d{15,}$")
     for f in SHARE_ROOT.rglob("*"):
         # 全树扫描对竞态不设防会杀掉整轮清理（R1-P2-3，与函数头部注释同源）
         try:
@@ -109,8 +114,7 @@ def _cleanup_tmp():
             # 孤儿规则绝不能越权提前物理销毁里面的条目（2026-11-04 review 轮补）
             if f.relative_to(SHARE_ROOT).parts[0] == ".trash":
                 continue
-            if f.is_file() and (f.name.endswith(".dedup")
-                                or orphan_re.search(f.name)
+            if f.is_file() and (orphan_re.search(f.name)
                                 or f.name.startswith(".tmp-")) \
                     and f.stat().st_mtime < orphan_cutoff:
                 f.unlink(missing_ok=True)

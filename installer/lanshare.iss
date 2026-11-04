@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.100"
+#define AppVersion     "4.0.0"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -180,9 +180,19 @@ Filename: "https://localhost:{#WebPort}"; Flags: shellexec nowait postinstall sk
 ; 同样要 shellexec，否则装完自动启动托盘时又是 740
 Filename: "{app}\tray\LANShareTray.exe"; Flags: shellexec nowait skipifsilent skipifdoesntexist; Tasks: autostart
 ; 注册开机自启任务（最高权限、不弹 UAC）。/F 覆盖同名任务，幂等。
-; 用 "" 转义内层引号 —— schtasks 的 /tr 参数本身要带引号包住含空格的路径
-; （{app} 默认是 C:\Program Files\LAN Share）。
-Filename: "{sys}\schtasks.exe"; Parameters: "/create /tn ""LANShareTray"" /tr """"{app}\tray\LANShareTray.exe"""" /sc onlogon /rl highest /f"; Flags: runhidden waituntilterminated; Tasks: autostart
+;
+; 🔴 引号层数要算清楚（2026-11-04 审查）：
+; Inno 的 Parameters 里，`""` 还原成一个 `"`。原写法
+;   /tr """"{app}\tray\LANShareTray.exe""""
+; 实际发出去是 /tr ""C:\Program Files\LAN Share\tray\LanShareTray.exe""
+; —— 参数值本身带了一对引号，CommandLineToArgvW 把它切成
+;   C:\Program / Files\LAN / Share\tray\LANShareTray.exe
+; schtasks 于是拿 /tr C:\Program 去建任务，创建失败；而这条是
+; runhidden 且没人看返回码，所以「勾了开机自启但重启不出现」完全无声。
+;
+; 正确写法是 /tr ""{app}\...\LANShareTray.exe"" —— 还原成
+;   /tr "C:\Program Files\LAN Share\tray\LanShareTray.exe" ✔
+Filename: "{sys}\schtasks.exe"; Parameters: "/create /tn ""LANShareTray"" /tr ""{app}\tray\LANShareTray.exe"" /sc onlogon /rl highest /f"; Flags: runhidden waituntilterminated; Tasks: autostart
 
 [UninstallRun]
 ; 撤销安装 = 撤销 lanshare_cli install 做的事：先停服务再删服务，数据保留。
@@ -200,10 +210,17 @@ Filename: "{app}\runtime\python.exe"; Parameters: "-m lanshare_cli uninstall"; F
 Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""LANShareTray"" /f"; Flags: runhidden; RunOnceId: "RemoveAutostartTask"
 ; CLI 摘掉服务之后，postgres.exe / caddy.exe 不一定立刻退出，数据目录里的
 ; PG 文件还锁着 —— 后面 DelTree 会返回 False，用户看到「点了是但 data 还在」。
-; 按进程名精确杀，不用通配。
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM postgres.exe /T"; Flags: runhidden; RunOnceId: "KillPostgres"
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM caddy.exe /T"; Flags: runhidden; RunOnceId: "KillCaddy"
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM python.exe /T"; Flags: runhidden; RunOnceId: "KillPython"
+;
+; 🔴 不能按进程名通配（原来的 /F /IM postgres.exe）：
+; 用户机器上可能装着另一个 PostgreSQL（自己开发用的）、或者正跑着别的
+; Python 程序（Jupyter、其它服务、乃至别的 agent）。按名字杀 = 卸载本产品
+; 顺手把别人的进程全干掉，而且完全没有提示。
+;
+; 改成「进程路径在本次安装目录下才杀」。PowerShell 的 $_ .Path 就是可执行
+; 文件全路径，用户自装的那份在 Program Files 下，不会命中。
+; python.exe 不再单独处理：它由 NSSM 托管，服务被删除时 NSSM 会带走子进程，
+; 多杀一次只会伤及无辜。
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -Command ""Get-Process postgres,caddy -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '{app}\*' }} | Stop-Process -Force -ErrorAction SilentlyContinue"""; Flags: runhidden; RunOnceId: "KillLockedBinaries"
 
 [UninstallDelete]
 ; 删「运行时生成、不在安装清单里」的东西：__pycache__ / Caddyfile / 日志 / 证书。
@@ -254,6 +271,10 @@ var
   // 3.97 及以前双击更新包会被当成全新安装，向导页数据目录的默认值优先级高于
   // 注册表，用户真实的数据目录被悄悄改成新目录；服务还在跑、文件被占用，
   // 装到一半直接失败（exit 5）。
+  // 配置阶段失败过（lanshare_cli install 返回非 0）。
+  // 静默安装里没法弹框，只能靠 GetCustomSetupExitCode 把失败传出去 ——
+  // 传不出去的话，托盘「立即更新」会把「服务一个都没起来」当成更新成功。
+  InstallStepFailed: Boolean;
   IsUpgrade: Boolean;
   PrevInstallDir: String;   // 上次装在哪
   PrevVersion: String;      // 上次的版本（空 = 老安装没写过 Version）
@@ -357,6 +378,21 @@ begin
                            'Version', RegVer) then
       PrevVersion := RegVer;
   end;
+end;
+
+{ 安装器最终退出码。
+
+  默认 0，配置阶段失败时返回 1。这个函数存在的唯一理由：静默安装
+  （/VERYSILENT，托盘一键更新走的就是它）不能弹框，所以「服务没起来」
+  这件事如果不从这里传出去，外面看到的就是一个干净的退出码 0 ——
+  托盘会以为更新成功，用户看到网盘打不开，而日志里什么都看不出来。
+  这类「失败伪装成成功」是所有后续排障的最大障碍。 }
+function GetCustomSetupExitCode(): Integer;
+begin
+  if InstallStepFailed then
+    Result := 1
+  else
+    Result := 0;
 end;
 
 { 命令行里有没有某个参数（不区分大小写）。 }
@@ -569,11 +605,29 @@ begin
     if DeleteDataOnUninstall and (DataPathForPurge <> '') and DirExists(DataPathForPurge) then
     begin
       Log('LANShare: 开始删除数据目录 ' + DataPathForPurge);
-      Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM postgres.exe /T',
+
+      { 先按「服务」停，不要 taskkill。两个理由：
+
+        1. NSSM 配的是 AppExit Default Restart + AppRestartDelay 3000 ——
+           强行杀掉被托管的进程，3 秒后它就把服务重新拉起来，正好和下面的
+           rmdir 撞车。这就是「点了是，但 data 还在」的另一半原因。
+        2. taskkill /IM 是按映像名**全机**杀。用户机器上可能跑着另一个
+           PostgreSQL（自己开发用的）或别的 Python 程序，会一起被干掉，
+           而且没有任何提示。 }
+      Exec('powershell.exe',
+           '-NoProfile -Command "foreach ($s in @(''' + GetPrefix() + '-api'','''
+           + GetPrefix() + '-caddy'',''' + GetPrefix() + '-postgresql''`)) '
+           + '{ Stop-Service $s -Force -ErrorAction SilentlyContinue }"',
            '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM caddy.exe /T',
+      Sleep(3000);
+
+      { 补刀：服务停了进程可能还在。按**安装路径**过滤，不碰别人的同名进程。 }
+      Exec('powershell.exe',
+           '-NoProfile -Command "Get-Process postgres,caddy -ErrorAction SilentlyContinue '
+           + '| Where-Object {{ $_.Path -like ''' + ExpandConstant('{app}') + '\*'' }} '
+           + '| Stop-Process -Force -ErrorAction SilentlyContinue"',
            '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      Sleep(1500);
+      Sleep(800);
 
       Exec(ExpandConstant('{cmd}'), '/c rmdir /s /q "' + DataPathForPurge + '"',
            '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -585,6 +639,21 @@ begin
         Exec(ExpandConstant('{cmd}'), '/c rmdir /s /q "' + DataPathForPurge + '"',
              '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
         Log('LANShare: rmdir 重试退出码=' + IntToStr(ResultCode));
+      end;
+
+      { pgdata 是 data_dir 的**同级**目录（3.95 搬出来的），不在它里面。
+        只删 data 会留下整个数据库（账号、口令哈希、文件索引），而 PG 的
+        密码锚点 .lanshare-pgpass 恰恰在 data 里 —— 于是变成「数据看起来
+        删了、几百 MB 的库还在、密码没了」。下次重装到同一路径：
+        is_initialized() 因为 PG_VERSION 还在返回 True → 跳过 initdb →
+        新密码对不上旧库 → 认证失败 → 卡在「PostgreSQL 在 30 秒内没有
+        接受连接」，装多少次都失败。 }
+      if DirExists(ExtractFileDir(DataPathForPurge) + '\pgdata') then
+      begin
+        Log('LANShare: 删除数据库目录');
+        Exec(ExpandConstant('{cmd}'), '/c rmdir /s /q "'
+             + ExtractFileDir(DataPathForPurge) + '\pgdata"',
+             '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
       end;
 
       if DirExists(DataPathForPurge) then
@@ -655,6 +724,7 @@ begin
 
   if ResultCode <> 0 then
   begin
+    InstallStepFailed := True;
     { 静默安装时绝不能弹框：脚本里的 MsgBox 不受 /SUPPRESSMSGBOXES 控制，
       会一直等人点，自动安装永远不返回。 }
     if not WizardSilent then

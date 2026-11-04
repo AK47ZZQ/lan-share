@@ -20,6 +20,18 @@ class TrustRequiredError implements Exception {
   String get pretty => TrustStore.pretty(fingerprint);
 }
 
+/// 取一个服务器地址的 host。解析失败时退回原始字符串 ——
+/// 宁可把两个地址判成"不同服务器"（多清一次 token，最多重新登录），
+/// 也不能判成"同一台"（把凭据发给别人）。
+String hostOfAddress(String url) {
+  try {
+    final h = Uri.parse(url).host;
+    return h.isNotEmpty ? h : url;
+  } catch (_) {
+    return url;
+  }
+}
+
 class ApiClient {
   ApiClient._();
   static final ApiClient I = ApiClient._();
@@ -136,9 +148,26 @@ class ApiClient {
 
 
   Future<void> switchServer(String url) async {
+    final prev = await Prefs.lastAddress();
     await Prefs.rememberAddress(url);
+
+    // 换到**不同主机**时必须丢掉旧设备的 token。
+    //
+    // 登录流程是「先 switchServer(B)，再 POST /api/login」，而请求拦截器
+    // 是无条件把 SecureStore 里的 token 塞进 Authorization 的 —— 不清的话
+    // A 服务器的设备凭据会跟着密码一起发给 B：换部署、帮家人配、扫码接入
+    // 别人的服务器，都会把自己的登录凭据交给第三方，还可能留在对方的
+    // 反代访问日志里。
+    //
+    // 只比 host 不比端口：同一台服务器的局域网地址和隧道映射端口不同，
+    // 但那是同一份数据，token 该保留。
+    if (hostOfAddress(prev) != hostOfAddress(url)) {
+      await SecureStore.clearToken();
+    }
+
     _dio = null; // 下次 dio() 按新地址重建
     _building = null;
     _gen++;
   }
+
 }

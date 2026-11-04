@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 # 这些字段出现时，值一律替换（大小写不敏感）
 _SECRET_HINTS = (
@@ -267,10 +268,13 @@ def _sec_ports(layout) -> list[str]:
         api, web = layout.api_port, layout.web_port
     except Exception:
         api, web = 8766, 8765
+    # 可空的可调用对象要显式标注：直接写 port_in_use = None 再当函数调用，
+    # mypy 无法推断，而 291 行的三元判断在两种状态下都要成立。
+    probe_port: Callable[[int], bool] | None
     try:
-        from .cli import port_in_use
+        from .cli import port_in_use as probe_port  # type: ignore[assignment]
     except Exception:
-        port_in_use = None
+        probe_port = None
     raw = _run(["netstat", "-ano", "-p", "TCP"])
     # 端口被占用本身不是问题 —— 自己的服务占着才叫正常。所以要带上进程名。
     owner_by_port: dict[int, str] = {}
@@ -288,7 +292,7 @@ def _sec_ports(layout) -> list[str]:
 
     for port, label in ((api, "API"), (web, "Web(HTTPS)")):
         try:
-            used = port_in_use(port) if port_in_use else None
+            used = probe_port(port) if probe_port else None
             pid = owner_by_port.get(port, "")
             who = ""
             if pid:
@@ -860,6 +864,36 @@ def _sec_config(layout) -> list[str]:
         root = Path(layout.root)
     except Exception:
         root = Path(".")
+
+    # ── 安全相关配置自检 ──
+    #
+    # `/local/*` 是一组免登录端点（改公网入口、改备份目录、取二维码），
+    # 它们靠「来源是本机」放行。而经 Caddy 反代后 TCP 对端恒为 127.0.0.1，
+    # 真正的来源只能靠 `header_up X-Real-IP {remote_host}` 这一行注入 ——
+    # Caddy 会把客户端自带的同名头整头替换掉，所以可信。
+    #
+    # 这一行一旦丢了（手改 Caddyfile、换版本重生成出错），/local/* 就会
+    # 对**任何能访问 8765 的人**开放：局域网邻居、配了穿透之后的整个公网。
+    # 平时完全看不出来，所以放进诊断包里专门盯一眼。
+    out.append("  --- 安全配置自检 ---")
+    try:
+        cf = root / "conf" / "Caddyfile"
+        text = cf.read_text(encoding="utf-8", errors="replace") if cf.is_file() else ""
+        checks = [
+            ("X-Real-IP 注入", "header_up X-Real-IP",
+             "丢了它 → /local/* 免登录端点对所有人开放"),
+            ("更新源目录", "handle_path /updates",
+             "丢了它 → 自定义更新地址连不上"),
+            ("HTTPS 站点", "tls {",
+             "丢了它 → 只能走 http，App 会拒绝连接"),
+        ]
+        for name, needle, why in checks:
+            ok = needle in text
+            out.append(f"  {name:16s} {'OK' if ok else '⚠ 缺失':6s} {'' if ok else why}")
+    except Exception as exc:
+        out.append(f"  自检失败：{exc}")
+    out.append("")
+
     for rel in ("conf/Caddyfile", "VERSION"):
         f = root / rel
         out.append(f"  --- {rel} ---")

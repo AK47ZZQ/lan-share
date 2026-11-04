@@ -3,7 +3,7 @@ import io
 
 import qrcode
 import qrcode.image.svg  # SvgPathImage 子模块：引用前必须显式导入
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 
 from app.security import require_user
@@ -93,12 +93,14 @@ async def local_qr(
     内容限制：只是一段带进局域网地址的文本，不是秘密 ——
     真正保护数据的是那些接口自己的 require_user。
     """
-    ip = _effective_client_ip(request)
-    if ip not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(
-            status_code=403,
-            detail="该接口仅限本机访问",
-        )
+    # 与 /local/* 其余端点共用同一道闸。
+    #
+    # 原来是本模块自己写的一份 IP 判断，和 local_config._require_local 各写一遍 ——
+    # 两处逻辑一有出入就会漏。更要紧的是这份同样只判 IP：FRP 隧道下公网请求的
+    # client_ip 也是 127.0.0.1，等于把二维码接口一起开放（能拿到局域网地址）。
+    from app.api.local_config import _require_local
+
+    _require_local(request)
     if format == "png":
         return qr_png_response(text)
     return qr_svg_response(text)

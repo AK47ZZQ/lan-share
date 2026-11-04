@@ -470,7 +470,7 @@ def _norm_item(raw: object, base: str, *, need_file: bool) -> dict:
     if need_file:
         if not item["url"]:
             raise RuntimeError("清单缺少 latest.url（没有下载地址就等于没有这个源）")
-        if not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(item["sha256"])):
             raise RuntimeError(
                 "清单缺少合法的 latest.sha256。更新源必须带校验值 —— "
                 "否则下载回来的包是不是你发的那个，谁也说不准")
@@ -558,7 +558,12 @@ def fetch_github(timeout: float = TIMEOUT) -> dict:
             "build": 0,
             "url": exe.get("browser_download_url", ""),
             "size": exe.get("size", 0),
-            "sha256": "",       # GitHub API 不给，只能靠 HTTPS 保证来源
+            # GitHub 从 2024 起在 assets[].digest 里给 sha256（格式
+            # "sha256:abcd…"）。早先这里硬写空串，理由是「API 不给」——
+            # 那个结论早就过时了，后果却是：唯一默认来源永远没有校验值，
+            # 托盘的「sha256 必须对得上」整段被跳过，一键更新等于裸奔。
+            # 取不到时才留空（老 Release），由托盘侧拒绝执行而不是静默放行。
+            "sha256": str(exe.get("digest") or "").strip().removeprefix("sha256:").lower(),
             "notes": (rel.get("body") or "")[:4000],
             "published": str(rel.get("published_at") or "")[:10],
         }

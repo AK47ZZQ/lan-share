@@ -47,11 +47,31 @@ class TestOrphanUploadTemps:
         assert not f.exists()
 
     def test_dedup_leftover_is_collected(self, share_root):
-        """裸 .dedup 仍是活跃中间态（uploads.py），保留回收。"""
-        f = share_root / "照片.jpg.dedup"
+        """带唯一后缀的 .dedup 中间态要回收。
+
+        2026-11-04 起 uploads.register_blob 写的是
+        `<name>.dedup-<pid>-<ns>`，不再写裸 `.dedup` —— 因为按纯后缀识别
+        等于承认「用户文件只要叫 xxx.dedup 就算我们的临时文件」，满 24h
+        静默物理删除（不进回收站、无审计）。
+        """
+        import os as _os
+        import time as _time
+
+        f = share_root / f"照片.jpg.dedup-{_os.getpid()}-{_time.time_ns()}"
         _aged(f, 2)
         cleanup._cleanup_tmp()
-        assert not f.exists()
+        assert not f.exists(), "自己产出的唯一后缀临时文件没被回收"
+
+    def test_user_file_named_dedup_survives(self, share_root):
+        """用户自己的 `备份.dedup` 绝不能被删。
+
+        裸 .dedup 不再有写手（uploads 已唯一化），识别规则收窄到
+        `-<pid>-<ns>` 后缀；用户从别处拷来的同名文件必须原样留着。
+        """
+        f = share_root / "备份-2026.dedup"
+        _aged(f, 5)
+        cleanup._cleanup_tmp()
+        assert f.exists(), "用户的 xxx.dedup 被误删了"
 
     def test_user_file_named_uploading_survives(self, share_root):
         """用户自己的 `my.uploading` 绝不能删 —— 裸后缀已无程序写手，

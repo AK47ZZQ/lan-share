@@ -1,6 +1,7 @@
 // 关于页（App v0.6.0）：版本信息 + 检查更新（下载自家 APK 并拉起安装器）+
 // 开源许可。发版约定：管理员把新 APK 与 version.json 放共享空间「App安装包/」。
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart' show ResultType;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -145,7 +146,19 @@ class _AboutPageState extends State<AboutPage> {
         if (!mounted) return;
         setState(() => _progress = null);
       }
-      await UpdateService.install(path);
+      final res = await UpdateService.install(path);
+      if (!mounted) return;
+      if (res.type != ResultType.done) {
+        final hint = switch (res.type) {
+          ResultType.permissionDenied =>
+            '没有「安装未知应用」权限。到系统设置 → 应用 → LAN Share → 安装未知应用，允许后重试。',
+          ResultType.noAppToOpen => '系统里没有可用的安装程序，无法打开安装包。',
+          ResultType.fileNotFound => '安装包已不存在，请重新下载。',
+          _ => '无法拉起安装程序：${res.message}',
+        };
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(hint)));
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _progress = null);

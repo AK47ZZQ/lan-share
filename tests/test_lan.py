@@ -350,6 +350,33 @@ class TestCollectStatus:
         assert status.probe_ok
         assert any("枚举不到" in h for h in status.hints)
 
+        # 🔴 兜底路径也必须交出 dict，不能直接塞 LanAddress 对象。
+        # 下游（steps 组装、JSON 输出）一律按 a["ip"] 取值，塞对象会
+        # TypeError: 'LanAddress' object is not subscriptable ——
+        # 而这条路径恰恰是为「端口枚举异常」准备的，等于安全网自己破了。
+        # 旧断言只看 state，所以这个 bug 一直没被发现。
+        assert status.addresses, "兜底路径没把地址带出来"
+        assert all(isinstance(a, dict) for a in status.addresses), status.addresses
+        assert status.addresses[0]["ip"] == "192.168.1.100"
+
+    def test_skip_probe_branch_also_returns_dicts(self, info, monkeypatch):
+        """skip_probe 分支同样要把 LanAddress 转成 dict。
+
+        enable 成功后托盘只要一行地址，明确要求别探测；那条快捷路径跳过了
+        probe_lan，更容易被漏掉。
+        """
+        monkeypatch.setattr(firewall, "service_image_path", lambda n: "C:\\x\\caddy.exe")
+        monkeypatch.setattr(network, "listen_addresses", lambda p: [])
+        monkeypatch.setattr(network, "list_lan_addresses", lambda: [
+            network.LanAddress("192.168.1.100", "以太网", 24, True, 1)
+        ])
+
+        status = lan.collect_status(info, skip_probe=True)
+        assert status.state == lan.LanState.ON
+        assert all(isinstance(a, dict) for a in status.addresses), status.addresses
+        # 下游真的能取值
+        assert [a["ip"] for a in status.addresses] == ["192.168.1.100"]
+
     def test_per_ip_hosts_is_on(self, info, monkeypatch):
         """逐 IP 绑定必须判成「开着」。
 
