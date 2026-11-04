@@ -387,10 +387,13 @@ namespace LanShare
         {
             // T8-①：安装器还在跑（更新期间手动开托盘）就先别消费标记 ——
             // 这时读到的 VERSION 还是旧的，Take() 掉会误报「更新没有生效」。
-            // 不消费 = 复述推迟；标记 15 分钟内未取自然过期，不会死循环。
+            // 但不能一走了之：安装器在 ssPostInstall 拉起托盘后自己还要收尾
+            // 一两秒，直接放弃会把最常见的成功复述也推迟到下次启动。
+            // 所以有界重试：每 2 秒看一眼，最多 30 秒，退出后照常复述。
             if (UpdateInstallerRunning())
             {
-                Log("检测到 LANShare-Setup-* 进程仍在运行，更新后复述推迟");
+                Log("检测到 LANShare-Setup-* 进程仍在运行，等它退出后再复述");
+                SchedulePostUpdateRetry(0);
                 return;
             }
             string[] mark = UpdateMarker.Take();
@@ -472,6 +475,36 @@ namespace LanShare
                     }
                 }
                 catch (Exception ex) { Log("更新后处理失败: " + ex.Message); }
+            };
+            t.Start();
+        }
+
+        /// <summary>
+        /// T8-① 的有界重试：等 LANShare-Setup-* 全退出（最长 30 秒）再走
+        /// HandlePostUpdate。超时就放弃，标记 15 分钟后自然过期 ——
+        /// 宁可少一次复述，不能把「安装器还活着」误报成「更新失败」。
+        /// </summary>
+        private void SchedulePostUpdateRetry(int attempt)
+        {
+            var t = new Timer { Interval = 2000 };
+            int n = attempt;
+            t.Tick += delegate
+            {
+                t.Stop();
+                t.Dispose();
+                if (UpdateInstallerRunning())
+                {
+                    if (n < 14)
+                    {
+                        SchedulePostUpdateRetry(n + 1);
+                    }
+                    else
+                    {
+                        Log("安装器 30 秒仍未退出，本次不复述（标记稍后自然过期）");
+                    }
+                    return;
+                }
+                HandlePostUpdate();
             };
             t.Start();
         }
