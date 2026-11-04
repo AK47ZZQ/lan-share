@@ -135,4 +135,14 @@ async def set_public_url(request: Request, body: PublicUrlBody):
     except Exception:
         pass
 
+    # T3（2026-11-05）：同理清掉 /api/app/entries 的 60 秒缓存 —— 托盘改完
+    # 地址，App 端最长 60 秒还在拿旧值。备用入口已删，这是唯一写入口，
+    # 漏清的「改了没生效」每次改地址都会发生。
+    try:
+        from app.api.appver import reset_entries_cache
+
+        reset_entries_cache()
+    except Exception:
+        pass
+
     return {"ok": True, "url": primary}

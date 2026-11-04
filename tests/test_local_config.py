@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -209,3 +211,53 @@ class TestRoundTrip:
         client, store = local_client
         resp = client.post("/local/public-url", json={"url": "https://"})
         assert resp.status_code == 422
+
+
+class TestEntriesCacheInvalidation(TestRoundTrip):
+    """T3（2026-11-05）：改公网地址必须立刻清 /api/app/entries 的 60 秒缓存。
+
+    现在只剩这一个写入口（备用入口已删除），漏清 = 托盘改完地址，App 最长
+    60 秒还在拿旧地址，用户看着「改了没生效」。
+    """
+
+    def test_set_public_url_clears_entries_cache(self, local_client, monkeypatch):
+        import time
+
+        import app.api.appver as appver
+        import app.api.local_config as mod
+
+        client, store = local_client
+
+        # 预热：塞一条「旧地址」的缓存条目
+        store["public_base_url"] = "https://old.example.com:8765"
+        appver._ENTRIES_CACHE[:] = [
+            (time.monotonic(), {"public": "https://old.example.com:8765"})
+        ]
+
+        resp = client.post("/local/public-url", json={"url": "new.example.com:8765"})
+        assert resp.status_code == 200
+        # 核心断言：缓存被清（对抗审查口径 —— 把「清缓存」改成「不清」必须红）
+        assert appver._ENTRIES_CACHE == [], "entries 缓存没被清"
+
+    def test_entries_endpoint_reflects_new_value_immediately(
+        self, local_client, monkeypatch
+    ):
+        """端到端：改完立刻请求 /api/app/entries，拿到的就是新地址。"""
+        import app.api.appver as appver
+        import app.api.local_config as mod
+
+        client, store = local_client
+
+        store["public_base_url"] = "https://old.example.com:8765"
+        appver._ENTRIES_CACHE[:] = [
+            (time.monotonic(), {"public": "https://old.example.com:8765"})
+        ]
+        # appver 是 from-import 的 get_setting，要补到 appver 名下才拦得住
+        monkeypatch.setattr(
+            appver, "get_setting", lambda key, default="": store.get(key, default)
+        )
+
+        client.post("/local/public-url", json={"url": "new.example.com:8765"})
+
+        resp = appver.app_entries()
+        assert resp["public"] == "https://new.example.com:8765"

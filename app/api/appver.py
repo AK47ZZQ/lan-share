@@ -508,8 +508,9 @@ _ENTRIES_CACHE: list = []   # [(monotonic_ts, resp_dict)]，set_public_url 时�
 
 @router.get("/api/app/entries")
 def app_entries():
-    """主/备公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置对应隧道；
-    App 端只展示非空项，主备切换、指纹预校验都以此为准。"""
+    """公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置隧道；
+    App 端只展示非空项，指纹预校验以此为准。（备用入口 2026-11-04 已删除，
+    字段不再下发 —— 历史语义见 tests/test_public_alt.py 文件头。）"""
     now = time.monotonic()
     if _ENTRIES_CACHE and now - _ENTRIES_CACHE[0][0] < _ENTRIES_TTL:
         return _ENTRIES_CACHE[0][1]

@@ -43,6 +43,12 @@ def test_old_client_url_alt_is_ignored(client, auth):
     got = auth.get("/api/admin/public-url").json()
     assert "public_base_url_alt" not in got
 
+    # T4（2026-11-05）：响应体没提 ≠ 库里没有。「不落库」必须读库证明 ——
+    # 否则把实现改成「照单全收写进库」这两条测试照样全绿（对抗审查实测）。
+    from app.settings import PUBLIC_BASE_URL_ALT, get_setting
+
+    assert get_setting(PUBLIC_BASE_URL_ALT) == ""
+
 
 def test_stale_alt_cleared_on_save(client, auth):
     """历史残留的 alt 值在下次保存主地址时被清掉。"""
@@ -50,6 +56,11 @@ def test_stale_alt_cleared_on_save(client, auth):
     _set_public(auth, f"http://{PRIMARY_HOST}")
     got = auth.get("/api/admin/public-url").json()
     assert "public_base_url_alt" not in got
+
+    # T4：同上，「会被清掉」读库证明。
+    from app.settings import PUBLIC_BASE_URL_ALT, get_setting
+
+    assert get_setting(PUBLIC_BASE_URL_ALT) == ""
 
 
 def test_entries_do_not_advertise_alt(client, auth):
@@ -75,3 +86,12 @@ def test_no_alt_in_app_module():
 
     src = open(appver.__file__, encoding="utf-8").read()
     assert '"public_alt"' not in src.split("def app_entries")[-1]
+
+
+def test_admin_public_url_rejects_non_string_url(client, auth):
+    """T8-③：{url:123} 必须回 422（请求体格式错），不能 500。
+
+    旧实现 body: dict 直接 .get("url")，非字符串在后续 strip() 上炸成 500。
+    """
+    r = auth.post("/api/admin/public-url", json={"url": 123})
+    assert r.status_code == 422, f"期望 422，实际 {r.status_code}"

@@ -710,17 +710,6 @@
     "title": "ProfileBody",
     "type": "object"
    },
-   "PublicUrlBody": {
-    "properties": {
-     "url": {
-      "default": "",
-      "title": "Url",
-      "type": "string"
-     }
-    },
-    "title": "PublicUrlBody",
-    "type": "object"
-   },
    "RedeemBody": {
     "properties": {
      "code": {
@@ -1323,6 +1312,29 @@
      "paths"
     ],
     "title": "ZipBody",
+    "type": "object"
+   },
+   "app__api__admin_ops__PublicUrlBody": {
+    "description": "T8-③：旧实现 body: dict，{url:123} 会在 strip() 上炸成 500。\n\nPydantic 模型让类型错直接 422。url_alt 等旧客户端多传的字段\nPydantic 默认忽略，与旧行为一致。",
+    "properties": {
+     "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "title": "PublicUrlBody",
+    "type": "object"
+   },
+   "app__api__local_config__PublicUrlBody": {
+    "properties": {
+     "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "title": "PublicUrlBody",
     "type": "object"
    }
   }
@@ -2531,9 +2543,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "additionalProperties": true,
-        "title": "Body",
-        "type": "object"
+        "$ref": "#/components/schemas/app__api__admin_ops__PublicUrlBody"
        }
       }
      },
@@ -3239,7 +3249,7 @@
   },
   "/api/app/entries": {
    "get": {
-    "description": "主/备公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置对应隧道；\nApp 端只展示非空项，主备切换、指纹预校验都以此为准。",
+    "description": "公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置隧道；\nApp 端只展示非空项，指纹预校验以此为准。（备用入口 2026-11-04 已删除，\n字段不再下发 —— 历史语义见 tests/test_public_alt.py 文件头。）",
     "operationId": "app_entries_api_app_entries_get",
     "responses": {
      "200": {
@@ -7561,7 +7571,7 @@
      "content": {
       "application/json": {
        "schema": {
-        "$ref": "#/components/schemas/PublicUrlBody"
+        "$ref": "#/components/schemas/app__api__local_config__PublicUrlBody"
        }
       }
      },

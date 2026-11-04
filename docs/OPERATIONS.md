@@ -120,7 +120,7 @@ powershell Restart-Service lan-share-api
 异常落 `logs/patrol/ALERT-*.md`；以下为手工排查用）：
 主隧道 `curl -sk -o /dev/null -w "%{http_code}" https://your-frp-domain.com:xxxxx/healthz`
 **期望 404**（healthz 对公网收敛是设计行为，404=隧道通且 Host 匹配生效）；
-备用隧道 `https://your-frp-domain.com:xxxxx/healthz` 同判；局域网基线
+（备用隧道探活已随 2026-11-04 备用入口删除一并作废，只探主隧道）；局域网基线
 `https://192.168.1.100:8765/healthz` 期望 200。公网探针非 404 时：
 `powershell Get-Service SakuraFrpService` + 查看 `C:\ProgramData\SakuraFrpService\Logs\`
 最新日志尾部；恢复后按 settings 表 `notify_webhook_url` 的 {title}/{body} 模板发告警。
@@ -322,14 +322,13 @@ ALTER ROLE lanshare CREATEDB;            -- 一次性
   节点为 anycast（当前落地 223.85.20.43，会变）——一律用 `your-frp-domain.com` 域名，勿写死 IP。
 - **主隧道 LANShare**（`https://your-frp-domain.com:xxxxx`）：纯 TCP 透传 → `127.0.0.1:8765`（Caddy），
   端到端 TLS=本机自签证书，App TOFU 指纹 `D3:7A:…:B4:D3`。
-- **备用隧道**（`https://your-frp-domain.com:xxxxx`，2026-09-03 启用）：原 HermesAgent 改造。
-  已关闭 frpc「自动HTTPS」，现为**纯 TCP 端到端透传** → Caddy（:8801/8765 同一套规则）——
-  公网段出示的正是本机自签证书（指纹 `D3:7A:…:B4:D3`，与主隧道逐位一致）。
-  因此 App 已信任主隧道后切备用**静默自动信任、零弹框**（2026-09-03 模拟器实测）。
-  `is_public_entry()` 按 `public_base_url` 的 Host 命中（防爆破分账、healthz 收敛）。
-  备用入口 2026-11-04 已删除；`tests/test_public_alt.py` 现在锁的是「它不会被加回来 /
-  历史残留值会被清掉」，见文件头注记。
-  若未来在面板改回「自动HTTPS」：公网段会换回樱花自动证书，App 需重新信任一次（指纹不同源）。
+- 【历史注记，勿照此配置】备用隧道（2026-09-03 启用，**2026-11-04 已删除**）：
+  曾经用原 HermesAgent 改造出第二条隧道（纯 TCP 透传 → Caddy :8801/8765 同一套规则，
+  App 静默自动信任）。实际用过一次就发现是坑：alt 地址被填成另一条隧道的端口，
+  App「备用入口」连到别的服务，于是 `public_base_url_alt` 与整套主/备判定被整体移除
+  （`tests/test_public_alt.py` 锁「不会被加回来 / 历史残留值会被清掉」）。
+  现行公网入口只有一条主隧道 → 127.0.0.1:8765；需要换入口时在面板里改
+  `public_base_url` 本身，而不是配备用地址。
 - 免费档限额（见启动器日志）：**10 Mbps**/隧道、**2 条**隧道、**5 GiB/月**流量
   （每月 1 日重置，签到可累加）。公网侧定位=出门在外应急浏览/小文件，
   大备份与大文件传输走局域网（App 备份公网默认跳过、网页公网上传有提醒，均为既有设计）。
@@ -342,7 +341,8 @@ ALTER ROLE lanshare CREATEDB;            -- 一次性
   `settings put global private_dns_specifier dns.alidns.com`。真机无此问题。
 - 遗留噪音：另一条隧道 **HermesAgent** 指向 `127.0.0.1:8801`（无服务监听），
   启动器日志持续报连接失败；是主人另一项目占用的免费档第 2 条隧道，勿动。
-- 端口一览：80/8080 跳转；8765 主入口；8767/443 备用同规则；8766 仅本机。
+- 端口一览：80/8080 跳转；8765 主入口；8767 隧道透传端口（Caddy 与 8765 同一站点块监听，
+  非独立入口，v4.0.4 起）；8766 仅本机。
 
 ## 7. 存储治理
 

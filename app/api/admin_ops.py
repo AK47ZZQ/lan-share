@@ -36,9 +36,20 @@ def get_public_url_user(_user=Depends(require_user)):
     return {"public_base_url": get_setting(PUBLIC_BASE_URL)}
 
 
+class PublicUrlBody(BaseModel):
+    """T8-③：旧实现 body: dict，{url:123} 会在 strip() 上炸成 500。
+
+    Pydantic 模型让类型错直接 422。url_alt 等旧客户端多传的字段
+    Pydantic 默认忽略，与旧行为一致。
+    """
+
+    url: str = ""
+
+
 @router.post("/api/admin/public-url")
-def set_public_url(body: dict, request: Request, _admin=Depends(require_admin)):
-    url = (body.get("url") or "").strip().rstrip("/")
+def set_public_url(body: PublicUrlBody, request: Request,
+                   _admin=Depends(require_admin)):
+    url = (body.url or "").strip().rstrip("/")
     if url and not url.startswith(("https://", "http://")):
         raise HTTPException(status_code=400, detail="地址需以 http(s):// 开头")
     set_setting(PUBLIC_BASE_URL, url)
