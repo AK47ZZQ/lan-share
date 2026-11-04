@@ -162,6 +162,17 @@ class TestIPv4MappedLoopback:
         req = _fake_request("::ffff:192.168.1.99")
         assert _effective_client_ip(req) == "192.168.1.99"
 
+    def test_host_case_normalized(self):
+        """回环字面量大小写归一 —— 自构造 scope 传 LOCALHOST 不该被拒。"""
+        req = _fake_request("LOCALHOST")
+        assert _effective_client_ip(req) == "localhost"
+
+    def test_xff_multihop_and_blank_segments_take_last(self):
+        """XFF 多跳 + 空段：尾值是我们自己的 Caddy 追加的。"""
+        req = _fake_request("127.0.0.1",
+                            {"x-forwarded-for": "1.2.3.4, , 5.6.7.8"})
+        assert _effective_client_ip(req) == "5.6.7.8"
+
     def test_mapped_v4_does_not_trust_headers(self):
         """映射形态的非回环直连同样不信 X- 头（防伪造方向不回退）。
         返回值统一为归一后的 IPv4 字面量（判定与审计展示一致）。"""

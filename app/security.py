@@ -348,6 +348,9 @@ def effective_client_ip(request: Request) -> str:
     # 会被当成「来自非本机」直接 403（2026-11-04 review 轮补）。
     if direct[:7].lower() == "::ffff:":
         direct = direct[7:]
+    # host 字面量大小写归一（ASGI 实现不产大写，但 TestClient/自构造
+    # scope 可能传 "LOCALHOST" —— 误拒方向也要堵住）
+    direct = direct.lower()
     loopbacks = ("127.0.0.1", "::1", "localhost")
 
     if direct not in loopbacks:
