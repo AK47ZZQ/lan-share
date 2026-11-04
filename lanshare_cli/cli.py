@@ -395,7 +395,7 @@ def lock_certs_acl(certs: Path) -> None:
              "/grant:r", "Administrators:(OI)(CI)F"],
             capture_output=True, text=True, timeout=180,
         )
-    except Exception as exc:                       # noqa: BLE001
+    except Exception as exc:
         warn(f"收紧证书目录权限失败（不影响运行，但建议手动处理）：{exc}")
 
 
@@ -1539,6 +1539,13 @@ def cmd_lan(args: argparse.Namespace) -> int:
         if report.success:
             say(f"  公网地址已就绪：{report.public_url}")
             say("  填进托盘「公网访问」即可（一键接入会自动填）。")
+        elif report.public_url:
+            # Caddyfile 和证书都已经就位，只是最后一步公网没通 ——
+            # 说成「接入失败」会让用户以为配置没写，回头再点一次、
+            # 甚至去手工改配置。实际情况是「配好了，等隧道改对」。
+            say("  配置已写入，但公网还没打通。")
+            say(f"  地址已记录：{report.public_url}")
+            say("  上面「公网连通性」那条写明了原因；按它改完隧道后点托盘「验证」。")
         else:
             say("  接入失败，上面是失败的那一步。")
         say()

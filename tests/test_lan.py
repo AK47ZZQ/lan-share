@@ -810,6 +810,10 @@ class TestPublicHost:
         monkeypatch.setattr(
             lan, "probe_tunnel_host", lambda *a, **k: (True, "HTTP/1.1 200 OK")
         )
+        # 公网探测必须一起打桩：它真的会去连 host:port，测试环境连不上任何公网地址
+        monkeypatch.setattr(
+            lan, "probe_public_url", lambda *a, **k: (True, "HTTP/1.1 200 OK")
+        )
 
         report = lan.set_public_host(info, "cn-bj.frp.one:35123")
 
@@ -838,6 +842,7 @@ class TestPublicHost:
         self._seed(info, text=text)
         monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "ok"))
         monkeypatch.setattr(lan, "probe_tunnel_host", lambda *a, **k: (True, "200"))
+        monkeypatch.setattr(lan, "probe_public_url", lambda *a, **k: (True, "200"))
 
         assert lan.set_public_host(info, "cn-bj.frp.one:35123").success
         assert "bind " not in info.caddyfile_path.read_text(encoding="utf-8")
@@ -853,4 +858,27 @@ class TestPublicHost:
         report = lan.set_public_host(info, "cn-bj.frp.one:35123")
 
         assert not report.success
-        assert any(name == "域名自检" and not ok for name, ok, _ in report.steps)
+        assert any(name == "域名已加入证书" and not ok for name, ok, _ in report.steps)
+
+    def test_public_unreachable_fails_but_keeps_url(self, info, monkeypatch):
+        """本地配好了、公网不通 → 必须报失败，但地址要带出去。
+
+        2026-11-04 实机：原来是「本地 SNI 探测 200 就算成功」，而用户从公网
+        访问 TLS 直接断（隧道建成 HTTPS 类型）。界面显示接入成功、实际完全
+        不通，比报错糟得多。现在公网探测才是 success 的判据；同时把
+        public_url 带出去，让上层能说成「已配置但公网不通」而不是「配置失败」。
+        """
+        self._seed(info)
+        monkeypatch.setattr(lan, "_restart_service", lambda *a, **k: (True, "ok"))
+        monkeypatch.setattr(lan, "probe_tunnel_host", lambda *a, **k: (True, "200"))
+        monkeypatch.setattr(
+            lan, "probe_public_url",
+            lambda *a, **k: (False, "TLS 握手失败：SakuraFrp 回了 501，隧道是 HTTPS 类型"),
+        )
+
+        report = lan.set_public_host(info, "cn-bj.frp.one:35123")
+
+        assert not report.success
+        # 地址仍要带出来 —— 配置本身是写对了的
+        assert report.public_url == "https://cn-bj.frp.one:35123"
+        assert any(name == "公网连通性" and not ok for name, ok, _ in report.steps)

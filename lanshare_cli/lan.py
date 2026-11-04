@@ -992,6 +992,76 @@ def probe_tunnel_host(
             pass
 
 
+def probe_public_url(host: str, port: int, *, timeout: float = 6.0) -> tuple[bool, str]:
+    """从**公网地址**验证端到端可用，而不是只连本机。
+
+    为什么必须单独有这一步（2026-11-04 实机）：
+
+    原来的「域名自检」连的是 `127.0.0.1:<web_port>`，SNI 填域名 —— 那只回答
+    「Caddy 认不认这个域名」，和「外面的人能不能访问」是两件事。实测就撞上了：
+    自检报 200 成功，用户从公网访问却 TLS 直接断。
+
+    返回 (ok, 说明)。失败时尽量说清楚是哪一种失败，因为用户看到「接入失败」
+    四个字根本不知道下一步该干嘛。
+    """
+    import socket
+    import ssl
+
+    # ── 第一步：TLS 握手（正常情况应该拿到我们 Caddy 的证书）──
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE     # 只验「能通 + 是我们在应答」，信任交客户端
+    try:
+        raw = socket.create_connection((host, port), timeout=timeout)
+    except OSError as exc:
+        return False, f"连不上 {host}:{port}（{exc}）—— 隧道没开或地址/端口不对"
+
+    tls_err = ""
+    try:
+        with ctx.wrap_socket(raw, server_hostname=host) as ssock:
+            req = f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+            ssock.sendall(req.encode("ascii"))
+            data = ssock.recv(256)
+        first = data.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
+        if first:
+            return (" 200" in first), first
+        tls_err = "服务端没有返回内容"
+    except Exception as exc:
+        tls_err = f"{type(exc).__name__}: {exc}"
+
+    # ── 第二步：TLS 失败时，发明文 HTTP 探一下对面到底是谁 ──
+    #
+    # 这一步专门用来识别「隧道建成了 HTTPS 类型」这个高频坑：那类隧道由
+    # 穿透服务端自己接管 TLS，需要你在服务商面板上传证书；我们没有（也不该）
+    # 把自己的自签 CA 交出去，于是它拿不到证书，握手直接断，HTTP 则回 501。
+    # 用户看到的只是「接入失败」，根本联想不到要去改隧道类型。
+    hint = ""
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.sendall(f"GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+                      .encode("ascii"))
+            head = s.recv(512).decode("latin-1", "replace")
+        server = ""
+        status = ""
+        for line in head.splitlines()[:8]:
+            low = line.lower()
+            if low.startswith("server:"):
+                server = line.split(":", 1)[1].strip()
+            elif line.startswith("HTTP/"):
+                status = line.strip()
+        if "sakurafrp" in server.lower() or server.lower().startswith("frp"):
+            hint = (f"（{server} 直接回了 {status or '非 TLS 响应'}："
+                    "这条隧道大概率建成了「HTTPS/HTTP 类型」，"
+                    "请到穿透面板把它改成 **TCP 类型**，"
+                    "本地地址 127.0.0.1、本地端口填 Web 端口）")
+        elif status:
+            hint = f"（明文探测得到：{status}，Server={server or '未知'}）"
+    except Exception:
+        hint = "（明文探测也没有响应：隧道可能没转发到本机）"
+
+    return False, f"TLS 握手失败：{tls_err}{hint or ''}"
+
+
 def set_public_host(
     info: InstallInfo, raw_addr: str, *, dry_run: bool = False
 ) -> ActionReport:
@@ -1099,7 +1169,7 @@ def set_public_host(
             report.add("回滚配置", False, f"回滚也失败了：{exc}")
         return report
 
-    # 给 Caddy 签新证书的时间，再验「域名能不能被认出来」
+    # ── ① 本地验证：Caddy 认不认这个域名（证书 SAN 里有没有它）──
     ok_cert, last = False, ""
     for _ in range(12):                       # 最多等约 18 秒
         ok_cert, last = probe_tunnel_host(info, host, timeout=4.0)
@@ -1108,12 +1178,30 @@ def set_public_host(
         time.sleep(1.5)
 
     report.add(
-        "域名自检",
+        "域名已加入证书",
         ok_cert,
-        f"https://{host}:{info.web_port}/healthz → {last}"
-        + ("" if ok_cert else "（服务端还不认这个域名，看上面的 TLS 报错）"),
+        f"本地 SNI={host} → {last}"
+        + ("" if ok_cert else "（本机 Caddy 还不认这个域名，看上面的 TLS 报错）"),
     )
     if not ok_cert:
+        return report
+
+    # ── ② 公网验证：从外面的地址真的连一次 ──
+    #
+    # 🔴 这一步才是「接入成功」的判据（2026-11-04 实机修正）。
+    #
+    # 原来这里只有 ①，而 ① 连的是 127.0.0.1:<web_port>、只是把 SNI 填成域名，
+    # 它证明的是「本机 Caddy 认识这个名字」—— 和「外面的人能不能访问」是三件
+    # 不同的事：隧道类型对不对、公网端口对不对、转发目标是不是本机 Web 端口。
+    #
+    # 实测撞上的正是这个：① 报 200「成功」，用户从公网访问 TLS 直接断，
+    # 因为那条隧道建成了 HTTPS 类型（由穿透服务端接管 TLS，需要上传证书）。
+    # 界面显示接入成功、实际完全不通，这比报错糟糕得多。
+    ok_pub, msg_pub = probe_public_url(host, pub_port or info.web_port)
+    report.add("公网连通性", ok_pub, msg_pub)
+    if not ok_pub:
+        # 配置本身是写对了的（Caddy 已认域名），所以把地址带出去，
+        # 让界面能说成「已配置但公网还不通」而不是「配置失败」。
         return report
 
     report.success = True

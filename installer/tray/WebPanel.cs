@@ -656,17 +656,34 @@ namespace LanShare
                 {
                     // 把失败那一步点名 —— 「接入失败」四个字帮不了用户
                     string detail = "";
+                    bool sawFail = false, onlyPublicFailed = true;
                     foreach (var s in List(ret, "steps"))
                     {
                         var d = s as Dictionary<string, object>;
                         if (d == null) continue;
                         bool sok = false;
                         try { sok = Convert.ToBoolean(d["ok"]); } catch (Exception) { }
-                        if (!sok)
-                        {
-                            detail = Str(d, "name") + "：" + Str(d, "detail");
-                            break;
-                        }
+                        if (sok) continue;
+                        sawFail = true;
+                        string nm = Str(d, "name");
+                        if (detail.Length == 0) detail = nm + "：" + Str(d, "detail");
+                        if (nm != "公网连通性") onlyPublicFailed = false;
+                    }
+
+                    // 「配置写对了、只是公网还没通」要和「配置就失败了」分开对待。
+                    //
+                    // 前者最常见的原因是隧道类型建错了（建成 HTTPS/HTTP 类型，
+                    // 由穿透服务端接管 TLS、需要上传证书），改一下隧道类型就好 ——
+                    // 这时候 Caddyfile 和证书都已经就位，把地址存下来，
+                    // 用户改完不用回来再点一次「一键接入」。
+                    bool hasPub = ret.ContainsKey("public_url") && Str(ret, "public_url").Length > 0;
+                    if (sawFail && onlyPublicFailed && hasPub)
+                    {
+                        string j2 = "{\"url\": " + Quote(Str(ret, "public_url"))
+                                  + ", \"url_alt\": " + Quote(KeepAltUrl()) + "}";
+                        if (ApiPost("/local/public-url", j2))
+                            AppendLog("WanAttach: 地址已保存，等公网打通 " + Str(ret, "public_url"));
+                        return "地址已保存，但公网还不通 —— " + detail;
                     }
                     return "接入失败" + (detail.Length > 0 ? "（" + detail + "）" : "");
                 }
@@ -2141,9 +2158,69 @@ namespace LanShare
                 string url = ApiGet<string>("/local/public-url", d2 => Str(d2, "url"));
                 if (string.IsNullOrEmpty(url)) return "还没有配置公网地址";
                 if (!url.StartsWith("http")) url = "https://" + url;
-                bool ok = ProbeOk(url);
-                return ok ? "连通正常" : "连不上，检查穿透工具是否在运行";
+                if (ProbeOk(url)) return "公网连通正常";
+
+                // 失败要分类。用户配好地址后最常撞的是「隧道类型建错」，
+                // 这时候说「检查穿透工具是否在运行」完全帮不上忙 ——
+                // 工具明明在跑，只是那条隧道不接受我们的自签证书。
+                Uri u;
+                try { u = new Uri(url); } catch (Exception) { return "公网不通（地址解析失败）"; }
+                return "公网不通：" + DiagnoseWanFailure(u.Host, u.Port);
             });
+        }
+
+        /// <summary>
+        /// 明文探一下公网端口对面是谁，用来区分几种失败。
+        ///
+        /// 判据来自实机：隧道建成 HTTPS/HTTP 类型时，由穿透服务端接管 TLS，
+        /// 它拿不到我们的自签证书 → 握手直接断；此时发明文 HTTP，回的是
+        /// 「501 Not Implemented + Server: SakuraFrp」，一眼就能认出来。
+        /// 而 TCP 类型隧道会把 TLS 原样透传到本机 Caddy，握手正常。
+        /// </summary>
+        private static string DiagnoseWanFailure(string host, int port)
+        {
+            try
+            {
+                using (var c = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = c.BeginConnect(host, port, null, null);
+                    if (!ar.AsyncWaitHandle.WaitOne(6000))
+                        return "TCP 都连不上，检查隧道是否在运行";
+                    c.EndConnect(ar);
+                    using (var s = c.GetStream())
+                    {
+                        s.ReadTimeout = 6000;
+                        var req = Encoding.ASCII.GetBytes(
+                            "GET /healthz HTTP/1.1\r\nHost: " + host
+                            + "\r\nConnection: close\r\n\r\n");
+                        s.Write(req, 0, req.Length);
+                        var buf = new byte[512];
+                        int n = s.Read(buf, 0, buf.Length);
+                        string head = Encoding.ASCII.GetString(buf, 0, n);
+                        string server = "";
+                        foreach (var line in head.Split('\n'))
+                        {
+                            if (line.ToLower().StartsWith("server:"))
+                                server = line.Substring(7).Trim();
+                        }
+                        if (server.Length > 0)
+                        {
+                            string low = server.ToLower();
+                            if (low.Contains("frp") || low.Contains("sakura"))
+                                return "穿透服务端直接应答了（" + server + "），"
+                                     + "说明这条隧道建成了 HTTPS/HTTP 类型。"
+                                     + "到穿透面板改成 TCP 类型（本地地址 127.0.0.1，"
+                                     + "本地端口填 Web 端口）后再验证。";
+                            return "对面是 " + server + "，不是本机的 Web 服务，检查转发目标";
+                        }
+                        return "明文探测也没拿到响应，检查隧道本地端口是否指向 Web 端口";
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                return "TCP 连不上，检查隧道是否在运行";
+            }
         }
 
         private void ClearWan()
