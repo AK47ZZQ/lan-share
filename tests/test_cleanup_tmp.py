@@ -79,3 +79,29 @@ class TestOrphanUploadTemps:
         _aged(f, 0.1)
         cleanup._cleanup_tmp()
         assert f.exists()
+
+
+class TestTrashNotTouchedByOrphanSweep:
+    """孤儿清理扫全树（SHARE_ROOT.rglob），但 .trash 是回收站——
+    里面的保留期由 _cleanup_trash 按 deleted_at 管理，孤儿规则
+    （.dedup / .tmp- 前缀 / .uploading-* 名字）绝不能越权提前物理销毁：
+    用户把一个叫 x.dedup 的文件删进回收站，第二天就没了 = 回收站承诺是假的。
+    """
+
+    def test_trash_dedup_survives_orphan_sweep(self, share_root):
+        f = share_root / ".trash" / "照片.dedup"
+        _aged(f, 5)
+        cleanup._cleanup_tmp()
+        assert f.exists(), "回收站条目被孤儿清理越权销毁"
+
+    def test_trash_tmp_prefixed_survives_orphan_sweep(self, share_root):
+        f = share_root / ".trash" / ".tmp-abc123.jpg"
+        _aged(f, 5)
+        cleanup._cleanup_tmp()
+        assert f.exists()
+
+    def test_trash_uploading_named_survives_orphan_sweep(self, share_root):
+        f = share_root / ".trash" / "video.uploading-1-1700000000000000"
+        _aged(f, 5)
+        cleanup._cleanup_tmp()
+        assert f.exists()

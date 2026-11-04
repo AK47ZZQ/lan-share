@@ -105,6 +105,10 @@ def _cleanup_tmp():
     for f in SHARE_ROOT.rglob("*"):
         # 全树扫描对竞态不设防会杀掉整轮清理（R1-P2-3，与函数头部注释同源）
         try:
+            # .trash 是回收站：保留期由 _cleanup_trash 按 deleted_at 管理，
+            # 孤儿规则绝不能越权提前物理销毁里面的条目（2026-11-04 review 轮补）
+            if f.relative_to(SHARE_ROOT).parts[0] == ".trash":
+                continue
             if f.is_file() and (f.name.endswith(".dedup")
                                 or orphan_re.search(f.name)
                                 or f.name.startswith(".tmp-")) \

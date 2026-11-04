@@ -343,6 +343,11 @@ def effective_client_ip(request: Request) -> str:
     别名，老测试不用改。
     """
     direct = request.client.host if request.client else ""
+    # 双栈监听下本机请求可能表现为 IPv4-mapped IPv6（::ffff:127.0.0.1）——
+    # 归一成 IPv4 字面量再判回环，否则元组里没有这个字面量，托盘请求
+    # 会被当成「来自非本机」直接 403（2026-11-04 review 轮补）。
+    if direct[:7].lower() == "::ffff:":
+        direct = direct[7:]
     loopbacks = ("127.0.0.1", "::1", "localhost")
 
     if direct not in loopbacks:

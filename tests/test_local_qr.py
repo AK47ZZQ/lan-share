@@ -148,3 +148,22 @@ class TestQrSvgOutput:
         resp = qr_svg_response("http://192.168.1.100:8765")
         assert b"<svg" in resp.body
         assert resp.media_type == "image/svg+xml"
+
+
+class TestIPv4MappedLoopback:
+    """双栈监听下本机请求可能表现为 IPv4-mapped IPv6（::ffff:127.0.0.1）——
+    它是回环，不能因为「元组里没有这个字面量」就把托盘拒之门外。"""
+
+    def test_mapped_v4_loopback_is_loopback(self):
+        req = _fake_request("::ffff:127.0.0.1")
+        assert _effective_client_ip(req) == "127.0.0.1"
+
+    def test_mapped_v4_real_ip_stays_real(self):
+        req = _fake_request("::ffff:192.168.1.99")
+        assert _effective_client_ip(req) == "192.168.1.99"
+
+    def test_mapped_v4_does_not_trust_headers(self):
+        """映射形态的非回环直连同样不信 X- 头（防伪造方向不回退）。
+        返回值统一为归一后的 IPv4 字面量（判定与审计展示一致）。"""
+        req = _fake_request("::ffff:203.0.113.50", {"x-real-ip": "127.0.0.1"})
+        assert _effective_client_ip(req) == "203.0.113.50"
