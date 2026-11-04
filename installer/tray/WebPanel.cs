@@ -1320,6 +1320,10 @@ namespace LanShare
                     DownloadUpdate();
                     break;
 
+                case "applyUpdate":
+                    ApplyUpdate();
+                    break;
+
                 case "saveUpdateSource":
                     SaveUpdateSource(msg);
                     break;
@@ -1460,6 +1464,10 @@ namespace LanShare
 
         /// <summary>上一次查到的新版下载地址（用户点「下载」时用）。</summary>
         private string _updateUrl;
+        // 一键更新要用的两样东西：校验值（下完对不上就不许装）和版本号（拼文件名）
+        private string _updateSha256;
+        private string _updateVersion;
+        private long _updateSize;
 
         private void CheckUpdate()
         {
@@ -1528,6 +1536,10 @@ namespace LanShare
                     p["history"] = d.TryGetValue("history", out hist)
                         ? hist : new List<object>();
                     _updateUrl = Str(d, "url");
+                    _updateSha256 = Str(d, "sha256");
+                    _updateVersion = Str(d, "latest");
+                    object sz;
+                    _updateSize = d.TryGetValue("size", out sz) ? Convert.ToInt64(sz) : 0L;
                 }
                 catch (Exception ex)
                 {
@@ -1583,6 +1595,125 @@ namespace LanShare
                 catch (Exception) { /* 打不开文件夹不算失败，路径已在 toast 里 */ }
                 return "诊断包已生成并打开文件夹：" + path;
             });
+        }
+
+        /// <summary>
+        /// 一键更新（3.99）：下载 → 校验 sha256 → 静默安装 → 自己退出。
+        ///
+        /// 为什么托盘必须退出：安装器要覆盖 tray\LANShareTray.exe 和
+        /// runtime\*.dll，而这些文件正被我们占着。与其让 Inno 去请求关闭
+        /// （会弹一堆「请关闭以下程序」），不如主动退干净，让安装器一路
+        /// 覆盖到底。装完 iss 的 [Run] 段会把托盘重新拉起来。
+        ///
+        /// 用户看到的就是：点一下 → 托盘消失几秒 → 新版本自己回来。
+        /// </summary>
+        private void ApplyUpdate()
+        {
+            if (string.IsNullOrEmpty(_updateUrl))
+            {
+                SendToast("还没有查到更新");
+                return;
+            }
+            // 地址来自更新源清单，理论上可信，但「理论上」不该是唯一防线
+            if (!_updateUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                SendToast("更新地址必须是 https");
+                return;
+            }
+
+            SendBusy(true, "正在下载更新…");
+
+            string ver = string.IsNullOrEmpty(_updateVersion) ? "new" : _updateVersion;
+            string dir = Path.Combine(Path.GetTempPath(), "LANShareUpdate");
+            string file = Path.Combine(dir, "LANShare-Setup-" + ver + ".exe");
+
+            Task.Run(() =>
+            {
+                // 返回 null = 成功，否则是给人看的错误
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    if (File.Exists(file)) File.Delete(file);
+
+                    using (var wc = new System.Net.WebClient())
+                    {
+                        // 自签证书：这台机器上装过我们的根证书，系统信任库认它；
+                        // WebClient 走 schannel，读的就是系统信任库。
+                        wc.DownloadFile(new Uri(_updateUrl), file);
+                    }
+
+                    var info = new FileInfo(file);
+                    if (info.Length == 0)
+                        return "下载失败：文件是空的";
+
+                    // sha256 必须对得上。更新链路上「差不多就行」等于装一个
+                    // 来路不明的 exe —— 这个校验是最后一公里。
+                    if (!string.IsNullOrEmpty(_updateSha256))
+                    {
+                        string actual;
+                        using (var sha = System.Security.Cryptography.SHA256.Create())
+                        using (var fs = File.OpenRead(file))
+                        {
+                            var hash = sha.ComputeHash(fs);
+                            var sb = new StringBuilder(hash.Length * 2);
+                            foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                            actual = sb.ToString();
+                        }
+                        if (!string.Equals(actual, _updateSha256.Trim(),
+                                           StringComparison.OrdinalIgnoreCase))
+                        {
+                            try { File.Delete(file); } catch (Exception) { }
+                            return "下载的安装包校验失败（sha256 不一致），已丢弃";
+                        }
+                    }
+                    AppendLog("更新包已下载并校验通过: " + file + " (" + info.Length + " 字节)");
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("下载更新失败: " + ex.Message);
+                    return "下载失败：" + ex.Message;
+                }
+            }).ContinueWith(t =>
+            {
+                string err = (t.Status == TaskStatus.RanToCompletion) ? t.Result
+                                                                     : "下载任务异常";
+                if (err != null)
+                {
+                    SendBusy(false, null);
+                    SendToast(err);
+                    return;
+                }
+
+                SendBusy(false, null);
+                try
+                {
+                    // /VERYSILENT：全静默；/NORESTART：不重启机器。
+                    // 安装器自己会停服务、覆盖、再起服务（iss 的 ssInstall /
+                    // ssPostInstall 两段），这里不需要额外动作。
+                    Process.Start(new ProcessStartInfo(file)
+                    {
+                        Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
+                        UseShellExecute = true
+                    });
+                    AppendLog("更新安装器已启动，托盘即将退出");
+                }
+                catch (Exception ex)
+                {
+                    SendToast("启动安装程序失败：" + ex.Message);
+                    return;
+                }
+
+                // 给界面几百毫秒把提示送出去，然后退干净交还文件句柄
+                var timer = new Timer { Interval = 900 };
+                timer.Tick += delegate
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    Application.Exit();
+                };
+                timer.Start();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
         private void DownloadUpdate()

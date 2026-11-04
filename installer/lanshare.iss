@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "3.97"
+#define AppVersion     "3.100"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -39,7 +39,7 @@ AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}/issues
-DefaultDirName={autopf}\LAN Share
+DefaultDirName={code:GetDefaultDir}
 ; 用户选一次安装目录，所有文件就在那儿 —— 不再自动追加一层。
 ;
 ; AppendDefaultDirName 默认是 yes：用户在向导里把路径改成 C:\lanshare 之后，
@@ -248,6 +248,116 @@ var
   // 用户真正的数据目录（可能在 G 盘）原封不动。
   // 2026-11-01 用户反馈「卸载时点了是，还是残留 2 个文件夹」就是这个。
   DataPathForPurge: String;
+  // ── 升级检测（3.98）──
+  //
+  // 安装器必须能认出「这台机器上已经有一份 LAN Share」。不认的后果是实打实的：
+  // 3.97 及以前双击更新包会被当成全新安装，向导页数据目录的默认值优先级高于
+  // 注册表，用户真实的数据目录被悄悄改成新目录；服务还在跑、文件被占用，
+  // 装到一半直接失败（exit 5）。
+  IsUpgrade: Boolean;
+  PrevInstallDir: String;   // 上次装在哪
+  PrevVersion: String;      // 上次的版本（空 = 老安装没写过 Version）
+  NewVersion: String;       // 本包的版本
+
+{ ── 升级检测（3.98）────────────────────────────────────────── }
+
+{ 把 "3.97" 这类版本串转成可比较的整数：每段乘 1000 累加。
+  段数不定（3.97 / 3.97.1），统一按 3 段算 —— 本项目版本号没超过 3 段，
+  每段 < 1000，进位空间够。 }
+function VersionKey(const V: String): Int64;
+var
+  I, Seg: Integer;
+  Num: Int64;
+begin
+  Result := 0;
+  Num := 0;
+  Seg := 0;
+  for I := 1 to Length(V) do
+  begin
+    if (V[I] >= '0') and (V[I] <= '9') then
+      Num := Num * 10 + (Ord(V[I]) - Ord('0'))
+    else if V[I] = '.' then
+    begin
+      Result := Result * 1000 + Num;
+      Num := 0;
+      Inc(Seg);
+      if Seg >= 3 then Break;
+    end;
+  end;
+  Result := Result * 1000 + Num;
+end;
+
+{ 服务名前缀。这台机器上装的可能是任意前缀（测试实例用过 lstest 之类），
+  从注册表读，读不到才用默认值。 }
+function GetPrefix(): String;
+begin
+  if (not RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\LANShare',
+                              'ServicePrefix', Result)) or (Result = '') then
+    Result := 'lanshare';
+end;
+
+{ 安装目录默认值：
+  · 升级 → 用上次装的那个目录，不给「装出第二个实例」的机会
+  · 新装 → 系统程序目录下的 LAN Share }
+function GetDefaultDir(Param: String): String;
+begin
+  if IsUpgrade and (PrevInstallDir <> '') then
+    Result := PrevInstallDir
+  else
+    Result := ExpandConstant('{autopf}\LAN Share');
+end;
+
+{ 覆盖安装前必须先停服务：python.exe / caddy.exe / *.dll 被占用时，
+  Inno 复制文件会失败（3.97 实测 exit 5，整个安装回滚）。
+
+  顺序和 lanshare_cli 的 StopAll 一致：入口 → 应用 → 数据库。
+  PostgreSQL 停止要做 checkpoint，-Force 保证即使还有连接也停得掉；
+  末尾再等 1.5 秒让端口和文件句柄真正释放。 }
+procedure StopServicesForUpgrade();
+var
+  RC: Integer;
+  Cmd: String;
+  P: String;
+begin
+  P := GetPrefix();
+  Cmd := '-NoProfile -Command "foreach ($s in @(''' + P + '-caddy'',''' + P
+       + '-api'',''' + P + '-postgresql'')) { Stop-Service $s -Force '
+       + '-ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 1500"';
+  Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, RC);
+
+  { 托盘不是服务，Stop-Service 管不到它 —— 但它同样占着 tray\LanShareTray.exe。
+    不关掉的话，Inno 覆盖这个文件时报「拒绝访问(5)」，整个安装回滚。
+    3.99 第一次真机升级就是这么失败的（日志里 DeleteFile 重试 4 次后 Abort）。 }
+  Exec('taskkill.exe', '/F /IM LanShareTray.exe', '', SW_HIDE,
+       ewWaitUntilTerminated, RC);
+  Sleep(600);
+end;
+
+{ 安装器启动的第一件事：这台机器上有没有已安装的 LAN Share？
+
+  只做识别、不弹窗 —— 静默安装（托盘「一键更新」走的就是这条路）
+  不能有任何等人点击的阻塞。给用户看的提示放在欢迎页，见 InitializeWizard。 }
+function InitializeSetup(): Boolean;
+var
+  RegDir, RegVer: String;
+begin
+  Result := True;
+  IsUpgrade := False;
+  PrevInstallDir := '';
+  PrevVersion := '';
+  NewVersion := '{#AppVersion}';
+
+  if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\LANShare',
+                         'InstallFolder', RegDir)
+     and (RegDir <> '') and DirExists(RegDir) then
+  begin
+    IsUpgrade := True;
+    PrevInstallDir := RegDir;
+    if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\LANShare',
+                           'Version', RegVer) then
+      PrevVersion := RegVer;
+  end;
+end;
 
 { 命令行里有没有某个参数（不区分大小写）。 }
 { 只为 /DELETE_DATA 服务：静默卸载默认选「否」（保留数据）， }
@@ -272,6 +382,24 @@ function GetDataDir(Param: String): String;
 var
   RegDir: String;
 begin
+  { 🔴 升级时，注册表里的 DataFolder 是**唯一权威**。
+
+    3.97 及以前这里没有这个分支，向导页的默认值（安装目录下的 data）优先级高于
+    注册表 —— 于是双击更新包会让用户真实的数据目录被悄悄换成新目录，
+    程序和文件从此分家，看起来就像「数据丢了」。
+
+    静默安装更严重：页面对象存在但不可见，默认值照样被读走。
+    这条分支是升级路径正确性的地基。 }
+  if IsUpgrade then
+  begin
+    if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\LANShare',
+                           'DataFolder', RegDir) and (RegDir <> '') then
+    begin
+      Result := RegDir;
+      Exit;
+    end;
+  end;
+
   { 安装阶段：向导页有值就用它（用户刚选的） }
   if (DataDirPage <> nil) and (DataDirPage.Values[0] <> '') then
   begin
@@ -301,6 +429,27 @@ end;
 
 procedure InitializeWizard;
 begin
+  { ── 升级：不建数据目录页，也不给改安装位置 ──
+    两个值都从注册表来（GetDefaultDir / GetDataDir 里已经处理），
+    向导从 4 页缩到 2 页。用户点「下一步」就该装完。 }
+  if IsUpgrade then
+  begin
+    WizardForm.WelcomeLabel1.Caption := '更新 LAN Share';
+    if PrevVersion <> '' then
+      WizardForm.WelcomeLabel2.Caption :=
+        '检测到已安装的 LAN Share ' + PrevVersion + '：' + #13#10 +
+        PrevInstallDir + #13#10 + #13#10 +
+        '本次将更新到 ' + NewVersion + '。程序文件会被替换，' +
+        '数据和账号全部保留，安装目录和存放位置也不变。'
+    else
+      WizardForm.WelcomeLabel2.Caption :=
+        '检测到已安装的 LAN Share（版本未知）：' + #13#10 +
+        PrevInstallDir + #13#10 + #13#10 +
+        '本次将更新到 ' + NewVersion + '。数据会原样保留。';
+    DataDirPage := nil;
+    Exit;
+  end;
+
   DataDirPage := CreateInputDirPage(wpSelectDir,
     '数据存放位置',
     '照片和文件会保存在这里。',
@@ -313,16 +462,22 @@ begin
   // 2026-11-01 真机装 3.79 崩了：Runtime error "An attempt was made to
   // expand the app constant before it was initialized"。
   //
-  // 原因是 InitializeWizard 跑在向导刚创建、用户还没选安装目录的时候，
-  // app 常量此刻是空的（尤其我们把 AppendDefaultDirName 关掉之后，没有任何
-  // 默认值可以兜底）。真正的路径要等用户在「选择目标位置」页点下一步才确定。
-  //
-  // 所以默认值留空，等 CurPageChanged 到了数据目录页再填 —— 那时
-  // WizardDirValue 一定有值。
-  //
-  // 注意：这段用 // 而不是花括号注释 —— 花括号注释里只要出现一个右花括号
-  // 就会提前闭合，而这里要提到那个常量名，必然会带出来。
+  // 真正可读的时机是 CurPageChanged 到了数据目录页 —— 那时 WizardDirValue 必有值。
   DataDirPage.Values[0] := '';
+end;
+
+{ 升级时跳过「选择目标位置」和「数据目录」两页：
+  两个值都由注册表决定，让用户在这里改只会制造「装出第二个实例」的机会。 }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if IsUpgrade then
+  begin
+    if PageID = wpSelectDir then
+      Result := True
+    else if (DataDirPage <> nil) and (PageID = DataDirPage.ID) then
+      Result := True;
+  end;
 end;
 
 // 进入数据目录页时，用上一步刚选的安装目录当默认值。
@@ -464,6 +619,18 @@ var
   Args: String;
   PyExe: String;
 begin
+  { 覆盖文件之前必须先停服务。
+
+    python.exe / caddy.exe / *.dll 正被占用时，Inno 复制文件会失败并整体
+    回滚 —— 这就是 3.97 实测的 exit 5。停完之后由下面的 ssPostInstall
+    阶段调 lanshare_cli install 重新拉起，用户感知不到中间这段。 }
+  if CurStep = ssInstall then
+  begin
+    if IsUpgrade then
+      StopServicesForUpgrade();
+    Exit;
+  end;
+
   if CurStep <> ssPostInstall then
     Exit;
 
@@ -496,5 +663,17 @@ begin
              '  cd /d "' + ExpandConstant('{app}') + '"' + #13#10 +
              '  runtime\python.exe ' + Args + #13#10 + #13#10 +
              '具体原因看：' + ExpandConstant('{app}') + '\logs\', mbError, MB_OK);
+  end;
+
+  { 升级装完把托盘拉回来。
+
+    静默安装不会勾选 [Tasks] 里的 autostart，而用户原来的托盘刚好被我们在
+    ssInstall 阶段关掉了 —— 不拉回来的话，他会以为程序装没了。
+    拉起失败不影响安装结果（服务已经起来了，用户也能自己点快捷方式）。 }
+  if IsUpgrade then
+  begin
+    if FileExists(ExpandConstant('{app}\tray\LANShareTray.exe')) then
+      Exec(ExpandConstant('{app}\tray\LANShareTray.exe'), '',
+           ExpandConstant('{app}'), SW_SHOWNORMAL, ewNoWait, ResultCode);
   end;
 end;

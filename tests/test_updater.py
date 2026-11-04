@@ -22,7 +22,7 @@ def _no_proxy_in_tests(monkeypatch):
     `_opener().open(...)` 而不是 `urllib.request.urlopen(...)` ——
     现有那些 mock 了 urlopen 的用例就全部失效，还会真的发网络请求。
     """
-    monkeypatch.setattr(updater, "_opener", lambda: None)
+    monkeypatch.setattr(updater, "_opener", lambda extra_ca=None: None)
 
 
 class TestCurrentVersion:

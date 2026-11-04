@@ -69,7 +69,19 @@ TEMPLATE = """\
 }}
 
 {site_addrs} {{
-{bind_line}\ttls internal
+{bind_line}\ttls {{
+{bind_line}\t\t# 站点证书有效期。Caddy 内部 CA 默认只给 12 小时，靠后台任务在到期前
+{bind_line}\t\t# 自动续期 —— 但那套后台维护只在服务连续运行时可靠。服务被停过、被
+{bind_line}\t\t# 重装过、机器睡眠过，就可能出现「证书已过期但没人续」的状态：
+{bind_line}\t\t# 此时任何走系统信任库的客户端（浏览器、Python updater、手机 App）
+{bind_line}\t\t# 握手一律失败，而且报的是「连不上」而不是「证书过期」。
+{bind_line}\t\t#
+{bind_line}\t\t# 2026-11-04 实测：11:18 过期，11:23 检查更新就报 TLS 校验失败。
+{bind_line}\t\t# 30 天足够覆盖「装了就不管」的用法，到期前 Caddy 也仍会自动续。
+{bind_line}\t\tissuer internal {{
+{bind_line}\t\t\tlifetime 720h
+{bind_line}\t\t}}
+{bind_line}\t}}
 
 \t# ── 静态资源交给 Caddy 直接发，不经过反向代理 ──
 \t# 2026-11-02 用户实测：/login 返回 200，但 /assets/*.js 和 *.css 全是 403，

@@ -231,7 +231,14 @@ def _http_json(url: str, timeout: float, *, label: str,
         headers={"User-Agent": "lanshare-cli", "Accept": "application/json"},
     )
     try:
-        op = _opener()
+        # 🔴 必须把 extra_ca 传下去。
+        #
+        # 这台机器常开系统代理（Clash 之类），_opener() 于是返回非 None，
+        # 走的就是代理分支 —— 而代理分支的 TLS 上下文是 _opener 自己建的。
+        # 早先这里写成 _opener()，参数漏了，代理分支拿不到本安装的 Caddy
+        # 根证书，自定义更新源 100% 报「证书校验失败」；无代理时反而正常，
+        # 所以本地开发机和用户机器表现不一致（2026-11-04 实测定位）。
+        op = _opener(extra_ca)
         if op is not None:
             resp_ctx = op.open(req, timeout=timeout)
         else:

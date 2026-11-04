@@ -423,8 +423,9 @@ button.link {
           <div class="hint" id="updtext" style="margin-top:4px"></div>
           <div class="updsrc" id="updsrc"></div>
           <div class="updhist" id="updhist"></div>
-          <div style="display:flex;justify-content:flex-end;margin-top:8px">
-            <button class="mini primary" id="updget" style="display:none">下载安装包</button>
+          <div style="display:flex;justify-content:flex-end;margin-top:8px;gap:8px">
+            <button class="mini" id="updget" style="display:none">打开发布页</button>
+            <button class="mini primary" id="updapply" style="display:none">立即更新</button>
           </div>
         </div>
 
@@ -512,6 +513,7 @@ function onUpdate(u) {
   const box = document.getElementById('updbox');
   const text = document.getElementById('updtext');
   const get = document.getElementById('updget');
+  const apply = document.getElementById('updapply');
 
   if (!u) return;
   const cur = u.current ? `v${u.current}` : '未知版本';
@@ -523,6 +525,7 @@ function onUpdate(u) {
     text.textContent = u.error;
     text.style.color = 'var(--danger)';
     get.style.display = 'none';
+    apply.style.display = 'none';
     return;
   }
 
@@ -537,7 +540,9 @@ function onUpdate(u) {
     text.textContent = `有新版本 v${u.latest}`
       + (u.published ? `（${u.published}）` : '') + '，下载后直接运行即可，数据和账号都会保留'
       + staleNote;
+    // url 有才谈得上更新；缺 sha256 时后端会整条拒掉，这里不用再判
     get.style.display = u.url ? '' : 'none';
+    apply.style.display = u.url ? '' : 'none';
   } else {
     text.style.color = '';
     text.textContent = u.stale
@@ -545,6 +550,7 @@ function onUpdate(u) {
       : `已是最新（GitHub 上也是 v${u.latest}）`;
     if (staleNote && u.stale) text.textContent += staleNote;
     get.style.display = 'none';
+    apply.style.display = 'none';
   }
 
   // ── 来源标注 ──
@@ -667,6 +673,9 @@ document.getElementById('srcclear').onclick = function () {
 
 document.getElementById('chkupdate').onclick = () => post({ action: 'checkUpdate' });
 document.getElementById('updget').onclick = () => post({ action: 'downloadUpdate' });
+// 一键更新：下载 → 校验 sha256 → 静默安装。托盘会主动退出把文件句柄交出去，
+// 装完由安装器重新拉起 —— 用户看到的是「消失几秒，新版本自己回来」。
+document.getElementById('updapply').onclick = () => post({ action: 'applyUpdate' });
 
 // ── 渲染 ───────────────────────────────────────────────────
 function render(s) {

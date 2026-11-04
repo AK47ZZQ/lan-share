@@ -57,7 +57,12 @@ class TestCaddyfile:
         生成 HTTP 站点的话二维码是 http://...，App 会静默忽略。
         """
         text = caddyfile.render(api_port=8000, web_port=8001)
-        assert "tls internal" in text
+        assert "issuer internal" in text
+        # 站点证书不能再用 Caddy 的 12 小时默认值：服务被停过、重装过就可能
+        # 处在「已过期但没人续」的状态，客户端只看到「连不上」。
+        # 注意也不能写成 `tls internal { issuer internal { ... } }` ——
+        # Caddy 会报 cannot mix issuer subdirective。
+        assert "lifetime 720h" in text
         assert "auto_https disable_redirects" in text
         # 生效的指令不能是 off（模板注释里提到它不算）
         assert "\tauto_https off\n" not in text
@@ -86,7 +91,7 @@ class TestCaddyfile:
             api_port=8000, web_port=8001, bind_host=caddyfile.BIND_LOOPBACK
         )
         assert "bind 127.0.0.1" in text
-        assert "tls internal" in text
+        assert "issuer internal" in text
 
     @pytest.mark.parametrize("bad", [0, -1, 65536, 99999])
     def test_rejects_out_of_range(self, bad):
