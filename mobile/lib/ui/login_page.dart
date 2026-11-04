@@ -190,7 +190,15 @@ class _LoginPageState extends ConsumerState<LoginPage>
       case _Probe.probing:
         return '正在检测连接…';
       case _Probe.ok:
-        return '已连接';
+        // 别写「已连接」（2026-11-04 审查 P3）。
+        //
+        // 这个预检是**故意不校验证书**的（见 trust_flow.probeAddress：它只
+        // 回答「服务器在不在线」，证书信不信任留给登录时的 TOFU 裁决）。
+        // 但用户看到「已连接」会认为链路已经可信：同网段的中间人可以让这里
+        // 显示成功，随后正式登录却被他没见过的证书拦住 —— 现象是
+        // 「明明显示已连接，登录又说证书不对」。
+        // 说清「在线」和「受信」是两件事，用户就不会被绕进去。
+        return '服务器在线';
       case _Probe.fail:
         return '无法连接（检查地址/网络）';
       case _Probe.idle:
@@ -209,12 +217,19 @@ class _LoginPageState extends ConsumerState<LoginPage>
         final user = _username.text.trim();
         if (user.isNotEmpty) Prefs.setLastLoginUser(user);
         if (!_pairMode && _password.text.isNotEmpty) {
-          SavedCredentialStore.save(SavedCredential(
+          // await 结果：Keystore 不可用时 save() 返回 false，此时不能默默
+          // 承诺「下次可以指纹登录」（2026-11-04 审查 P3）。提示一句，
+          // 用户下次按指纹没反应时就知道是这台机器存不了，而不是以为坏了。
+          final saved = await SavedCredentialStore.save(SavedCredential(
               server: _server.text.trim(),
               username: _username.text.trim(),
               password: _password.text));
+          if (!saved && mounted) {
+            messenger.showSnackBar(const SnackBar(
+                content: Text('本机无法安全保存凭据，下次需要重新输入密码')));
+          }
         }
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
             SnackBar(content: Text('欢迎，${next.username ?? ''}')));
       }
       // 登录失败（新错误）：抖动卡片提示；验证码/配对码输错自动清空重输

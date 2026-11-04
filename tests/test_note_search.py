@@ -25,6 +25,11 @@ def _write_note(rel: str, text: str) -> None:
     # mtime_ns 粒度随文件系统，显式拨指针保证"变更"可被增量识别
     t = time.time() + 1
     os.utime(p, (t, t))
+    # 这里绕过了 API 直接写盘，所以清单缓存不会自动失效 ——
+    # 手动清一下，让 /api/search、/api/recent 立刻看到这个文件。
+    # （真实路径由 uploads / files 的写端点在返回前调 invalidate_listing）
+    from app.api.files import invalidate_listing
+    invalidate_listing()
 
 
 def _q(client, q: str):
@@ -184,3 +189,44 @@ def test_refresh_index_scales_to_max_notes(client):
     assert steady["updated"] == 0, f"稳态轮次不应有写入，实测 updated={steady['updated']}"
     assert steady["gone"] == 0, f"稳态轮次不应有删除，实测 gone={steady['gone']}"
     assert steady_elapsed < 30, f"稳态轮次耗时 {steady_elapsed:.1f}s 超预算"
+
+
+def test_search_snippets_pushes_private_filter_into_sql():
+    """private 可见性必须下推到 SQL，不能等 LIMIT 之后再过滤。
+
+    2026-11-04 审查：原来 `SELECT ... WHERE content LIKE ? LIMIT n` 之后
+    才在 Python 里按 visible() 过滤。索引表是全库的（含各人 private/），
+    只要命中行里多数属于他人私有笔记，本人写的笔记就永远进不了那 n 行 ——
+    表现为「我明明写过这个词，却搜不到」。
+
+    直接测 store 层：构造「他人私有 20 条 + 我的 1 条 + 公开 1 条」，
+    取 limit=3，我的那条必须出现。
+    """
+    tag = f"k{_rand()}"
+    rows = [(f"private/other{n}/{tag}.md", f"关键词 {tag} 别人的", 1, 1)
+            for n in range(20)]
+    rows.append((f"private/me/{tag}.md", f"关键词 {tag} 我的笔记", 1, 1))
+    rows.append((f"shared/{tag}.md", f"关键词 {tag} 公开的", 1, 1))
+    ns_store.apply_scan(rows, [])
+
+    got = ns_store.search_snippets(f"关键词 {tag}", 3, username="me")
+    paths = [r["path"] for r in got]
+
+    assert any(p_.startswith("private/me/") for p_ in paths), (
+        f"自己的私有笔记被他人私有笔记挤出窗口；返回 {paths}")
+    assert not any(p_.startswith("private/other") for p_ in paths), (
+        f"泄漏了他人私有笔记：{paths}")
+
+    # admin 也拿不到别人的 private（visible() 对 private 不看 role）
+    got_admin = ns_store.search_snippets(f"关键词 {tag}", 3,
+                                         username="root", is_admin=True)
+    assert not any(r["path"].startswith("private/other")
+                   for r in got_admin), "admin 不该看到他人私有笔记"
+
+
+def test_search_snippets_hides_tmp_dir():
+    """tmp 是运维作业目录，任何角色都不可见（与 spaces.visible 同口）。"""
+    tag = f"t{_rand()}"
+    ns_store.apply_scan([(f"tmp/{tag}.md", f"作业 {tag}", 1, 1)], [])
+    got = ns_store.search_snippets(f"作业 {tag}", 5, username="me")
+    assert not got, f"tmp 下的文件出现在搜索结果里：{got}"

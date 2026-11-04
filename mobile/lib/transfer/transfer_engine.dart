@@ -185,19 +185,39 @@ class TransferEngine extends ChangeNotifier {
     return task;
   }
 
-  /// 下载落 App 沙盒 documents/Downloads/，重名自动加序号
+  /// 下载落 App 沙盒 documents/Downloads/，重名自动加序号。
+  ///
+  /// `name` 是服务端回显的远端文件名 —— 可能是别的成员上传的，也可能是
+  /// 恶意构造的 `../../transfer_queue.json`。直接拼进路径会写到 Downloads
+  /// 之外：覆盖队列文件、污染沙盒、或让「本地文件」视图读到不属于下载目录
+  /// 的东西。所以先做 basename 归一（与 backup_engine 拒 `/ \ ..` 同口）。
   String _downloadTarget(String name) {
     final dir = Directory('$_docsPath/Downloads');
     if (!dir.existsSync()) dir.createSync(recursive: true);
-    var p = '${dir.path}/$name';
+    final safe = _safeFileName(name);
+    var p = '${dir.path}/$safe';
     var i = 1;
-    final dot = name.lastIndexOf('.');
+    final dot = safe.lastIndexOf('.');
     while (File(p).existsSync()) {
-      final base = dot > 0 ? name.substring(0, dot) : name;
-      final ext = dot > 0 ? name.substring(dot) : '';
+      final base = dot > 0 ? safe.substring(0, dot) : safe;
+      final ext = dot > 0 ? safe.substring(dot) : '';
       p = '${dir.path}/$base(${i++})$ext';
     }
     return p;
+  }
+
+  /// 把远端文件名收敛成一个安全的本地文件名。
+  ///
+  /// - 只取最后一段（`/` 和 `\` 都算分隔符）
+  /// - 拒 `.` / `..` / 空名，退回带时间戳的占位名
+  /// - Windows 非法字符换下划线（否则 createSync 会抛，用户看到「下载失败」）
+  static String _safeFileName(String name) {
+    var n = name.replaceAll('\\', '/').split('/').last.trim();
+    if (n.isEmpty || n == '.' || n == '..') {
+      n = 'download-${DateTime.now().millisecondsSinceEpoch}';
+    }
+    n = n.replaceAll(RegExp(r'[<>:"|?*\x00-\x1f]'), '_');
+    return n;
   }
 
   /// 下载沙盒目录（documents/Downloads）：传输页"本地文件"视图、更新安装

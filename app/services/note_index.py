@@ -24,6 +24,7 @@ import time
 
 from app.config import SHARE_ROOT
 from app.filetools import NOTE_EXTS, to_rel
+from app.roles import ADMIN
 from app.spaces import visible
 from app.store import note_search as note_search_store
 
@@ -86,7 +87,10 @@ def search_notes(user, q: str, limit: int = 20) -> list[dict]:
     needle = q.strip().lower()
     if not needle:
         return []
-    rows = note_search_store.search_snippets(needle, limit * 3)   # 余量给可见性过滤
+    rows = note_search_store.search_snippets(
+        needle, limit * 3,                      # 余量留给 guest 授权过滤
+        username=user["username"],
+        is_admin=(user["role"] == ADMIN) if "role" in user.keys() else False)
     out = []
     for r in rows:
         rel = r["path"]

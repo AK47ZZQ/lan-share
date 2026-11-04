@@ -109,7 +109,22 @@ class UpdateSourceClient {
   static String resolveUrl(String u, String base) {
     final u0 = u.trim();
     if (u0.isEmpty) return '';
-    if (RegExp(r'^https?://', caseSensitive: false).hasMatch(u0)) return u0;
+    if (RegExp(r'^https?://', caseSensitive: false).hasMatch(u0)) {
+      // 绝对地址同样只能走 https（2026-11-04 审查）。
+      //
+      // 用户填的 base 有 validate() 把关，但清单里的 `"url"` 是一个
+      // **远端可控字段** —— 它能塞 http://，而后端下载走的是裸 Dio。
+      // 那样「只支持 https」这句话就名存实亡了：包还是会被下载、sha256
+      // 也还能验（同一条 TLS 链外），但传输过程明文可见。
+      // 回环地址例外，与 normalize/validate 的口径保持一致。
+      final low = u0.toLowerCase();
+      if (low.startsWith('http://')) {
+        final host = Uri.tryParse(u0)?.host ?? '';
+        final loopback = host == '127.0.0.1' || host == '::1' || host == 'localhost';
+        if (!loopback) return '';
+      }
+      return u0;
+    }
     var b = base.trim().replaceAll(RegExp(r'/+$'), '');
     if (b.toLowerCase().endsWith('.json')) {
       final i = b.lastIndexOf('/');

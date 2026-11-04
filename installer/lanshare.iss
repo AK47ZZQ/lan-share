@@ -21,7 +21,7 @@
 ; ============================================================================
 
 #define AppName        "LAN Share"
-#define AppVersion     "4.0.1"
+#define AppVersion     "4.0.2"
 #define AppPublisher   "AK47ZZQ"
 #define AppURL         "https://github.com/AK47ZZQ/lan-share"
 #define HttpPort       "8764"
@@ -377,6 +377,37 @@ begin
     if RegQueryStringValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\LANShare',
                            'Version', RegVer) then
       PrevVersion := RegVer;
+  end;
+
+  { 降级拦截（2026-11-04 审查）。
+
+    在此之前 Installer 完全没有版本概念：手滑双击一个旧包，它一句话不说就把
+    程序文件盖回去，然后拿老代码去连新版 schema 的库 —— 用户只会看到
+    「更新完就坏了」，而且不知道是自己装错了包。
+
+    静默安装（托盘一键更新走这条路）更不能自动降级：那说明更新源返回了
+    比本机更旧的版本，通常意味着清单被改错、或者有人往源里塞了旧包。
+    直接失败并给出非 0 退出码，比「默默降级然后一切看起来正常」安全得多。 }
+  if IsUpgrade and (PrevVersion <> '') then
+  begin
+    if VersionKey(PrevVersion) > VersionKey(NewVersion) then
+    begin
+      if WizardSilent then
+      begin
+        InstallStepFailed := True;
+        Result := False;
+        Exit;
+      end;
+      if MsgBox('这台机器上装的是 ' + PrevVersion + '，而这个是 ' +
+                NewVersion + '（更旧）。' + #13#10 + #13#10 +
+                '继续安装会降级：新版本里的功能和修复会消失。' +
+                '数据和账号不会丢。' + #13#10 + #13#10 +
+                '确实要降级吗？', mbConfirmation, MB_YESNO) <> IDYES then
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
   end;
 end;
 

@@ -38,8 +38,18 @@ class SavedCredentialStore {
   /// 密码属敏感数据：只写 Keystore，不落 SharedPreferences 明文副本
   /// （Token 可服务端吊销才允许 SP 降级副本；密码写失败则视为未保存，
   /// 退出登录后靠重新输密码，不做明文兜底）。
-  static Future<void> save(SavedCredential c) async {
-    await SecureStore.setStringKeystoreOnly(_key, jsonEncode(c._toJson()));
+  /// 返回是否真的写进去了（2026-11-04 审查 P3）。
+  ///
+  /// Keystore 在个别机型/被清理后不可用，写入会静默失败。原来返回 void，
+  /// 调用方照旧，而登录页底部还写着「登录后本机保存凭据用于指纹快速登录」——
+  /// 用户下次按指纹没有任何反应，只会以为指纹坏了。
+  /// 现在把结果交出去，让界面按实际情况说话。
+  static Future<bool> save(SavedCredential c) async {
+    try {
+      return await SecureStore.setStringKeystoreOnly(_key, jsonEncode(c._toJson()));
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 写空串即清除（SecureStore 读到空串按 null 处理）

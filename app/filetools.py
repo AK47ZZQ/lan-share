@@ -285,8 +285,10 @@ async def save_upload(file: UploadFile, dest: Path, quota_user=None,
     }
 
 
-def file_dict(f: Path) -> dict:
-    stat = f.stat()
+def file_dict(f: Path, st=None) -> dict:
+    """文件的展示形状。st 可选：调用方已有 stat 结果时传进来，
+    避免在热路径（/api/recent 全树遍历）上重复 stat。"""
+    stat = st or f.stat()
     return {
         "name": f.name,
         "path": to_rel(f),

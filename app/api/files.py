@@ -8,6 +8,8 @@ import mimetypes
 import os
 import secrets
 import shutil
+import stat as stat_mod
+import threading
 import time
 import zipfile
 from datetime import datetime
@@ -85,6 +87,7 @@ async def create_directory(request: Request, path: str, _user=Depends(require_us
     target.mkdir(parents=True, exist_ok=True)
     rel = to_rel(target)
     audit("mkdir", rel, ip=client_ip(request))
+    invalidate_listing()
     return {"ok": True, "path": rel}
 
 
@@ -159,6 +162,7 @@ async def move_items(request: Request, body: MoveBody, _user=Depends(require_use
             results.append({"src": src, "ok": False, "error": e.detail})
         except OSError as e:
             results.append({"src": src, "ok": False, "error": f"系统错误（{type(e).__name__}）"})
+    invalidate_listing()
     return {"ok": True, "results": results}
 @router.post("/api/copy")
 def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
@@ -226,6 +230,7 @@ def copy_items(request: Request, body: MoveBody, _user=Depends(require_user)):
             results.append({"src": src, "ok": False, "error": e.detail})
         except OSError as e:
             results.append({"src": src, "ok": False, "error": f"系统错误（{type(e).__name__}）"})
+    invalidate_listing()
     return {"ok": True, "results": results}
 
 
@@ -243,6 +248,7 @@ async def delete_file(request: Request, path: str, _user=Depends(require_user)):
     # 审计同样记物理相对路径（R1-P3-1）：vpath 形态（private:x.jpg）进动态流
     # 后 visible() 无法归一，会泄漏到全员可见
     audit("trash", to_rel(target), ip=client_ip(request))
+    invalidate_listing()
     return {"ok": True}
 
 
@@ -361,6 +367,7 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
         raise HTTPException(status_code=404, detail="Not found")
     dest = target.parent / clean_filename(body.new_name)
     if dest == target:
+        invalidate_listing()
         return {"ok": True}
     if dest.exists():
         raise HTTPException(status_code=400, detail="目标名称已存在")
@@ -377,7 +384,56 @@ async def rename_path(request: Request, body: RenameBody, _user=Depends(require_
     if old_rel:
         sync_grants_on_move(old_rel, to_rel(dest))
     audit("rename", old_rel or body.path, body.new_name, client_ip(request))
+    invalidate_listing()
     return {"ok": True, "path": to_rel(dest)}
+
+
+# ── 目录清单缓存（2026-11-04 审查 P3）──
+#
+# /api/recent 和 /api/search 原来每次请求都 SHARE_ROOT.rglob("*") 并对每个
+# 文件 stat 一次。同模块的 _scan_share_sizes 早就有 5 分钟 TTL，注释里还
+# 记着「22k 文件树单轮 2.4s」—— 而这两条恰恰是 App 首页和 Web 仪表盘的
+# 高频接口：一个成员持续轮询，或弱网重试，就能长期占住线程池的若干槽，
+# 表现是全站列表/预览一起变慢（此时 /api/disk 因为有缓存反而正常，
+# 很容易误判成 DB 问题）。
+#
+# TTL 取 5 秒而不是 60 秒：这个缓存的目的是挡住「一个客户端连点/多端同时
+# 刷新/弱网重试」，不是让数据变旧。5 秒足够吸收这波突发（原来每次请求
+# 都是全树 stat，2.4 秒起步，两个请求就把线程池压住了），又短到用户上传完
+# 刷新一下就能看见。
+#
+# 写操作主动失效：mkdir / move / copy / delete / rename / zip 收尾处都调
+# invalidate_listing()，上传完成也调（见 uploads.upload_finish）。
+# 之所以还要 TTL 兜底：WebDAV 那条路径不经过这些端点，漏了它缓存就永不更新。
+_listing_cache: dict = {"ts": 0.0, "rows": []}
+_LISTING_TTL = 5.0
+_listing_lock = threading.Lock()
+
+
+def invalidate_listing() -> None:
+    """强制下一次读重建清单（给「上传完想立刻看到」这类场景用）。"""
+    with _listing_lock:
+        _listing_cache["ts"] = 0.0
+
+
+def _listing() -> list:
+    """全树文件清单 [(Path, os.stat_result)]，15 秒 TTL。"""
+    now = time.time()
+    with _listing_lock:
+        if _listing_cache["rows"] and now - _listing_cache["ts"] < _LISTING_TTL:
+            return _listing_cache["rows"]
+    rows = []
+    for f in SHARE_ROOT.rglob("*"):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        if stat_mod.S_ISREG(st.st_mode):
+            rows.append((f, st))
+    with _listing_lock:
+        _listing_cache["rows"] = rows
+        _listing_cache["ts"] = now
+    return rows
 
 
 @router.get("/api/search")
@@ -386,12 +442,13 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
     # HomeView）不读它，零改动；"file"=文件名命中，"note"=笔记正文全文命中
     # （附 snippet 片段）。文件名命中语义原样保留。
     results = []
-    for f in SHARE_ROOT.rglob("*"):
+    needle = q.lower()
+    for f, st in _listing():
         rel_parts = f.relative_to(SHARE_ROOT).parts
         if not visible(_user, rel_parts):
             continue
-        if f.is_file() and q.lower() in f.name.lower():
-            d = file_dict(f)
+        if needle in f.name.lower():
+            d = file_dict(f, st)
             d["kind"] = "file"
             results.append(d)
             if len(results) >= 50:
@@ -404,15 +461,16 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
 
 @router.get("/api/recent")
 def recent_files(limit: int = Query(default=20, ge=0, le=100), _user=Depends(require_user)):
-    files = []
-    for f in SHARE_ROOT.rglob("*"):
+    rows = []
+    for f, st in _listing():
         rel_parts = f.relative_to(SHARE_ROOT).parts
         if not visible(_user, rel_parts):
             continue
-        if f.is_file():
-            files.append(file_dict(f))
-    files.sort(key=lambda x: x["modified"], reverse=True)
-    return files[:limit]
+        rows.append((st.st_mtime, f, st))
+    # 按 mtime 排序而不是按格式化后的字符串：字符串排序在跨时区/跨年份时
+    # 会出错，而且对缓存里的 stat 排序不需要再解析时间。
+    rows.sort(key=lambda r: r[0], reverse=True)
+    return [file_dict(f, st) for _mt, f, st in rows[:limit]]
 
 
 # 网盘全量扫描 5 分钟 TTL 缓存（R1-P2-11）：10 万文件级库上每次 /api/disk

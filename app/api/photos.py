@@ -55,6 +55,13 @@ def _media_type(rel: str) -> str:
     return "video" if Path(rel).suffix.lower() in VID_EXTS else "photo"
 
 
+# 下推到 SQL 的后缀表（2026-11-04 P3）。与 _media_type 同源：
+# photo 匹配 IMG_EXTS，video 匹配 VID_EXTS。注意 _media_type 的语义是
+# 「不是视频就当照片」，所以 photo 的下推必须显式列出 IMG_EXTS ——
+# 直接把「非视频」翻译成 NOT LIKE 会把 .txt 之类的非媒体文件也算进照片墙。
+_MEDIA_EXTS = {"photo": sorted(IMG_EXTS), "video": sorted(VID_EXTS)}
+
+
 # ffprobe 候选路径。
 #
 # 🔴 优先找**本安装目录**下的。2026-11-03 源码仓库和生产安装分家之后，写死
@@ -424,8 +431,48 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     # added_at 为空的存量行沉底
     order = ("COALESCE(added_at, 0) DESC, path"
              if sort == "added" else "taken_at DESC, path")
-    all_rows = photos_store.list_for_gallery(
-        cond if pushdown else "", args, order)
+
+    # ── 可下推的筛选条件（2026-11-04 审查 P3）──
+    #
+    # 这个接口原来把所有行都拉进内存再过滤分页：库里 3 万张照片时，一次翻页
+    # = 3 万行 PG 往返 + 全量 Python 过滤。而 month / 文件夹 / 媒体类型这三个
+    # 筛选条件全都是 DB 字段或纯路径前缀，放进 WHERE 就能在 SQL 层收掉大部分
+    # 行 —— 而且它们恰好是最常用的三种（按月翻相册、只看某个文件夹、只看视频）。
+    #
+    # 不下推的三项有各自理由：
+    #   · uploader 要解析路径归属，不是独立列
+    #   · album / 隐藏清单（excludes）是 JSON 配置，不在库里
+    #   · visible() 必须兜底 —— PG 的 LIKE 大小写敏感，磁盘上若存在
+    #     'Private' 这类变体，纯 SQL 下推会把它当 shared 放行
+    extra_parts: list[str] = []
+    extra_args: list = []
+    if month:
+        extra_parts.append("taken_at LIKE ?")
+        extra_args.append(month + "%")
+    if media_type in ("photo", "video"):
+        exts = _MEDIA_EXTS[media_type]
+        extra_parts.append(
+            "(" + " OR ".join(["LOWER(path) LIKE ?"] * len(exts)) + ")")
+        extra_args.extend(f"%{e}" for e in exts)
+    _pref = [p.strip().strip("/") for p in (include_dirs or "").split(",")
+             if p.strip().strip("/")][:32]
+    if _pref:
+        # 每个前缀两个条件：目录本身 + 目录下的一切。
+        # 之前写成 ["path = ?"] * len * 2 —— 全部是等号，而参数是
+        # [p, p + "/%"] 交替，第二个 ? 拿到的是 "前缀/"，等号永远不成立。
+        _ors: list[str] = []
+        for p in _pref:
+            _ors.append("path = ?")
+            _ors.append("path LIKE ?")
+            extra_args.extend([p, p + "/%"])
+        extra_parts.append("(" + " OR ".join(_ors) + ")")
+    _where = cond if pushdown else ""
+    _args = list(args)
+    if extra_parts:
+        _where = (_where + " AND " if _where else "") + " AND ".join(extra_parts)
+        _args += extra_args
+
+    all_rows = photos_store.list_for_gallery(_where, _args, order)
     # visible() 必须无条件兜底（2026-09-19 对抗审查 F3）：下推只是 DB 侧预过滤，
     # 而 PG 的 LIKE 大小写敏感（SQLite 只折叠 ASCII）——磁盘目录若存在 'Private'
     # 等大小写变体，下推条件在 PG 会把他人 private 当 shared 放行。visible()

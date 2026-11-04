@@ -24,6 +24,9 @@ class InboxPoll {
   bool _sseTried = false; // 每个前台周期只试一次 SSE，失败留给下轮
   int _lastUnread = -1; // -1 = 首次对齐基线不提醒（避免冷启动炸历史通知）
 
+  /// 登出/换账号时必须调到，否则新账号的首轮未读数会和**上一个账号**的
+  /// 基线比较：偏小则新账号的第一条通知永远不弹（2026-11-04 审查 P3）。
+
   void start() {
     _timer ??= Timer.periodic(const Duration(seconds: 60), (_) => _tick());
     _tick();
@@ -36,6 +39,13 @@ class InboxPoll {
     _timer = null;
     _sseCancel?.cancel();
     _sseCancel = null;
+    // 清掉未读基线（2026-11-04 审查 P3）。
+    //
+    // _lastUnread 是进程级字段，登出路径会走到这里。不清的话，换账号后
+    // 首轮 _tick() 拿新账号的未读数去和**旧账号**的基线比：只要偏小，
+    // 新账号的第一条通知就永远不弹。换账号是真实场景（家里多个成员共用
+    // 一台手机、或帮家人登录），不是理论问题。
+    _lastUnread = -1;
   }
 
   /// 建立 SSE 长连接：事件帧到达即拉通知。任何异常都静默转轮询兜底。

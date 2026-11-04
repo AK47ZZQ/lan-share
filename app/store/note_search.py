@@ -25,15 +25,33 @@ def load_index() -> list:
         "SELECT path, mtime_ns, size FROM note_search").fetchall()
 
 
-def search_snippets(needle: str, limit: int) -> list:
+def search_snippets(needle: str, limit: int, *, username: str = "",
+                    is_admin: bool = False) -> list:
     """正文命中行：(path, content_lower, 位置)。needle 由调用方做好小写；
-    LIKE 通配符在此统一转义。位置用 INSTR/POSITION？——**不用**：双引擎
-    位置函数不同构，取回整行由调用方在 Python 里定位（镜像 ≤8KB，代价可忽略）。"""
+    LIKE 通配符在此统一转义。"""
     like = "%" + _escape_like(needle.lower()) + "%"
-    return _db().execute(
-        "SELECT path, content_lower FROM note_search "
-        "WHERE content_lower LIKE ? ESCAPE '\\' LIMIT ?",
-        (like, limit)).fetchall()
+    _ = is_admin
+
+    # 可见性条件下推（2026-11-04 审查）。
+    #
+    # 原来这里只 `LIMIT n`，可见性由调用方在 Python 里逐行过滤 —— 而过滤
+    # 发生在**截断之后**。索引表是全库的（含各人 private/ 下的笔记），
+    # 只要命中行里多数属于他人私有笔记，本人写的笔记就永远进不了那 n 行：
+    # 表现是「我明明写过这个词，却搜不到」。
+    #
+    # 现在把「不属于我的 private 一律排除」放进 SQL，截断前就收敛集合。
+    # incoming 的 admin 例外留在 Python 里判（不常见，且 admin 本来就少）。
+    sql = ("SELECT path, content_lower FROM note_search "
+           "WHERE content_lower LIKE ? ESCAPE '\\'"
+           # tmp 是运维作业目录，任何角色都不可见（与 spaces.visible 同口）
+           " AND LOWER(path) NOT LIKE 'tmp/%'")
+    args: list = [like]
+    if username:
+        # private 只给本人 —— 注意 visible() 里对 private 不看 role，
+        # admin 也看不到别人的私人笔记，这里保持一致。
+        sql += " AND (LOWER(path) NOT LIKE 'private/%' OR LOWER(path) LIKE ?)"
+        args.append(f"private/{_escape_like(username.lower())}/%")
+    return _db().execute(sql + " LIMIT ?", (*args, limit)).fetchall()
 
 
 # ─── 写 ───────────────────────────────────────────────────
