@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from lanshare_cli import caddyfile
 
 
@@ -230,3 +232,70 @@ class TestExistingDomainsPreserved:
         site = [ln for ln in f.read_text(encoding="utf-8").splitlines()
                 if ln.startswith("https://")][0]
         assert "localhost" in site
+
+
+class TestHostsMerge:
+    """T5（2026-11-05）：write(hosts=[...]) 必须是合并不是替换。
+
+    历史事故：只传域名时 localhost/127.0.0.1/网卡 IP 全被挤掉，
+    127.0.0.1 不在 SAN → 托盘健康探测全 TLS 失败（SecureChannelFailure）。
+    """
+
+    def test_explicit_hosts_keep_loopback(self, tmp_path):
+        f = tmp_path / "Caddyfile"
+        caddyfile.write(f, api_port=8766, web_port=8765,
+                        hosts=["new-frp.example.com"])
+        text = f.read_text(encoding="utf-8")
+        assert "127.0.0.1" in text, "127.0.0.1 被挤掉 → 托盘健康探测必失败"
+        assert "localhost" in text
+        assert "new-frp.example.com" in text
+
+    def test_loopback_missing_raises(self, tmp_path, monkeypatch):
+        """合并后缺 loopback → ValueError（安全网，防 default_hosts 变坏）。"""
+        monkeypatch.setattr(caddyfile, "default_hosts", lambda: ["localhost"])
+        with pytest.raises(ValueError):
+            caddyfile.write(tmp_path / "Caddyfile", api_port=8766, web_port=8765,
+                            hosts=["x.example.com"])
+
+    def test_merge_dedupes_case_insensitive(self, tmp_path):
+        """域名大小写差异不算重复主机（但同形去重）。"""
+        f = tmp_path / "Caddyfile"
+        caddyfile.write(f, api_port=8766, web_port=8765,
+                        hosts=["New-FRP.example.com", "new-frp.example.com"])
+        site = [ln for ln in f.read_text(encoding="utf-8").splitlines()
+                if ln.startswith("https://")][0]
+        assert site.lower().count("new-frp.example.com") == 1
+
+
+class TestSafeHostStrictness:
+    """T10（2026-11-05）：_safe_host 按 label 校验。
+
+    _HOST_RE 只挡字符集，挡不住结构错：a..b（空 label）、foo-.com
+    （label 连字符收尾）、999.999.999.999（不是 IP 的纯数字点分）——
+    这些喂给 Caddy 会去给它签证书（白签）或加载失败。
+    """
+
+    def test_rejects_consecutive_dots(self):
+        with pytest.raises(ValueError):
+            caddyfile._safe_host("a..b")
+
+    def test_rejects_label_trailing_hyphen(self):
+        with pytest.raises(ValueError):
+            caddyfile._safe_host("foo-.com")
+
+    def test_rejects_label_leading_hyphen(self):
+        with pytest.raises(ValueError):
+            caddyfile._safe_host("a.-b.com")
+
+    def test_rejects_bogus_dotted_quad(self):
+        with pytest.raises(ValueError):
+            caddyfile._safe_host("999.999.999.999")
+
+    def test_rejects_64char_label(self):
+        with pytest.raises(ValueError):
+            caddyfile._safe_host("a" * 64 + ".com")
+
+    def test_accepts_valid(self):
+        for v in ("localhost", "my-frp.example.com", "192.168.1.100",
+                  "a.b", "x-y.example.com", "a" * 63 + ".com"):
+            assert caddyfile._safe_host(v) == v

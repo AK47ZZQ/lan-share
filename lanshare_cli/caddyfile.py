@@ -201,6 +201,8 @@ def default_hosts() -> list[str]:
 
 
 _HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,252}[A-Za-z0-9])?")
+# 单个 label：字母数字开头、中间可带连字符、字母数字收尾（长度另查，1-63）。
+_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?")
 
 
 def _safe_host(h: str) -> str:
@@ -213,6 +215,21 @@ def _safe_host(h: str) -> str:
     v = (h or "").strip()
     if not v or not _HOST_RE.fullmatch(v):
         raise ValueError(f"非法主机名: {h!r}")
+    # T10（2026-11-05）：_HOST_RE 只挡字符集，挡不住结构错。逐 label 校验：
+    # 1-63 字符、字母数字收尾（连字符只能在中间）—— a..b（空 label）、
+    # foo-.com（连字符收尾）在这里被拦下；这些喂给 Caddy 要么白签证书
+    # 要么配置加载失败。
+    for lb in v.split("."):
+        if not 1 <= len(lb) <= 63:
+            raise ValueError(f"非法主机名（label 长度 1-63）: {h!r}")
+        if not _LABEL_RE.fullmatch(lb):
+            raise ValueError(f"非法主机名（label 需字母数字收尾）: {h!r}")
+    # 纯数字点分四段但不是合法 IP（999.999.999.999）→ 拒：Caddy 会当主机名
+    # 去签一张永远没人信任的证书。
+    labels = v.split(".")
+    if len(labels) == 4 and all(lb.isdigit() for lb in labels):
+        if not _is_ip_literal(v):
+            raise ValueError(f"非法 IP 地址: {h!r}")
     return v
 
 
@@ -361,6 +378,13 @@ def existing_domains(path: str | Path, ports: "list[int] | None" = None) -> list
             if not m:
                 continue                              # `:8765 {`、IPv6、乱码
             host, port = m.group(1).lower(), m.group(2)
+            # T10（2026-11-05 幂等测试抓到的真 bug）：只捞「带 scheme 或端口」的段。
+            # 我们生成的站点地址永远是 https://host:port；裸单词段（tls { /
+            # handle { 这类指令行）既没 scheme 也没端口 —— 捞进来等于把指令名
+            # 当域名，Caddy 会给它签证书，而且 write() 不再幂等（每次重写
+            # 都多出 tls/handle 两个假域名，再顺手激活 8767 端口）。
+            if not port and not part.lower().startswith(("https://", "http://")):
+                continue
             if not host or host == "localhost" or _is_ip_literal(host):
                 continue
             if want_ports and port and port not in want_ports:
@@ -368,6 +392,35 @@ def existing_domains(path: str | Path, ports: "list[int] | None" = None) -> list
             if _HOST_RE.fullmatch(host) and host not in out:
                 out.append(host)
     return out
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    """临时文件 + os.replace 的原子写。Caddy 起不起得来就看这个文件的完整性。"""
+    import os as _os
+    tmp = target.with_name(target.name + ".tmp-" + str(_os.getpid()))
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+            fh.flush()
+            _os.fsync(fh.fileno())
+        _os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _backup(target: Path, old_content: str) -> None:
+    """重写前备份 Caddyfile.bak-<时间戳>。备份失败不阻断（后悔药尽力而为）。"""
+    import time as _time
+    stamp = _time.strftime("%Y%m%d-%H%M%S")
+    bak = target.with_name(target.name + ".bak-" + stamp)
+    try:
+        bak.write_text(old_content, encoding="utf-8", newline="")
+    except OSError:
+        pass
 
 
 def write(
@@ -383,6 +436,10 @@ def write(
     tunnel_port: "int | None | str" = "auto",
 ) -> Path:
     """渲染并写入。用 LF 换行 —— Caddy 不在乎，而且避免 diff 噪音。
+
+    hosts 契约（T5）：传 hosts 是「补充」不是「替换」—— default_hosts()
+    （localhost / 127.0.0.1 / 网卡 IP）永远并入，合并按 lower() 去重，
+    合并后缺 127.0.0.1 直接抛 ValueError。调用方只需要带上「额外的」域名。
 
     会**自动保留**旧文件站点地址里的公网域名（见 existing_domains）。这一步放在
     这里而不是各个调用点，是因为重写 Caddyfile 的地方有三处（install、
@@ -412,7 +469,23 @@ def write(
     else:
         real_tunnel = tunnel_port                      # type: ignore[assignment]
 
-    merged = list(hosts) if hosts is not None else default_hosts()
+    # T5（2026-11-05）：显式传 hosts 是「补充」不是「替换」。
+    #
+    # 旧实现 `merged = list(hosts) if hosts is not None else default_hosts()`
+    # 把 loopback 集合整个挤掉 —— 127.0.0.1 不进 SAN，托盘健康探测全 TLS
+    # 失败（SecureChannelFailure），就是 test_caddyfile_hosts.py 顶部记的那次
+    # 真机事故。所以无论调用方传什么，default_hosts() 都要并进来。
+    extras = list(hosts) if hosts is not None else []
+    merged: list[str] = []
+    for h in default_hosts() + extras:
+        # lower() 去重：域名大小写不敏感，写成两遍 Caddy 照样报重复站点
+        if h.lower() not in [m.lower() for m in merged]:
+            merged.append(h)
+    if "127.0.0.1" not in [m.lower() for m in merged]:
+        # 安全网：default_hosts() 未来若坏掉，这里必须炸出来而不是静默少签
+        raise ValueError(
+            "hosts 合并后缺少 127.0.0.1 —— 证书 SAN 缺它，托盘健康探测必失败"
+        )
     if keep_existing_domains:
         for h in _ftp:
             if h not in merged:
@@ -420,8 +493,10 @@ def write(
 
     content = render(api_port, web_port, bind_host, merged, storage_dir, web_root,
                      updates_root, tunnel_port=real_tunnel)
-    with open(target, "w", encoding="utf-8", newline="") as fh:
-        fh.write(content)
+    # 原子写（_atomic_write_text）：先写临时文件再 os.replace。
+    # 之前是原地 "w" 截断写 —— 进程崩了/断电了就留下半份 Caddyfile，
+    # Caddy 下次起不来，网盘整体不可用。os.replace 在 Windows 上也是原子的。
+    _atomic_write_text(target, content)
     return target
 
 
@@ -468,3 +543,118 @@ def detect_bind_host(path: str | Path, web_port: int | None = None) -> str | Non
         return BIND_ALL
 
     return None
+
+
+# ============================================================
+# 「这份 Caddyfile 是不是我们生成的」+ install 守卫（T2）
+# ============================================================
+
+def is_ours(caddyfile_content: str) -> bool:
+    """判断这份 Caddyfile 是不是 lanshare_cli 生成的。
+
+    我们的模板第一行固定写 `# 由 lanshare_cli 生成`。没有这个标记说明是
+    用户手写/历史遗留的配置 —— 里面可能有 FRP 隧道、自签证书、备用端口
+    等一堆我们不知道的东西。**绝不能整份重写**。
+    """
+    for line in caddyfile_content.splitlines()[:3]:
+        if "由 lanshare_cli 生成" in line:
+            return True
+    return False
+
+
+def rewrite_bind_in_place(content: str, bind_host: str,
+                          web_port: int) -> tuple[str, bool]:
+    """只改站点块的 bind 行，其余内容逐字节保留（原样来自 lan.py）。"""
+    import re as _re
+
+    open_re = _re.compile(r"^[ \t]*:" + str(web_port) + r"\s*\{[^\n]*$", _re.MULTILINE)
+    m = open_re.search(content)
+    if not m:
+        open_re2 = _re.compile(
+            r"^[ \t]*(?:0\.0\.0\.0|127\.0\.0\.1):" + str(web_port) + r"\s*\{[^\n]*$",
+            _re.MULTILINE,
+        )
+        m = open_re2.search(content)
+        if not m:
+            return content, False
+
+    block_start = m.end()
+    rest = content[block_start:]
+    close_m = _re.search(r"^\}[ \t]*$", rest, _re.MULTILINE)
+    if not close_m:
+        return content, False
+    block_body = rest[: close_m.start()]
+
+    bind_re = _re.compile(r"^[ \t]*bind\s+([^\s#]+)[ \t]*$", _re.MULTILINE)
+    existing = bind_re.search(block_body)
+
+    if bind_host == BIND_LOOPBACK:
+        if existing:
+            new_body = bind_re.sub(f"\tbind {BIND_LOOPBACK}", block_body, count=1)
+        else:
+            new_body = f"\n\tbind {BIND_LOOPBACK}" + block_body
+    else:
+        if existing and existing.group(1).strip() in ("127.0.0.1", "::1", "localhost"):
+            new_body = _re.sub(
+                r"^[ \t]*bind\s+" + _re.escape(existing.group(1)) + r"[ \t]*\n?",
+                "",
+                block_body,
+                count=1,
+                flags=_re.MULTILINE,
+            )
+        else:
+            new_body = block_body
+
+    new_content = content[:block_start] + new_body + rest[close_m.start():]
+    return new_content, True
+
+
+def smart_write(
+    path: str | Path,
+    api_port: int,
+    web_port: int,
+    bind_host: str = BIND_ALL,
+    storage_dir: str = "",
+    web_root: str = "",
+    updates_root: str = "",
+) -> str:
+    """install / lan enable-disable 共用的「改 Caddyfile」守卫策略。
+
+    正确性标准：**自定义（非我们生成的）配置绝不能整份重写** —— 那等于把
+    用户的 FRP 隧道、外挂证书、附加站点（8801 等）全部删掉。判据是首行
+    的生成标记（is_ours）。
+
+    策略：
+      · 文件不存在 / 是我们的   → 整份重写（write()，原子写）
+      · 不是我们的             → 只改 bind 行（rewrite_bind_in_place），
+                                  其余逐字节保留；找不到目标端口站点块时
+                                  抛 ValueError，宁可失败不可硬改。
+    两种路径都先备份 Caddyfile.bak-<时间戳>。
+    返回写入方式："rewritten" | "bind-only"。
+    """
+    target = Path(path)
+    old: str | None = None
+    if target.is_file():
+        try:
+            old = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            old = None
+
+    if old is not None and not is_ours(old):
+        new_content, ok_flag = rewrite_bind_in_place(old, bind_host, web_port)
+        if not ok_flag:
+            raise ValueError(
+                f"{target} 是自定义配置（缺生成标记），且找不到端口 {web_port} "
+                f"的站点块。为了不改坏它这里拒绝自动修改，请手工处理。"
+            )
+        _backup(target, old)
+        _atomic_write_text(target, new_content)
+        return "bind-only"
+
+    if old is not None:
+        _backup(target, old)
+    write(
+        target, api_port, web_port, bind_host,
+        storage_dir=storage_dir, web_root=web_root, updates_root=updates_root,
+    )
+    return "rewritten" 

@@ -32,6 +32,11 @@ from enum import Enum
 from pathlib import Path
 
 from . import caddyfile, firewall, network
+# T2：_is_ours / _rewrite_bind_in_place 的真身搬到了 caddyfile.py
+#（install 与 lan enable/disable 共用同一套守卫）。这里保留同名别名，
+# 本模块后文的调用点不用动。
+from .caddyfile import is_ours as _is_ours
+from .caddyfile import rewrite_bind_in_place as _rewrite_bind_in_place
 
 
 class LanState(str, Enum):
@@ -705,84 +710,6 @@ def _restart_service(service_name: str, *, dry_run: bool = False) -> tuple[bool,
     return True, f"服务 {service_name} 已重启"
 
 
-def _is_ours(caddyfile_content: str) -> bool:
-    """判断这份 Caddyfile 是不是 lanshare_cli 生成的。
-
-    我们的模板第一行固定写 `# 由 lanshare_cli 生成`。
-    没有这个标记说明是用户手写/历史遗留的配置 —— 里面可能有
-    FRP 隧道、自签证书、备用端口等一堆我们不知道的东西。
-
-    **绝不能整份重写**：那等于把用户辛苦维护的配置删掉。
-    """
-    for line in caddyfile_content.splitlines()[:3]:
-        if "由 lanshare_cli 生成" in line:
-            return True
-    return False
-
-
-def _rewrite_bind_in_place(content: str, bind_host: str, web_port: int) -> tuple[str, bool]:
-    """只改站点块的监听方式，其他内容原样保留。
-
-    返回 (新内容, 是否成功)。找不到目标站点块就返回 (原内容, False)。
-
-    ⚠️ 用的是 bind 指令，不是改首行 —— 改首行对 Caddy 无效（见 caddyfile.py 说明）。
-
-    三种情况的处理：
-        1. 要绑回环，块内没有 bind  → 在第一行之后插入 bind 127.0.0.1
-        2. 要绑回环，块内已有 bind  → 把地址替换成 127.0.0.1
-        3. 要绑所有接口，块内有 bind 127.0.0.1 → 删掉这一行
-    """
-    import re as _re
-
-    # 找到 :web_port { 的站点块起始位置
-    open_re = _re.compile(r"^[ \t]*:" + str(web_port) + r"\s*\{[^\n]*$", _re.MULTILINE)
-    m = open_re.search(content)
-    if not m:
-        # 也接受 0.0.0.0:web_port { 这种写法（用户自定义配置里可能有）
-        open_re2 = _re.compile(
-            r"^[ \t]*(?:0\.0\.0\.0|127\.0\.0\.1):" + str(web_port) + r"\s*\{[^\n]*$",
-            _re.MULTILINE,
-        )
-        m = open_re2.search(content)
-        if not m:
-            return content, False
-
-    block_start = m.end()      # 站点块首行的行尾
-    # 找匹配的收尾 }（简单起见：从块首往下找第一个行首的 }）
-    rest = content[block_start:]
-    close_m = _re.search(r"^\}[ \t]*$", rest, _re.MULTILINE)
-    if not close_m:
-        return content, False
-    block_body = rest[: close_m.start()]
-
-    # 块内现有的 bind 行
-    bind_re = _re.compile(r"^[ \t]*bind\s+([^\s#]+)[ \t]*$", _re.MULTILINE)
-    existing = bind_re.search(block_body)
-
-    if bind_host == caddyfile.BIND_LOOPBACK:
-        if existing:
-            # 有 bind 就替换地址
-            new_body = bind_re.sub(f"\tbind {caddyfile.BIND_LOOPBACK}", block_body, count=1)
-        else:
-            # 没有就在块首插一行
-            new_body = f"\n\tbind {caddyfile.BIND_LOOPBACK}" + block_body
-    else:
-        if existing and existing.group(1).strip() in ("127.0.0.1", "::1", "localhost"):
-            # 要开放：删掉那条只绑回环的 bind。
-            # ⚠️ 必须连同换行一起删，否则留下一行空行，反复开关会让文件越来越长。
-            new_body = _re.sub(
-                r"^[ \t]*bind\s+" + _re.escape(existing.group(1)) + r"[ \t]*\n?",
-                "",
-                block_body,
-                count=1,
-                flags=_re.MULTILINE,
-            )
-        else:
-            # 本来就是开放的，或 bind 到别的地址（不是我们能判断的），不动
-            new_body = block_body
-
-    new_content = content[:block_start] + new_body + rest[close_m.start():]
-    return new_content, True
 
 
 def _write_caddyfile_and_restart(

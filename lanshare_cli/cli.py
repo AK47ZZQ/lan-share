@@ -205,6 +205,65 @@ class Layout:
         ]
 
 
+def write_caddyfile_step(layout: "Layout", api_port: int, web_port: int) -> int:
+    """install 的第 6 步：守卫式写入 Caddyfile + caddy 语法校验。
+
+    抽成独立函数的原因：T2 的守卫策略（legacy 配置不整份重写）必须有单测，
+    而整个 install() 根本跑不到单测里 —— 它要提权、装服务、初始化 PG。
+
+    返回 0 = 成功，1 = 失败（已经用 fail()/say() 报过原因）。
+    """
+    try:
+        # 先看旧配置里用户选的是「局域网开」还是「关」。
+        # 不看的话，修复安装 / 升级会把用户开好的局域网静默重置成关闭 ——
+        # 这个重置没有任何提示，用户只会觉得「怎么突然手机又连不上了」。
+        previous_bind = caddyfile.detect_bind_host(layout.caddyfile)
+        if previous_bind is None:
+            # 文件不存在（全新安装）或文件在但没有本端口的站点 —— bind 取
+            # 默认「开启」；文件内容是不是我们的交给 smart_write 判断。
+            bind_host = caddyfile.BIND_ALL
+            say("    全新安装，局域网访问默认开启")
+        else:
+            bind_host = previous_bind
+            mode = "开启" if bind_host == caddyfile.BIND_ALL else "关闭（仅本机）"
+            ok(f"沿用上次的局域网设置：{mode}")
+
+        mode = caddyfile.smart_write(
+            layout.caddyfile,
+            api_port=api_port,
+            web_port=web_port,
+            bind_host=bind_host,
+            # 证书/CA 存在安装目录下，不用 Caddy 默认的 SYSTEM AppData
+            storage_dir=str(layout.root / "certs" / "caddy"),
+            # 静态资源由 Caddy 直接发（绕开 API 中间件，避免 /assets 403 白屏）
+            web_root=str(layout.root / "web" / "dist"),
+            # 更新包目录（3.96）：放程序目录下，不放数据目录 ——
+            # 数据目录是用户文件根，网盘会把里面的东西列给用户看
+            updates_root=str(layout.root / "updates"),
+        )
+        if mode == "bind-only":
+            say("    检测到自定义 Caddyfile：只改监听方式，其余内容原样保留")
+        ok(str(layout.caddyfile))
+    except (OSError, ValueError) as exc:
+        fail(f"{exc}")
+        return 1
+
+    # 用 caddy 自己校验，别等启动才发现语法错。
+    # caddy.exe 不在（单测环境）就跳过 —— 守卫逻辑的正确性不依赖它。
+    if layout.caddy.is_file():
+        result = subprocess.run(
+            [str(layout.caddy), "validate", "--config", str(layout.caddyfile),
+             "--adapter", "caddyfile"],
+            capture_output=True, timeout=60,
+        )
+        if result.returncode != 0:
+            fail("Caddyfile 校验失败")
+            say(result.stderr.decode("utf-8", "replace")[:800])
+            return 1
+        ok("Caddy 语法校验通过")
+    return 0
+
+
 # ──────────────────────────────────────────────────────────────
 # 输出
 # ──────────────────────────────────────────────────────────────
@@ -583,46 +642,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     # ── 6. Caddyfile ──
     step(6, total, "生成 Caddyfile")
-    try:
-        # 先看旧配置里用户选的是「局域网开」还是「关」。
-        # 不看的话，修复安装 / 升级会把用户开好的局域网静默重置成关闭 ——
-        # 这个重置没有任何提示，用户只会觉得「怎么突然手机又连不上了」。
-        previous_bind = caddyfile.detect_bind_host(layout.caddyfile)
-        if previous_bind is None:
-            bind_host = caddyfile.BIND_ALL      # 全新安装：默认开启（原有行为）
-            say("    全新安装，局域网访问默认开启")
-        else:
-            bind_host = previous_bind
-            mode = "开启" if bind_host == caddyfile.BIND_ALL else "关闭（仅本机）"
-            ok(f"沿用上次的局域网设置：{mode}")
-
-        caddyfile.write(
-            layout.caddyfile,
-            api_port=api_port,
-            web_port=web_port,
-            bind_host=bind_host,
-            # 证书/CA 存在安装目录下，不用 Caddy 默认的 SYSTEM AppData
-            storage_dir=str(layout.root / "certs" / "caddy"),
-            # 静态资源由 Caddy 直接发（绕开 API 中间件，避免 /assets 403 白屏）
-            web_root=str(layout.root / "web" / "dist"),
-            # 更新包目录（3.96）：放程序目录下，不放数据目录 ——
-            # 数据目录是用户文件根，网盘会把里面的东西列给用户看
-            updates_root=str(layout.root / "updates"),
-        )
-        ok(str(layout.caddyfile))
-        # 用 caddy 自己校验，别等启动才发现语法错
-        result = subprocess.run(
-            [str(layout.caddy), "validate", "--config", str(layout.caddyfile),
-             "--adapter", "caddyfile"],
-            capture_output=True, timeout=60,
-        )
-        if result.returncode != 0:
-            fail("Caddyfile 校验失败")
-            say(result.stderr.decode("utf-8", "replace")[:800])
-            return 1
-        ok("Caddy 语法校验通过")
-    except (OSError, ValueError) as exc:
-        fail(f"{exc}")
+    if write_caddyfile_step(layout, api_port=api_port, web_port=web_port) != 0:
         return 1
 
     # ── 7. 初始化数据库 ──
