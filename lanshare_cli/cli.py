@@ -375,6 +375,16 @@ def lock_certs_acl(certs: Path) -> None:
 
     Caddy 跑在 SYSTEM 下，收紧后读写不受影响。失败只警告不中止：
     权限没改掉比装不上强。
+
+    🔴 绝对不能加 /T（2026-11-04 实机踩到，生产被自己搞挂一次）：
+    icacls /T 会把 /inheritance:r 应用到**每一个子对象**，而 (OI)(CI) 是
+    目录继承标记、对文件无效 —— 结果是所有文件的 ACE 被清空，
+    root.crt 变成谁都读不了。Caddy 启动即报：
+        loading root cert: open ...\root.crt: Access is denied
+    服务卡在 PAUSED，整个网盘 502。
+
+    正确做法是只对目录本身断继承 + 授权，子对象靠**继承**自动跟随 ——
+    父的 ACL 一变，子对象立刻生效，不需要 /T。
     """
     try:
         import subprocess
@@ -382,8 +392,7 @@ def lock_certs_acl(certs: Path) -> None:
         subprocess.run(
             ["icacls", str(certs), "/inheritance:r",
              "/grant:r", "SYSTEM:(OI)(CI)F",
-             "/grant:r", "Administrators:(OI)(CI)F",
-             "/T", "/C", "/Q"],
+             "/grant:r", "Administrators:(OI)(CI)F"],
             capture_output=True, text=True, timeout=180,
         )
     except Exception as exc:                       # noqa: BLE001
