@@ -758,7 +758,9 @@ def _write_caddyfile_and_restart(
                 )
                 return False
             if not dry_run:
-                target.write_text(new_content, encoding="utf-8", newline="")
+                # 原子写（与 caddyfile.write 同一套）：bind-only 改的也是
+                # Caddy 正在吃的配置文件，写一半崩了同样起不来。
+                caddyfile._atomic_write_text(target, new_content)
             mode = (
                 f"bind {caddyfile.BIND_LOOPBACK}（仅本机）"
                 if bind_host == caddyfile.BIND_LOOPBACK
@@ -791,7 +793,8 @@ def _write_caddyfile_and_restart(
         #（2026-11-04 值守批修：原实现把返回值丢掉，回滚成功与否全靠猜）
         if old_content is not None and not dry_run:
             try:
-                target.write_text(old_content, encoding="utf-8", newline="")
+                # 回滚同样走原子写：恢复动作本身不能制造「半份配置」
+                caddyfile._atomic_write_text(target, old_content)
                 ok2, msg2 = _restart_service(info.caddy_service)
                 report.add("回滚配置", ok2,
                            "已恢复原 Caddyfile 并重启" if ok2
