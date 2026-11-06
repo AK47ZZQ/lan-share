@@ -227,6 +227,11 @@
       "title": "Files",
       "type": "array"
      },
+     "public_to_github": {
+      "default": "",
+      "title": "Public To Github",
+      "type": "string"
+     },
      "title": {
       "title": "Title",
       "type": "string"
@@ -367,6 +372,100 @@
     "title": "FeedbackAppendBody",
     "type": "object"
    },
+   "FeedbackConfigBody": {
+    "properties": {
+     "enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Enabled"
+     },
+     "gh_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gh Enabled"
+     },
+     "gh_repo": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gh Repo"
+     },
+     "gh_token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Gh Token"
+     },
+     "inbox_token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Inbox Token"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source"
+     },
+     "token": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Token"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Url"
+     }
+    },
+    "title": "FeedbackConfigBody",
+    "type": "object"
+   },
    "FinishBody": {
     "properties": {
      "ended_at": {
@@ -478,6 +577,11 @@
       "maxLength": 64,
       "title": "Id",
       "type": "string"
+     },
+     "public": {
+      "default": false,
+      "title": "Public",
+      "type": "boolean"
      },
      "source": {
       "default": "",
@@ -1775,6 +1879,56 @@
      }
     },
     "summary": "Feedback Admin List"
+   }
+  },
+  "/api/admin/feedback-config": {
+   "get": {
+    "operationId": "admin_get_feedback_config_api_admin_feedback_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Admin Get Feedback Config"
+   },
+   "post": {
+    "operationId": "admin_set_feedback_config_api_admin_feedback_config_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FeedbackConfigBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Admin Set Feedback Config"
    }
   },
   "/api/admin/feedback-relay": {
@@ -7546,6 +7700,56 @@
      }
     },
     "summary": "Run Backup"
+   }
+  },
+  "/local/feedback-config": {
+   "get": {
+    "operationId": "get_feedback_config_local_feedback_config_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Feedback Config"
+   },
+   "post": {
+    "operationId": "set_feedback_config_local_feedback_config_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FeedbackConfigBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Feedback Config"
    }
   },
   "/local/public-url": {

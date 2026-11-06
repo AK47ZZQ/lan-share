@@ -31,6 +31,9 @@ class _FeedbackPageState extends State<FeedbackPage>
   final _bodyCtrl = TextEditingController();
   final List<PlatformFile> _images = [];
   bool _sending = false;
+  // v4.0.9 P4：公开到 GitHub。默认关 —— 公开意味着任何人都能看到，
+  // 必须由用户主动勾选，不能替他决定。
+  bool _publicToGh = false;
   String _appVer = '';
   String _device = '';
 
@@ -122,6 +125,7 @@ class _FeedbackPageState extends State<FeedbackPage>
       await FeedbackApi.submit(
         title: title,
         type: _type,
+        publicToGithub: _publicToGh,
         body: _bodyCtrl.text.trim(),
         appVer: _appVer,
         device: _device,
@@ -132,6 +136,7 @@ class _FeedbackPageState extends State<FeedbackPage>
         ],
       );
       if (!mounted) return;
+      if (mounted) setState(() => _publicToGh = false);
       showToast('已提交，处理状态可在历史记录里查看');
       setState(() {
         _titleCtrl.clear();
@@ -241,6 +246,23 @@ class _FeedbackPageState extends State<FeedbackPage>
                     ])),
             ])),
       const SizedBox(height: 10),
+      // v4.0.9 P4：公开到 GitHub。默认关 —— 公开意味着任何人可见，
+      // 得用户自己点头。文案把后果说在前面，不藏在折叠里。
+      CheckboxListTile(
+          value: _publicToGh,
+          onChanged: (v) => setState(() => _publicToGh = v ?? false),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('同时公开到 GitHub', style: TextStyle(fontSize: 13.5)),
+          subtitle: Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                  _publicToGh
+                      ? '⚠️ 这条反馈、App 版本和设备信息会公开在互联网上，任何人可见。别写密码、内网地址、公司名。截图不会上传。'
+                      : '勾选后由中继端代发，你不需要 GitHub 账号',
+                  style: TextStyle(fontSize: 11.5, color: cs.onSurfaceVariant))),
+      ),
       FilledButton.icon(
           onPressed: _sending ? null : _submit,
           icon: _sending

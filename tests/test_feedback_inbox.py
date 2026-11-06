@@ -111,7 +111,12 @@ def test_inbox_dedupes_same_id(client):
 
 
 def test_relay_payload_excludes_sensitive_fields():
-    """上报体只该有这九个字段。任何路径/附件/Token 都不许混进去。"""
+    """上报体只该有这十个字段。任何路径/附件/Token 都不许混进去。
+
+    `public`（v4.0.9 P4）是布尔量：只表示「提交者希望公开到 GitHub」，
+    本身不含任何可定位到人的信息，所以进白名单是安全的。真正建 issue 的
+    是接收端 —— 本机永远不持有仓库写权限的 token。
+    """
     item = {
         "id": "20260101-abc",
         "title": "标题",
@@ -129,8 +134,9 @@ def test_relay_payload_excludes_sensitive_fields():
     payload = feedback_relay.build_payload(item)
     assert set(payload) == {
         "id", "title", "type", "body", "app_ver", "device", "user", "created",
-        "source",
+        "source", "public",
     }
+    assert payload["public"] is False   # 没勾选时必须是明确的 False，不是缺省
     blob = json.dumps(payload)
     assert "secret" not in blob
     assert "should-not-leak" not in blob

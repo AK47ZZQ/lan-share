@@ -1,3 +1,97 @@
+## 2026-11-06 — v4.0.9：反馈三端入口 + 公开到 GitHub
+
+### 现场
+
+反馈这件事是**半成品**：App 有完整页面，但
+
+- 网页端 16 个页面里一个反馈页都没有，`api/feedback` 一次都没被调用过
+- 托盘面板没有任何入口（`NotificationsBell` 能收 `kind === 'feedback'` 的 SSE 信号，
+  却没有任何地方能提交）
+- 跨机上报接口 `POST /api/feedback/inbox` 早就写好了，但 `feedback_inbox_token`
+  从没配过 —— 一次都没打通
+- 今天 14:52 用户从手机提的那条反馈，确实落在 `data/反馈/待处理/` 里了，
+  但**没有任何通知**，等于提给了空气
+
+### 调研结论（决定架构的那两条）
+
+翻了一圈主流做法，两条证据改变了设计：
+
+1. **GitHub Issues 对普通用户是墙**。Docket 那篇对比的原话：
+   「account is the whole problem」—— 写给开发者用的工具，客户本来就有账号；
+   卖给不写代码的人，他们不会为了报告一个按钮位置去注册开发者账号。
+   LAN Share 的用户是家人朋友，所以**默认不能让用户看到「GitHub」这个词**。
+
+2. **token 必须待在服务端**。独立开发者的零成本方案（Tally → Worker → GitHub）
+   之所以成立，是因为把 PAT 放在 Worker 里，客户端只发 JSON。反过来做
+   （客户端持 token）等于拆包就能往仓库灌垃圾。
+
+于是「公开到 GitHub」从**默认行为**降为**用户主动勾选**，且真正建 issue 的动作
+挪到接收端——客户端只发一个 `public: true` 布尔值。
+
+### 改了什么
+
+**网页端（新增）**
+
+- `web/src/views/FeedbackView.vue`：列表 / 新建 / 详情三态。字段与 App 的
+  `feedback_page.dart` 对齐，只是渲染层不同。
+- `web/src/api/feedback.ts`：`list/create/detail/append` + `statusClass()`
+  状态色（列表和详情共用一份，避免两处色值漂移）。
+- 侧边栏 + 用户菜单各加一个「💬 反馈」，所有角色可见（`guest` 也能提）。
+- 提交成功提示是「**已保存（fid）**」而不是「提交成功」—— 本地一定落盘，
+  上报是附带动作，用词不能骗人。
+
+**设置页（新增一块）**
+
+- 「💬 反馈上报」卡片：开关 / 接收端地址 / token（留空不改）/ 本机标识。
+- token 三个字段读回来是「已设置（N 位）」的脱敏文案，**只有真的打字了才提交** ——
+  否则会把脱敏串原样写进库，下次上报静默失败，而界面上看不出来。
+- 后端 `read_feedback_config()` / `apply_feedback_config()` 做成纯函数，
+  `/local/feedback-config`（托盘）和 `/api/admin/feedback-config`（网页）
+  共用同一份 —— 两条通道各写一遍必然漂移。
+- 明文 `http://` 只允许 `127.0.0.1`：token 会跟着请求发出去，对外的必须 https。
+- **逐项保存**而不是整份覆盖：只改地址不该把 token 清空。
+
+**公开通道（P3+P4）**
+
+- `POST /api/feedback` 新增 `public_to_github` 表单字段，写进 frontmatter 的
+  `公开:` 行，并随 relay 上报体带一个 `public` 布尔值。
+- `feedback_inbox._publish_issue()`：接收端收到 `public: true` 的反馈时，
+  用**自己的** `feedback_gh_repo` + `feedback_gh_token` 代发 issue，
+  链接写回 frontmatter 的 `issue:` 行，前端详情页显示「在 GitHub 查看 ↗」。
+- 代发失败**不影响收件**：GitHub 500 了反馈照样落盘。收件比公开重要。
+- `build_payload()` 白名单加 `public`（布尔值，不含任何可定位到人的信息）。
+
+**托盘**
+
+- 面板新增「反馈」卡片：「提反馈」+「导出诊断包」。
+- 服务在跑 → 直接开网页版 `/feedback`（有登录态、能看历史和处理状态）；
+  服务没跑 → 开页面只会得到浏览器错误页，改为提示先导出诊断包。
+  这就是 §「反馈通道不能和被反馈的故障共用链路」的落地。
+
+**App**
+
+- 提交页加「同时公开到 GitHub」复选框，默认关。勾上后副标题立刻变红字警告
+  「会公开在互联网上，任何人可见，别写密码/内网地址/公司名」。
+- 提交成功后自动复位勾选 —— 否则下一条又默认公开，容易误发。
+
+**删除**
+
+- 无。
+
+### 教训
+
+**「反馈通道」和「被反馈的故障」不能共用同一条链路。** 最需要反馈的时刻是
+「公网打不开了」，而 relay 恰好走的就是那条打不开的隧道 —— 两边一起哑。
+托盘入口不经过 API 写文件，是这次能兜住这种情况的原因。
+
+### 测试
+
+- 新增 `tests/test_feedback_public.py`（9 条）：代发触发 / 未勾不调 GitHub /
+  无 token 仍收件 / GitHub 500 不丢反馈 / issue 链接写回 frontmatter /
+  token 脱敏 / 明文 http 拒绝 / 回环 http 放行 / 逐项更新保留 token。
+- `test_relay_payload_excludes_sensitive_fields` 的白名单断言加 `public`
+  并补一条「默认必须是 False 而不是缺省」。
+
 ## 2026-11-06 — v4.0.8：连接服务器列表里的僵尸地址
 
 ### 现场

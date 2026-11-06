@@ -1305,6 +1305,10 @@ namespace LanShare
                     OpenUrl(_cfg.WebUrl);
                     break;
 
+                case "feedback":
+                    OpenFeedback();
+                    break;
+
                 case "openLogs":
                     OpenFolder(_cfg.LogFolder);
                     break;
@@ -2403,6 +2407,27 @@ namespace LanShare
                 return wex.Response != null;
             }
             catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// 打开反馈入口（v4.0.9 P1）。
+        ///
+        /// 服务在跑 → 开网页版反馈页：那边有登录态，能提交、能看历史和处理状态。
+        /// 服务没跑 → 页面打不开，这时候硬开只会得到一个浏览器错误页；
+        /// 真正有用的是诊断包，所以直接把用户引到那个按钮上。
+        /// </summary>
+        private void OpenFeedback()
+        {
+            if (TcpConnects("127.0.0.1", _cfg.WebPort, 800))
+            {
+                string baseUrl = (_cfg.WebUrl ?? "").TrimEnd('/');
+                if (baseUrl.Length == 0) baseUrl = "https://localhost:" + _cfg.WebPort;
+                OpenUrl(baseUrl + "/feedback");
+            }
+            else
+            {
+                SendToast("网盘服务没在运行，先点「导出诊断包」，把文件发给开发者");
+            }
         }
 
         private void OpenUrl(string url)

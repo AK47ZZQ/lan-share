@@ -146,3 +146,113 @@ async def set_public_url(request: Request, body: PublicUrlBody):
         pass
 
     return {"ok": True, "url": primary}
+
+
+# ───────────────────────── 反馈上报配置（v4.0.9 P2） ─────────────────────────
+# 和更新源同一套心智模型：本机可以填一个「自己维护的接收端」，没填就走公开通道。
+# 区别在于反馈是**推**不是拉：推失败等于数据丢失，所以这里只管「往哪推」，
+# 落盘永远在本地先做完。
+#
+# 逻辑写成两个纯函数（read/apply），因为 /local 与 /api/admin 两条通道都要用：
+# 托盘没有登录态走 /local，网页设置页走 admin。两处各写一遍必然漂移。
+
+_SECRET_KEYS = (
+    settings.FEEDBACK_RELAY_TOKEN,
+    settings.FEEDBACK_GH_TOKEN,
+    settings.FEEDBACK_INBOX_TOKEN,
+)
+
+
+def _mask(v: str) -> str:
+    """token 只回「设了没 / 多少位」，绝不回明文 —— 这个页面可能被投屏或截图。"""
+    v = (v or "").strip()
+    return f"已设置（{len(v)} 位）" if v else ""
+
+
+class FeedbackConfigBody(BaseModel):
+    enabled: bool | None = None          # 自定义地址上报开关
+    url: str | None = None               # 接收端地址
+    token: str | None = None             # 发送方 Bearer（写入用，不回显）
+    source: str | None = None            # 本机标识
+    gh_enabled: bool | None = None       # 本机直连 GitHub（开发端自用）
+    gh_repo: str | None = None
+    gh_token: str | None = None
+    inbox_token: str | None = None       # 本机作为接收端时用
+
+
+def read_feedback_config() -> dict:
+    try:
+        g = settings.get_setting
+        return {
+            "enabled": (g(settings.FEEDBACK_RELAY_ENABLED, "") or "").strip() == "1",
+            "url": g(settings.FEEDBACK_RELAY_URL, "") or "",
+            "token": _mask(g(settings.FEEDBACK_RELAY_TOKEN, "")),
+            "source": g(settings.FEEDBACK_SOURCE, "") or "lanshare",
+            "gh_enabled": (g(settings.FEEDBACK_GH_ENABLED, "") or "").strip() == "1",
+            "gh_repo": g(settings.FEEDBACK_GH_REPO, "") or "",
+            "gh_token": _mask(g(settings.FEEDBACK_GH_TOKEN, "")),
+            "inbox_token": _mask(g(settings.FEEDBACK_INBOX_TOKEN, "")),
+            "available": True,
+            "error": "",
+        }
+    except Exception as exc:
+        return {"available": False, "error": f"读取配置失败：{exc}"}
+
+
+def apply_feedback_config(body: FeedbackConfigBody) -> None:
+    """校验并逐项落库。
+
+    逐项而不是整份覆盖：地址和 token 是两个输入框，用户可能只改一个。
+    整份覆盖会让「只改地址」把 token 清空 —— 而且界面上看不出来
+    （token 框显示的是脱敏文案），下次上报静默失败。
+    """
+    url = (body.url or "").strip()
+    if url and not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="上报地址必须是 http:// 或 https:// 开头")
+    if url.lower().startswith("http://") and "127.0.0.1" not in url and "localhost" not in url:
+        raise HTTPException(
+            status_code=422,
+            detail="明文 http 只允许本机。对外接收端必须用 https —— token 会跟着请求发出去",
+        )
+    repo = (body.gh_repo or "").strip()
+    if repo and "/" not in repo:
+        raise HTTPException(status_code=422, detail="仓库写成 owner/repo")
+
+    if body.enabled is not None:
+        settings.set_setting(settings.FEEDBACK_RELAY_ENABLED, "1" if body.enabled else "")
+    if body.url is not None:
+        settings.set_setting(settings.FEEDBACK_RELAY_URL, url)
+    if body.token is not None:
+        settings.set_setting(settings.FEEDBACK_RELAY_TOKEN, body.token.strip())
+    if body.source is not None:
+        raw = body.source.strip()
+        src = "".join(
+            ch for ch in raw if ch.isalnum() or ch in "_-" or "\u4e00" <= ch <= "\u9fff"
+        )
+        settings.set_setting(settings.FEEDBACK_SOURCE, src[:40] or "lanshare")
+    if body.gh_enabled is not None:
+        settings.set_setting(settings.FEEDBACK_GH_ENABLED, "1" if body.gh_enabled else "")
+    if body.gh_repo is not None:
+        settings.set_setting(settings.FEEDBACK_GH_REPO, repo)
+    if body.gh_token is not None:
+        settings.set_setting(settings.FEEDBACK_GH_TOKEN, body.gh_token.strip())
+    if body.inbox_token is not None:
+        settings.set_setting(settings.FEEDBACK_INBOX_TOKEN, body.inbox_token.strip())
+
+
+@router.get("/local/feedback-config")
+async def get_feedback_config(request: Request):
+    _require_local(request)
+    return read_feedback_config()
+
+
+@router.post("/local/feedback-config")
+async def set_feedback_config(request: Request, body: FeedbackConfigBody):
+    _require_local(request)
+    try:
+        apply_feedback_config(body)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
+    return {"ok": True}

@@ -37,6 +37,9 @@ class FeedbackApi {
     required String appVer,
     required String device,
     List<FeedbackImage> images = const [],
+    /// v4.0.9 P4：勾选后由中继端代发 GitHub Issue。
+    /// 客户端**不持有**任何 GitHub token —— 那是分发时绝不能带出去的东西。
+    bool publicToGithub = false,
   }) async {
     final dio = await _dio();
     final fd = FormData.fromMap({
@@ -45,6 +48,7 @@ class FeedbackApi {
       'body': body,
       'app_ver': appVer,
       'device': device,
+      if (publicToGithub) 'public_to_github': '1',
       'files': [
         for (final i in images)
           MultipartFile.fromBytes(i.bytes, filename: i.name),

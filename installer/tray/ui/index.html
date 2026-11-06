@@ -445,6 +445,20 @@ button.link {
           </div>
         </div>
       </div>
+
+      <!-- 反馈（v4.0.9 P1）。为什么这里只给一个按钮而不做输入框：
+           托盘没有登录态，自己攒一个表单就得再维护一套"谁在提、提到哪"的逻辑。
+           服务在跑时直接开网页版反馈页（有登录态、能看历史、能看状态）；
+           服务没跑时开也白开 —— 那时候真正有用的是诊断包。 -->
+      <div class="card">
+        <div class="card-title">反馈</div>
+        <div class="hint">遇到问题或有想法，告诉开发者</div>
+        <div class="btnrow">
+          <button class="mini primary" id="feedback">提反馈</button>
+          <button class="mini" id="fbdiag">导出诊断包</button>
+        </div>
+        <div class="hint" id="fbhint"></div>
+      </div>
     </div>
 
   </div>
@@ -842,6 +856,9 @@ document.getElementById('openweb').onclick  = () => post({ action: 'openWeb' });
 document.getElementById('restartall').onclick = () => post({ action: 'restartAll' });
 document.getElementById('stopall').onclick  = () => post({ action: 'stopAll' });
 document.getElementById('logs').onclick     = () => post({ action: 'openLogs' });
+document.getElementById('feedback').onclick = () => post({ action: 'feedback' });
+document.getElementById('fbdiag').onclick = () => post({ action: 'exportDiag' });
+
 document.getElementById('diag').onclick = () => post({ action: 'exportDiag' });
 document.getElementById('wanhelp').onclick  = () => post({ action: 'wanHelp' });
 document.getElementById('wantest').onclick  = () => post({ action: 'wanTest' });

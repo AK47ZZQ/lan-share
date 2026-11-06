@@ -1,6 +1,21 @@
 // 管理台域（v3.48 从 api.ts 按域拆分）：总览/治理/审计/会话设备/公告与站内
 // 通知管理/广播/成员与权限/邀请/授权矩阵/webhook/健康日报/公网地址/数据导出。
 import { handle, jpost } from './core'
+
+/** 反馈上报配置。token 三个字段回传的是「已设置（N 位）」这类脱敏文案，
+ *  不是明文 —— 读回来再原样提交会把脱敏串写进库里，所以提交时必须跳过它们。 */
+export interface FeedbackConfig {
+  enabled: boolean
+  url: string
+  token: string
+  source: string
+  gh_enabled: boolean
+  gh_repo: string
+  gh_token: string
+  inbox_token: string
+  available: boolean
+  error: string
+}
 import type {
   AdminDevice, AdminNotificationItem, AdminSession, AdminUser, Announcement,
   AuditItem, BroadcastItem, ConsoleOverview, DupGroup, Grant, LargeFileItem,
@@ -63,6 +78,14 @@ export const consoleApi = {
   getPublicUrl: () => fetch('/api/public-url').then(r => handle<{ public_base_url: string }>(r)),
   // 备用入口已删除（2026-11-04）：只发 url，服务端也只认 url。
   setPublicUrl: (url: string) => jpost('/api/admin/public-url', { url }).then(r => handle<{ ok: boolean }>(r)),
+
+  // 反馈上报配置（v4.0.9 P2）：和更新源同一套心智模型 ——
+  // 本机可配自己的接收端，没配就走公开通道。token 回传的是脱敏文案。
+  getFeedbackConfig: () => fetch('/api/admin/feedback-config')
+    .then(r => handle<FeedbackConfig>(r)),
+  setFeedbackConfig: (body: Partial<Pick<FeedbackConfig,
+    'enabled' | 'url' | 'token' | 'source' | 'gh_enabled' | 'gh_repo' | 'gh_token' | 'inbox_token'>>) =>
+    jpost('/api/admin/feedback-config', body).then(r => handle<{ ok: boolean }>(r)),
 
   // 成员与权限 / 邀请 / 授权矩阵
   adminUsers: () => fetch('/api/admin/users').then(r => handle<AdminUser[]>(r)),

@@ -15,6 +15,7 @@ import SettingsView from './views/SettingsView.vue'
 import GovernanceView from './views/GovernanceView.vue'
 import StatusView from './views/StatusView.vue'
 import TodosView from './views/TodosView.vue'
+import FeedbackView from './views/FeedbackView.vue'
 
 // 产品定位（2026-09-10）：Web = 站长管理工作台，App = 内容入口。
 // '/' 即控制台总览（meta.admin，成员被 App.vue 守卫转去 /files）；
@@ -31,6 +32,7 @@ export const router = createRouter({
     { path: '/shares', name: 'shares', component: SharesView },
     { path: '/activity', name: 'activity', component: ActivityView },
     { path: '/todos', name: 'todos', component: TodosView },
+    { path: '/feedback', name: 'feedback', component: FeedbackView },
     { path: '/admin', name: 'admin', component: AdminView, meta: { admin: true } },
     { path: '/notify-ops', name: 'notify-ops', component: NotifyOpsView, meta: { admin: true } },
     { path: '/share-ops', name: 'share-ops', component: ShareOpsView, meta: { admin: true } },

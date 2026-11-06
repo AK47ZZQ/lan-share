@@ -107,6 +107,9 @@ def build_payload(item: dict[str, Any]) -> dict[str, Any]:
         "user": _pseudonym(item.get("user") or "", salt),
         "created": item.get("created", ""),
         "source": (salt or "")[:40],
+        # P4：是否要求公开到 GitHub。真正建 issue 的是接收端 ——
+        # 本机永远不持有仓库写权限的 token。
+        "public": bool(item.get("public")),
     }
 
 

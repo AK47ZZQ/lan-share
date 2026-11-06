@@ -156,6 +156,9 @@ def _to_item(mm: dict, with_body: bool = False) -> dict:
         "created": mm.get("创建", ""),
         "updated": mm.get("更新") or mm.get("创建", ""),
         "images": [f"/api/feedback/{fid}/img/{name}" for name in _images_of(fid)],
+        # P4：是否要求公开、以及公开后的 issue 地址（由中继端回填）
+        "public": (mm.get("公开") or "").strip() == "是",
+        "issue_url": mm.get("issue") or "",
     }
     if with_body:
         item["body"] = mm.get("body", "")
@@ -169,6 +172,9 @@ async def feedback_create(request: Request,
                           body: str = Form(""),
                           app_ver: str = Form(""),
                           device: str = Form(""),
+                          # P4（2026-11-06）：勾选后中继端代发 GitHub Issue。
+                          # 用户不需要 GitHub 账号 —— token 只存在于接收端。
+                          public_to_github: str = Form(""),
                           files: list[UploadFile] = File(default=[]),
                           # 默认给一个空实例而不是 None：FastAPI 不接受
                           # `BackgroundTasks | None`（会报 Invalid args for
@@ -224,7 +230,7 @@ async def feedback_create(request: Request,
         f"用户: {user}\n"
         f"创建: {now}\n"
         f"更新: {now}\n"
-        "---\n\n"
+        f"公开: {'是' if public_to_github.strip() in ('1', 'true', 'on') else ''}\n"        "---\n\n"
         f"{body.strip()[:2000]}\n"
     )
     (_dir() / "待处理" / f"{fid}.md").write_text(md, encoding="utf-8")
@@ -250,6 +256,7 @@ async def feedback_create(request: Request,
                 "device": device,
                 "user": user,
                 "created": now,
+                "public": public_to_github.strip() in ("1", "true", "on"),
             },
         )
 

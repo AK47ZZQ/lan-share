@@ -19,6 +19,7 @@ from app.settings import (ACTIVITY_CLEARED_AT, NOTIFY_WEBHOOK_URL,
 from app.store import devices as devices_store
 from app.store import shares as shares_store
 from app.store import users as users_store
+from app.api.local_config import FeedbackConfigBody, apply_feedback_config, read_feedback_config
 
 
 # 路由挂到本模块 router；由 admin.py 门面聚合（URL 不变）
@@ -265,3 +266,22 @@ def admin_metrics(_admin=Depends(require_admin)):
 def _backup_orchestrator_status() -> dict | None:
     from app.services import backup as _backup_svc
     return _backup_svc.last_status()
+
+# ─────────────── 反馈上报配置（v4.0.9 P2）：网页设置页用的登录态通道 ───────────────
+# 逻辑本身在 local_config 里（托盘走 /local，网页走这里），共用同一份
+# read/apply —— 两处各写一遍必然漂移：token 脱敏规则、校验规则、默认值都会分叉。
+
+@router.get("/api/admin/feedback-config")
+def admin_get_feedback_config(_admin=Depends(require_admin)):
+    return read_feedback_config()
+
+
+@router.post("/api/admin/feedback-config")
+def admin_set_feedback_config(body: FeedbackConfigBody, _admin=Depends(require_admin)):
+    try:
+        apply_feedback_config(body)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
+    return {"ok": True}

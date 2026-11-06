@@ -16,11 +16,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -28,7 +30,11 @@ from app import settings
 from app.config import SHARE_ROOT
 from app.security import require_admin
 
+log = logging.getLogger(__name__)
 router = APIRouter()
+
+# 代发 issue 用的超时。relay 本身是后台任务，用户感知不到这段等待。
+_GH_TIMEOUT = 15.0
 
 _MAX_PER_SOURCE_PER_DAY = 200
 _SAFE_SOURCE = re.compile(r"[^0-9A-Za-z_\-\u4e00-\u9fff]")
@@ -43,6 +49,9 @@ class InboxItem(BaseModel):
     device: str = Field(default="", max_length=80)
     user: str = Field(default="", max_length=60)
     created: str = Field(default="", max_length=32)
+    # P4（2026-11-06）：提交方要求「公开到 GitHub」。
+    # 客户端**不持有** GitHub token —— 那个动作只能在接收端发生。
+    public: bool = False
     source: str = Field(default="", max_length=40)
 
 
@@ -82,6 +91,51 @@ def _token_ok(got: str, want: str) -> bool:
     return hmac.compare_digest(got.encode("utf-8"), want.encode("utf-8"))
 
 
+async def _publish_issue(item: InboxItem, source: str) -> str:
+    """把一条要求公开的反馈变成 GitHub Issue，返回 html_url（失败返回空串）。
+
+    **为什么在这里做、而不是在用户机器上做**：建 issue 需要仓库写权限的 token。
+    分发出去的安装包里绝不能带这东西 —— 一旦带上，任何人拆包就能往仓库灌垃圾。
+    所以客户端只勾一个「公开」，真正落地的动作由接收端用自己的凭据完成。
+    """
+    repo = (settings.get_setting(settings.FEEDBACK_GH_REPO, "") or "").strip()
+    token = (settings.get_setting(settings.FEEDBACK_GH_TOKEN, "") or "").strip()
+    if not repo or not token:
+        log.info("收到公开请求，但接收端没配 feedback_gh_repo / feedback_gh_token，跳过代发")
+        return ""
+    kind = item.type or "other"
+    body = "\n".join([
+        item.body or "(无正文)",
+        "",
+        "---",
+        f"- 编号：`{item.id}`",
+        f"- 类型：{kind}",
+        f"- 版本：{item.app_ver or '-'}",
+        f"- 设备：{item.device or '-'}",
+        f"- 来源：{source}",
+        f"- 创建：{item.created or '-'}",
+        "",
+        "_由 LAN Share 反馈中继代发（提交者在客户端勾选「公开」）_",
+    ])
+    try:
+        async with httpx.AsyncClient(timeout=_GH_TIMEOUT) as c:
+            r = await c.post(
+                f"https://api.github.com/repos/{repo}/issues",
+                json={"title": f"[反馈/{kind}] {(item.title or '(无标题)')[:240]}", "body": body},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+        if r.status_code < 300:
+            return str(r.json().get("html_url") or "")
+        log.warning("代发 issue 失败：HTTP %s %s", r.status_code, (r.text or "")[:200])
+    except Exception as exc:
+        log.warning("代发 issue 异常：%s", exc)
+    return ""
+
+
 @router.post("/api/feedback/inbox")
 async def feedback_inbox(
     item: InboxItem,
@@ -115,6 +169,10 @@ async def feedback_inbox(
     if path.exists():  # 重发不重复写
         return {"ok": True, "id": fid, "dup": True}
 
+    # P4：要求公开的，先在接收端代发 issue。失败不影响收件 ——
+    # 反馈本身比「公开」这个附加动作重要得多。
+    issue_url = await _publish_issue(item, source) if item.public else ""
+
     md = "\n".join(
         [
             "---",
@@ -129,6 +187,8 @@ async def feedback_inbox(
             f"来源: {source}",
             f"创建: {item.created or now}",
             f"更新: {now}",
+            f"公开: {'是' if item.public else ''}",
+            f"issue: {issue_url}",
             "---",
             "",
             item.body,
@@ -142,7 +202,7 @@ async def feedback_inbox(
         json.dumps(item.model_dump(), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return {"ok": True, "id": fid}
+    return {"ok": True, "id": fid, "issue_url": issue_url}
 
 
 @router.get("/api/feedback/inbox/status")
