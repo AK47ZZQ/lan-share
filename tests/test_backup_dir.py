@@ -162,6 +162,39 @@ class TestPruneSafety:
         for s in stamps[:-keep]:
             assert f"meta-{s}.db" not in remaining
 
+    def test_prunes_dump_suffix_too(self, monkeypatch, tmp_path):
+        """PG 引擎的 dump 后缀是 .dump，滚动淘汰必须同样认它。
+
+        不认的后果是「老的不删、新的不认」，备份目录越滚越大，
+        而 BACKUP_KEEP 形同虚设。
+        """
+        keep = backup_svc.BACKUP_KEEP
+        stamps = [f"202602{i:02d}-040000" for i in range(1, keep + 4)]
+        for s in stamps:
+            (tmp_path / f"meta-{s}.dump").write_text("PGDMP", encoding="utf-8")
+            (tmp_path / f"settings-{s}.json").write_text("{}", encoding="utf-8")
+
+        monkeypatch.setattr(backup_svc, "backup_dir", lambda: tmp_path)
+        backup_svc._prune_old()
+
+        remaining = sorted(p.name for p in tmp_path.iterdir())
+        assert len(remaining) == keep * 2
+        for s in stamps[-keep:]:
+            assert f"meta-{s}.dump" in remaining
+        for s in stamps[:-keep]:
+            assert f"meta-{s}.dump" not in remaining
+
+    def test_dump_suffix_matches_engine(self, monkeypatch):
+        """后缀必须如实反映内容：PG 的 pg_dump -Fc 归档不是 sqlite 库文件。
+
+        2026-11-06 排障：备份叫 meta-*.db，用 sqlite 打开报
+        'file is not a database'，差点被判定成「备份坏了」。
+        """
+        monkeypatch.setattr(backup_svc, "USE_PG", True)
+        assert backup_svc._dump_suffix() == ".dump"
+        monkeypatch.setattr(backup_svc, "USE_PG", False)
+        assert backup_svc._dump_suffix() == ".db"
+
     def test_missing_dir_is_noop(self, monkeypatch, tmp_path):
         monkeypatch.setattr(backup_svc, "backup_dir",
                             lambda: tmp_path / "does-not-exist")

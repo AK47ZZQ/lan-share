@@ -164,7 +164,7 @@ def run_backup_once(push=None) -> dict:
         set_setting(STATUS_KEY, json.dumps(status, ensure_ascii=False))
         return status
     try:
-        dump = _dump_to(dest / f"meta-{stamp}.db")
+        dump = _dump_to(dest / f"meta-{stamp}{_dump_suffix()}")
         if dump is _NO_DUMP:
             status["detail"] = "当前引擎无可用 dump 工具（PG 需 pg_dump 在 PATH）"
             raise RuntimeError(status["detail"])
@@ -341,6 +341,19 @@ def _write_settings_snapshot(p: Path) -> None:
     tmp.replace(p)   # 原子落位：不留半写假备份
 
 
+def _dump_suffix() -> str:
+    """数据库 dump 的文件后缀，按引擎给。
+
+    PG 引擎产出的是 `pg_dump -Fc` 的 custom 归档（文件头 `PGDMP`），
+    不是 SQLite 库文件；SQLite 引擎产出的才是真 `.db`。
+
+    2026-11-06 排障时踩到：备份目录里全是 `meta-*.db`，用 sqlite 工具打开
+    报 `file is not a database` —— 第一反应是「备份坏了」。实际上文件好好的，
+    只是名字骗人。出事的时候没人有时间去 xxd 看文件头，所以后缀必须诚实。
+    """
+    return ".dump" if USE_PG else ".db"
+
+
 def _prune_old() -> None:
     """滚动保留最近 BACKUP_KEEP **组**（终审 P1 修复：原按文件名排序时
     meta-* 字典序恒前于 settings-*，切片会先删光全部 dump——改为按
@@ -367,7 +380,10 @@ def _prune_old() -> None:
         return
 
     # 主文件 + 可选边车后缀
-    pat = re.compile(r"^(meta|settings)-(\d{8}-\d{6})\.(db|json)(-shm|-wal)?$")
+    # dump 后缀按引擎不同（PG=.dump / sqlite=.db），两种都要认 ——
+    # 漏一个的话，换成 PG 之后旧 `.db` 清不掉、新 `.dump` 也不识别，
+    # 备份目录会一直长。
+    pat = re.compile(r"^(meta|settings)-(\d{8}-\d{6})\.(db|dump|json)(-shm|-wal)?$")
 
     groups: dict[str, list] = {}
     orphans: list = []
