@@ -66,6 +66,26 @@ class Prefs {
     return a;
   }
 
+  /// 从历史地址里移除一条。
+  ///
+  /// 为什么需要：历史列表是**只增不减**的 —— 换过 IP、试过别人的服务器、
+  /// 用过的隧道下线了，那些地址会永远排在候选列表里。2026-11-06 主人机器上
+  /// 就积了三条僵尸记录：一条指向另一条隧道的端口（点进去是别的服务）、
+  /// 两条是同 IP 的 http/https 重复（那个 IP 早就不属于这台机器了）。
+  ///
+  /// 服务端删掉什么都不会影响本地这份列表，所以必须给用户一个删除入口。
+  static Future<void> forgetAddress(String url) async {
+    final a = url.trim().replaceAll(RegExp(r'/+$'), '');
+    final sp = await SharedPreferences.getInstance();
+    final rest = (await addresses()).where((e) => e != a).toList();
+    await sp.setStringList(_kAddresses, rest);
+    // 删的正好是「上次用过的」就把指针清掉，让它下次按列表首位回退，
+    // 否则会继续指向一个已经不在候选里的地址。
+    if (sp.getString(_kLast) == a) {
+      await sp.remove(_kLast);
+    }
+  }
+
   static Future<void> rememberAddress(String url) async {
     // 去尾部斜杠归一：UI 拼接是 '$base/thumb/...' 字符串直拼，
     // 存入 'https://host:8766/' 会产出 //thumb/... 全 404（对抗审查 P3）

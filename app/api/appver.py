@@ -541,11 +541,11 @@ def _lan_addresses() -> list[str]:
     该字段不能被用于把 App 导向假服务器：App 端探测走 TrustStore TLS
     握手裁决 + 响应指纹同源复核双门槛，伪造 lan 字段最坏是指向错误地址
     的 DoS，不构成凭据风险。"""
-    out: list[str] = []
+    found: list[str] = []
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
     except OSError:
-        return out
+        return found
     for info in infos:
         ip = str(info[4][0])
         parts = ip.split(".")
@@ -554,8 +554,43 @@ def _lan_addresses() -> list[str]:
         o = [int(p) for p in parts]
         is_private = (o[0] == 10 or (o[0] == 172 and 16 <= o[1] <= 31)
                       or (o[0] == 192 and o[1] == 168))
-        if is_private:
-            addr = f"https://{ip}:{_LAN_PORT}"
-            if addr not in out:
-                out.append(addr)
-    return out[:4]
+        if is_private and ip not in found:
+            found.append(ip)
+
+    # 排序，别让虚拟网卡把真网卡挤出 [:4]。
+    #
+    # 2026-11-06 实机：这台机器下发的是
+    #   192.168.56.1（VirtualBox host-only）
+    #   192.168.192.1（Hyper-V 默认交换机）
+    #   172.31.240.1（WSL）
+    # 而真正能连的以太网 192.168.1.100 排在后面、WLAN 直接没进来。
+    # 手机照着列表挨个试，前三个必然超时 —— 用户体感是「局域网连不上」。
+    egress = _egress_ip()
+    virtual_prefixes = ("192.168.56.", "192.168.192.")
+
+    def _rank(ip: str) -> tuple:
+        return (
+            0 if ip == egress else 1,                       # 出网用的那张卡最优先
+            1 if ip.startswith(virtual_prefixes) else 0,    # 已知虚拟网卡垫底
+            ip,                                             # 同档按字面量稳定排序
+        )
+
+    found.sort(key=_rank)
+    return [f"https://{ip}:{_LAN_PORT}" for ip in found[:4]]
+
+
+def _egress_ip() -> str:
+    """本机默认路由出口 IP（不发包，只让内核选一次路由）。拿不到返回空串。
+
+    这是判断「哪张网卡真的连着外面」最便宜也最可靠的办法：connect 一个 UDP
+    目标不会产生任何流量，只是让内核按路由表选出源地址。虚拟网卡（VirtualBox /
+    Hyper-V / WSL）没有默认路由，永远不会是答案。
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("223.5.5.5", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        s.close()

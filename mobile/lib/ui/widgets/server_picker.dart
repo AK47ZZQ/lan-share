@@ -134,6 +134,30 @@ class _ServerPickerSheetState extends State<_ServerPickerSheet> {
     });
   }
 
+  /// 删除一条历史地址。删之前问一句 —— 地址是手打过或扫来的，
+  /// 误删了要重新找很烦；但它只是个本地候选，不涉及服务器。
+  Future<void> _confirmForget(String url) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('移除这个地址？'),
+        content: Text('$url\n\n只从这台手机的候选列表里删掉，不影响服务器上的任何数据。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('移除')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await Prefs.forgetAddress(url);
+    if (!mounted) return;
+    setState(() => _addrs = _addrs.where((e) => e != url).toList());
+  }
+
   void _pick(String url) {
     Navigator.pop(context);
     widget.onPick(url);
@@ -155,7 +179,7 @@ class _ServerPickerSheetState extends State<_ServerPickerSheet> {
           children: [
             Text('连接服务器', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
-            Text('同一网络可直连家里；出门在外用公网入口（主/备隧道任选）。',
+            Text('同一网络可直连家里；出门在外用公网入口。',
                 style: theme.textTheme.bodySmall),
             const SizedBox(height: 12),
 
@@ -185,9 +209,8 @@ class _ServerPickerSheetState extends State<_ServerPickerSheet> {
                     leading: const Icon(Icons.cloud_outlined, size: 22),
                     title: Text(shortHost(a),
                         style: const TextStyle(fontSize: 14)),
-                    subtitle: Text(
-                        a == entries?.pub ? '主隧道 · 当前' : '备用隧道 · 当前',
-                        style: const TextStyle(fontSize: 11.5)),
+                    subtitle: const Text('公网入口 · 当前',
+                        style: TextStyle(fontSize: 11.5)),
                     trailing: Icon(Icons.check_circle,
                         size: 18, color: theme.colorScheme.primary)),
               if (a != current)
@@ -198,8 +221,7 @@ class _ServerPickerSheetState extends State<_ServerPickerSheet> {
                     title: Text(shortHost(a),
                         style: const TextStyle(fontSize: 14)),
                     subtitle: Text(
-                        '${a == entries?.pub ? '主隧道 · 公网' : '备用隧道 · 公网'}'
-                        '${_fpKnown ? '' : ' · 证书未验证'}',
+                        '公网入口${_fpKnown ? '' : ' · 证书未验证'}',
                         style: TextStyle(
                             fontSize: 11.5,
                             color: _fpKnown ? null : theme.colorScheme.error)),
@@ -217,7 +239,16 @@ class _ServerPickerSheetState extends State<_ServerPickerSheet> {
                     title: Text(shortHost(a),
                         style: const TextStyle(fontSize: 14)),
                     subtitle: Text(a, style: const TextStyle(fontSize: 11.5)),
-                    onTap: () => _pick(a)),
+                    onTap: () => _pick(a),
+                    // 历史列表只增不减，换过 IP 之后僵尸地址会一直排在这儿。
+                    // 长按和右侧 × 都能删 —— 长按是熟手的快捷方式，
+                    // × 是给不知道有这个功能的人看的。
+                    onLongPress: () => _confirmForget(a),
+                    trailing: IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        tooltip: '从候选列表移除',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _confirmForget(a))),
             ],
 
             if (widget.allowScan) ...[

@@ -80,6 +80,45 @@ def test_entries_are_login_free_and_carry_cert_fingerprint(client, auth):
     assert fp == "" or _FP_RE.match(fp), f"证书指纹格式不对: {fp!r}"
 
 
+def test_lan_addresses_put_real_nic_first(monkeypatch):
+    """LAN 候选必须把「真的连着外面」的那张网卡排第一。
+
+    2026-11-06 实机：下发的是 192.168.56.1（VirtualBox）/ 192.168.192.1
+    （Hyper-V）/ 172.31.240.1（WSL），真正能连的 192.168.1.100 反而在后面。
+    手机照着列表挨个试，前三个必然超时 —— 用户体感是「局域网连不上」。
+    """
+    import socket as _s
+    from app.api import appver
+
+    fake = [
+        (2, 1, 6, "", ("192.168.56.1", 0)),
+        (2, 1, 6, "", ("192.168.1.100", 0)),
+        (2, 1, 6, "", ("192.168.192.1", 0)),
+    ]
+    monkeypatch.setattr(appver.socket, "getaddrinfo", lambda *a, **k: fake)
+    monkeypatch.setattr(appver, "_egress_ip", lambda: "192.168.1.100")
+
+    out = appver._lan_addresses()
+    assert out[0] == "https://192.168.1.100:8765", "出口网卡必须排第一"
+    # 已知虚拟网卡垫底
+    assert out.index("https://192.168.56.1:8765") > 0
+    assert out.index("https://192.168.192.1:8765") > 0
+
+
+def test_egress_ip_is_safe_when_no_route(monkeypatch):
+    """没有默认路由（断网/纯内网）时不能抛，优雅返回空串。"""
+    from app.api import appver
+
+    class _BadSocket:
+        def __init__(self, *a, **k): pass
+        def connect(self, addr): raise OSError("no route")
+        def getsockname(self): return ("", 0)
+        def close(self): pass
+
+    monkeypatch.setattr(appver.socket, "socket", _BadSocket)
+    assert appver._egress_ip() == ""
+
+
 def test_no_alt_in_app_module():
     """防止有人把备用入口加回来却漏掉安全语义。"""
     import app.api.appver as appver
