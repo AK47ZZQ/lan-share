@@ -264,6 +264,50 @@ def format_report(d: dict) -> tuple[str, bool]:
 router = APIRouter()
 
 
+@router.get("/local/health")
+def local_health(request: Request):
+    """控制面板专用健康快照（只允许环回，无 session）。
+
+    为什么不让托盘走 /api/admin/healthreport：托盘是 WebView2 + C# 桥接，
+    没有 session cookie 走不了 admin 鉴权；而 gather_health() 会跑
+    `pip check` 子进程（1-2s），面板每 10s 刷一次等于常驻烧 CPU。
+    这里只收轻量只读项（磁盘/证书/备份/循环失败/孤儿计数），毫秒级。
+
+    暴露什么：与 /local/backup 同一威胁模型（环回 = 主人自己的机器），
+    只给聚合数字——孤儿文件只出 count 不出路径，攻击面最小化。
+    """
+    from app.api.local_config import _require_local
+
+    _require_local(request)
+    du = shutil.disk_usage(str(SHARE_ROOT))
+    orphans = _last_trash_orphans()
+    return {
+        "ts": time.time(),
+        "disk_used_pct": round(du.used / du.total * 100, 1) if du.total else None,
+        "disk_free_gb": round(du.free / 2**30, 1),
+        "cert_days_left": _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem"),
+        "backup_freshness": _backup_status(BACKUP_DEST),
+        "backup_orchestrator": _orchestrator_status(),
+        "loops_failing": loop_health.failing(),
+        "trash_orphans_count": (orphans or {}).get("count"),
+        "counts": counts_snapshot(),
+    }
+
+
+def counts_snapshot() -> dict:
+    """DB 计数快照：任何一项失败都降级为 None，健康快照不能因单表挂而 500。"""
+    counts: dict = {}
+    for name, fn in (("users", users_store.count),
+                     ("photos", photos_store.count),
+                     ("shares", shares_store.count),
+                     ("devices", devices_store.count)):
+        try:
+            counts[name] = fn()
+        except Exception:
+            counts[name] = None
+    return counts
+
+
 @router.get("/api/admin/healthreport")
 def admin_get_healthreport(_admin=Depends(require_admin)):
     cfg = get_report_config()

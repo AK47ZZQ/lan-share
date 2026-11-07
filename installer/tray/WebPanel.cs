@@ -292,6 +292,10 @@ namespace LanShare
                 { "certTrusted", true },
                 { "backup", FetchBackupState() },
                 { "certDaysLeft", CertDaysLeft() },
+                // 磁盘水位：本地毫秒级读（UI 线程可直接算，不走 HTTP）
+                { "disk", DiskPayload() },
+                // 健康快照：后台线程缓存，UI 线程只读缓存值
+                { "health", FetchHealth() },
             };
 
             // 局域网地址不要等 CLI —— 直接问网卡。
@@ -565,6 +569,76 @@ namespace LanShare
             }
             return _backupCache ?? new Dictionary<string, object>();
         }
+
+        // 健康快照缓存：与备份状态同一套「先回缓存、后台刷」纪律。
+        // API 没起来时面板显示上一次的数字而不是空白/冻住。
+        private Dictionary<string, object> _healthCache;
+        private DateTime _healthCacheAt = DateTime.MinValue;
+        private int _healthFetching;
+
+        /// <summary>
+        /// 拉取 /local/health（磁盘水位/证书余期/备份新鲜度/后台循环失败/孤儿计数）。
+        /// 🔴 永远不在 UI 线程同步等 HTTP —— 与 FetchBackupState 同一条红线。
+        /// </ fetching 刷新周期 30s：这些数字是分钟级的，10s 刷是浪费；
+        /// 用户点「重新检查状态」时 forceRefresh 提前过期。
+        /// </summary>
+        private Dictionary<string, object> FetchHealth(bool forceRefresh = false)
+        {
+            if (!_healthFetching
+                && (forceRefresh || (DateTime.Now - _healthCacheAt).TotalSeconds > 30))
+            {
+                _healthFetching = 1;
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        var fresh = ApiGet<Dictionary<string, object>>("/local/health", d => d, null);
+                        if (fresh != null && fresh.Count > 0)
+                        {
+                            _healthCache = fresh;
+                            _healthCacheAt = DateTime.Now;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // API 没起来：继续用旧值，卡片保持上一次的数字
+                    }
+                    finally
+                    {
+                        _healthFetching = 0;
+                    }
+                });
+            }
+            return _healthCache ?? new Dictionary<string, object>();
+        }
+
+        /// <summary>
+        /// 数据目录所在盘的磁盘水位（毫秒级本地读，可在 UI 线程直接算）。
+        /// 盘满 = 照片上传静默失败，这是家庭网盘最常见的"无声事故"，
+        /// 面板必须让人一眼看见。拿不到（盘符无效/网络盘）返回 null。
+        /// </summary>
+        private Dictionary<string, object> DiskPayload()
+        {
+            try
+            {
+                string root = System.IO.Path.GetPathRoot(
+                    System.IO.Path.GetFullPath(_cfg.DataFolder));
+                var drive = new System.IO.DriveInfo(root);
+                if (!drive.IsReady) return null;
+                long total = drive.TotalSize, free = drive.AvailableFreeSpace;
+                return new Dictionary<string, object>
+                {
+                    { "totalGb", Math.Round(total / 1073741824.0, 1) },
+                    { "freeGb", Math.Round(free / 1073741824.0, 1) },
+                    { "usedPct", total > 0 ? Math.Round((total - free) * 100.0 / total, 1) : 0.0 },
+                };
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
 
         /// <summary>
         /// 保存公网访问地址。
