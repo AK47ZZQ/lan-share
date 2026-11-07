@@ -5,8 +5,10 @@
 - 调度是"每分钟看一次表"而非长睡眠：改配置即时生效，重启不重发（按日期去重，
   服务器整天没到点开着的场景也能在到点后的第一分钟补发）。
 - gather() 只读本地状态不发网络请求；隧道探活是唯一出网动作，拆成独立参数，
-  单测不走。备份产物只看 BACKUP_DEST 里的文件时间戳——备份是 Task Scheduler
-  独立跑的，服务端不参与也就不该去驱动它，日报只负责"看得见"。
+  单测不走。备份新鲜度读**现行备份链的真实落点**（services/backup.backup_dir()
+  ——settings.backup_dir 配置或 data/.backups 默认）；BACKUP_DEST 环境变量
+  是 Task-Scheduler 时代的废弃位置（v3.52 兜底链上线后没同步，安装器布局下
+  日报展示的"最新 dump"一直是 10-22 的废弃产物——2026-11-08 值守批实证并收口）。
 """
 import json
 import os
@@ -32,7 +34,21 @@ from app.settings import (HEALTH_REPORT_ENABLED, HEALTH_REPORT_TIME,
                                 NOTIFY_WEBHOOK_URL, get_setting, set_setting)
 
 # 备份产物目录：backup.bat（Task Scheduler 03:30 独立跑）的落点，服务端只读状态
-BACKUP_DEST = Path(os.environ.get("BACKUP_DEST", "C:/lan-share-backup"))
+BACKUP_DEST = Path(os.environ.get("BACKUP_DEST", "C:/lan-share-backup"))  # 废弃位置，仅存档
+
+
+def _live_backup_dir():
+    """现行备份链的真实落点（单一真值 = services/backup.backup_dir()）。
+
+    为什么不走 BACKUP_DEST：v3.52 起备份是进程内兜底编排，落点由
+    settings.backup_dir（面板可改）决定，默认 data/.backups。BACKUP_DEST
+    是 Task-Scheduler 时代的旧位置——v4.0.x 安装器布局下它的最新产物停在
+    10-22，日报/面板的备份新鲜度一直对着它数日子，而真实备份链每天都在
+    成功（2026-11-08 值守批实证：C:/lan-share-backup 最新 10-22 vs
+    data/.backups meta-20261108 当天）。"""
+    from app.services import backup as backup_svc
+
+    return backup_svc.backup_dir()
 
 # 免费隧道突然挂掉是"全家公网失联"的前兆，日报兜底探活。
 # 用 LANSHARE_PUBLIC_PROBE 环境变量配置 host:port；不配置则不探活。
@@ -46,7 +62,7 @@ _daily_task = None       # 日报任务引用：未保存引用的 create_task �
 def get_report_config() -> dict:
     return {"enabled": get_setting(HEALTH_REPORT_ENABLED, "1") == "1",
             "time": get_setting(HEALTH_REPORT_TIME, _DEFAULT_TIME),
-            "backup_dest": str(BACKUP_DEST),
+            "backup_dest": str(_live_backup_dir()),
             "public_probe": PUBLIC_PROBE}
 
 
@@ -174,7 +190,7 @@ def gather_health(probe_public: bool = False) -> dict:
         "db_ok": True,
         "disk_used_pct": used_pct,
         "disk_free_gb": round(du.free / 2**30, 1),
-        "backup": {**_backup_status(BACKUP_DEST),
+        "backup": {**_backup_status(_live_backup_dir()),
                    "orchestrator": _orchestrator_status()},
         "cert_days_left": cert_days_left_any(),
         "public_ok": _probe_public(PUBLIC_PROBE) if probe_public else None,
@@ -302,7 +318,7 @@ def local_health(request: Request):
         "disk_used_pct": round(du.used / du.total * 100, 1) if du.total else None,
         "disk_free_gb": round(du.free / 2**30, 1),
         "cert_days_left": cert_days_left_any(),
-        "backup_freshness": _backup_status(BACKUP_DEST),
+        "backup_freshness": _backup_status(_live_backup_dir()),
         "backup_orchestrator": _orchestrator_status(),
         "loops_failing": loop_health.failing(),
         "trash_orphans_count": (orphans or {}).get("count"),

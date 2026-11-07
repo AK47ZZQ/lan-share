@@ -18,12 +18,16 @@ def fake_backup(tmp_path, monkeypatch):
     old = os.utime
     past = time.time() - 2 * 3600
     os.utime(dump, (past, past))
-    monkeypatch.setattr(hr, "BACKUP_DEST", tmp_path / "backup")
+    # 2026-11-08 起新鲜度读 services/backup.backup_dir()（单一真值）,
+    # 旧 BACKUP_DEST 是 Task-Scheduler 时代废弃位置
+    from app.services import backup as backup_svc
+    monkeypatch.setattr(backup_svc, "backup_dir", lambda: tmp_path / "backup")
     return dump
 
 
 def test_gather_no_backup(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(hr, "BACKUP_DEST", tmp_path / "nothing")
+    from app.services import backup as backup_svc
+    monkeypatch.setattr(backup_svc, "backup_dir", lambda: tmp_path / "nothing")
     d = hr.gather_health(probe_public=False)
     assert d["backup"]["present"] is False
     assert d["public_ok"] is None          # 未要求探活就不出网
@@ -76,7 +80,8 @@ def test_format_fresh_vs_stale(fake_backup, monkeypatch):
 
 
 def test_format_missing_backup_warns(monkeypatch, tmp_path):
-    monkeypatch.setattr(hr, "BACKUP_DEST", tmp_path / "nothing")
+    from app.services import backup as backup_svc
+    monkeypatch.setattr(backup_svc, "backup_dir", lambda: tmp_path / "nothing")
     body, warn = hr.format_report(hr.gather_health())
     assert "未发现备份产物" in body and warn is True
 
