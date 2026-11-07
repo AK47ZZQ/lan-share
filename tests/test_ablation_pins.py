@@ -317,3 +317,55 @@ def test_M2_normcase_unifies_separator():
     assert _normcase("shared\photos") == "shared/photos"
     assert _normcase_eq("shared\photos", "shared/photos")
     assert _normcase_eq("PRIVATE\Admin", "private/admin")
+
+
+# ── M20 钉（2026-11-08 值守批 · 认证面消融扩展 WB8）──────────
+# 背景：把消融注册表从 spaces/filetools 扩到 security/local 后，
+# M20（会话过期/停用闸）在 1132 项全量下存活 —— 过期与被吊销会话
+# 的拒绝逻辑此前零测试守护（登出、改密、封号全踩在这条闸上）。
+
+
+def test_M20_expired_and_revoked_sessions_rejected(client):
+    """过期/停用会话必须 401（登出/改密/封号的地基）。
+
+    变异 M20（闸改恒 False）下本测试必红。直接插 sessions 行
+    （token 只存哈希，绕开 create_session 的 Request 依赖）：
+      · A: expires_at 已过 → 401，且访问后该行被自清（113 行为）
+      · B: users.is_active=0 → 401
+    """
+    import time as _t
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.security import COOKIE_NAME, _sha
+    from app.db import _db
+
+    uid = _db().execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+    now = _t.time()
+
+    # A：过期会话
+    tok = "pin-m20-expired-token"
+    _db().execute(
+        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at, ip, ua) "
+        "VALUES(?,?,?,?,?,?)",
+        (_sha(tok), uid, now, now - 1, "127.0.0.1", "ablation-pin"))
+    _db().commit()
+    c = TestClient(app, base_url="https://testserver")
+    c.cookies.set(COOKIE_NAME, tok)
+    assert c.get("/api/notifications").status_code == 401, "过期会话被放行 = M20 缺口成真"
+    left = _db().execute("SELECT COUNT(*) FROM sessions WHERE token_hash=?",
+                         (_sha(tok),)).fetchone()[0]
+    assert left == 0, "过期会话行应被访问即自清（get_session_user 113 行为）"
+
+    # B：未过期但用户已停用
+    tok2 = "pin-m20-revoked-token"
+    _db().execute(
+        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at, ip, ua) "
+        "VALUES(?,?,?,?,?,?)",
+        (_sha(tok2), uid, now, now + 3600, "127.0.0.1", "ablation-pin"))
+    _db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
+    _db().commit()
+    c2 = TestClient(app, base_url="https://testserver")
+    c2.cookies.set(COOKIE_NAME, tok2)
+    assert c2.get("/api/notifications").status_code == 401, "停用用户的会话被放行 = M20 缺口成真"
