@@ -15,6 +15,13 @@ STATUS 的直写落盘方案(反馈文件直写 待处理/,文件直写 private/
 实测(2026-11-07,80 条反馈 + 300 文件,PG 后端):
   feedback p50 78ms / p95 82ms · search p50 88ms · recent 9ms ·
   PROPFIND p50 7ms · photos p50 4.5ms
+
+实测(2026-11-08 值守批,80 条反馈 + 9934 文件 ≈ 生产真实规模,PG 后端,
+search/recent 优化后:rel_parts 预计算 + single-flight 重建):
+  feedback p50 6.8ms · search p50 34.7ms · recent p50 34.7ms ·
+  PROPFIND p50 5.0ms · photos p50 67.7ms(冷启首查 3.2s 系缩略图预热,
+  稳态快)。并发消融:10 线程×8 请求,旧实现 p50 6406ms/41s →
+  新实现 p50 362ms/3.1s(17.7x)。
 """
 import argparse
 import json
@@ -66,8 +73,8 @@ def main():
     se = bench(c, "GET /api/search?q=bench",
                lambda: c.get("/api/search", params={"q": "bench"}), k=a.k)
     re_ = bench(c, "GET /api/recent", lambda: c.get("/api/recent"), k=a.k)
-    da = bench(c, "PROPFIND /dav/private/admin/",
-               lambda: c.request("PROPFIND", "/dav/private/admin/",
+    da = bench(c, "PROPFIND /dav/private/%s/" % a.user,
+               lambda: c.request("PROPFIND", "/dav/private/%s/" % a.user,
                                  headers={"Depth": "1"}), ok=(200, 207), k=a.k)
     ph = bench(c, "GET /api/photos",
                lambda: c.get("/api/photos", params={"limit": 120}), k=a.k)

@@ -417,23 +417,36 @@ def invalidate_listing() -> None:
 
 
 def _listing() -> list:
-    """全树文件清单 [(Path, os.stat_result)]，15 秒 TTL。"""
-    now = time.time()
+    """全树文件清单 [(Path, stat_result, rel_parts)]，5 秒 TTL。
+
+    rel_parts（相对 SHARE_ROOT 的路径段）在**构建缓存时**预计算一次：
+    2026-11-08 实测 9934 文件树每请求重算 relative_to 要花 58ms（占
+    search/recent 总耗时 46%）——它是纯路径字符串切分，构建时算一次、
+    所有请求共享，每请求省下的就是它。
+
+    🔴 重建必须**持锁**（single-flight）：9934 文件重建约 1s，TTL 到期时
+    若放任并发请求各自 rglob（先查锁再释放去扫盘），10 线程 × 8 请求的
+    实测 p50 从 35ms 恶化到 **6.4s**（缓存击穿 + GIL 争抢）。
+    持锁重建 = 其余线程等这一份结果而不是各自扫一遍。重建期间到达的
+    invalidate_listing()（写端点调用）只是排队等锁，不会死锁——重建路径
+    内部不调它。
+    """
     with _listing_lock:
+        now = time.time()
         if _listing_cache["rows"] and now - _listing_cache["ts"] < _LISTING_TTL:
             return _listing_cache["rows"]
-    rows = []
-    for f in SHARE_ROOT.rglob("*"):
-        try:
-            st = f.stat()
-        except OSError:
-            continue
-        if stat_mod.S_ISREG(st.st_mode):
-            rows.append((f, st))
-    with _listing_lock:
+        rows = []
+        rel_root = SHARE_ROOT
+        for f in SHARE_ROOT.rglob("*"):
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            if stat_mod.S_ISREG(st.st_mode):
+                rows.append((f, st, f.relative_to(rel_root).parts))
         _listing_cache["rows"] = rows
         _listing_cache["ts"] = now
-    return rows
+        return rows
 
 
 @router.get("/api/search")
@@ -443,8 +456,7 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
     # （附 snippet 片段）。文件名命中语义原样保留。
     results = []
     needle = q.lower()
-    for f, st in _listing():
-        rel_parts = f.relative_to(SHARE_ROOT).parts
+    for f, st, rel_parts in _listing():
         if not visible(_user, rel_parts):
             continue
         if needle in f.name.lower():
@@ -462,8 +474,7 @@ def search_files(q: str = Query(..., min_length=1), _user=Depends(require_user))
 @router.get("/api/recent")
 def recent_files(limit: int = Query(default=20, ge=0, le=100), _user=Depends(require_user)):
     rows = []
-    for f, st in _listing():
-        rel_parts = f.relative_to(SHARE_ROOT).parts
+    for f, st, rel_parts in _listing():
         if not visible(_user, rel_parts):
             continue
         rows.append((st.st_mtime, f, st))
