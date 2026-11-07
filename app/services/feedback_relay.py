@@ -40,7 +40,7 @@ def _on(key: str) -> bool:
     return (settings.get_setting(key, "") or "").strip() == "1"
 
 
-def _scrub(text: str, limit: int) -> str:
+def scrub_text(text: str, limit: int) -> str:
     """把正文里能定位到人的东西换成占位符（2026-11-01）。
 
     反馈正文是用户手打的，什么都可能有：服务器地址、内网 IP、同事真名、
@@ -64,7 +64,7 @@ def _scrub(text: str, limit: int) -> str:
     return out[:limit]
 
 
-def _pseudonym(value: str, salt: str) -> str:
+def pseudonym(value: str, salt: str) -> str:
     """账号名/设备名 → 稳定的短哈希。
 
     为什么不留原文：反馈正文里出现「admin 的网盘上传失败」这种句子时，
@@ -98,13 +98,13 @@ def build_payload(item: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "id": item.get("id", ""),
-        "title": _scrub(item.get("title") or "", 80),
+        "title": scrub_text(item.get("title") or "", 80),
         "type": item.get("type", "other"),
-        "body": _scrub(body, 2000),
+        "body": scrub_text(body, 2000),
         "app_ver": (item.get("app_ver") or "")[:40],
         # 设备名可能是「ZZQ的台式机」这种带真名的，只留哈希
-        "device": _pseudonym(item.get("device") or "", salt),
-        "user": _pseudonym(item.get("user") or "", salt),
+        "device": pseudonym(item.get("device") or "", salt),
+        "user": pseudonym(item.get("user") or "", salt),
         "created": item.get("created", ""),
         "source": (salt or "")[:40],
         # P4：是否要求公开到 GitHub。真正建 issue 的是接收端 ——

@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from app import settings
 from app.config import SHARE_ROOT
+from app.services.feedback_relay import pseudonym, scrub_text
 from app.security import require_admin
 
 log = logging.getLogger(__name__)
@@ -169,14 +170,20 @@ async def feedback_inbox(
     if not _quota_ok(source):
         raise HTTPException(status_code=429, detail="该来源今日反馈已达上限")
 
+    # 接收端自脱敏(2026-11-07):开源后发送端版本混杂 —— 旧版发送端不做
+    # scrub,原始 IP/路径/邮箱/真名会直达收件箱。信任边界已从"自家人"扩大
+    # 为"任意第三方部署",接收端必须自带防线,不信任发送端已洗。
     # 单行归一(frontmatter 键行注入面,见 _oneline docstring);body 是
-    # frontmatter 之后的多行正文,不在其列
+    # frontmatter 之后的多行正文,只洗不改行。device/user 与新版发送端
+    # 同规格伪名化(pseudonym 与 scrub_text 复用 relay 的同一套规则,防漂移)。
+    salt = (settings.get_setting(settings.FEEDBACK_SOURCE, "") or "lanshare")
     item = item.model_copy(update={
-        "title": _oneline(item.title),
+        "title": scrub_text(_oneline(item.title), 80),
+        "body": scrub_text(item.body, 2000),
         "type": _oneline(item.type),
         "app_ver": _oneline(item.app_ver),
-        "device": _oneline(item.device),
-        "user": _oneline(item.user),
+        "device": pseudonym(_oneline(item.device), salt),
+        "user": pseudonym(_oneline(item.user), salt),
     })
 
     fid = (item.id or time.strftime("%Y%m%d%H%M%S")).strip()

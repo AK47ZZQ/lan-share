@@ -166,46 +166,46 @@ class TestRelayScrub:
     """
 
     def test_scrubs_urls_and_ips(self):
-        from app.services.feedback_relay import _scrub
+        from app.services.feedback_relay import scrub_text
 
-        out = _scrub("我的服务器是 https://192.0.2.10:8765 打不开", 2000)
+        out = scrub_text("我的服务器是 https://192.0.2.10:8765 打不开", 2000)
         assert "192.0.2.10" not in out
         assert "<地址>" in out
 
     def test_scrubs_bare_ip(self):
-        from app.services.feedback_relay import _scrub
+        from app.services.feedback_relay import scrub_text
 
-        out = _scrub("连 10.0.0.5 这台不行", 2000)
+        out = scrub_text("连 10.0.0.5 这台不行", 2000)
         assert "10.0.0.5" not in out
         assert "<IP>" in out
 
     def test_scrubs_windows_path(self):
-        from app.services.feedback_relay import _scrub
+        from app.services.feedback_relay import scrub_text
 
-        out = _scrub(r"文件在 D:\work\a.zip", 2000)
+        out = scrub_text(r"文件在 D:\work\a.zip", 2000)
         assert "zhangsan" not in out
         assert "<路径>" in out
 
     def test_scrubs_email(self):
-        from app.services.feedback_relay import _scrub
+        from app.services.feedback_relay import scrub_text
 
-        out = _scrub("联系我 user@example.com", 2000)
+        out = scrub_text("联系我 user@example.com", 2000)
         assert "user@example.com" not in out
         assert "<邮箱>" in out
 
     def test_keeps_normal_text(self):
         """别把正常内容也洗没了。"""
-        from app.services.feedback_relay import _scrub
+        from app.services.feedback_relay import scrub_text
 
-        out = _scrub("上传大文件时会卡住，重新登录后恢复", 2000)
+        out = scrub_text("上传大文件时会卡住，重新登录后恢复", 2000)
         assert out == "上传大文件时会卡住，重新登录后恢复"
 
     def test_pseudonym_is_stable_and_irreversible(self):
-        from app.services.feedback_relay import _pseudonym
+        from app.services.feedback_relay import pseudonym
 
-        a = _pseudonym("admin", "salt1")
-        b = _pseudonym("admin", "salt1")
-        c = _pseudonym("admin", "salt2")
+        a = pseudonym("admin", "salt1")
+        b = pseudonym("admin", "salt1")
+        c = pseudonym("admin", "salt2")
         assert a == b            # 同一人同一部署 → 能串起来看
         assert a != c            # 不同部署的盐不同 → 不能跨部署关联
         assert "admin" not in a
@@ -253,3 +253,32 @@ def test_inbox_newline_injection_blocked(client):
     assert len([ln for ln in front.splitlines() if ln.startswith("用户:")]) == 1
     assert not any(ln.startswith("状态: 已修复") for ln in front.splitlines())
     assert "状态: 已提交" in front
+
+
+def test_inbox_receiver_side_scrub(client):
+    """开源后发送端版本混杂:旧版发送端不做 scrub,接收端必须自带防线。
+
+    收到的 title/body 洗掉 URL/IP/路径/邮箱;device/user 与新版发送端同
+    规格伪名化。原始值不得出现在落盘 md(也不得进 json 存档)。
+    """
+    tok = "t-" + _rand()
+    _token(tok)
+    fid = "2026010100" + _rand()
+    r = client.post(
+        "/api/feedback/inbox",
+        json={"id": fid,
+              "title": "服务器 https://192.0.2.10:8765 打不开",
+              "type": "bug",
+              "body": "联系 alice@example.com,文件在 D:\私有\照片,IP 10.0.0.5",
+              "app_ver": "3.0.0", "device": "张三的电脑", "user": "alice"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200, r.text
+    md = (SHARE_ROOT / "反馈" / "收件箱" / "unknown" / f"{fid}.md").read_text(encoding="utf-8")
+    for raw in ("192.0.2.10", "alice@example.com", "D:\私有", "10.0.0.5",
+                "张三的电脑", "用户: alice"):
+        assert raw not in md, f"原始值泄漏进收件箱: {raw}"
+    assert "<地址>" in md and "<邮箱>" in md and "<路径>" in md
+    # md/收件箱文件的用户行是伪名(12 hex),不是原文也不是空
+    user_ln = next(ln for ln in md.splitlines() if ln.startswith("用户: "))
+    assert len(user_ln.split(": ", 1)[1]) == 12
