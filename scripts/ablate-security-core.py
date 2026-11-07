@@ -169,9 +169,16 @@ MUTATIONS: list[tuple[str, str, str, str, str, str]] = [
     ("M1", "grant 按路径段前缀命中（E10）", "app/spaces.py",
      'if gp == key or key.startswith(gp + "/"):', 'if gp == key:',
      "子目录授权失效——只授 shared/photos 却访问不到其下文件"),
+    # 2026-11-08 值守批:锚点更新 —— dca8068(10-30)把 _normcase 从
+    # os.path.normcase 重构为 replace+lower,旧锚点从此失配,M2 在后续每轮
+    # "全套"里都被静默 SKIP(11-07 报的 16/16 实际 15 条有结论)。同批新增
+    # M17 守住 lower() 归一(那次重构修的正是 PG 越权放行)。
     ("M2", "比较键统一正斜杠（P1 2026-09-03）", "app/spaces.py",
-     'return os.path.normcase(s).replace("\\\\", "/")', 'return os.path.normcase(s)',
-     "Windows normcase 混入反斜杠后 startswith 永不命中，前缀授权形同虚设"),
+     'return s.replace("\\\\", "/").lower()', 'return s.lower()',
+     "混入反斜杠后 startswith 永不命中，前缀授权形同虚设"),
+    ("M17", "比较键大小写归一（dca8068 修的 PG 越权）", "app/spaces.py",
+     'return s.replace("\\\\", "/").lower()', 'return s.replace("\\\\", "/")',
+     "去掉 lower() 后 Linux/PG 形态大小写分叉，Private/ 对 member 放行"),
     ("M3", "虚拟路径段级穿越清洗（E1）", "app/spaces.py",
      'if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):',
      'if any(p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):',
