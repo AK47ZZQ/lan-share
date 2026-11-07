@@ -142,8 +142,24 @@ foreach ($line in Get-Content $reqFile) {
     if ($t -eq "" -or $t.StartsWith("#")) { continue }
     $name = ($t -split "[=<>!\[;]")[0].Trim()
     if ($name -eq "") { continue }
-    # pip 的包名到目录名：hello-world -> hello_world
-    $dirName = $name -replace "-", "_"
+    # pip 包名 → site-packages 目录名。绝大多数只是把 - 换成 _，
+    # 但这几个不一样：沿用朴素规则会把它们永远判成「缺失」、于是每次打包
+    # 都全量重装依赖（几分钟），还会把真正的缺失淹没在噪音里。
+    $dirMap = @{
+        'pillow'            = 'PIL'
+        'pyyaml'            = 'yaml'
+        'beautifulsoup4'    = 'bs4'
+        'python-dateutil'   = 'dateutil'
+        'opentelemetry-api' = 'opentelemetry'
+        'opentelemetry-sdk' = 'opentelemetry'
+        'pytest-asyncio'    = 'pytest_asyncio'
+    }
+    $key = $name.ToLower()
+    if ($dirMap.ContainsKey($key)) {
+        $dirName = $dirMap[$key]
+    } else {
+        $dirName = $name -replace "-", "_"
+    }
     if (-not (Test-Path (Join-Path $sitePackages $dirName))) {
         $missing += $name
     }
@@ -179,7 +195,10 @@ Step "5. 冒烟：embeddable 能不能 import 关键包"
 $py = Join-Path $runtime "python.exe"
 $smoke = & $py -c @"
 import importlib, sys
-mods = ['fastapi','starlette','pydantic','uvicorn','aiofiles','PIL','pillow_heif','pyotp','qrcode','multipart','tzdata']
+# 2026-11-07：httpx 曾经从这个列表里漏掉，结果 runtime 里没有它，
+# 而 feedback_relay.py 顶部 `import httpx` —— 每次提交反馈都是「落盘成功 + 500」，
+# 用户看到「提交失败」却能在历史里找到那条。**新增第三方依赖必须同步这里**。
+mods = ['fastapi','starlette','pydantic','uvicorn','aiofiles','PIL','pillow_heif','pyotp','qrcode','multipart','tzdata','httpx']
 bad = []
 for m in mods:
     try: importlib.import_module(m)
@@ -188,7 +207,9 @@ if bad:
     print('FAILED: ' + '; '.join(bad)); sys.exit(1)
 print('OK ' + str(len(mods)) + ' modules')
 "@ 2>&1
-if ($LASTEXITCODE -ne 0) { Fail "import 冒烟失败: $smoke" }
+if ($LASTEXITCODE -ne 0) {
+    Fail "import 冒烟失败: $smoke`n  提示：requirements 里加了新包，记得同时加进上面 mods 列表 —— 否则装到用户机器上才炸"
+}
 Ok $smoke
 
 # ────────────────────────────────────────────────────────────

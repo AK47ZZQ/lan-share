@@ -1,3 +1,57 @@
+## 2026-11-07 — v4.0.10：httpx 没打进包，反馈提交一直 500
+
+### 现场
+
+用户在 App 里提反馈，界面报「服务端返回 HTTP 500」，但切到「历史记录」
+能看到那几条 test —— **落盘成功了，返回 500**。
+
+服务端 traceback：
+
+```
+File "C:\lanshare\app\api\feedback.py", line 240, in feedback_create
+    from app.services.feedback_relay import relay
+File "C:\lanshare\app\services\feedback_relay.py", line 30, in <module>
+    import httpx
+ModuleNotFoundError: No module named 'httpx'
+```
+
+**`httpx` 没打进安装包的 runtime。** `requirements.txt` 里明明有
+（`httpx==0.28.1 # fastapi.testclient 传递`），开发环境也有，测试全绿
+—— 因为测试跑在开发 venv 里，`import httpx` 永远成功。
+
+这个 bug 从 v4.0.6 引入「反馈上报」那天就存在：**生产环境上反馈从来
+没真正上报成功过**，每次都卡在 import。用户看到的「提交失败」是对的，
+只是落盘那一步先做完了，所以历史记录里又有。
+
+### 为什么没被发现
+
+`installer/build.ps1` 的第 5 步有个 import 冒烟，但模块列表是硬编码的：
+
+```python
+mods = ['fastapi','starlette','pydantic','uvicorn','aiofiles',
+        'PIL','pillow_heif','pyotp','qrcode','multipart','tzdata']
+```
+
+**没有 httpx。** requirements 里加了新依赖，冒烟列表没跟上。
+
+### 改了什么
+
+- `installer/build.ps1`：冒烟列表加 `httpx`，并在失败提示里写明
+  「requirements 加了新包要同步这里」。
+- 生产 runtime 与打包 runtime 都已补装 `httpx==0.28.1`（含依赖）。
+- 版本升 4.0.10 重打安装包 —— 4.0.9 已发布、SHA 记在清单里，
+  原地换包会让校验失败。
+
+### 教训
+
+**打包漏依赖，测试永远抓不到。** 测试跑在开发 venv，那里什么都有。
+唯一能拦住的是「用打包产物自己的解释器 import 一遍」—— 冒烟列表必须
+覆盖所有运行时会 import 的第三方包，而且它得跟着 requirements 一起长。
+
+顺带一个观察：`build.ps1` 里 `$missing` 的判断用「包名把 - 换成 _」当目录名，
+对 `pillow`（实际目录 `PIL`）、`opentelemetry-api`（实际 `opentelemetry`）
+永远误判成缺失，所以每次打包都会全量重装依赖。不致命，但很浪费。
+
 ## 2026-11-06 — v4.0.9：反馈三端入口 + 公开到 GitHub
 
 ### 现场
