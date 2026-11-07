@@ -7752,6 +7752,23 @@
     "summary": "Set Feedback Config"
    }
   },
+  "/local/health": {
+   "get": {
+    "description": "控制面板专用健康快照（只允许环回，无 session）。\n\n为什么不让托盘走 /api/admin/healthreport：托盘是 WebView2 + C# 桥接，\n没有 session cookie 走不了 admin 鉴权；而 gather_health() 会跑\n`pip check` 子进程（1-2s），面板每 10s 刷一次等于常驻烧 CPU。\n这里只收轻量只读项（磁盘/证书/备份/循环失败/孤儿计数），毫秒级。\n\n暴露什么：与 /local/backup 同一威胁模型（环回 = 主人自己的机器），\n只给聚合数字——孤儿文件只出 count 不出路径，攻击面最小化。",
+    "operationId": "local_health_local_health_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Local Health"
+   }
+  },
   "/local/public-url": {
    "get": {
     "description": "读当前配置的公网入口地址。\n\n返回的 url 是存库值；available 表示服务器实际能不能读库\n（比如数据库还没初始化时 get_setting 会抛异常）。",

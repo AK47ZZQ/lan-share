@@ -923,7 +923,32 @@ namespace LanShare
         private void UpdateDataLine(Dictionary<string, object> dict)
         {
             string dir = _cfg.DataFolder;
-            _dataLabel.Text = "数据目录   " + dir;
+            string disk = "";
+            // 磁盘水位（与 WebView2 面板的磁盘卡同一份数据）：DriveInfo 本地毫秒级读。
+            // 盘满是家庭网盘最常见的"无声事故"，回退面板也不能没有这行。
+            try
+            {
+                var drive = new System.IO.DriveInfo(System.IO.Path.GetPathRoot(
+                    System.IO.Path.GetFullPath(dir)));
+                if (drive.IsReady)
+                {
+                    double freeGb = drive.AvailableFreeSpace / 1073741824.0;
+                    double totalGb = drive.TotalSize / 1073741824.0;
+                    double pct = drive.TotalSize > 0
+                        ? Math.Round((drive.TotalSize - drive.AvailableFreeSpace) * 100.0 / drive.TotalSize, 0)
+                        : 0;
+                    disk = "（磁盘剩余 " + freeGb.ToString("0.#") + " GB / 共 "
+                           + totalGb.ToString("0.#") + " GB，已用 " + pct.ToString("0") + "%）";
+                    // 超过 85% 换警示色，与 WebView2 面板同一阈值
+                    if (pct >= 85) _dataLabel.ForeColor = Color.Firebrick;
+                    else _dataLabel.ForeColor = Theme.TextMuted;
+                }
+            }
+            catch (Exception)
+            {
+                // 盘符无效/网络盘：显示原样，不加分盘信息
+            }
+            _dataLabel.Text = "数据目录   " + dir + disk;
         }
 
         /// <summary>二维码走 /local/qr（本机免认证）。异步加载，失败就静默降级。</summary>

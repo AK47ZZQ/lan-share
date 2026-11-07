@@ -574,12 +574,12 @@ namespace LanShare
         // API 没起来时面板显示上一次的数字而不是空白/冻住。
         private Dictionary<string, object> _healthCache;
         private DateTime _healthCacheAt = DateTime.MinValue;
-        private int _healthFetching;
+        private volatile bool _healthFetching;
 
         /// <summary>
         /// 拉取 /local/health（磁盘水位/证书余期/备份新鲜度/后台循环失败/孤儿计数）。
         /// 🔴 永远不在 UI 线程同步等 HTTP —— 与 FetchBackupState 同一条红线。
-        /// </ fetching 刷新周期 30s：这些数字是分钟级的，10s 刷是浪费；
+        /// 刷新周期 30s：这些数字是分钟级的，10s 刷是浪费；
         /// 用户点「重新检查状态」时 forceRefresh 提前过期。
         /// </summary>
         private Dictionary<string, object> FetchHealth(bool forceRefresh = false)
@@ -587,7 +587,7 @@ namespace LanShare
             if (!_healthFetching
                 && (forceRefresh || (DateTime.Now - _healthCacheAt).TotalSeconds > 30))
             {
-                _healthFetching = 1;
+                _healthFetching = true;
                 Task.Run(() =>
                 {
                     try
@@ -605,7 +605,7 @@ namespace LanShare
                     }
                     finally
                     {
-                        _healthFetching = 0;
+                        _healthFetching = false;
                     }
                 });
             }

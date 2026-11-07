@@ -170,6 +170,21 @@ button.link {
 
 .hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; word-break: break-word; overflow-wrap: anywhere; }
 
+/* ── 磁盘水位条 ── */
+.diskbar {
+  height: 8px; border-radius: 999px; background: var(--line, #E7EAF2);
+  overflow: hidden; margin: 10px 0 6px;
+}
+.diskbar > i {
+  display: block; height: 100%; border-radius: 999px; width: 0%;
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+  transition: width .4s ease;
+}
+/* 70% 起黄、85% 起红 —— 颜色切换的阈值只写在这里一处 */
+.diskbar.warn > i { background: var(--warn); }
+.diskbar.err  > i { background: var(--danger); }
+#diskpct { font-weight: 700; color: var(--text); }
+
 /* ── 地址行 ── */
 /* flex-shrink: 0 是必须的 —— 下面 .qr-row 用了 flex:1，会反过来把
    .addr 挤窄，导致地址框只显示到 https://192.168. 就被截断。 */
@@ -340,6 +355,17 @@ button.link {
         <div id="svclist"></div>
       </div>
 
+      <!-- 磁盘：盘满是家庭网盘最常见的"无声事故"（上传静默失败）。
+           这张卡让主人不用问"还剩多少空间"，打开面板第一眼就看见。 -->
+      <div class="card" id="diskcard" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div class="card-title">磁盘</div>
+          <span class="hint" id="diskpct"></span>
+        </div>
+        <div class="diskbar" id="diskbar"><i></i></div>
+        <div class="hint" id="diskfree"></div>
+      </div>
+
       <div class="card grow">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="card-title">公网访问</div>
@@ -458,6 +484,18 @@ button.link {
           <button class="mini" id="fbdiag">导出诊断包</button>
         </div>
         <div class="hint" id="fbhint"></div>
+      </div>
+
+      <!-- 运行健康：把「吞异常保活」盲区实时暴露给主人 —— 日报一天只来一次，
+           后台循环连挂 3 轮、回收站孤儿文件这些信号值得当场看见。 -->
+      <div class="card" id="healthcard" style="display:none">
+        <div class="card-title">运行健康</div>
+        <div class="hint" id="healthline1">读取中…</div>
+        <div class="hint" id="healthline2"></div>
+        <div class="hint" id="healthline3"></div>
+        <div class="hint" id="healthline4"></div>
+        <div class="hint" id="healthline5"></div>
+        <div class="hint" id="healthhint" style="margin-top:6px">这些是服务端后台任务的自检结果，每天也会随健康日报推送</div>
       </div>
     </div>
 
@@ -818,6 +856,74 @@ function render(s) {
   } else {
     bkWarn.style.display = 'none';
   }
+
+  // ── 磁盘水位 ──
+  // 数据目录所在盘：>=70% 黄、>=85% 红。阈值与 CSS 类一一对应。
+  var disk = s.disk;
+  var diskCard = document.getElementById('diskcard');
+  if (disk && typeof disk.usedPct === 'number') {
+    diskCard.style.display = '';
+    var bar = document.getElementById('diskbar');
+    bar.className = 'diskbar' + (disk.usedPct >= 85 ? ' err' : (disk.usedPct >= 70 ? ' warn' : ''));
+    bar.firstElementChild.style.width = Math.min(100, disk.usedPct) + '%';
+    document.getElementById('diskpct').textContent = '已用 ' + disk.usedPct + '%';
+    document.getElementById('diskfree').textContent =
+      '剩余 ' + disk.freeGb + ' GB / 共 ' + disk.totalGb + ' GB'
+      + (disk.usedPct >= 85 ? '　⚠ 空间快满了，新上传可能失败，请清理或扩容'
+         : (disk.usedPct >= 70 ? '　空间偏紧，建议清理旧文件' : ''));
+  } else {
+    diskCard.style.display = 'none';
+  }
+
+  // ── 运行健康 ──
+  // 数据来自 /local/health（服务端自检聚合）。API 没起来时保持隐藏 ——
+  // 显示一个空卡片比不显示更让人困惑。
+  var h = s.health || {};
+  var healthCard = document.getElementById('healthcard');
+  var hasHealth = h.ts || (h.loops_failing && h.loops_failing.length)
+    || typeof h.trash_orphans_count === 'number';
+  if (hasHealth) {
+    healthCard.style.display = '';
+    var c = h.counts || {};
+    var line1 = document.getElementById('healthline1');
+    var line2 = document.getElementById('healthline2');
+    var line3 = document.getElementById('healthline3');
+    var line4 = document.getElementById('healthline4');
+    var line5 = document.getElementById('healthline5');
+    line1.textContent = '成员 ' + z(c.users) + ' · 照片 ' + z(c.photos)
+      + ' · 在架分享 ' + z(c.shares) + ' · 设备 ' + z(c.devices);
+    line2.textContent = certText(h.cert_days_left);
+    // 后台循环连挂 = "吞异常保活"盲区，必须红字当场喊
+    var failing = h.loops_failing || [];
+    if (failing.length) {
+      line3.textContent = '⚠ 后台任务异常：' + failing.map(function (f) {
+        return (f.name || '?') + ' 连挂 ' + (f.consecutive || f.count || 1) + ' 轮';
+      }).join('，');
+      line3.style.display = '';
+    } else { line3.style.display = 'none'; }
+    if (typeof h.trash_orphans_count === 'number' && h.trash_orphans_count > 0) {
+      line4.textContent = '⚠ 回收站有 ' + h.trash_orphans_count
+        + ' 个无索引残留文件，等 7 天宽限后进日报，需要人工处置';
+      line4.style.display = '';
+    } else { line4.style.display = 'none'; }
+    var bf = h.backup_freshness || {};
+    line5.textContent = (bf.present && typeof bf.dump_age_hours === 'number')
+      ? ('数据库备份最新一份 ' + (bf.dump_age_hours < 1
+          ? '不到 1 小时' : (Math.round(bf.dump_age_hours) + ' 小时')) + '前')
+      : '（数据库备份状态未知）';
+  } else {
+    healthCard.style.display = 'none';
+  }
+}
+
+// 数字占位：null/undefined 显示 —（DB 降级语义在服务端已兜底）
+function z(v) { return (v === null || v === undefined) ? '—' : v; }
+// 证书余期文案：与顶部 certdays 条互补，这里始终显示数值
+function certText(days) {
+  if (typeof days !== 'number') return '本地证书余期：未知';
+  if (days <= 0) return '⚠ 本地证书已过期，请点「修复证书信任」重装';
+  if (days < 30) return '⚠ 本地证书只剩 ' + days + ' 天到期';
+  return '本地证书余期 ' + days + ' 天';
 }
 
 // ── 交互 ───────────────────────────────────────────────────
