@@ -1,3 +1,28 @@
+## 2026-11-07 — 许可证从 AGPL-3.0 改为 PolyForm Noncommercial 1.0.0
+
+### 为什么
+
+AGPL-3.0 允许商业使用（只要求改动也开源），和「商用不行、个人可用」的
+诉求不一致。换成 PolyForm Noncommercial 1.0.0：
+
+- **个人使用随便**：自己家里搭、学习、改着玩、装机自用，不用问
+- **商用需授权**：卖、做付费服务、公司内部当生产力工具，得先联系作者
+- **非商业组织免费**：慈善、教育、公共研究、公共安全/健康、环保、政府机构
+
+### 注意
+
+- **这不是 OSI 意义上的开源许可**。OSI 定义要求允许商业使用，这条限制与之冲突。
+  准确叫法是 source-available（源码可见）。README 和 LICENSE 里都写清楚了。
+- **已按 AGPL-3.0 发布的版本，授权不可撤销** —— 拿到那些版本的人仍可依 AGPL 使用。
+  改许可只能约束今后的版本。
+- 第三方依赖（FastAPI、PostgreSQL、Caddy 等）仍是它们各自的许可，不受影响。
+
+### 改了什么
+
+- `LICENSE`：换成 PolyForm Noncommercial 1.0.0 全文（SPDX 权威副本）+ 中文说明段
+- `README.md` / `README.en.md`：badge 与许可段同步改写
+- `scripts/pre-open-source-check.py`：许可检查从 AGPL 改为 PolyForm
+
 ## 2026-11-07 — v4.0.10：httpx 没打进包，反馈提交一直 500
 
 ### 现场

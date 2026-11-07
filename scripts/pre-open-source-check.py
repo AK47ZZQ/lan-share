@@ -113,11 +113,11 @@ lic = ROOT / "LICENSE"
 if not lic.exists():
     problems.append("缺 LICENSE")
     print("  FAIL  LICENSE 不存在")
-elif "GNU AFFERO GENERAL PUBLIC LICENSE" in lic.read_text(encoding="utf-8", errors="ignore"):
-    print("  ok    LICENSE = AGPL-3.0")
+elif "PolyForm Noncommercial License 1.0.0" in lic.read_text(encoding="utf-8", errors="ignore"):
+    print("  ok    LICENSE = PolyForm-Noncommercial-1.0.0")
 else:
-    notes.append("LICENSE 存在但不是 AGPL 全文")
-    print("  warn  LICENSE 不是 AGPL 全文")
+    notes.append("LICENSE 不是 PolyForm Noncommercial 1.0.0 全文")
+    print("  warn  LICENSE 不是 PolyForm Noncommercial 全文（2026-11-07 由 AGPL-3.0 改成非商业许可）")
 
 readme = ROOT / "README.md"
 if not readme.exists():

@@ -13,7 +13,7 @@
   ![app](https://img.shields.io/badge/app-v4.0.2%2B134-2563eb)
   ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
   ![tests](https://img.shields.io/badge/tests-729%20passed-16a34a)
-  ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
+  ![license](https://img.shields.io/badge/license-PolyForm--Noncommercial-orange)
 </div>
 
 ---
@@ -274,8 +274,12 @@ API 契约        143 路径 / 167 操作   （contracts/openapi.json）
 
 ## 许可
 
-[GNU AGPL-3.0](LICENSE)。
+[PolyForm Noncommercial 1.0.0](LICENSE)。
 
-拿去用、拿去改、自己搭，都行。只有一条硬规矩：你要是改完了挂到网上给别人当服务用，你的改动也得按 AGPL-3.0 开源。自己家里用不算。
+**个人使用随便**：自己家里搭、学习、改着玩、装机自用，都不用问，也不用告诉我。
+
+**商用要授权**：拿它去卖、做付费服务、或者在公司里当生产力工具，得先联系作者。
+
+严格说这不算 OSI 意义上的「开源」——OSI 要求许可必须允许商业使用，这条限制和它冲突。准确叫法是 **source-available**：源码公开、个人可用、商用受限。第三方依赖（FastAPI、PostgreSQL、Caddy 等）仍按它们各自的许可。
 
 `data/`、`env/`、`.venv/`、凭据和证书都不入库，`.gitignore` 里写着。

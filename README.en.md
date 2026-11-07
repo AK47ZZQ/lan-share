@@ -13,7 +13,7 @@
   ![app](https://img.shields.io/badge/app-v1.1.17%2B124-2563eb)
   ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
   ![tests](https://img.shields.io/badge/tests-560%20passed-16a34a)
-  ![license](https://img.shields.io/badge/license-AGPL--3.0-blue)
+  ![license](https://img.shields.io/badge/license-PolyForm--Noncommercial-orange)
 </div>
 
 ---
@@ -273,8 +273,12 @@ The same test suite runs against both SQLite and PostgreSQL, isolated in a tempo
 
 ## License
 
-[GNU AGPL-3.0](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE).
 
-Use it, change it, run it yourself — all fine. One hard rule: if you modify it and offer it to others as a network service, your changes have to be released under AGPL-3.0 too. Running it for your own household doesn't trigger that.
+**Personal use is free**: run it at home, study it, modify it, tinker with it — no need to ask.
+
+**Commercial use requires a license**: selling it, offering it as a paid service, or using it as a productivity tool inside a company needs permission from the author.
+
+Strictly speaking this is not "open source" in the OSI sense — the OSI definition requires allowing commercial use, which this restriction contradicts. The accurate term is **source-available**: source public, personal use allowed, commercial use restricted. Third-party dependencies (FastAPI, PostgreSQL, Caddy, etc.) keep their own licenses.
 
 `data/`, `env/`, `.venv/`, credentials and certificates are excluded from the repo. See `.gitignore`.
