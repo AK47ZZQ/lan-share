@@ -43,6 +43,12 @@ def bench(c, name, fn, ok=(200,), k=20):
         t0 = time.perf_counter()
         r = fn()
         xs.append((time.perf_counter() - t0) * 1000)
+        # 限速桶(429)不算断言失败:连跑多轮时上一轮的配额会吃掉这一轮,
+        # 直接炸掉整个基线反而拿不到数字。计入样本但打印提示,分位照出
+        # —— 429 的延迟也是真实世界延迟的一部分。
+        if r.status_code == 429:
+            print(f"  ! {name}: 429 rate-limited (计入样本,连续多轮会这样)")
+            continue
         assert r.status_code in ok, f"{name}: {r.status_code} {r.text[:80]}"
     print(f"{name:26s} n={k}  min {min(xs):7.1f}  p50 {pctl(xs, 50):7.1f}  "
           f"mean {statistics.mean(xs):7.1f}  p95 {pctl(xs, 95):7.1f}  "
