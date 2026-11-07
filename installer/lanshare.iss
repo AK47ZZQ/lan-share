@@ -50,6 +50,9 @@ DefaultDirName={code:GetDefaultDir}
 ; 关掉它，选哪就是哪。数据目录默认取 {app}\data，也在同一个根下。
 AppendDefaultDirName=no
 DefaultGroupName={#AppName}
+; 2026-11-07：许可从 AGPL 改为 PolyForm Noncommercial（商用需授权）。
+; 安装时必须让用户看到条款 —— 商用限制要知情同意才站得住。
+LicenseFile=LICENSE.txt
 DisableProgramGroupPage=yes
 OutputDir=..\build\out
 OutputBaseFilename=LANShare-Setup-{#AppVersion}

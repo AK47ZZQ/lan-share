@@ -25,5 +25,6 @@
   "overrides": {
     "source-map-js": "^1.2.2",
     "brace-expansion": "^2.1.7"
-  }
+  },
+  "license": "SEE LICENSE IN ../LICENSE"
 }

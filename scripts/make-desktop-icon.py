@@ -30,7 +30,7 @@ import sys
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from brandmark import brand_icon, brand_tray  # noqa: E402
+from brandmark import brand_icon, brand_tray
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 LOGO_DIR = os.path.join(ROOT, "logo")

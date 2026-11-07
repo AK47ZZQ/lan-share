@@ -19,7 +19,7 @@
 
 import re
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 # ── 品牌常量 ──
 GRAD_TOP = (91, 107, 255)    # #5B6BFF（登录页渐变起点）

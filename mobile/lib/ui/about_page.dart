@@ -419,7 +419,14 @@ class _AboutPageState extends State<AboutPage> {
         ]);
   }
 
-  /// 底部：开源许可入口。
+  /// 底部：许可与致谢入口。
+  ///
+  /// 2026-11-07 许可从 AGPL-3.0 改成 PolyForm Noncommercial 1.0.0 ——
+  /// 按钮文案也跟着从「开源许可」改成「许可与致谢」：非商业许可严格讲
+  /// 不算开源（OSI 要求允许商用），再写「开源许可」是自相矛盾的。
+  ///
+  /// showLicensePage 列的是 **第三方依赖** 的许可（Flutter 自动收集），
+  /// 不包含本项目自己的条款 —— 所以用 applicationLegalese 在页首补一句。
   Widget _buildFooter(BuildContext context, dynamic info) {
     return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -427,11 +434,15 @@ class _AboutPageState extends State<AboutPage> {
           const SizedBox(height: Gap.md),
           TextButton.icon(
               icon: const Icon(Icons.policy_outlined, size: 18),
-              label: const Text('开源许可'),
+              label: const Text('许可与致谢'),
               onPressed: () => showLicensePage(
                   context: context,
                   applicationName: 'LAN Share',
-                  applicationVersion: info?.version)),
+                  applicationVersion: info?.version,
+                  applicationLegalese:
+                      'PolyForm Noncommercial 1.0.0\n'
+                      '个人使用免费 · 商用需授权\n'
+                      'polyformproject.org/licenses/noncommercial/1.0.0')),
         ]);
   }
 }
