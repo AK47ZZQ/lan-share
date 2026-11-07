@@ -2,6 +2,7 @@
 // 落盘在服务器 data/反馈/（每条一个 md + 截图），开发端直接读写处理；
 // 状态流转（已提交→处理中→已修复/已实装/已拒绝/已暂缓）由开发端改文件，
 // 本页下拉刷新即可看到最新状态与备注。
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -501,7 +502,11 @@ class _FeedbackDetailSheetState extends State<_FeedbackDetailSheet> {
                         child: Text('开发备注：${it['note']}',
                             style: const TextStyle(fontSize: 12.5)))),
               for (final url in ((it['images'] as List?) ?? []))
-                Padding(
+                if (url is String &&
+                    (url.endsWith('.txt') || url.endsWith('.md')))
+                  _DocAttachment(url: url)
+                else
+                  Padding(
                     padding: const EdgeInsets.only(top: 10),
                     child: ClipRRect(
                         borderRadius: Radii.bSm,
@@ -564,5 +569,72 @@ class _StatusChip extends StatelessWidget {
         child: Text(status,
             style: TextStyle(
                 fontSize: 12, color: color, fontWeight: FontWeight.w600)));
+  }
+}
+
+/// 文档附件(txt/md,e464 白名单后半段):文件芯片样式,点击弹出文本查看。
+/// 服务器端以 text/plain 返回(05cee8f);图片类附件走上方 Image 路径。
+class _DocAttachment extends StatefulWidget {
+  final String url;
+  const _DocAttachment({required this.url});
+
+  @override
+  State<_DocAttachment> createState() => _DocAttachmentState();
+}
+
+class _DocAttachmentState extends State<_DocAttachment> {
+  late final Future<Uint8List?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = FeedbackApi.fetchBytes(widget.url);
+  }
+
+  void _showText(String text) {
+    showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (bctx) => SafeArea(
+            child: Padding(
+                padding: const EdgeInsets.all(Gap.md),
+                child: SingleChildScrollView(
+                    child: SelectableText(text)))));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final name = widget.url.split('/').last;
+    return FutureBuilder<Uint8List?>(
+        future: _future,
+        builder: (ctx, snap) {
+          final ok = snap.hasData && snap.data != null;
+          return InkWell(
+              onTap: ok
+                  ? () => _showText(utf8.decode(snap.data!, allowMalformed: true))
+                  : null,
+              child: Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: Gap.sm, vertical: Gap.xs),
+                  decoration: BoxDecoration(
+                      border: Border.all(color: cs.outlineVariant),
+                      borderRadius: Radii.bSm),
+                  child: Row(children: [
+                    Icon(Icons.description_outlined,
+                        size: 18, color: cs.onSurfaceVariant),
+                    const SizedBox(width: Gap.xxs),
+                    Expanded(
+                        child: Text(name,
+                            style: TextStyle(
+                                fontSize: 13, color: cs.onSurface),
+                            overflow: TextOverflow.ellipsis)),
+                    if (snap.hasError || (snap.hasData && snap.data == null))
+                      Text('无法读取',
+                          style: TextStyle(fontSize: 11, color: cs.error)),
+                  ])));
+        });
   }
 }
