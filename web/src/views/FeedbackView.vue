@@ -67,6 +67,17 @@ async function submit() {
   } catch (e) { toast((e as Error).message, 'err') } finally { busy.value = false }
 }
 
+const IMG_RE = /\.(jpe?g|png|webp)$/i
+
+function isImg(src: string): boolean {
+  return IMG_RE.test(src.split('?')[0])
+}
+
+function fileName(src: string): string {
+  try { return decodeURIComponent(src.split('/').pop() || src) }
+  catch { return src }
+}
+
 async function open(fid: string) {
   if (openId.value === fid) { openId.value = null; detail.value = null; return }
   openId.value = fid
@@ -178,8 +189,12 @@ onMounted(load)
           <template v-else>
             <pre style="white-space:pre-wrap;font-family:inherit;font-size:13.5px;margin:0 0 10px">{{ detail.body || '（无正文）' }}</pre>
             <div v-if="detail.images?.length" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-              <img v-for="src in detail.images" :key="src" :src="src" alt="附件"
-                   style="width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid var(--line)" />
+              <template v-for="src in detail.images" :key="src">
+                <img v-if="isImg(src)" :src="src" alt="截图"
+                     style="width:120px;height:90px;object-fit:cover;border-radius:8px;border:1px solid var(--line)" />
+                <a v-else :href="src" target="_blank" rel="noopener"
+                   style="display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);font-size:13px">📄 {{ fileName(src) }}</a>
+              </template>
             </div>
             <div style="font-size:12px;color:var(--text-3);margin-bottom:8px">
               版本 {{ detail.app || '-' }} · 设备 {{ detail.device || '-' }} · 编号 {{ detail.id }}
