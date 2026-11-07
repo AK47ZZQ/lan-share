@@ -188,7 +188,8 @@ def _pem_bytes(days: int) -> bytes:
     import subprocess, sys
     import tempfile
     with tempfile.TemporaryDirectory() as td:
-        key = td + "/k.pem"; crt = td + "/c.pem"
+        key = td + "/k.pem"
+        crt = td + "/c.pem"
         r = subprocess.run(
             ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
              "-keyout", key, "-out", crt, "-days", str(days), "-subj", "/CN=test"],
