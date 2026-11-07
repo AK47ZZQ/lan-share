@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import FEEDBACK_MAX_ATTACHMENT_MB, SHARE_ROOT
+from app.filetools import oneline
 from app.security import (ADMIN, allow_rate, audit, client_ip, require_admin,
                           require_user)
 from app.api import events as events_bus
@@ -68,17 +69,6 @@ def _img_dir() -> Path:
 
 def _now_str() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _oneline(s: str) -> str:
-    """Form 字段归一成单行(换行/制表等空白折叠成单个空格)。
-
-    标题/版本/设备都是客户端可控的 Form 字段,值里带换行等于允许登录用户
-    在自己的反馈文件 frontmatter(「键: 值」平铺行)里插任意键行 ——
-    实测注入的 编号:/状态: 行**会覆盖真实行**(dict 后键覆盖前键),
-    能劫持列表 id、自我标"已修复"污染看板。
-    """
-    return re.sub(r"\s+", " ", (s or "").strip())
 
 
 def _parse(text: str) -> dict | None:
@@ -196,9 +186,9 @@ async def feedback_create(request: Request,
     user = users_store.get_username(_user["user_id"]) or f"#{_user['user_id']}"
     if not allow_rate(f"fb:{_user['user_id']}", _MAX_PER_DAY, 86400):
         raise HTTPException(status_code=429, detail="今天反馈太多了，明天再来")
-    title = _oneline(title)
-    app_ver = _oneline(app_ver)
-    device = _oneline(device)
+    title = oneline(title)
+    app_ver = oneline(app_ver)
+    device = oneline(device)
     if not title or len(title) > 80:
         raise HTTPException(status_code=422, detail="标题必填且不超过 80 字")
     if type not in TYPES:

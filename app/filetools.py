@@ -121,6 +121,19 @@ def clean_filename(name: str | None) -> str:
 RESERVED_NAME = re.compile(r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$', re.I)
 
 
+def oneline(s: str) -> str:
+    """把任意文本归一成单行（换行/制表等空白折叠成单个空格）。
+
+    **为什么在 filetools**：feedback 提交端与收件箱端曾各自实现一份 `_oneline`
+    （2026-11-07 自主值守批收编）——同一安全语义两份实现 = 必然漂移面。
+    平铺 frontmatter 是「键: 值」逐行解析，值里带换行 = 登录用户可在自己
+    反馈文件的 frontmatter 里插任意键行；实测注入 `编号:` 行会覆盖真实行
+    （dict 后键覆盖前键），能劫持列表 id、自我标「已修复」污染看板。
+    所有要写进「键: 值」平铺结构的客户端可控短字段（标题/版本/设备/账号名）
+    一律先过这里。"""
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
 def dir_tree(path: Path) -> dict:
     items = []
     if not path.exists():
