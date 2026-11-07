@@ -279,3 +279,22 @@ def test_safe_path_rejects_traversal_and_hidden():
 def test_safe_path_allows_within_root():
     assert safe_path("photos/a.jpg") == SHARE_ROOT / "photos" / "a.jpg"
     assert safe_path("") == SHARE_ROOT
+
+
+def test_safe_path_rejects_83_alias_directly():
+    """M16 消融钉(2026-11-07 克隆树消融批):8.3 短名闸此前只在 resolve()
+    侧被用例执行到,filetools.safe_path 侧的闸被消融时全绿 —— 纵深单侧
+    失守不可见。直测 safe_path:META~1.DB / TRASH~1 子路径 / 正常名放行。"""
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    from app.filetools import safe_path
+
+    with _pytest.raises(HTTPException) as ei:
+        safe_path("META~1.DB")
+    assert ei.value.status_code == 403
+    with _pytest.raises(HTTPException) as ei:
+        safe_path("private/admin/TRASH~1/x")
+    assert ei.value.status_code == 403
+    # 正常名不受副作用波及(名字里不带 ~N 形态)
+    assert safe_path("private/admin/正常照片.jpg").name == "正常照片.jpg"
