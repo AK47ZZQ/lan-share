@@ -285,10 +285,10 @@ frontmatter 细状态（已修复/已实装/已拒绝/已暂缓）。`看板.md`
 
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
-| POST | `/api/feedback` | 🔑 | multipart：`title`(≤80 必填)/`type`(idea\|bug\|other)/`body`(≤2000)/`app_ver`/`device`/`files`(截图≤3，单张≤12MB)/`public_to_github`(可选，`1` 表示要求公开到 GitHub)；限 20 条/天/人；落 `待处理/` 并刷新看板 |
+| POST | `/api/feedback` | 🔑 | multipart：`title`(≤80 必填)/`type`(idea\|bug\|other)/`body`(≤2000)/`app_ver`/`device`/`files`(附件≤3，单件≤25MB；jpg/jpeg/png/webp + txt/md 白名单，其他后缀回落 .jpg)/`public_to_github`(可选，`1` 表示要求公开到 GitHub)；限 20 条/天/人；落 `待处理/` 并刷新看板 |
 | GET | `/api/feedback` | 🔑 | 本人列表；**admin 全量**（含 user 字段），新→旧 |
-| GET | `/api/feedback/{fid}` | 🔑 | 详情（含 body 与图片 URL 列表）；仅本人/admin |
-| GET | `/api/feedback/{fid}/img/{name}` | 🔑 | 截图读取（鉴权：本人/admin；文件名防穿越校验） |
+| GET | `/api/feedback/{fid}` | 🔑 | 详情（含 body 与附件 URL 列表）；仅本人/admin |
+| GET | `/api/feedback/{fid}/img/{name}` | 🔑 | 附件读取：四图格式回 image/*，txt/md 回 text/plain（e464）；鉴权：本人/admin；文件名防穿越校验 |
 | GET | `/api/admin/feedback` | ⚙️ | 全量视角 |
 | POST | `/api/feedback/inbox` | 🔑(Bearer) | 跨机上报入口。`feedback_inbox_token` 未配 → 403。字段同 `/api/feedback` 的 payload 白名单 + `public`；`public: true` 时由**接收端**代发 GitHub Issue（客户端不持 token），issue 链接写回 frontmatter 的 `issue:` 行 |
 | GET | `/api/feedback/inbox/status` | ⚙️ | 收件箱是否启用 + 各来源条数 |
