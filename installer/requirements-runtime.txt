@@ -1,7 +1,12 @@
 # LAN Share 运行时依赖（安装器专用，从 requirements.txt 裁剪）
 #
 # 与 requirements.txt 的差异：
-#   砍掉 pytest / ruff / mypy / pip-audit / httpx  —— 开发门禁，装到用户机器上没用
+#   砍掉 pytest / ruff / mypy / pip-audit  —— 开发门禁，装到用户机器上没用
+#
+# ⚠️ httpx 2026-11-07 起是**运行时**依赖（feedback_relay / feedback_inbox
+#    顶层 import）：v4.0.10 事故里它被当"开发门禁"砍掉，反馈上报每次 500。
+#    scripts/check_runtime_deps.py 会静态扫 app/ 的真实 import 与本清单双向
+#    对账，漏一个构建前就红 —— 别再手工同步。
 #
 # ⚠️ psycopg 现在是必需的，不再砍。
 #    2026-10-31 主人拍板：以后只用 PostgreSQL 一个数据库，
@@ -35,3 +40,8 @@ psycopg[binary]==3.3.6
 #   [SSL: CERTIFICATE_VERIFY_FAILED] unable to get issuer certificate
 # 自带一份 certifi 就不依赖系统的证书链是否完整了。
 certifi==2026.10.23
+
+# ── 反馈上报通道（feedback_relay / feedback_inbox 顶层 import）──
+httpx==0.28.1
+httpcore==1.0.9
+idna==3.20

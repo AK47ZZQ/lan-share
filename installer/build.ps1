@@ -191,24 +191,18 @@ if ($SkipDeps -and $missing.Count -eq 0) {
 }
 
 # ────────────────────────────────────────────────────────────
-Step "5. 冒烟：embeddable 能不能 import 关键包"
+Step "5. 冒烟：embeddable 能不能 import 全部第三方依赖"
+# 2026-11-07：冒烟列表不再手工维护。v4.0.10 的 httpx 事故根因是
+# 「源码 import / requirements-runtime / 冒烟列表」三份清单各自手工同步,
+# 必然漂移。现在用 scripts/check_runtime_deps.py --import 从**源码 AST
+# 推导**第三方模块清单,在本 runtime 的 python 里真 import 一遍 ——
+# 源码新增 import 自动进冒烟,不需要任何人记得改这里。
 $py = Join-Path $runtime "python.exe"
-$smoke = & $py -c @"
-import importlib, sys
-# 2026-11-07：httpx 曾经从这个列表里漏掉，结果 runtime 里没有它，
-# 而 feedback_relay.py 顶部 `import httpx` —— 每次提交反馈都是「落盘成功 + 500」，
-# 用户看到「提交失败」却能在历史里找到那条。**新增第三方依赖必须同步这里**。
-mods = ['fastapi','starlette','pydantic','uvicorn','aiofiles','PIL','pillow_heif','pyotp','qrcode','multipart','tzdata','httpx']
-bad = []
-for m in mods:
-    try: importlib.import_module(m)
-    except Exception as e: bad.append(f'{m}: {e}')
-if bad:
-    print('FAILED: ' + '; '.join(bad)); sys.exit(1)
-print('OK ' + str(len(mods)) + ' modules')
-"@ 2>&1
+$checker = Join-Path $Root "scripts\check_runtime_deps.py"
+if (-not (Test-Path $checker)) { Fail "缺少 $checker" }
+$smoke = & $py $checker --import 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Fail "import 冒烟失败: $smoke`n  提示：requirements 里加了新包，记得同时加进上面 mods 列表 —— 否则装到用户机器上才炸"
+    Fail "import 冒烟失败: $smoke`n  runtime 缺包 —— 以 installer/requirements-runtime.txt 为准补齐后重打"
 }
 Ok $smoke
 
