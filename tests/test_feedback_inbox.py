@@ -227,3 +227,29 @@ class TestRelayScrub:
         # 该留的还在
         assert payload["app_ver"] == "1.1.20"
         assert payload["type"] == "bug"
+
+
+def test_inbox_newline_injection_blocked(client):
+    """收件箱端同样挡换行注入:Pydantic 的 max_length 不挡 \n —— 持 token
+    的上报方能在收件箱 md 的 frontmatter 里插任意键行(来源目录清洗已有,
+    这里补的是文件内容的键行注入面)。"""
+    tok = "t-" + _rand()
+    _token(tok)
+    fid = "2026010100" + _rand()
+    r = client.post(
+        "/api/feedback/inbox",
+        json={"id": fid, "title": "正常\n状态: 已修复\n用户: fake", "type": "bug",
+              "body": "b", "app_ver": "1.0\n编号: fake2",
+              "device": "d\n状态: 已修复\n用户: fake2",
+              "user": "u"},
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200, r.text
+    md = (SHARE_ROOT / "反馈" / "收件箱" / "unknown" / f"{fid}.md").read_text(
+        encoding="utf-8")
+    front = md.split("---\n", 2)[1]
+    assert len([ln for ln in front.splitlines() if ln.startswith("标题:")]) == 1
+    assert len([ln for ln in front.splitlines() if ln.startswith("编号:")]) == 1
+    assert len([ln for ln in front.splitlines() if ln.startswith("用户:")]) == 1
+    assert not any(ln.startswith("状态: 已修复") for ln in front.splitlines())
+    assert "状态: 已提交" in front

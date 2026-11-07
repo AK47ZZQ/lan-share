@@ -70,6 +70,17 @@ def _now_str() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _oneline(s: str) -> str:
+    """Form 字段归一成单行(换行/制表等空白折叠成单个空格)。
+
+    标题/版本/设备都是客户端可控的 Form 字段,值里带换行等于允许登录用户
+    在自己的反馈文件 frontmatter(「键: 值」平铺行)里插任意键行 ——
+    实测注入的 编号:/状态: 行**会覆盖真实行**(dict 后键覆盖前键),
+    能劫持列表 id、自我标"已修复"污染看板。
+    """
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
 def _parse(text: str) -> dict | None:
     """解析 frontmatter + 正文；缺"编号"行的文件不进列表（容错手工半成品）。"""
     if not text.startswith("---"):
@@ -185,7 +196,9 @@ async def feedback_create(request: Request,
     user = users_store.get_username(_user["user_id"]) or f"#{_user['user_id']}"
     if not allow_rate(f"fb:{_user['user_id']}", _MAX_PER_DAY, 86400):
         raise HTTPException(status_code=429, detail="今天反馈太多了，明天再来")
-    title = title.strip()
+    title = _oneline(title)
+    app_ver = _oneline(app_ver)
+    device = _oneline(device)
     if not title or len(title) > 80:
         raise HTTPException(status_code=422, detail="标题必填且不超过 80 字")
     if type not in TYPES:
@@ -193,7 +206,7 @@ async def feedback_create(request: Request,
     if len(files) > _MAX_ATTACHMENTS:
         raise HTTPException(status_code=422, detail=f"附件最多 {_MAX_ATTACHMENTS} 个")
 
-    fid = time.strftime("%Y%m%d%H%M%S") + "-" + os.urandom(2).hex()
+    fid = time.strftime("%Y%m%d%H%M%S") + "-" + os.urandom(4).hex()
     now = _now_str()
     limit = FEEDBACK_MAX_ATTACHMENT_MB * 1024 * 1024
     for i, up in enumerate(files, 1):
@@ -393,11 +406,17 @@ def feedback_image(fid: str, name: str, _user=Depends(require_user)):
     if not is_admin and mm.get("用户") != me:
         raise HTTPException(status_code=403, detail="只能查看自己的反馈截图")
     safe = Path(name).name
-    if not re.fullmatch(rf"{re.escape(fid)}-\d+\.(jpg|jpeg|png|webp)", safe):
-        raise HTTPException(status_code=400, detail="非法图片名")
+    m_img = re.fullmatch(rf"{re.escape(fid)}-\d+\.(jpg|jpeg|png|webp)", safe)
+    # e464 白名单的后半段:txt/md 附件也要能读回(此前能传不能读,列表点开 400)
+    m_doc = re.fullmatch(rf"{re.escape(fid)}-\d+\.(txt|md)", safe)
+    if not m_img and not m_doc:
+        raise HTTPException(status_code=400, detail="非法附件名")
     p = _img_dir() / safe
     if not p.is_file():
-        raise HTTPException(status_code=404, detail="图片不存在")
+        raise HTTPException(status_code=404, detail="附件不存在")
+    if m_doc:
+        # text/plain:浏览器不执行、不嗅探,无脚本面;md 也按纯文本给
+        return FileResponse(p, media_type="text/plain; charset=utf-8")
     media = ("image/png" if safe.endswith(".png")
              else "image/webp" if safe.endswith(".webp") else "image/jpeg")
     return FileResponse(p, media_type=media)

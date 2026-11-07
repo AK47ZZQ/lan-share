@@ -67,6 +67,17 @@ def _safe(name: str) -> str:
     return cleaned or "unknown"
 
 
+def _oneline(s: str) -> str:
+    """单行归一:换行/制表折叠成空格。
+
+    收件箱 md 同样是「键: 值」平铺 frontmatter;Pydantic 的 max_length 不挡
+    \n —— 持 token 的上报方(或被攻破的客户端)能在文件里插任意键行。
+    与 app/api/feedback.py 的 _oneline 同语义,两处各自独立、
+    不为两行代码建共享模块(奥卡姆)。
+    """
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
 def _quota_ok(source: str) -> bool:
     today = time.strftime("%Y%m%d")
     d = _inbox_dir() / source
@@ -157,6 +168,16 @@ async def feedback_inbox(
     source = _safe(item.source)
     if not _quota_ok(source):
         raise HTTPException(status_code=429, detail="该来源今日反馈已达上限")
+
+    # 单行归一(frontmatter 键行注入面,见 _oneline docstring);body 是
+    # frontmatter 之后的多行正文,不在其列
+    item = item.model_copy(update={
+        "title": _oneline(item.title),
+        "type": _oneline(item.type),
+        "app_ver": _oneline(item.app_ver),
+        "device": _oneline(item.device),
+        "user": _oneline(item.user),
+    })
 
     fid = (item.id or time.strftime("%Y%m%d%H%M%S")).strip()
     # 编号也过一遍白名单，避免有人拿它做路径穿越

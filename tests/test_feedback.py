@@ -4,6 +4,7 @@
 状态由 Agent 直接改 frontmatter 文件后列表即时反映、空标题/超图数拒绝。
 """
 import os
+import re
 
 from conftest import MEMBER_PASS
 
@@ -164,3 +165,81 @@ def test_feedback_rejects_oversize_and_unknown_falls_back(client, monkeypatch):
     assert r2.status_code == 200
     fid = r2.json()["id"]
     assert (SHARE_ROOT / "反馈" / "img" / f"{fid}-1.jpg").is_file()
+
+
+# ── 对抗审查批(2026-11-07 自主值守):换行注入 / 文档附件可读 / 编号熵 ──
+
+
+def test_feedback_newline_injection_blocked(client):
+    """标题里的换行不能伪造 frontmatter 键行。
+
+    frontmatter 是「键: 值」平铺行,解析器逐行切;值里带 \n = 登录用户可在
+    自己的反馈文件里插任意键行 —— 后键覆盖前键救了「用户」spoof,但
+    状态/备注 没有后面的真实行兜底,注入即生效(看板会显示躺在待处理/
+    目录的"已修复"条目,误导领任务的 Agent)。
+    """
+    m, _ = _member(client)
+    r = _post_feedback(m, f"注入-{_rand()}\n状态: 已修复\n编号: 20990101000000-dead",
+                       ftype="bug")
+    assert r.status_code == 200, r.text
+    fid = r.json()["id"]
+    hit = next(i for i in m.get("/api/feedback").json()["items"]
+               if i["id"] == fid)
+    assert hit["status"] == "已提交"          # 注入的状态不生效
+    assert hit["type"] == "bug"
+    assert "\n" not in hit["title"]           # 标题归一单行
+    text = (SHARE_ROOT / "反馈" / "待处理" / f"{fid}.md").read_text(encoding="utf-8")
+    front = text.split("---\n", 2)[1]
+    assert len([ln for ln in front.splitlines() if ln.startswith("标题:")]) == 1
+    assert not any(ln.startswith("状态: 已修复") for ln in front.splitlines())
+
+
+def test_feedback_newline_injection_in_device_blocked(client):
+    """版本/设备字段同样归一 —— 用户行只允许出现一次且为真实账号。"""
+    m, mname = _member(client)
+    parts = [("title", (None, "设备注入-" + _rand())), ("type", (None, "bug")),
+             ("body", (None, "")), ("app_ver", (None, "1.0\n状态: 已修复")),
+             ("device", (None, "D\n用户: victim"))]
+    r = m.post("/api/feedback", files=parts)
+    assert r.status_code == 200, r.text
+    fid = r.json()["id"]
+    hit = next(i for i in m.get("/api/feedback").json()["items"]
+               if i["id"] == fid)
+    assert hit["status"] == "已提交"
+    text = (SHARE_ROOT / "反馈" / "待处理" / f"{fid}.md").read_text(encoding="utf-8")
+    front = text.split("---\n", 2)[1]
+    user_lines = [ln for ln in front.splitlines() if ln.startswith("用户:")]
+    assert user_lines == [f"用户: {mname}"]
+
+
+def test_feedback_txt_md_attachments_readable(client):
+    """e464 后半段:txt/md 附件必须能经鉴权端点读回,不能「能传不能读」。
+
+    _images_of 把 {fid}-1.txt 列进 images,而读取端点正则只认四图格式 →
+    列表点开 400。旧测试只断言落盘、没走读取 —— 测试与实现同时半成品。
+    """
+    m, _ = _member(client)
+    parts = [("title", (None, "文档附件可读-" + _rand())), ("type", (None, "other")),
+             ("body", (None, "")), ("app_ver", (None, "0.28.3+77")),
+             ("device", (None, "TestDroid")),
+             ("files", ("notes.txt", b"hello txt", "text/plain")),
+             ("files", ("readme.md", b"# hello md", "text/markdown"))]
+    r = m.post("/api/feedback", files=parts)
+    assert r.status_code == 200, r.text
+    fid = r.json()["id"]
+    hit = next(i for i in m.get("/api/feedback").json()["items"]
+               if i["id"] == fid)
+    assert f"/api/feedback/{fid}/img/{fid}-1.txt" in hit["images"]
+    r1 = m.get(f"/api/feedback/{fid}/img/{fid}-1.txt")
+    assert r1.status_code == 200 and r1.content == b"hello txt"
+    assert r1.headers["content-type"].startswith("text/plain")
+    r2 = m.get(f"/api/feedback/{fid}/img/{fid}-2.md")
+    assert r2.status_code == 200 and r2.content == b"# hello md"
+
+
+def test_feedback_id_entropy(client):
+    """编号熵:14 位时间戳 + 4 字节随机(8 hex)。旧值 urandom(2) 同秒并发
+    两条有 1/65536 概率同 id,write_text 截断写 → 后写覆盖前写 = 丢数据。"""
+    m, _ = _member(client)
+    fid = _post_feedback(m, f"编号熵-{_rand()}").json()["id"]
+    assert re.fullmatch(r"\d{14}-[0-9a-f]{8}", fid), fid
