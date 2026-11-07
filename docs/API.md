@@ -295,6 +295,7 @@ frontmatter 细状态（已修复/已实装/已拒绝/已暂缓）。`看板.md`
 | GET | `/api/admin/feedback-config` | ⚙️ | 反馈上报配置。三个 token 字段返回脱敏文案（`已设置（N 位）`），不回明文 |
 | POST | `/api/admin/feedback-config` | ⚙️ | 逐项更新（只写传入字段）。明文 `http://` 仅允许 `127.0.0.1`；`gh_repo` 必须 `owner/repo` |
 | GET/POST | `/local/feedback-config` | 🖥️ | 同上，仅本机（托盘控制面板用）。与 admin 版共用同一份 read/apply |
+| GET | `/local/health` | 🖥️ | 托盘面板健康快照（仅本机）：磁盘水位/证书余期(双布局回退)/备份新鲜度/后台循环失败名单/回收站孤儿计数/DB 计数。单表挂降级 None 不 500；不跑 pip check 子进程（毫秒级） |
 
 ## 管理台（v3.39–v3.42）
 
