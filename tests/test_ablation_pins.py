@@ -298,3 +298,22 @@ def test_safe_path_rejects_83_alias_directly():
     assert ei.value.status_code == 403
     # 正常名不受副作用波及(名字里不带 ~N 形态)
     assert safe_path("private/admin/正常照片.jpg").name == "正常照片.jpg"
+
+
+# ── M2 钉（2026-11-08 值守批）────────────────────────────────
+# 背景：M2 锚点自 dca8068 重构起失配，被静默 SKIP 到本轮克隆树复验才现形；
+# 复验（全套 1131 绿）证实分隔符归一此前零测试守护。钉在单元层（奥卡姆，
+# 与本文件既有口径一致）：变异退化为 s.lower() 时本测试必红。
+
+
+def test_M2_normcase_unifies_separator():
+    """分隔符归一是授权前缀比较的前提（P1 2026-09-03）。
+
+    反斜杠若不被统一成 /，grant 前缀 `gp + "/"` 的 startswith 永不命中
+    ——带反斜杠的段会让授权静默失配（fail-closed 的可用性缺口）。
+    变异 `return s.lower()` 下本测试变红。"""
+    from app.spaces import _normcase, _normcase_eq
+
+    assert _normcase("shared\photos") == "shared/photos"
+    assert _normcase_eq("shared\photos", "shared/photos")
+    assert _normcase_eq("PRIVATE\Admin", "private/admin")
