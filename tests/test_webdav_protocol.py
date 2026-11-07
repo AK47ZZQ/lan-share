@@ -82,3 +82,16 @@ def test_dav_member_cannot_write_others_private(client):
                    headers={"Authorization": f"Basic {other}"}, content=b"x")
     # 403/409 均为拒绝语义（resolve 守卫对"成员写他人私人空间"给 409 跨空间码）
     assert r.status_code in (403, 404, 409)
+
+
+def test_dav_destination_traversal_blocked(auth):
+    """Destination 清洗(_dav_destination)不滤 '..' —— 防线在 resolve 的
+    safe_path(拒点前缀段)。此用例把这条纵深钉在 API 层:清洗将来改动
+    (比如放开更多字符)时,resolve 的 backstop 一旦破坏立刻红。"""
+    old = f"davtrav{_rand()}.txt"
+    assert auth.put(f"/dav/private/admin/{old}", content=b"v").status_code in (200, 201, 204)
+    # 目标带 .. 试图逃出空间:必须 4xx,且旧文件仍原位
+    r = auth.request("MOVE", f"/dav/private/admin/{old}",
+                     headers={"Destination": "https://testserver/dav/private/admin/../../escape.txt"})
+    assert r.status_code in (400, 403), r.text
+    assert auth.get(f"/dav/private/admin/{old}").status_code == 200

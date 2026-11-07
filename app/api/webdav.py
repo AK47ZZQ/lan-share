@@ -126,6 +126,11 @@ def _dav_destination(request: Request, user) -> Path:
     if not p.startswith("/dav/"):
         raise HTTPException(status_code=400, detail="Invalid Destination")
     segs = [s for s in p[len("/dav/"):].replace("\\", "/").split("/") if s not in ("", ".")]
+    if any(s == ".." for s in segs):
+        # clean_filename 会把 ".." 洗成 "unnamed"(结尾点被剥),穿越被中和但
+        # 目标变成不存在的路径 → MOVE/COPY 500。显式 400:目的地非法就拒绝,
+        # 不做静默路径改写
+        raise HTTPException(status_code=400, detail="Invalid Destination")
     cleaned = "/".join(clean_filename(s) for s in segs)  # 目标名同界面规则清洗
     return resolve(user, cleaned, "write")
 
