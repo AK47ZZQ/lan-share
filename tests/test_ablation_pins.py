@@ -332,6 +332,12 @@ def test_M20_expired_and_revoked_sessions_rejected(client):
     （token 只存哈希，绕开 create_session 的 Request 依赖）：
       · A: expires_at 已过 → 401，且访问后该行被自清（113 行为）
       · B: users.is_active=0 → 401
+
+    🔴 恢复纪律（2026-11-08 全量套件 340 红的事故现场）：conftest 的
+    `client` 是 **session 级共享库**——首版直接 UPDATE users SET
+    is_active=0 且不还原，admin 被永久停用，后续 340 项集体假红。
+    本测试的每一笔写都必须 try/finally 复原，同 test_listing_cache
+    的换根教训一脉相承：**session 级夹具下的任何状态改动都要自己收**。
     """
     import time as _t
 
@@ -343,29 +349,36 @@ def test_M20_expired_and_revoked_sessions_rejected(client):
 
     uid = _db().execute("SELECT id FROM users LIMIT 1").fetchone()[0]
     now = _t.time()
+    toks = []
 
-    # A：过期会话
-    tok = "pin-m20-expired-token"
-    _db().execute(
-        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at, ip, ua) "
-        "VALUES(?,?,?,?,?,?)",
-        (_sha(tok), uid, now, now - 1, "127.0.0.1", "ablation-pin"))
-    _db().commit()
-    c = TestClient(app, base_url="https://testserver")
-    c.cookies.set(COOKIE_NAME, tok)
-    assert c.get("/api/notifications").status_code == 401, "过期会话被放行 = M20 缺口成真"
-    left = _db().execute("SELECT COUNT(*) FROM sessions WHERE token_hash=?",
-                         (_sha(tok),)).fetchone()[0]
-    assert left == 0, "过期会话行应被访问即自清（get_session_user 113 行为）"
+    def _mk_session(token: str, expires_at: float) -> None:
+        toks.append(token)
+        _db().execute(
+            "INSERT INTO sessions(token_hash, user_id, created_at, expires_at, ip, ua) "
+            "VALUES(?,?,?,?,?,?)",
+            (_sha(token), uid, now, expires_at, "127.0.0.1", "ablation-pin"))
+        _db().commit()
 
-    # B：未过期但用户已停用
-    tok2 = "pin-m20-revoked-token"
-    _db().execute(
-        "INSERT INTO sessions(token_hash, user_id, created_at, expires_at, ip, ua) "
-        "VALUES(?,?,?,?,?,?)",
-        (_sha(tok2), uid, now, now + 3600, "127.0.0.1", "ablation-pin"))
-    _db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
-    _db().commit()
-    c2 = TestClient(app, base_url="https://testserver")
-    c2.cookies.set(COOKIE_NAME, tok2)
-    assert c2.get("/api/notifications").status_code == 401, "停用用户的会话被放行 = M20 缺口成真"
+    try:
+        # A：过期会话 → 401；且访问后行被自清（get_session_user 113 行为）
+        _mk_session("pin-m20-expired-token", now - 1)
+        c = TestClient(app, base_url="https://testserver")
+        c.cookies.set(COOKIE_NAME, "pin-m20-expired-token")
+        assert c.get("/api/notifications").status_code == 401, "过期会话被放行 = M20 缺口成真"
+        left = _db().execute("SELECT COUNT(*) FROM sessions WHERE token_hash=?",
+                             (_sha("pin-m20-expired-token"),)).fetchone()[0]
+        assert left == 0, "过期会话行应被访问即自清（get_session_user 113 行为）"
+
+        # B：未过期但用户已停用 → 401
+        _mk_session("pin-m20-revoked-token", now + 3600)
+        _db().execute("UPDATE users SET is_active=0 WHERE id=?", (uid,))
+        _db().commit()
+        c2 = TestClient(app, base_url="https://testserver")
+        c2.cookies.set(COOKIE_NAME, "pin-m20-revoked-token")
+        assert c2.get("/api/notifications").status_code == 401, "停用用户的会话被放行 = M20 缺口成真"
+    finally:
+        # 共享库复原：删测试会话行 + 恢复 is_active（本例 B 分支改过它）
+        for tok in toks:
+            _db().execute("DELETE FROM sessions WHERE token_hash=?", (_sha(tok),))
+        _db().execute("UPDATE users SET is_active=1 WHERE id=?", (uid,))
+        _db().commit()
