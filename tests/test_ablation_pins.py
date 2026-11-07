@@ -347,7 +347,8 @@ def test_M20_expired_and_revoked_sessions_rejected(client):
     from app.security import COOKIE_NAME, _sha
     from app.db import _db
 
-    uid = _db().execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+    # 🔴 列名访问（PG RealDictRow 不认 row[0] 下标——v3.54 rowid 事故同款）
+    uid = _db().execute("SELECT id FROM users LIMIT 1").fetchone()["id"]
     now = _t.time()
     toks = []
 
@@ -365,8 +366,8 @@ def test_M20_expired_and_revoked_sessions_rejected(client):
         c = TestClient(app, base_url="https://testserver")
         c.cookies.set(COOKIE_NAME, "pin-m20-expired-token")
         assert c.get("/api/notifications").status_code == 401, "过期会话被放行 = M20 缺口成真"
-        left = _db().execute("SELECT COUNT(*) FROM sessions WHERE token_hash=?",
-                             (_sha("pin-m20-expired-token"),)).fetchone()[0]
+        left = _db().execute("SELECT COUNT(*) AS n FROM sessions WHERE token_hash=?",
+                             (_sha("pin-m20-expired-token"),)).fetchone()["n"]
         assert left == 0, "过期会话行应被访问即自清（get_session_user 113 行为）"
 
         # B：未过期但用户已停用 → 401
