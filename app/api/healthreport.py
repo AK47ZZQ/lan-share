@@ -74,6 +74,22 @@ def _cert_days_left(path: Path) -> int | None:
         return None
 
 
+def cert_days_left_any() -> int | None:
+    """证书余期：兼容两种部署布局。
+
+    仓库/NSSM 时代布局（PROJECT_ROOT/certs/cert.pem，长期自签服务器证书）
+    与安装器布局（Caddy 管理 PKI，根证书 10 年寿命）并存。安装器布局里
+    cert.pem 不存在 —— 原实现永远返回 None，日报的证书行从 v4.0.x 起就
+    一直是「读取失败」**静默失效**（2026-11-08 值守批在 C:\lanshare 实证）。
+    安装器布局读 Caddy 根 CA（托盘面板的「证书余期」与它同源）。
+    """
+    direct = _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem")
+    if direct is not None:
+        return direct
+    return _cert_days_left(
+        PROJECT_ROOT / "certs" / "caddy" / "pki" / "authorities" / "local" / "root.crt")
+
+
 def _backup_status(dest: Path) -> dict:
     """备份产物新鲜度：db/ 最新 dump 的月龄 + files/ 目录最近落盘时间。"""
     out: dict[str, bool | str | None | float] = {
@@ -160,7 +176,7 @@ def gather_health(probe_public: bool = False) -> dict:
         "disk_free_gb": round(du.free / 2**30, 1),
         "backup": {**_backup_status(BACKUP_DEST),
                    "orchestrator": _orchestrator_status()},
-        "cert_days_left": _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem"),
+        "cert_days_left": cert_days_left_any(),
         "public_ok": _probe_public(PUBLIC_PROBE) if probe_public else None,
         "counts": counts,
         # 后台循环连续失败名单（v3.56）：预热/清理这类"吞异常保活"的任务一旦在
@@ -285,7 +301,7 @@ def local_health(request: Request):
         "ts": time.time(),
         "disk_used_pct": round(du.used / du.total * 100, 1) if du.total else None,
         "disk_free_gb": round(du.free / 2**30, 1),
-        "cert_days_left": _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem"),
+        "cert_days_left": cert_days_left_any(),
         "backup_freshness": _backup_status(BACKUP_DEST),
         "backup_orchestrator": _orchestrator_status(),
         "loops_failing": loop_health.failing(),

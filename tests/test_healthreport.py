@@ -153,3 +153,48 @@ def test_test_endpoint(auth, monkeypatch):
     anon = auth.__class__(server := __import__("server").app, base_url="https://testserver")
     anon.cookies.clear()
     assert anon.post("/api/admin/healthreport/test").status_code in (401, 403)
+
+
+# ── 证书余期的双布局回退（2026-11-08 值守批）────────────────────
+
+class TestCertDaysLeftAny:
+    def test_prefers_repo_cert_pem(self, monkeypatch, tmp_path):
+        """仓库布局：certs/cert.pem 在 → 直接读它（旧语义不变）。"""
+        import app.api.healthreport as m
+        (tmp_path / "certs").mkdir()
+        (tmp_path / "certs" / "cert.pem").write_bytes(_pem_bytes(3650))
+        monkeypatch.setattr(m, "PROJECT_ROOT", tmp_path)
+        assert m.cert_days_left_any() is not None
+        assert m.cert_days_left_any() > 3600
+
+    def test_falls_back_to_caddy_root(self, monkeypatch, tmp_path):
+        """安装器布局：cert.pem 不存在 → 读 Caddy 根 CA（10 年寿命那一张）。"""
+        import app.api.healthreport as m
+        caddy_root = tmp_path / "certs" / "caddy" / "pki" / "authorities" / "local"
+        caddy_root.mkdir(parents=True)
+        (caddy_root / "root.crt").write_bytes(_pem_bytes(3650))
+        monkeypatch.setattr(m, "PROJECT_ROOT", tmp_path)
+        assert m.cert_days_left_any() is not None
+        assert m.cert_days_left_any() > 3600
+
+    def test_both_missing_returns_none(self, monkeypatch, tmp_path):
+        import app.api.healthreport as m
+        monkeypatch.setattr(m, "PROJECT_ROOT", tmp_path)
+        assert m.cert_days_left_any() is None
+
+
+def _pem_bytes(days: int) -> bytes:
+    """生成一张 days 天后过期的真实自签证书（openssl 若可用则真签）。"""
+    import subprocess, sys
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        key = td + "/k.pem"; crt = td + "/c.pem"
+        r = subprocess.run(
+            ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+             "-keyout", key, "-out", crt, "-days", str(days), "-subj", "/CN=test"],
+            capture_output=True)
+        if r.returncode == 0:
+            return open(crt, "rb").read()
+        # 无 openssl 的环境：给一个固定 PEM 外壳（解析会失败 → None），
+        # 走"都缺失→None"分支,前两个用例需 openssl。
+        return b""
