@@ -1,4 +1,4 @@
-// LAN Share 托盘程序 —— C# WinForms，.NET Framework 4.8
+﻿// LAN Share 托盘程序 —— C# WinForms，.NET Framework 4.8
 //
 // 编译（不需要 Visual Studio，Win10 自带编译器）：
 //   %WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe ^
@@ -84,8 +84,22 @@ namespace LanShare
         private static extern int GetProcessDpiAwareness(IntPtr process, out int value);
 
         [STAThread]
-        private static void Main(string[] args)
+        private static int Main(string[] args)
         {
+            // 独立更新看护模式（2026-11-07）：安装器把托盘 exe 以不同文件名复制到
+            // %TEMP% 后带此参数启动。**分支必须在单实例互斥量之前 return** ——
+            // 看护不是第二个托盘实例，绝不能碰 Global\LanShareTraySingleInstance
+            // （v4.0.7 加时审查明确要求不开互斥量旁路）。
+            if (args != null && args.Length >= 1
+                && string.Equals(args[0], "--update-watcher", StringComparison.OrdinalIgnoreCase))
+            {
+                // 以看护参数开头但参数不全 = 看护被误用 → 退出码 2,**绝不**落回
+                // 正常托盘分支（那会对着已有实例发面板信号,还能弹框）
+                if (args.Length < 3)
+                    return 2;
+                return DetachedUpdateWatcher.Run(args);
+            }
+
             // --panel：启动时直接打开控制面板（调试用，也方便做桌面快捷方式）
             bool openPanelOnStart = false;
             foreach (var a in args)
@@ -120,7 +134,7 @@ namespace LanShare
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information);
                     }
-                    return;
+                    return 0;
                 }
 
                 Application.EnableVisualStyles();
@@ -205,6 +219,7 @@ namespace LanShare
                     new System.Windows.Forms.WindowsFormsSynchronizationContext());
 
                 Application.Run(new TrayApp(openPanelOnStart));
+                return 0;
             }
         }
     }

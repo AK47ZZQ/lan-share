@@ -1,4 +1,4 @@
-; ============================================================================
+﻿; ============================================================================
 ;  LAN Share — Windows 一键安装脚本（Inno Setup 6）
 ;
 ;  设计目标：小白双击 → 下一步 → 下一步 → 完成 → 浏览器自动打开登录页。
@@ -288,6 +288,11 @@ var
 { 把 "3.97" 这类版本串转成可比较的整数：每段乘 1000 累加。
   段数不定（3.97 / 3.97.1），统一按 3 段算 —— 本项目版本号没超过 3 段，
   每段 < 1000，进位空间够。 }
+{ 独立更新看护需要安装器自报 PID（传给 %TEMP% 副本作轮询目标）。
+  Inno 的 Exec/ewNoWait 拿不到子进程句柄，自报家门最简。 }
+function GetCurrentProcessId: Longint;
+  external 'GetCurrentProcessId@kernel32.dll stdcall';
+
 function VersionKey(const V: String): Int64;
 var
   I, Seg: Integer;
@@ -337,6 +342,29 @@ end;
   顺序和 lanshare_cli 的 StopAll 一致：入口 → 应用 → 数据库。
   PostgreSQL 停止要做 checkpoint，-Force 保证即使还有连接也停得掉；
   末尾再等 1.5 秒让端口和文件句柄真正释放。 }
+{ 安装失败看护（2026-11-07）：把托盘 exe 复制到 %TEMP% 换名
+  （LanShareUpdateWatcher.exe），带 --update-watcher <安装器PID> <托盘exe> 启动。
+  映像名不同 → 前面的 taskkill /IM LanShareTray.exe 杀不到它；
+  ewNoWait 脱管 → 安装器退出不影响它；C# 侧分支在互斥量之前 return。
+  任何一步失败都只是退回「没有看护」的现状，绝不影响安装本身。 }
+procedure SpawnDetachedUpdateWatcher();
+var
+  RC: Integer;
+  Src, Dst, Tmp: String;
+begin
+  Tmp := ExpandConstant('{%TEMP}');
+  if Tmp = '' then Exit;
+  Src := ExpandConstant('{app}\tray\LanShareTray.exe');
+  Dst := Tmp + '\LanShareUpdateWatcher.exe';
+  { 覆盖旧副本；删不掉就让 FileCopy 失败 = 退回现状 }
+  DeleteFile(Dst);
+  if not CopyFile(Src, Dst, False) then Exit;
+  if not FileExists(Dst) then Exit;
+  Exec(Dst, '--update-watcher ' + IntToStr(GetCurrentProcessId())
+       + ' "' + ExpandConstant('{app}\tray\LanShareTray.exe') + '"',
+       Tmp, SW_HIDE, ewNoWait, RC);
+end;
+
 procedure StopServicesForUpgrade();
 var
   RC: Integer;
@@ -355,6 +383,10 @@ begin
   Exec('taskkill.exe', '/F /IM LanShareTray.exe', '', SW_HIDE,
        ewWaitUntilTerminated, RC);
   Sleep(600);
+
+  { 此刻起到 ssPostInstall 拉回托盘之间是「无看护窗口」：复制失败回滚
+    （exit 5 类）会让托盘死掉且没人拉回 —— v4.0.7 加时审查记录的缺口。 }
+  SpawnDetachedUpdateWatcher();
 end;
 
 { 安装器启动的第一件事：这台机器上有没有已安装的 LAN Share？

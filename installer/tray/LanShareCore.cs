@@ -1,4 +1,4 @@
-// 服务控制 + 安装信息读取
+﻿// 服务控制 + 安装信息读取
 //
 // 拆成独立文件的原因：托盘和主窗口都要用，放任何一边都别扭；
 // 而且这两块最容易出错（服务名、注册表键名），集中一处好维护。
@@ -233,6 +233,84 @@ namespace LanShare
     /// Invoke 的组合在托盘半退出状态下是另一个雷区。1 秒粒度足够 ——
     /// 安装器提前中止发生在秒级，不是毫秒级。
     /// </summary>
+    /// <summary>
+    /// 安装失败看护（2026-11-07）：安装器 ssInstall 杀掉托盘之后、复制失败
+    /// 回滚（3.97/3.99 实测 exit 5）的场景，托盘与进程内看护
+    /// （UpdateWatchdog.Watch）一起消亡，没人把托盘拉回来 —— 用户以为
+    /// 「程序装没了」。
+    ///
+    /// 解法（v4.0.7 加时审查建议的落地）：托盘 exe 以**不同文件名**
+    /// （LanShareUpdateWatcher.exe）复制到 %TEMP% 并 detached 运行：
+    ///   ① 映像名不同，安装器的 taskkill /IM LanShareTray.exe 杀不到它；
+    ///   ② 安装器 ewNoWait 脱管，安装器退出不影响它；
+    ///   ③ Main 的参数分支在单实例互斥量之前 return —— 不开互斥量旁路；
+    ///      被救回的托盘走正常互斥量（旧实例已被 taskkill，锁是空闲的）。
+    ///
+    /// 语义：盯安装器进程直到退出（30 分钟硬顶）：
+    ///   exit 0         → 正常路径：安装器 ssPostInstall 自己拉托盘，静默退出；
+    ///   exit 非0/消失  → 失败：UpdateMarker.Take() 清掉「进行中」标记
+    ///                   （防下次托盘启动把回滚误报成成功），再从安装目录
+    ///                   拉回托盘 --panel（文件已回滚，拉起的是旧版）。
+    /// 不可见边角（有意接受）：找不到安装器进程时按「无法监督」退出（等于
+    /// 现状），30 分钟硬顶后同样静默退出 —— 两者都不比今天更糟。
+    /// </summary>
+    internal static class DetachedUpdateWatcher
+    {
+        public static int Run(string[] args)
+        {
+            int pid;
+            string trayPath;
+            if (args.Length < 3 || !int.TryParse(args[1], out pid) || pid <= 0
+                || string.IsNullOrWhiteSpace(args[2]))
+            {
+                return 2;
+            }
+            trayPath = args[2];
+
+            // 起手先按 PID 抓安装器进程；抓不到 = 无法监督 = 放弃（不比现状糟）。
+            Process setup;
+            try
+            {
+                setup = Process.GetProcessById(pid);
+                var nm = (setup.ProcessName ?? "");
+                if (!nm.StartsWith("LANShare-Setup", StringComparison.OrdinalIgnoreCase))
+                    return 3;   // PID 复用：这个 PID 不是安装器
+            }
+            catch (Exception)
+            {
+                return 3;
+            }
+
+            var cap = DateTime.UtcNow.AddSeconds(1800);
+            while (!setup.HasExited)
+            {
+                if (DateTime.UtcNow >= cap) return 0;   // 硬顶：不比现状糟，静默退
+                Thread.Sleep(1000);
+            }
+            int code;
+            try { code = setup.ExitCode; }
+            catch (Exception) { code = 1; }   // 句柄失效当失败处理（rescue 是安全侧）
+
+            if (code == 0) return 0;          // 安装器自己拉托盘
+
+            // 失败路径：清「进行中」标记 + 拉回托盘。
+            try { UpdateMarker.Take(); } catch (Exception) { }
+            try
+            {
+                if (File.Exists(trayPath))
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = trayPath,
+                        Arguments = "--panel",
+                        UseShellExecute = true,
+                        WorkingDirectory = System.IO.Path.GetDirectoryName(trayPath) ?? ""
+                    });
+            }
+            catch (Exception) { }
+            return 0;
+        }
+    }
+
     internal static class UpdateWatchdog
     {
         /// <summary>
