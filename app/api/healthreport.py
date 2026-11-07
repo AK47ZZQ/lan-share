@@ -80,7 +80,7 @@ def cert_days_left_any() -> int | None:
     仓库/NSSM 时代布局（PROJECT_ROOT/certs/cert.pem，长期自签服务器证书）
     与安装器布局（Caddy 管理 PKI，根证书 10 年寿命）并存。安装器布局里
     cert.pem 不存在 —— 原实现永远返回 None，日报的证书行从 v4.0.x 起就
-    一直是「读取失败」**静默失效**（2026-11-08 值守批在 C:\lanshare 实证）。
+    一直是「读取失败」**静默失效**（2026-11-08 值守批在 C:/lanshare 实证）。
     安装器布局读 Caddy 根 CA（托盘面板的「证书余期」与它同源）。
     """
     direct = _cert_days_left(PROJECT_ROOT / "certs" / "cert.pem")
