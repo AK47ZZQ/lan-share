@@ -131,13 +131,3 @@ software under these terms.
 
 **Use** means anything you do with the software requiring one
 of your licenses.
-
----
-
-## 这个项目为什么用它（中文说明，非许可正文）
-
-- **个人使用随便**：自己家里搭、学习、改着玩、装机自用，都不用问。
-- **商用要授权**：拿它去卖、做付费服务、公司内部当生产力工具，得先联系作者。
-- **不是 OSI 开源许可**：严格说这叫 source-available（源码可见）。OSI 定义里的
-  开源必须允许商业使用，这条限制和它冲突。
-- 第三方依赖仍按它们各自的许可（FastAPI、PostgreSQL、Caddy 等不变）。
