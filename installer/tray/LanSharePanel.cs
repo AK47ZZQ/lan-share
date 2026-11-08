@@ -134,16 +134,8 @@ namespace LanShare
         /// </summary>
         private static string QuoteArg(string s)
         {
-            if (string.IsNullOrEmpty(s)) return "\"\"";
-            var sb = new StringBuilder("\"");
-            foreach (char c in s)
-            {
-                if (c == '"') sb.Append("\\\"");
-                else if (c == '\\') sb.Append("\\\\");
-                else sb.Append(c);
-            }
-            sb.Append('"');
-            return sb.ToString();
+            // 单源在 LanShareCore.ArgQuoting（2026-11-09 收编；旧版缺「尾部反斜杠成对加倍」修复，已废弃）。
+            return ArgQuoting.Quote(s);
         }
 
         /// <summary>下载二维码 PNG（走本机免认证接口）。失败返回 null。</summary>

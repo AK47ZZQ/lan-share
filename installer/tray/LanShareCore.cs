@@ -323,6 +323,39 @@ namespace LanShare
     ///
     /// 所以：托盘启动时如果安装器在跑，只弹面板，绝不碰服务。
     /// </summary>
+    /// <summary>
+    /// Windows 命令行参数引用的单源实现（2026-11-09 值守批收编）。
+    ///
+    /// 为什么收编：QuoteArg 在 WebPanel 与 LanSharePanel 各有一份，
+    /// WebPanel 的那份带着 2026-11-04 审查修的「尾部反斜杠必须成对加倍」，
+    /// LanSharePanel 的还是旧版 —— 同一安全语义两份实现 = 必然漂移面
+    ///（filetools.oneline 收编同款教训）。
+    ///
+    /// Windows 命令行解析规则：引号前连续 N 个反斜杠，N/2 对是字面
+    /// 反斜杠，剩下的转义引号。参数以反斜杠结尾时不加倍，收尾引号会被
+    /// 转义掉 —— QuoteArg("https://a/b\") → 解析成 https://a/b" --xxx，
+    /// 后一个开关整个被并进同一参数，静默丢失。
+    /// </summary>
+    internal static class ArgQuoting
+    {
+        public static string Quote(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "\"\"";
+            var sb = new System.Text.StringBuilder("\"");
+            int trailing = 0;
+            for (int i = s.Length - 1; i >= 0 && s[i] == '\\'; i--) trailing++;
+            for (int i = 0; i < s.Length - trailing; i++)
+            {
+                char c = s[i];
+                if (c == '"') sb.Append("\\\"");
+                else sb.Append(c);
+            }
+            sb.Append('\\', trailing * 2);   // 尾部反斜杠成对加倍（2026-11-04 审查）
+            sb.Append('"');
+            return sb.ToString();
+        }
+    }
+
     internal static class InstallerBusy
     {
         private const string ImagePrefix = "LANShare-Setup";

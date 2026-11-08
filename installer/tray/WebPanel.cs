@@ -1472,29 +1472,8 @@ namespace LanShare
         /// </summary>
         private static string QuoteArg(string s)
         {
-            if (string.IsNullOrEmpty(s)) return "\"\"";
-            var sb = new StringBuilder("\"");
-            // 尾部反斜杠必须成对加倍（2026-11-04 审查）。
-            //
-            // Windows 命令行解析规则：引号前连续 N 个反斜杠，其中
-            // N/2 对是字面反斜杠，剩下的用来转义引号。所以参数以反斜杠
-            // 结尾时，如果不额外补一个，收尾那个引号会被转义掉 ——
-            //   QuoteArg(@"https://a/b\")  →  "https://a/b\"
-            //   CommandLineToArgvW 解析成：https://a/b" --clear   ← 后一个
-            //   开关整个被并进同一个参数，静默丢失。
-            // 用户把更新源粘成以 \ 结尾（UNC 路径、手滑）就会撞上，
-            // 表现是「保存了但没生效」，很难联想到引号。
-            int trailing = 0;
-            for (int i = s.Length - 1; i >= 0 && s[i] == '\\'; i--) trailing++;
-            for (int i = 0; i < s.Length - trailing; i++)
-            {
-                char c = s[i];
-                if (c == '"') sb.Append("\\\"");
-                else sb.Append(c);
-            }
-            sb.Append('\\', trailing * 2);   // 每个尾部反斜杠加倍
-            sb.Append('"');
-            return sb.ToString();
+            // 单源在 LanShareCore.ArgQuoting（2026-11-09 收编；本方法留垫片稳住调用点）。
+            return ArgQuoting.Quote(s);
         }
 
         /// <summary>
