@@ -120,7 +120,9 @@ def _no_github_releases(monkeypatch):
     from app.api import appver
 
     monkeypatch.setattr(appver, "_github_app_releases", lambda *a, **k: [])
-    monkeypatch.setattr(appver, "_gh_cache", {"ts": 0.0, "items": []})
+    # fail_ts 是 2026-11-08 加的负缓存时间戳；缺这个键会让被测实现 KeyError，
+    # 桩必须跟着真实缓存结构走。
+    monkeypatch.setattr(appver, "_gh_cache", {"ts": 0.0, "items": [], "fail_ts": 0.0})
     yield
 
 

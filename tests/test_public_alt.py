@@ -11,12 +11,40 @@ healthz 对任何公网 Host 都必须收敛，防爆破必须按公网分账。
 
 import re
 
+import pytest
+
+from app.api.appver import reset_entries_cache
 from app.main import app
+from app.security import reset_netloc_cache
+from app.settings import (PUBLIC_BASE_URL, PUBLIC_BASE_URL_ALT, get_setting,
+                          set_setting)
 
 PRIMARY_HOST = "frp-main.example.com:35391"
 STALE_ALT_HOST = "frp-alt.example.com:35390"
 
 _FP_RE = re.compile(r"^([0-9A-F]{2}:){31}[0-9A-F]{2}$")
+
+
+@pytest.fixture(autouse=True)
+def _restore_public_url():
+    """本文件的用例会改全局设置 `public_base_url`，必须还原。
+
+    2026-11-08 实测到的假红：`test_adversarial_v1.py::test_healthz_hidden_from_
+    public_host` **单跑绿、与本文件同跑红**。根因是 asgi 的 `_healthz_blocked`
+    在 `public_netlocs()` 非空时直接放行（判定交给 is_public_entry），而本文件
+    留下的 `http://frp-main.example.com:35391` 让后面那个用例的前置条件
+    「公网地址未配置」不成立了 —— 它测的其实是另一条分支。
+
+    单测单跑绿 + 套件顺序红 = 状态泄漏指纹；这里把泄漏源堵在源头上，
+    而不是去改下游用例的前提。
+    """
+    prev = get_setting(PUBLIC_BASE_URL)
+    prev_alt = get_setting(PUBLIC_BASE_URL_ALT)
+    yield
+    set_setting(PUBLIC_BASE_URL, prev)
+    set_setting(PUBLIC_BASE_URL_ALT, prev_alt)
+    reset_netloc_cache()      # security 的 netloc 缓存清掉，判定恢复原状
+    reset_entries_cache()     # entries 端点 60s 缓存同样别带出去
 
 
 def _set_public(auth, url: str, url_alt: str = ""):

@@ -3403,7 +3403,7 @@
   },
   "/api/app/entries": {
    "get": {
-    "description": "公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置隧道；\nApp 端只展示非空项，指纹预校验以此为准。（备用入口 2026-11-04 已删除，\n字段不再下发 —— 历史语义见 tests/test_public_alt.py 文件头。）",
+    "description": "公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置隧道；\nApp 端只展示非空项，指纹预校验以此为准。（备用入口 2026-11-04 已删除，\n字段不再下发 —— 历史语义见 tests/test_public_alt.py 文件头。）\n\n指纹按 **请求 Host 对应的叶子证书** 现算（不走 _ENTRIES_CACHE 的整包缓存\n之外另算）：同一台机器用不同地址访问时会看到不同叶子证书，指纹必须跟着\n主机走，否则 App 的同源复核必然失败。",
     "operationId": "app_entries_api_app_entries_get",
     "responses": {
      "200": {

@@ -55,8 +55,15 @@ REG_SUBKEY = "LANShare"
 # 而不是硬解析出一堆 None 然后告诉用户「没有新版」。
 SCHEMA = 1
 
-# 一次最多带多少条历史，够用且不会把返回体撑大
-MAX_HISTORY = 20
+# 一次最多带多少条历史。
+#
+# 2026-11-08 起两个来源分开设：自定义源是**本机自己的清单**（由 release.py
+# 从 CHANGELOG 全量重建，实测 111 条），用户要求「更新记录要看全部」，
+# 所以不再截到 20 条；留 500 这个天花板纯粹是防「别人给的清单塞一万条把
+# 界面撑死」，正常量级永远碰不到。
+# GitHub 那边仍限 30 —— 那是 API 单页条数，要更早的得翻页，界面上说清楚。
+MAX_HISTORY = 500       # 自定义源
+GITHUB_HISTORY = 30     # GitHub Releases 单页
 
 
 # ──────────────────────────────────────────────────────────────
@@ -593,7 +600,7 @@ def fetch_github(timeout: float = TIMEOUT) -> dict:
 
         if latest is None:
             latest = entry
-        if len(history) < MAX_HISTORY:
+        if len(history) < GITHUB_HISTORY:
             history.append(entry)
 
     if latest is None:

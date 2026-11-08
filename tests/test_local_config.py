@@ -259,5 +259,8 @@ class TestEntriesCacheInvalidation(TestRoundTrip):
 
         client.post("/local/public-url", json={"url": "new.example.com:8765"})
 
-        resp = appver.app_entries()
+        class _Req:                       # 直调端点：只需 headers 供取 Host
+            headers = {"host": "127.0.0.1:8766"}
+
+        resp = appver.app_entries(request=_Req())
         assert resp["public"] == "https://new.example.com:8765"

@@ -36,6 +36,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -684,6 +685,229 @@ def sync_to_local_server(apk: Path, history: list[dict]) -> None:
                 pass
 
 
+# ──────────────────────────────────────────────────────────────
+# 更新源清单（`<安装目录>/updates/index.json`、`updates/app/index.json`）
+# ──────────────────────────────────────────────────────────────
+#
+# 这两份清单是托盘「自定义更新源」的数据源，Caddy 用 `handle_path /updates/*`
+# 静态下发。2026-11-08 排查发现：**仓库里没有任何脚本生成它们** —— 一直是
+# 手工维护的孤儿文件，`history` 只有几条，早就和 CHANGELOG 脱节。结果就是
+# 用户在托盘里点「更新记录」看到的是残缺数据，而 App 那条线因为是
+# `release.py` 自动生成的 `versions.json`，反而是全的。
+#
+# 现在由发版脚本从这里接管：**历史永远从 CHANGELOG 全量重建**，不追加、
+# 不合并 —— 追加会随时间产生重复和错序，重建每次都是同一个结果。
+
+# 这两类标题不是「发过的版本」，一律不进历史
+_UNRELEASED_RE = re.compile(r"未发布|未发版")
+_APP_TITLE_RE = re.compile(r"App\s+v?(\d+\.\d+\.\d+)")
+# 服务端线不能用「v 加数字就收」—— CHANGELOG 里 `App v1.1.20：…` 这种标题
+# 也带 v，照收就会把 App 版本混进服务端历史（2026-11-08 自测抓到的真实 bug）。
+# 所以先取出所有候选，再排除紧跟在 `App` 后面的那些。
+_VER_ANY_RE = re.compile(r"v(\d+(?:\.\d+){1,2})")
+_APP_BEFORE_RE = re.compile(r"App\s*\+?\s*$", re.I)
+
+
+def _pick_server_version(title: str) -> str | None:
+    """从标题里挑**服务端**版本号；整条只有 App 版本时返回 None。"""
+    for m in _VER_ANY_RE.finditer(title):
+        if _APP_BEFORE_RE.search(title[:m.start()]):
+            continue
+        return m.group(1)
+    return None
+
+
+def find_install_dir() -> Path | None:
+    """读注册表拿安装目录（`C:\\LANShare`）。找不到返回 None。
+
+    和 `find_local_share_dir()` 是一对：那个找数据目录（App 安装包），
+    这个找程序目录（updates 更新源清单）。
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\LANShare") as k:
+            return Path(winreg.QueryValueEx(k, "InstallFolder")[0])
+    except OSError:
+        return None
+
+
+def _changelog_sections(markdown: str) -> list[tuple[str, str]]:
+    """`## ` 切节 → [(标题, 正文)]，保持文件顺序（新到旧）。"""
+    out: list[tuple[str, str]] = []
+    for sec in re.split(r"^## ", markdown, flags=re.M)[1:]:
+        lines = sec.splitlines()
+        if lines:
+            out.append((lines[0].strip(), "\n".join(lines[1:]).strip()))
+    return out
+
+
+def _title_summary(title: str, version: str) -> str:
+    """从节标题里取一句话说明 —— `… v4.0.11：自主值守批（8 个修复）` → 冒号后那段。
+
+    这是「简洁明了」的落点：标题本来就是人写的一行摘要，比从正文里挑小标题
+    靠谱得多。正文的 `###` 小标题经常只是「安全」「体验」「数据正确性」这类
+    分类名，拼出来是 `- 安全`、`- 体验`，对用户零信息量（2026-11-08 实测）。
+
+    标题的形态并不统一，实测见过这几种：
+        `v4.0.11：xxx`        `服务端 v3.96 + App v1.1.25：xxx`
+        `v1.1.20（一）：xxx`   `App +124：xxx`（版本号根本不在标题里）
+    所以先按版本号定位尾巴，再剥掉 `（一）`、`+`、`—` 这些残渣。
+    """
+    idx = title.find(version)
+    tail = title[idx + len(version):] if idx >= 0 else ""
+
+    def _strip_lead(s: str) -> str:
+        s = re.sub(r"^[\s，,、+＋—\-–·]*", "", s)
+        s = re.sub(r"^（[一二三四五六七八九十\d]+）", "", s)   # （一）/（1）
+        s = re.sub(r"^[\s，,、+＋—\-–·]*", "", s)
+        return re.sub(r"^[：:]\s*", "", s)
+
+    tail = _strip_lead(tail)
+    # 还是残渣的情形：`服务端 v3.96 + App v1.1.25：说明` 按 3.96 定位后，
+    # 尾巴从 `+ App v1.1.25：说明` 开始 —— 再剥一层「另一个版本号 + 冒号」。
+    tail = re.sub(r"^(?:服务端|App)?\s*[+＋]?\s*v?\d[\d.]*\s*[：:]\s*", "", tail).strip()
+    if tail:
+        return tail[:300]
+
+    # 版本号不在标题里（如 `App +124：xxx`）：退到「第一个冒号之后」
+    if re.search(r"[：:]", title):
+        return re.sub(r"^[^：:]*[：:]\s*", "", title, count=1)[:300]
+    rest = re.sub(r"^\d{4}-\d{2}-\d{2}\s*[—\-–]*\s*", "", title)
+    return rest.strip(" —-–+：:")[:300]
+
+
+def _summary_for(body: str) -> str:
+    """标题给不出东西时的兜底：优先取 `###` 小标题要点，没有就取首段。"""
+    bullets = _history_notes(body)
+    if bullets:
+        return bullets
+    for para in body.split("\n\n"):
+        p = para.strip()
+        if p and not p.startswith(("#", "|", "```", ">")):
+            return p[:200]
+    return ""
+
+
+def _clean_note(text: str) -> str:
+    """去掉 markdown 装饰与残留编号 —— 这份文字要直接进 PC 面板的纯文本列表。
+
+    `**加粗**`、反引号、开头的 `124：`（`App +124` 那种标题的残渣）都不该
+    出现在「更新记录」里。**不渲染 markdown**：这段文字来自 CHANGELOG，
+    但也可能来自自定义更新源，渲染器等于给 XSS 开门（见 ui 侧的 esc()）。
+    """
+    s = text.replace("**", "").replace("`", "")
+    s = re.sub(r"^\d+\s*[：:]\s*", "", s)
+    s = re.sub(r"^[\s—\-–+＋·]*", "", s)
+    return re.sub(r"\s+", " ", s).strip()[:300]
+
+
+def parse_update_history(markdown: str, line: str) -> list[dict]:
+    """CHANGELOG.md → **某一条版本线**的更新历史（新到旧）。
+
+    `line="server"` 取服务端线（`v4.0.11` / `服务端 v4.0.1`），
+    `line="app"` 取 App 线（`App v1.1.25`）。
+
+    两条线在 CHANGELOG 里是混着写的（`服务端 v3.96 + App v1.1.25`），
+    所以必须**分开解析、分开落盘** —— 混在一起会让用户以为手机装了 4.0.11。
+
+    说明统一走 `_summary_for`（小标题要点），和 App 早期 1.x.x 的书写风格一致。
+    同一版本被拆成多节（见过 `一`/`二`）只留第一条。
+    """
+    if line not in ("server", "app"):
+        raise ValueError(f"line 只能是 server 或 app，收到 {line!r}")
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    for title, body in _changelog_sections(markdown):
+        if _UNRELEASED_RE.search(title):
+            continue
+        if line == "server":
+            ver = _pick_server_version(title)
+        else:
+            m = _APP_TITLE_RE.search(title)
+            ver = m.group(1) if m else None
+        if not ver:
+            continue
+        if ver in seen:
+            continue
+        seen.add(ver)
+        dm = re.search(r"(\d{4}-\d{2}-\d{2})", title)
+        items.append({
+            "version": ver,
+            "published": dm.group(1) if dm else "",
+            "notes": _clean_note(_title_summary(title, ver) or _summary_for(body)),
+        })
+    return items
+
+
+def sync_update_manifest(line: str, version: str, artifact: Path | None) -> None:
+    """按 CHANGELOG 重建更新源清单。找不到本机服务端就安静跳过。
+
+    `latest` 指向本次发出的版本；`history` 是**全量重建**的结果。
+
+    历史条目能对上本目录里的文件时顺手补 `url` / `sha256` / `size` ——
+    对不上就留空：`need_file=False` 的历史条目允许缺这些字段，而老安装包
+    本来就会被按约定修剪掉，强行编一个下载地址比留空更糟。
+    """
+    inst = find_install_dir()
+    if inst is None:
+        warn("本机没装服务端（注册表无 LANShare），跳过更新源清单同步")
+        return
+    dest = inst / "updates" if line == "server" else inst / "updates" / "app"
+    manifest = dest / "index.json"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    hist = parse_update_history(CHANGELOG.read_text(encoding="utf-8"), line)
+    if not hist:
+        warn(f"CHANGELOG 里没解析出任何 {line} 线版本，清单保持原样")
+        return
+
+    # 本目录里实际存在的产物 → 文件名 → sha256/size
+    present: dict[str, Path] = {}
+    try:
+        for f in dest.iterdir():
+            if f.is_file() and f.suffix.lower() in (".exe", ".apk"):
+                present[f.name] = f
+    except OSError:
+        pass
+
+    out_hist: list[dict] = []
+    for h in hist:
+        item = {"version": h["version"], "published": h["published"], "notes": h["notes"]}
+        for name, path in present.items():
+            # 版本号前后不能紧邻数字，也不能再跟 `.数字`（`4.0.11.2`）；
+            # 但 `.exe` 那个点是正常的 —— 所以不能用 `(?![0-9.])`，
+            # 那样连 `LANShare-Setup-4.0.11.exe` 都会被判成不匹配。
+            if re.search(rf"(?<![0-9.]){re.escape(h['version'])}(?!\d)(?!\.\d)", name):
+                item["url"] = name
+                item["size"] = path.stat().st_size
+                item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                break
+        out_hist.append(item)
+
+    latest = {"version": version, "published": next(
+        (h["published"] for h in hist if h["version"] == version), ""),
+        "notes": next((h["notes"] for h in hist if h["version"] == version), ""),
+        "url": artifact.name if artifact else "",
+        "size": artifact.stat().st_size if artifact else 0,
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest() if artifact else ""}
+
+    if manifest.is_file():
+        # 生产目录里的文件，改前先留一份 —— 写坏了还能照原样放回去
+        backup = manifest.with_suffix(".json.bak")
+        try:
+            backup.write_bytes(manifest.read_bytes())
+        except OSError:
+            pass
+
+    _atomic_write(manifest, json.dumps(
+        {"schema": 1, "latest": latest, "history": out_hist},
+        ensure_ascii=False, indent=2))
+    ok(f"{manifest} 已重建（latest {version}，历史 {len(out_hist)} 条）")
+
+
 def restore_latest_to_server() -> None:
     """把 GitHub 的 Latest 标记还给最新的服务端 Release。
 
@@ -869,7 +1093,7 @@ def cmd_check(args) -> int:
 
 def cmd_server(args) -> int:
     ver = args.version
-    total = 7
+    total = 8
     step(1, total, "前置检查")
     check_git_clean()
     check_privacy()
@@ -902,6 +1126,11 @@ def cmd_server(args) -> int:
     verify_release(f"server-v{target}", exe)
     prune_old_releases("server", f"server-v{target}")
 
+    step(8, total, "同步更新源清单")
+    # 托盘的自定义更新源读 <安装目录>/updates/index.json。这份清单此前
+    # 没有生成者（手工维护、和 CHANGELOG 脱节），历史永远是残的。
+    sync_update_manifest("server", target, exe)
+
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")
     return 0
@@ -911,7 +1140,7 @@ def cmd_app(args) -> int:
     cur_ver, cur_build = read_app_version()
     target = args.version or cur_ver
     new_build = cur_build if target == cur_ver else cur_build + 1
-    total = 8
+    total = 9
 
     step(1, total, "前置检查")
     check_git_clean()
@@ -954,10 +1183,15 @@ def cmd_app(args) -> int:
     prune_old_releases("app", f"app-v{target}")
     restore_latest_to_server()
 
-    step(8, 8, "同步到本机服务端（更新镜像）")
+    step(8, total, "同步到本机服务端（更新镜像）")
     # 历史从完整 CHANGELOG 生成，不是只取当前版本 —— 服务端要能给出全部历史
     history = parse_changelog_history(CHANGELOG.read_text(encoding="utf-8"))
     sync_to_local_server(apk, history)
+
+    step(9, total, "同步更新源清单")
+    # App 线的自定义更新源清单（updates/app/index.json），和上面 versions.json
+    # 同一个源但不同落点：那个给 /api/app/history，这个给 App 的「自定义更新地址」。
+    sync_update_manifest("app", target, apk)
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")

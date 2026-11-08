@@ -32,8 +32,13 @@ def main() -> None:
     spec = normalize_openapi(app.openapi())
     out = PROJECT_ROOT / "contracts" / "openapi.json"
     out.parent.mkdir(exist_ok=True)
-    out.write_text(json.dumps(spec, ensure_ascii=False, indent=1, sort_keys=True),
-                   encoding="utf-8")
+    # newline="\n"：Windows 上 write_text 默认把 \n 翻成 \r\n，而 .gitattributes
+    # 规定 *.json 是 `text eol=lf` —— 留下 CRLF 工作副本只会让下次
+    # `git add` 产生一次无意义的整文件归一 diff（2026-11-08 实测）。
+    # 注意：这份快照本身带 `-diff` 属性，git diff 永远显示「Binary files
+    # differ」，内容漂移靠 tests/test_contract.py 比对，不靠肉眼看 diff。
+    with out.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(spec, ensure_ascii=False, indent=1, sort_keys=True))
     routes = sum(len(paths) for paths in [spec.get("paths", {})])
     print(f"openapi.json written: {routes} paths -> {out}")
     shutil.rmtree(tmp, ignore_errors=True)

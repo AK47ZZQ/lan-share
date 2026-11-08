@@ -253,6 +253,39 @@ button.link {
 }
 .updhist .v { color: var(--text); font-weight: 600; margin-right: 6px; }
 
+/* ── 更新记录弹层（2026-11-08）───────────────────────────────
+   历史从 CHANGELOG 全量重建后实测 85 条，内联卡片放不下，改成弹层 + 分页。
+   分页是纯前端切页（数据早就全在手里），不额外请求。 */
+.histmask {
+  position: fixed; inset: 0; background: rgba(16, 20, 30, .42);
+  display: none; align-items: center; justify-content: center;
+  z-index: 60; padding: 18px;
+}
+.histmask.on { display: flex; }
+.histdlg {
+  background: var(--card); border-radius: var(--radius);
+  width: min(660px, 100%); max-height: 82vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 18px 48px rgba(16, 20, 30, .26);
+}
+.histdlg .histhead {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border);
+}
+.histdlg .histhead h3 { margin: 0; font-size: 13.5px; color: var(--text); font-weight: 600; }
+.histbody { overflow-y: auto; flex: 1 1 auto; padding: 4px 16px; }
+.histrow { padding: 9px 0; border-bottom: 1px dashed var(--border); }
+.histrow:last-child { border-bottom: 0; }
+.histrow .hv { font-weight: 600; color: var(--text); }
+.histrow .hd { color: var(--muted); font-size: 10.5px; margin-left: 8px; }
+.histrow .hn { color: var(--body); font-size: 11.5px; line-height: 1.65; margin-top: 3px; }
+.histrow .hcur { color: var(--ok); font-size: 10.5px; margin-left: 6px; }
+.histfoot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border);
+}
+.histfoot .range { font-size: 11px; color: var(--muted); }
+
 /* ── 二维码 ── */
 .qr-row { display: flex; align-items: center; gap: 14px; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .qr-row img {
@@ -442,7 +475,10 @@ button.link {
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div class="card-title">版本</div>
-          <button class="link" id="chkupdate">检查更新</button>
+          <div style="display:flex;align-items:center;gap:14px">
+            <button class="link" id="histopen">更新记录</button>
+            <button class="link" id="chkupdate">检查更新</button>
+          </div>
         </div>
         <div class="hint" id="verline">点右边「检查更新」查一下</div>
         <div id="updbox" style="display:none">
@@ -516,6 +552,26 @@ button.link {
 
 <div class="busy" id="busy"><span id="busytext">处理中…</span></div>
 <div class="toast" id="toast"></div>
+
+<!-- 更新记录弹层。数据来自「检查更新」的返回体（history 由服务端
+     updates/index.json 提供，该清单由 release.py 从 CHANGELOG 全量重建），
+     分页纯前端切页，不再请求。 -->
+<div class="histmask" id="histmask">
+  <div class="histdlg" role="dialog" aria-modal="true" aria-labelledby="histtitle">
+    <div class="histhead">
+      <h3 id="histtitle">更新记录</h3>
+      <button class="mini" id="histclose">关闭</button>
+    </div>
+    <div class="histbody" id="histbody"></div>
+    <div class="histfoot">
+      <span class="range" id="histrange"></span>
+      <span style="display:flex;gap:8px">
+        <button class="mini" id="histprev">‹ 上一页</button>
+        <button class="mini" id="histnext">下一页 ›</button>
+      </span>
+    </div>
+  </div>
+</div>
 
 
 <script>
@@ -633,22 +689,94 @@ function onUpdate(u) {
     src.innerHTML = '';
   }
 
-  // ── 更新历史 ──
-  // 填了自定义地址就从自定义源的历史拉；没填就是 GitHub Releases 列表。
+  // ── 更新历史（内联只放最近 3 条）──
+  // 全量在「更新记录」弹层里看。历史条数现在是几十上百条，内联卡片
+  // 塞满会把整个「版本」卡撑成一面墙（2026-11-08：自定义源已不再截断）。
+  lastHistory = Array.isArray(u.history) ? u.history : [];
+  lastVersion = u.latest || '';
   const hist = document.getElementById('updhist');
-  const items = (u.history || []).slice(0, 10);
+  const items = lastHistory.slice(0, 3);
   if (!items.length) {
     hist.style.display = 'none';
     hist.innerHTML = '';
   } else {
     hist.style.display = '';
     hist.innerHTML = items.map(function (h) {
-      // 说明只取第一行前 60 字：这里是个小卡片，不是 CHANGELOG 阅读器
-      const n = (h.notes || '').split('\n')[0].slice(0, 60);
+      const n = (h.notes || '').split('\n')[0].slice(0, 48);
       return '<div><span class="v">v' + esc(h.version) + '</span>'
         + esc(h.published || '') + (n ? ' · ' + esc(n) : '') + '</div>';
-    }).join('');
+    }).join('')
+      + (lastHistory.length > 3
+        ? '<div style="margin-top:4px">共 ' + lastHistory.length
+          + ' 个版本，点右上角「更新记录」看全部</div>'
+        : '');
   }
+
+  // 弹层是被「更新记录」按钮触发打开的：数据到手了就开。
+  // 拿不到历史（查询失败/源里没历史）时必须清掉 pending 并提示，
+  // 否则 openHistory 会再发一次 checkUpdate，无限打转。
+  if (histPending) {
+    histPending = false;
+    if (lastHistory.length) openHistory();
+    else toast('没拿到更新记录，稍后再试');
+  }
+}
+
+// ── 更新记录弹层 ───────────────────────────────────────────
+// 数据就是「检查更新」返回体里的 history，不额外请求；分页纯前端切页。
+let lastHistory = [];
+let lastVersion = '';
+let histPending = false;     // 点了按钮但还没拿到数据
+let histPage = 0;
+const HIST_PER = 20;
+
+function openHistory() {
+  if (!lastHistory.length) {
+    // 还没查过：先替他查一次，数据回来再开（onUpdate 里接管）
+    histPending = true;
+    setUpdateBusy(true);
+    post({ action: 'checkUpdate' });
+    return;
+  }
+  const mask = document.getElementById('histmask');
+  // 从当前版本所在的那页开始，比每次都翻到第一页有用
+  const idx = lastHistory.findIndex(function (h) { return h.version === lastVersion; });
+  histPage = idx >= 0 ? Math.floor(idx / HIST_PER) : 0;
+  renderHistory();
+  mask.classList.add('on');
+  document.getElementById('histclose').focus();
+}
+
+function closeHistory() {
+  document.getElementById('histmask').classList.remove('on');
+}
+
+function renderHistory() {
+  const body = document.getElementById('histbody');
+  const total = lastHistory.length;
+  const pages = Math.max(1, Math.ceil(total / HIST_PER));
+  histPage = Math.min(Math.max(0, histPage), pages - 1);
+  const from = histPage * HIST_PER;
+  const slice = lastHistory.slice(from, from + HIST_PER);
+
+  body.innerHTML = slice.map(function (h) {
+    const isCur = lastVersion && h.version === lastVersion;
+    const n = (h.notes || '').trim();
+    return '<div class="histrow">'
+      + '<span class="hv">v' + esc(h.version) + '</span>'
+      + '<span class="hd">' + esc(h.published || '') + '</span>'
+      + (isCur ? '<span class="hcur">最新</span>' : '')
+      // 说明是纯文本：转义后只保留换行，绝不把远端文字当 HTML 解析
+      + (n ? '<div class="hn">' + esc(n) + '</div>' : '')
+      + '</div>';
+  }).join('');
+
+  document.getElementById('histrange').textContent =
+    (from + 1) + '–' + Math.min(from + HIST_PER, total) + ' / 共 ' + total
+    + ' 条 · 第 ' + (histPage + 1) + '/' + pages + ' 页';
+  document.getElementById('histprev').disabled = histPage === 0;
+  document.getElementById('histnext').disabled = histPage >= pages - 1;
+  body.scrollTop = 0;
 }
 
 /** HTML 转义。更新源地址和远端清单里的文字都会进 innerHTML，
@@ -736,6 +864,24 @@ document.getElementById('srcclear').onclick = function () {
 };
 
 document.getElementById('chkupdate').onclick = () => post({ action: 'checkUpdate' });
+
+// ── 更新记录弹层（2026-11-08）─────────────────────────────
+document.getElementById('histopen').onclick = openHistory;
+document.getElementById('histclose').onclick = closeHistory;
+document.getElementById('histprev').onclick = () => {
+  if (histPage > 0) { histPage -= 1; renderHistory(); }
+};
+document.getElementById('histnext').onclick = () => {
+  histPage += 1;           // renderHistory 里会夹到合法范围
+  renderHistory();
+};
+// 点遮罩空白处关；Esc 也关。弹层是自己画的，没有原生 dialog 的那套行为。
+document.getElementById('histmask').addEventListener('click', function (e) {
+  if (e.target === this) closeHistory();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeHistory();
+});
 document.getElementById('updget').onclick = () => post({ action: 'downloadUpdate' });
 // 一键更新：下载 → 校验 sha256 → 静默安装。托盘会主动退出把文件句柄交出去，
 // 装完由安装器重新拉起 —— 用户看到的是「消失几秒，新版本自己回来」。

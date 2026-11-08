@@ -48,7 +48,8 @@ APK_MIME = "application/vnd.android.package-archive"
 GITHUB_RELEASE_API = "https://api.github.com/repos/AK47ZZQ/lan-share/releases"
 _GH_TTL = 300.0        # 缓存 5 分钟
 _GH_TIMEOUT = 4.0      # 短超时：这是可选源，卡住不如放弃
-_gh_cache: dict = {"ts": 0.0, "items": []}
+_GH_NEG_TTL = 60.0     # 失败退避窗口：失败本身也要缓存，否则每请求白付 4s 超时
+_gh_cache: dict = {"ts": 0.0, "items": [], "fail_ts": 0.0}
 _gh_lock = threading.Lock()
 
 
@@ -86,6 +87,12 @@ def _github_app_releases(force: bool = False) -> list:
     now = time.monotonic()
     with _gh_lock:
         if not force and _gh_cache["items"] and now - _gh_cache["ts"] < _GH_TTL:
+            return _gh_cache["items"]
+        # 刚失败过：退避窗口内直接返回上次缓存（可能为空），不再付一次超时。
+        # 2026-11-08：原实现失败分支只 `return 旧缓存` 而不记时间戳，于是
+        # 「GitHub 不可达 + 全新部署没有本地 version.json」这条路上**每个请求
+        # 都要白等 4s**（_GH_TIMEOUT），而它每次都注定失败。受众很窄但代价确定。
+        if not force and now - _gh_cache.get("fail_ts", 0.0) < _GH_NEG_TTL:
             return _gh_cache["items"]
 
     items: list = []
@@ -134,6 +141,7 @@ def _github_app_releases(force: bool = False) -> list:
             })
     except Exception:
         with _gh_lock:
+            _gh_cache["fail_ts"] = now        # 记下失败时刻，进入退避窗口
             return _gh_cache["items"]
 
     # 排序必须按 version 元组，不能按 build。
@@ -147,8 +155,12 @@ def _github_app_releases(force: bool = False) -> list:
         key=lambda x: tuple(int(n) for n in x["version"].split(".")),
         reverse=True,
     )
-    if items:
-        with _gh_lock:
+    # 能走到这里说明请求本身成功了（哪怕一条 app- 资产都没有）——
+    # 退避只看「网络是否通」，不看「有没有新内容」，否则 GitHub 恢复后
+    # 也要白等满一个窗口才重新开始查。
+    with _gh_lock:
+        _gh_cache["fail_ts"] = 0.0
+        if items:
             _gh_cache["ts"] = now
             _gh_cache["items"] = items
     return items
@@ -483,42 +495,118 @@ def app_download(request: Request, _user=Depends(require_user)):
 # 敏感的 healthz/磁盘水位仍由 is_public_entry 的 Host 匹配收敛。
 
 _PEM_BODY = re.compile(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", re.S)
-_cert_fp_cache: list = []   # [指纹hex冒号格式, mtime, size]
+_CFP_CACHE: dict[str, list] = {}   # str(路径) → [指纹hex冒号格式, mtime, size]
+
+# Host 头是客户端可控字段，拼进路径前必须过这道闸（只放行主机名/域名字符）。
+# 内网 IPv4、域名、localhost 都在这套字符集里；冒号（IPv6）不放行 ——
+# Caddy 在本项目的安装器布局里只按 IPv4/域名出证，见 _leaf_cert_path。
+_HOST_SAFE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 
 
-def _cert_fingerprint() -> str:
-    """本机 TLS 证书 SHA256 指纹（冒号格式与 App TOFU 弹框一致）；无证书返回空串。
-    纯标准库：PEM→DER→SHA256，与 App 端 TrustStore 对同一 DER 摘要，逐字可比。"""
-    path = PROJECT_ROOT / "certs" / "cert.pem"
+def _leaf_cert_path(host: str | None) -> Path | None:
+    """给出该 Host 对应的叶子证书路径；路径不合法或找不到文件返回 None。
+
+    两种部署布局（2026-11-08 值守批发现，与 healthreport.cert_days_left_any
+    同源问题）：
+
+    - **仓库 / NSSM 时代布局**：`PROJECT_ROOT/certs/cert.pem`，长期自签服务器证书。
+    - **安装器布局**：Caddy 管理 PKI，叶子证书按主机名分目录落在
+      `certs/caddy/certificates/local/<host>/<host>.crt`，根 CA 在
+      `certs/caddy/pki/authorities/local/root.crt`。
+
+    安装器布局里 `certs/cert.pem` 不存在。原实现只认它，于是
+    `cert_sha256` 在生产恒为空 —— 而 App 端 `_probeAddress` 对空指纹是
+    **直接拒绝**（`if (fp.isEmpty) return null`），自动再发现的指纹门槛
+    因此永远失败。从 v4.0.x 起这条链路就是死的，只是没人对着返回体看过。
+    """
+    base = PROJECT_ROOT / "certs"
+    legacy = base / "cert.pem"
+    if legacy.is_file():
+        return legacy
+    if not host or not _HOST_SAFE.match(host):
+        return None
+    h = host.lower()
+    cand = base / "caddy" / "certificates" / "local" / h / f"{h}.crt"
+    # 纵深：即使字符集被改宽，也确保解析后仍在证书目录内（不许 .. 逃逸）
+    try:
+        cand.resolve().relative_to((base / "caddy" / "certificates" / "local").resolve())
+    except (ValueError, OSError):
+        return None
+    return cand if cand.is_file() else None
+
+
+def _fingerprint_of(path: Path) -> str:
+    """单个证书文件的 SHA256 指纹（冒号格式）；读不到返回空串。"""
+    key = str(path)
     try:
         st = path.stat()
-        if _cert_fp_cache and _cert_fp_cache[1:] == [st.st_mtime, st.st_size]:
-            return _cert_fp_cache[0]
+        hit = _CFP_CACHE.get(key)
+        if hit and hit[1:] == [st.st_mtime, st.st_size]:
+            return hit[0]
         der = base64.b64decode("".join(_PEM_BODY.findall(path.read_text(encoding="ascii"))))
         fp = ":".join(f"{b:02X}" for b in hashlib.sha256(der).digest())
     except Exception:
         return ""
-    _cert_fp_cache[:] = [fp, st.st_mtime, st.st_size]
+    _CFP_CACHE[key] = [fp, st.st_mtime, st.st_size]
     return fp
+
+
+def _cert_fingerprint(host: str | None = None) -> str:
+    """本机 TLS 证书 SHA256 指纹（冒号格式与 App TOFU 弹框一致）；无证书返回空串。
+
+    纯标准库：PEM→DER→SHA256，与 App 端 TrustStore 对同一 DER 摘要，逐字可比。
+
+    `host` 取请求的 Host 头（去掉端口）：App 的 TOFU 存的是**握手时实际看到的
+    叶子证书**，所以必须回该主机名对应那张，回错了 App 同源复核照样拒绝。
+    host 给了却找不到对应证书时返回空串（fail-closed），**不要**退到别的
+    网卡的证书 —— 那只会把「明确没有」变成「有但不对」，更难排查。
+
+    2026-11-08 值守批：原实现无 host 参数、只读仓库布局的 cert.pem，
+    安装器布局下恒返回空串（见 _leaf_cert_path 文档）。
+    """
+    path = _leaf_cert_path(host)
+    if path is None:
+        return ""
+    return _fingerprint_of(path)
 
 
 _ENTRIES_TTL = 60.0   # 秒；App 每 20s/端探测一次，60s 缓存把 N 客户端 × 3 设施
 _ENTRIES_CACHE: list = []   # [(monotonic_ts, resp_dict)]，set_public_url 时清（先例 reset_netloc_cache）
 
 
+def _request_host(request: Request | None) -> str | None:
+    """Host 头 → 纯主机名（去端口、去方括号、小写）；拿不到返回 None。"""
+    if request is None:
+        return None
+    raw = (request.headers.get("host") or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("["):                  # [::1]:8765
+        return None                          # IPv6 字面量不参与（_HOST_SAFE 也不放行）
+    host = raw.rsplit(":", 1)[0] if ":" in raw else raw
+    return host.lower() or None
+
+
 @router.get("/api/app/entries")
-def app_entries():
+def app_entries(request: Request):
     """公网入口 + 本机局域网地址 + 证书指纹。地址为 null 表示未配置隧道；
     App 端只展示非空项，指纹预校验以此为准。（备用入口 2026-11-04 已删除，
-    字段不再下发 —— 历史语义见 tests/test_public_alt.py 文件头。）"""
+    字段不再下发 —— 历史语义见 tests/test_public_alt.py 文件头。）
+
+    指纹按 **请求 Host 对应的叶子证书** 现算（不走 _ENTRIES_CACHE 的整包缓存
+    之外另算）：同一台机器用不同地址访问时会看到不同叶子证书，指纹必须跟着
+    主机走，否则 App 的同源复核必然失败。"""
+    host = _request_host(request)
     now = time.monotonic()
     if _ENTRIES_CACHE and now - _ENTRIES_CACHE[0][0] < _ENTRIES_TTL:
-        return _ENTRIES_CACHE[0][1]
+        cached = dict(_ENTRIES_CACHE[0][1])
+        cached["cert_sha256"] = _cert_fingerprint(host)   # 指纹随 host 变，不缓存
+        return cached
     resp = {"public": get_setting(PUBLIC_BASE_URL) or None,
             # 备用入口已删除（2026-11-04）。字段不再下发，App 拿不到就只显示
             # 一个入口，不需要重新发版。
             "lan": _lan_addresses(),
-            "cert_sha256": _cert_fingerprint()}
+            "cert_sha256": _cert_fingerprint(host)}
     _ENTRIES_CACHE[:] = [(now, resp)]
     return resp
 
