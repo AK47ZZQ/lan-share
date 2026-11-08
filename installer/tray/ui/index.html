@@ -913,9 +913,13 @@ function render(s) {
     const cls = !svc.exists ? 'off' : (svc.status === 'Running' ? '' : 'err');
     row.innerHTML = `
       <span class="dot ${cls}"></span>
-      <span class="name">${svc.label}</span>
-      <span class="info">${svc.detail || '—'}</span>
+      <span class="name">${esc(svc.label)}</span>
+      <span class="info">${esc(svc.detail || '—')}</span>
       <button class="mini" data-restart="${i}">重启</button>`;
+    // label/detail 走 esc（2026-11-09 值守批）：今天它们是本地常量派生
+    // （服务名/状态枚举），无攻击路径；但 innerHTML 约定是「进模板的
+    // 文本一律转义」——未来谁往 detail 里塞个文件名/报错原文，别在
+    // 这里留个现成的 XSS 落点。
     list.appendChild(row);
   });
 
