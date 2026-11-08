@@ -20,6 +20,19 @@ import atexit
 from app.config import DB_PATH
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+if not DATABASE_URL:
+    # 安装器布局的口令不进注册表（NSSM 把环境变量存 HKLM 服务键，
+    # ACL 实测 Users: ReadKey —— 本机任意账号可读）。cli 把完整连接串
+    # 写进数据目录的 .lanshare-dburl（icacls 收紧），env 只带路径。
+    # （2026-11-09 值守批 P1，与 .lanshare-pgpass 同批。）
+    _url_file = os.environ.get("LANSHARE_PG_URL_FILE", "").strip()
+    if _url_file:
+        try:
+            from pathlib import Path as _Path
+
+            DATABASE_URL = _Path(_url_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            DATABASE_URL = ""
 USE_PG = DATABASE_URL.startswith("postgres")
 
 _db_local = threading.local()

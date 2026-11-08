@@ -504,6 +504,30 @@ def write_pg_password(data_dir: Path, reg_key: str, password: str) -> None:
         say(f"    WARN 密码文件写入失败（不影响安装）：{exc}")
 
 
+_DB_URL_FILE = ".lanshare-dburl"
+
+
+def write_dburl_file(data_dir: Path, url: str) -> Path:
+    """把完整连接串写进数据目录并收紧 ACL，返回路径。
+
+    为什么不直接进服务环境变量（原实现 DATABASE_URL=postgresql://...:pw@）：
+    NSSM 把环境变量存 HKLM\...\Services\<名>\Parameters\AppEnvironmentExtra
+    （REG_MULTI_SZ），服务键 ACL 实测 BUILTIN/Users: ReadKey —— 本机任意
+    用户和任何 AppContainer 都能读走带口令的连接串。写文件 + lock_pgpass_acl
+    同款收紧，env 里只留路径。（2026-11-09 值守批 P1，与 .lanshare-pgpass
+    同一批实证。）"""
+    f = data_dir / _DB_URL_FILE
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(url, encoding="utf-8")
+        lock_pgpass_acl(f)
+    except OSError as exc:
+        # 文件写不进时回退旧路径（env 带口令）——功能优先于硬化
+        warn(f"连接串文件写入失败（回退环境变量方式）：{exc}")
+        return None
+    return f
+
+
 def _first_lan_ip() -> str:
     """取本机第一个有网关的局域网 IP，取不到就退回 127.0.0.1。
 
@@ -519,6 +543,23 @@ def _first_lan_ip() -> str:
         if h != "localhost":
             return h
     return "127.0.0.1"
+
+
+def _api_service_env(layout: "Layout", api_port: int, pg) -> dict:
+    """API 服务的环境变量。口令不进注册表：见 write_dburl_file docstring。"""
+    env = {
+        "SHARE_ROOT": str(layout.data_dir),
+        "LANSHARE_API_PORT": str(api_port),
+        # 只跑 PostgreSQL。不设这个变量时 app/db.py 会退到 SQLite，
+        # 那不是我们要的行为 —— 必须显式给。
+        "LANSHARE_PG_URL_FILE": str(layout.data_dir / _DB_URL_FILE),
+    }
+    url_file = write_dburl_file(layout.data_dir, pg.connection_url())
+    if url_file is None:
+        # 文件路径方案失败 → 回退旧方式（注册表里会留带口令的连接串，
+        # 功能优先于硬化；warn 已在 write_dburl_file 里发过）
+        env["DATABASE_URL"] = pg.connection_url()
+    return env
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -740,13 +781,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             exe=layout.python,
             args=[str(layout.entry)],
             cwd=layout.root,
-            env={
-                "SHARE_ROOT": str(layout.data_dir),
-                "LANSHARE_API_PORT": str(api_port),
-                # 只跑 PostgreSQL。不设这个变量时 app/db.py 会退到 SQLite，
-                # 那不是我们要的行为 —— 必须显式给。
-                "DATABASE_URL": pg.connection_url(),
-            },
+            env=_api_service_env(layout, api_port, pg),
             stdout=layout.logs / "api-stdout.log",
             stderr=layout.logs / "api-stderr.log",
             description=f"LAN Share 后端 API（端口 {api_port}）",

@@ -764,3 +764,37 @@ def test_lock_pgpass_acl_removes_users_access(tmp_path):
     assert "Administrators:(" in out, f"Administrators 授权缺失：{out}"
     # 文件内容不受影响
     assert f.read_text(encoding="utf-8") == "test-password"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="icacls 是 Windows 命令")
+def test_api_service_env_keeps_password_out_of_registry(tmp_path):
+    """API 服务环境变量不得携带带口令的连接串（2026-11-09 P1 钉）。
+
+    NSSM 把 env 存 HKLM 服务键 Parameters\AppEnvironmentExtra，
+    ACL 实测 Users: ReadKey —— 本机任意用户可读带口令的 DATABASE_URL。
+    修复后 env 只带 LANSHARE_PG_URL_FILE 路径，连接串落
+    .lanshare-dburl（icacls 收紧）。回退（env 重新塞回 DATABASE_URL）
+    → 本钉红。"""
+    from lanshare_cli import cli as cli_mod
+
+    calls: dict = {}
+
+    class _FakePg:
+        def connection_url(self):
+            return "postgresql://lanshare:secret-pw@127.0.0.1:5433/lanshare"
+
+    layout = type("L", (), {"data_dir": tmp_path})()
+    env = cli_mod._api_service_env(layout, 8766, _FakePg())
+    # 1) env 不得含 DATABASE_URL（除非文件方案失败回退）
+    assert "DATABASE_URL" not in env, \
+        f"带口令连接串仍在服务环境变量里: {sorted(env)}"
+    # 2) env 带文件路径
+    assert env.get("LANSHARE_PG_URL_FILE") == str(tmp_path / ".lanshare-dburl")
+    # 3) 文件存在且收紧（真 icacls 验证）
+    f = tmp_path / ".lanshare-dburl"
+    assert f.is_file()
+    raw = subprocess.run(["icacls", str(f)], capture_output=True).stdout or b""
+    out = raw.decode("gbk", errors="replace")
+    assert not any("Users:(" in ln for ln in out.splitlines()), out
+    # 4) 文件内容 = 完整连接串（app 端能读回）
+    assert f.read_text(encoding="utf-8") == "postgresql://lanshare:secret-pw@127.0.0.1:5433/lanshare"
