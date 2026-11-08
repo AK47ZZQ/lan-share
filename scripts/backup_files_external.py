@@ -88,7 +88,8 @@ def main() -> int:
         return 2
 
     cmd = ["robocopy", str(SHARE_ROOT), str(dest), "/E", "/COPY:DAT", "/DCOPY:DAT",
-           "/R:2", "/W:5", "/NP", "/NFL", "/NDL"]
+           "/R:2", "/W:5", "/NP"]   # 2026-11-08 夜批：去掉 /NFL /NDL —— 否则 /LOG 里
+    # 没有 per-file 明细，"证据日志"退化成摘要表（重演实测 35 行/0 明细）。
     for d in EXCLUDE_DIRS:
         cmd += ["/XD", str(SHARE_ROOT / d)]
     ts = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000:06d}"

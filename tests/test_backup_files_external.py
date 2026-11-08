@@ -126,6 +126,8 @@ def test_e2e_incremental_run_two_manifests(tmp_path):
     assert man1["match"] is True
     assert man1["src_files"] == 3 and man1["dest_files"] == 3
     assert man1["robocopy_log"] and (Path(man1["robocopy_log"]).exists())
+    log_text = Path(man1["robocopy_log"]).read_text(encoding="gbk", errors="replace")
+    assert "a.jpg" in log_text, "日志必须含 per-file 明细（/NFL /NDL 已去除的回归钉）"
     assert man1["dry_run"] is False
 
     r2 = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
