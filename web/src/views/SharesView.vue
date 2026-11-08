@@ -43,11 +43,6 @@ async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); toast('已复制', 'ok') }
   catch { await promptDlg('请手动复制：', text) }
 }
-async function copyPwd(s: ShareItem) {
-  if (!s.password) return
-  try { await navigator.clipboard.writeText(s.password); toast('提取码已复制', 'ok') }
-  catch { await promptDlg('提取码：', s.password) }
-}
 async function revoke(s: ShareItem) {
   if (!(await confirmDlg(`撤销「${s.name}」的分享？链接立即失效。`, { danger: true, okText: '撤销' }))) return
   try { await api.revokeShare(s.token); await load(); toast('已撤销', 'ok') } catch (e) { toast((e as Error).message, 'err') }
@@ -91,8 +86,6 @@ onMounted(async () => {
           </span>
           <span class="sname" :title="s.name">{{ s.name }}</span>
           <span v-if="s.target" class="status-pill targeted" title="定向分享：仅该成员可取件">🎯 {{ s.target }}</span>
-          <span v-if="s.password" class="status-pill" style="cursor:pointer"
-                :title="'点击复制提取码'" @click="copyPwd(s)">提取码 {{ s.password }}</span>
           <span class="status-pill" :class="statusOf(s)">{{ STATUS_LABEL[statusOf(s)] }}</span>
         </div>
         <div class="spath" :title="s.path">{{ s.path }} · {{ s.size_human }} · {{ s.expires_in }}内有效
@@ -107,7 +100,6 @@ onMounted(async () => {
           <span style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">
             <button class="btn ghost sm" @click="copy(s)">📋 复制链接</button>
             <button v-if="publicBase" class="btn ghost sm" @click="copyText(publicBase + '/s/' + s.token)">🌐 公网链接</button>
-            <button v-if="s.password" class="btn ghost sm" @click="copyPwd(s)">🔑 复制提取码</button>
             <button class="btn ghost sm" @click="qrFor = s; qrFailed = false">🔳 二维码</button>
             <button class="btn ghost sm" @click="showHistory(s)">取件记录</button>
             <button class="btn danger sm btn-revoke" @click="revoke(s)">✕ 撤销</button>
