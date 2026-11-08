@@ -78,6 +78,11 @@ def list_notes(request: Request, path: str = Query(..., min_length=1),
                 if p.name.startswith(".") or any(
                         part.startswith(".") for part in p.relative_to(base).parts):
                     continue
+                # 目录侧同样逐节点收口（2026-11-08 夜批对抗审查）：文件侧早有
+                # visible 闸，目录侧漏了——path=/ 时他人 private 下的分类目录名
+                # 会泄漏进 categories（成员对 shared 根默认可读，可达）
+                if not visible(_user, p.relative_to(SHARE_ROOT).parts):
+                    continue
                 dirs.add(rel)
                 continue
             if not p.is_file() or p.suffix.lower() not in NOTE_EXTS:
