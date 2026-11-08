@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 from app.config import SHARE_ROOT
 from app.services import albums as albums_svc
-from app.db import _db_lock
+from app.db import _db, _db_lock
 from app.security import audit
 from app.store import users as users_store
 
@@ -77,6 +77,37 @@ def rename_user_everywhere(uid: int, old_name: str, new_name: str,
             audit(dir_fail_action, f"{old_name} → {new_name}", ip=ip)
             raise HTTPException(status_code=500,
                                 detail="私人目录改名失败（可能正被占用），已回滚用户名，请稍后重试")
+
+    # 分享与回收站行的路径改写（2026-11-08 值守批二一致性缺口）：
+    # rename 之前这两类行的 rel 仍指 private/<旧名>/… —— 私人分享的
+    # meta/prepare/dl 全 404（链接还在、文件搬了），回收站条目恢复时
+    # resolve 会在已不存在的 private/<旧名>/ 下 mkdir 重建，文件"恢复成功"
+    # 但成员看不到。逐行 Python 侧 normcase 精确段前缀比对（与
+    # sync_grants_on_move 同款纪律：LIKE 的 %/_ 会被路径字符破坏），
+    # 事务一次收束。大小写纯变化（normcase 相同、目录未动）时零改动。
+    if not os.path.normcase(old_name) == os.path.normcase(new_name):
+        old_prefix = "private/" + old_name + "/"
+        ok_prefix = os.path.normcase(old_prefix)
+        new_prefix = "private/" + new_name + "/"
+        with _db_lock:
+            rows = _db().execute(
+                "SELECT token, path FROM shares WHERE "
+                "lower(substr(path,1,8))='private/'").fetchall()
+            for r in rows:
+                gp = os.path.normcase(r["path"])
+                if gp == ok_prefix[:-1] or gp.startswith(ok_prefix):
+                    _db().execute("UPDATE shares SET path=? WHERE token=?",
+                                  (new_prefix + r["path"][len(old_prefix):], r["token"]))
+            trows = _db().execute(
+                "SELECT id, orig_path FROM trash WHERE "
+                "lower(substr(orig_path,1,8))='private/'").fetchall()
+            for r in trows:
+                gp = os.path.normcase(r["orig_path"]
+                                      .replace("\\", "/"))
+                if gp == ok_prefix[:-1] or gp.startswith(ok_prefix):
+                    _db().execute("UPDATE trash SET orig_path=? WHERE id=?",
+                                  (new_prefix + r["orig_path"].replace("\\", "/")[len(old_prefix):], r["id"]))
+            _db().commit()
 
     # 直传子目录同步改名（否则旧 incoming/<旧名>/ 文件对本人不可见）
     old_inc = SHARE_ROOT / "incoming" / old_name

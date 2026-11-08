@@ -314,6 +314,66 @@ def test_webdav_member_can_read_shared_not_private_others(auth, make_user):
     assert r.status_code in (403, 404)  # 别名→本人空间不存在该子目录
 
 
+def test_rename_member_rewrites_private_share_paths(auth, make_user):
+    """改名必须改写私人分享的 path —— 否则链接 404（2026-11-08 值守批二钉）。
+
+    回退改写逻辑 → 本钉红（share meta 404）。"""
+    from app.db import _db as _s_db
+    member = make_user("member")
+    uname = member.username
+    uid = _s_db().execute("SELECT id FROM users WHERE username=?",
+                          (uname,)).fetchone()["id"]
+    r = member.post("/api/upload/private", files={"file": ("sh1.txt", b"v1", "text/plain")})
+    assert r.status_code == 200, r.text
+    r = member.post("/api/share", data={"path": f"private/{uname}/sh1.txt",
+                                        "expires_hours": "1"})
+    assert r.status_code == 200, r.text
+    tok = r.json()["token"]
+    # 改名（避开既有测试用过的名字）
+    new_name = "renamed-sh-" + uname[-6:]
+    r = auth.post(f"/api/admin/users/{uid}/username", json={"value": new_name})
+    assert r.status_code == 200, r.text
+    # 分享链接必须仍然活着（path 已改写到 private/<new>/）
+    r = member.get(f"/api/share/meta/{tok}")
+    assert r.status_code == 200, f"分享链接因改名死亡: {r.status_code} {r.text[:120]}"
+    r = member.post(f"/api/share/{tok}/prepare", json={})
+    assert r.status_code == 200, r.text
+    # meta/prepare 不 resolve 路径（消融实证：改写被删后两者仍绿）——
+    # 判别力必须落在真正取文件的 dl 上
+    dl = r.json()["url"]
+    r = member.get(dl)
+    assert r.status_code == 200 and r.content == b"v1",         f"dl 因改名死亡: {r.status_code} {r.text[:120]}"
+
+
+def test_rename_member_rewrites_trash_orig_paths(auth, make_user):
+    """改名必须改写回收站 orig_path —— 否则恢复进已消失的旧目录（数据看似丢失）。
+
+    回退改写逻辑 → 本钉红（restore 404 或文件落错目录）。"""
+    import os
+    from app.db import _db as _s_db
+    member = make_user("member")
+    uname = member.username
+    uid = _s_db().execute("SELECT id FROM users WHERE username=?",
+                          (uname,)).fetchone()["id"]
+    r = member.post("/api/upload/private", files={"file": ("tr1.txt", b"v1", "text/plain")})
+    assert r.status_code == 200, r.text
+    r = member.delete(f"/api/files/private/{uname}/tr1.txt")
+    assert r.status_code in (200, 204), r.text
+    new_name = "renamed-tr-" + uname[-6:]
+    r = auth.post(f"/api/admin/users/{uid}/username", json={"value": new_name})
+    assert r.status_code == 200, r.text
+    r = member.get("/api/trash")
+    items = [it for it in r.json() if it["name"] == "tr1.txt"]
+    assert items, r.text[:200]
+    r = member.post(f"/api/trash/{items[0]['id']}/restore")
+    assert r.status_code == 200, r.text
+    # 文件必须回到改名后的私人目录
+    r = member.get("/api/files", params={"path": f"private/{new_name}"})
+    ok = r.status_code == 200 and "tr1.txt" in r.text
+    assert ok, f"恢复后文件不在新目录: {r.status_code} {r.text[:200]}"
+    assert not os.path.isdir(os.path.join(os.environ["SHARE_ROOT"], "private", uname)),         "旧目录不得被恢复流程重建"
+
+
 def test_admin_can_rename_and_reset_member(auth, make_user):
     """管理员直接改成员用户名/重置密码。"""
     from app.db import _db as _s_db
