@@ -48,9 +48,34 @@ def _mirror_text(raw: bytes, ext: str) -> str:
     return _ws_re.sub(" ", text).strip().lower()
 
 
+# 复扫节流（2026-11-09 值守批三，与 files._listing 同款 5s TTL）：
+# 全树 rglob + 逐文件读头在 9934 文件规模 ≈ 0.5-0.9s——此前每次 /api/search
+# 都全额付一次（perf 实测：0 命中查询 p50 474ms/5000 文件树，而 11-08 基线
+# 的查询恰好命中 ≥50 文件走了短路，没看到这条路径）。节流后同一窗口内的
+# 后续搜索零复扫；写时失效见 files.invalidate_listing 联动。
+_REFRESH_TTL = 5.0
+_last_refresh = 0.0
+
+
+def invalidate() -> None:
+    """强制下一次搜索前复扫（写端点联动用）。"""
+    global _last_refresh
+    _last_refresh = 0.0
+
+
 def refresh_index() -> dict:
-    """增量维护索引：新/变更 upsert、消失删行。返回统计（测试/巡检用）。"""
+    """增量维护索引：新/变更 upsert、消失删行。返回统计（测试/巡检用）。
+
+    5s 节流：与 /api/recent、/api/search 的文件侧清单缓存同一语义 ——
+    挡突发重扫，不强求实时；写端点（upload/mkdir/move/copy/rename/delete）
+    已联动 invalidate()，API 写入后下一次搜索立即重扫，用户无感。"""
+    global _last_refresh
+    now = time.time()
+    if now - _last_refresh < _REFRESH_TTL:
+        return {}
     with _scan_lock:
+        if time.time() - _last_refresh < _REFRESH_TTL:
+            return {}
         known = {r["path"]: (r["mtime_ns"], r["size"])
                  for r in note_search_store.load_index()}
         seen: set[str] = set()
@@ -77,6 +102,7 @@ def refresh_index() -> dict:
                             st.st_mtime_ns, st.st_size))
         gone = [p for p in known if p not in seen]
         note_search_store.apply_scan(upserts, gone)
+        _last_refresh = time.time()
         return {"indexed": len(seen), "updated": len(upserts), "gone": len(gone)}
 
 

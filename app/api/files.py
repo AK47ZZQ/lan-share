@@ -411,9 +411,19 @@ _listing_lock = threading.Lock()
 
 
 def invalidate_listing() -> None:
-    """强制下一次读重建清单（给「上传完想立刻看到」这类场景用）。"""
+    """强制下一次读重建清单（给「上传完想立刻看到」这类场景用）。
+
+    同步失效笔记索引（note_index.invalidate）：笔记就是文件 —— 任何走
+    通用写端点的 .md 落盘都必须让下一次 /api/search 立即重扫笔记索引，
+    否则 5s TTL 窗口内「刚写完就搜」会搜不到自己的新笔记。DAV/直落盘
+    写入无此联动，靠 TTL 兜底（与文件清单同一取舍）。"""
     with _listing_lock:
         _listing_cache["ts"] = 0.0
+    try:
+        from app.services import note_index as _ni
+        _ni.invalidate()
+    except Exception:   # 循环 import 防御：note_index 挂了不能连累写端点
+        pass
 
 
 def _listing() -> list:
