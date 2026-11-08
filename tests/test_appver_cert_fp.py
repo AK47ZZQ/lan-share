@@ -126,17 +126,22 @@ class TestLeafCertPath:
         assert m._cert_fingerprint(bad) == ""
 
     def test_traversal_cannot_escape_cert_dir(self, monkeypatch, tmp_path):
-        """纵深：即使字符串过了字符集闸，解析后跑出证书目录也必须拒绝。"""
+        """纵深：即使字符串过了字符集闸，解析后跑出证书目录也必须拒绝。
+
+        ⚠️ 逃逸落点必须**真的放一张证书**：2026-11-08 消融实证，夹具不放
+        「host='..' 词法归一后的落点文件」时，把防线整段删掉 19 项仍全绿
+        （被「目标不存在 → None」掩蔽）。放上去之后删防线必须红。
+        """
         import app.api.appver as m
         root = _installer_layout(tmp_path)
-        # 在证书目录外放一张同名证书，试图让 '..' 之类指过去
-        outside = tmp_path / "certs" / "caddy" / "certificates"
-        outside.mkdir(parents=True, exist_ok=True)
-        (outside / "local").mkdir(exist_ok=True)
+        # host='..' → cand=local/../​...crt → Win32 词法归一落点 = certificates/...crt。
+        # 在落点放一张真 PEM：防线在 → None；防线删 → is_file() 命中、指纹非空。
+        escaped = root / "certs" / "caddy" / "certificates" / "...crt"
+        escaped.write_bytes(_pem(b"escaped-cert-must-never-be-served"))
         monkeypatch.setattr(m, "PROJECT_ROOT", root)
         assert m._leaf_cert_path("..") is None
-        assert m._leaf_cert_path("local") is None or True  # 目录不是文件 → None
-        assert not (tmp_path / "certs" / "caddy" / "certificates" / "local" / "local").is_file()
+        assert m._cert_fingerprint("..") == ""
+        assert m._leaf_cert_path("local") is None   # 目录不是文件 → None（原恒真断言改正）
 
     def test_two_hosts_get_different_fingerprints(self, monkeypatch, tmp_path):
         """同一台机器两张叶子证书：指纹必须各自独立，缓存不能串。"""
