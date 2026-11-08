@@ -459,34 +459,12 @@ def lock_certs_acl(certs: Path) -> None:
 
 
 def lock_pgpass_acl(f: Path) -> None:
-    """把 PG 口令文件的 ACL 收紧到 SYSTEM + Administrators。
+    """收紧 PG 口令文件 ACL —— 实现单源在 acl.lock_file_acl（2026-11-09
+    抽出：pg.initdb 的 .pgpass.tmp 是第三个消费者，防 QuoteArg/oneline
+    式两份实现漂移）。"""
+    from lanshare_cli.acl import lock_file_acl
 
-    🔴 os.chmod(0o600) 在 Windows 上**不生效**（POSIX 语义不映射，只碰
-    只读位）—— 实测生产 C:/LANShare/data/.lanshare-pgpass 的继承 ACL
-    是 BUILTIN/Users:(M) + Authenticated Users:(M)：本机任意账号可
-    **读**（PG 角色口令 → 127.0.0.1:5433 全库读写 = 家人全部数据）也可
-    **改**（下次重启 API 连不上库）。与 lock_certs_acl 防 root.key 同款
-    威胁模型、同款修法（icacls 断继承 + 双授权），单文件无需 (OI)(CI)。
-    失败只警告不中止：与 certs 同款取舍。"""
-    try:
-        import subprocess
-
-        # 用 SID 不用组名（EnsureSecureDir 同款教训）：中文 Windows 的组名
-        # 本地化， Administrators 可能解析不了（实测 icacls 静默只授 SYSTEM）。
-        # *S-1-5-18 = SYSTEM、*S-1-5-32-544 = Administrators，全世界一样。
-        # 用 SID 不用组名（EnsureSecureDir 同款教训）：中文 Windows 的组名
-        # 本地化， Administrators 可能解析不了（实测 icacls 静默只授 SYSTEM）。
-        # *S-1-5-18 = SYSTEM、*S-1-5-32-544 = Administrators，全世界一样。
-        # 用 SID 不用组名（EnsureSecureDir 同款教训）：中文 Windows 的组名
-        # 本地化， Administrators 可能解析不了（实测 icacls 静默只授 SYSTEM）。
-        # *S-1-5-18 = SYSTEM、*S-1-5-32-544 = Administrators，全世界一样。
-        subprocess.run(
-            ["icacls", str(f), "/inheritance:r",
-             "/grant:r", "*S-1-5-18:F", "/grant:r", "*S-1-5-32-544:F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60,
-        )
-    except Exception as exc:
-        warn(f"收紧 PG 口令文件权限失败（建议手动 icacls 处理）：{exc}")
+    lock_file_acl(f)
 
 
 def write_pg_password(data_dir: Path, reg_key: str, password: str) -> None:

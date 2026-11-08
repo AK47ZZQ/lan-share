@@ -496,6 +496,37 @@ class TestSecureDataDir:
         return Postgres(root=tmp_path, data_dir=tmp_path / "pgdata",
                         port=5433, password="x")
 
+    def test_initdb_locks_pwfile_and_cleans_orphan(self, tmp_path, monkeypatch):
+        """initdb 的 .pgpass.tmp 必须收紧 ACL + 清理断电孤儿（2026-11-09 值守批三）。
+
+        明文超级用户口令在 initdb 期间（可达 180s）坐 pgdata.parent；
+        正常路径 finally 会删，但强杀/断电留孤儿 —— 不清则永久残留。
+        回退 lock_file_acl 调用或孤儿预清理 → 本钉红。"""
+        import sys as _sys
+
+        import lanshare_cli.acl as acl_mod
+
+        pg = self._pg(tmp_path)
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setattr(pg, "_run",
+                            lambda cmd, **k: type("R", (), {"returncode": 0,
+                                                            "stderr": b"",
+                                                            "stdout": b""})())
+        monkeypatch.setattr(pg, "exe",
+                            lambda name: tmp_path / "bin" / (name + ".exe"))
+        pwfile = tmp_path / ".pgpass.tmp"
+        pwfile.write_text("stale-orphan-password", encoding="utf-8")   # 断电孤儿
+        locked = []
+        monkeypatch.setattr(acl_mod, "lock_file_acl",
+                            lambda f: locked.append(Path(f)))
+
+        pg.initdb()
+
+        # 锁定发生在 pwfile 上（孤儿同路径被覆盖重写后再锁）
+        assert len(locked) == 1 and locked[0] == pwfile, locked
+        # 正常路径 finally 删掉明文
+        assert not pwfile.exists()
+
     def test_noop_on_non_windows(self, tmp_path, monkeypatch):
         import sys as _sys
         # 只改 sys.platform：改 os.name 会把 pathlib 也带坏

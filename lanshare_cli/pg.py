@@ -232,7 +232,17 @@ class Postgres:
 
         pwfile = self.pgdata.parent / ".pgpass.tmp"
         try:
+            # 上次装到一半断电/强杀的孤儿 .pgpass.tmp 先清掉（正常路径
+            # finally 会删，但硬杀/断电会留 —— 里面是超级用户口令）
+            pwfile.unlink(missing_ok=True)
             pwfile.write_text(self.password, encoding="utf-8")
+            # 🔴 写完立刻收紧 ACL（2026-11-09 值守批三）：明文超级用户口令
+            # 在 initdb 期间（可达 180s）坐在这里 —— pgdata.parent 若继承
+            # Users:(M)（ProgramData 类位置），本机任意账号可读；断电孤儿
+            # 更是永久残留。单源 lanshare_cli.acl（三消费点防漂移）。
+            from lanshare_cli.acl import lock_file_acl
+
+            lock_file_acl(pwfile)
             cmd = [
                 str(self.exe("initdb")),
                 "-D", str(self.pgdata),
