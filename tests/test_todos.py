@@ -241,3 +241,32 @@ def test_sweep_due_reminder_idempotent(make_user):
     items = [n for n in m1.get("/api/notifications").json()["items"]
              if n["link"] == f"todos:todo:{tid}"]
     assert len(items) == 1
+
+
+def test_rename_list_enforces_uniqueness_invariant(make_user):
+    """2026-11-08 夜批对抗审查补口：create 守的重名不变量 rename 也要守。
+    personal=同用户同名拒（含 family 重名，对齐 create 口径）；
+    family=全局同名拒；重命名为现名（no-op）不拒。"""
+    m1 = make_user("member")
+    r = m1.post("/api/todos/lists", json={"name": "购物", "kind": "family"})
+    assert r.status_code == 200
+    fid = r.json()["id"]
+    r = m1.post("/api/todos/lists", json={"name": "私事", "kind": "personal"})
+    assert r.status_code == 200
+    pid = r.json()["id"]
+
+    # personal 改成 family 清单同名 → 409（同用户建的同名）
+    r = m1.patch(f"/api/todos/lists/{pid}", json={"name": "购物"})
+    assert r.status_code == 409, r.text
+    # family 改成另一个 family 同名（m2 建的）→ 409
+    m2 = make_user("member")
+    r = m2.post("/api/todos/lists", json={"name": "采购", "kind": "family"})
+    assert r.status_code == 200
+    r = m1.patch(f"/api/todos/lists/{fid}", json={"name": "采购"})
+    assert r.status_code == 409, r.text
+    # 重命名为现名（no-op）→ 200
+    r = m1.patch(f"/api/todos/lists/{fid}", json={"name": "购物"})
+    assert r.status_code == 200
+    # 正常改名 → 200
+    r = m1.patch(f"/api/todos/lists/{pid}", json={"name": "私事改"})
+    assert r.status_code == 200

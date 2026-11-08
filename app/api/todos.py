@@ -173,6 +173,14 @@ def rename_list(lid: int, request: Request, body: ListRenameBody,
     lst = _visible_list_or_404(lid, _user)
     if lst["user_id"] != _user["user_id"] and _user["role"] != "admin":
         raise HTTPException(status_code=403, detail="只有清单创建者可以重命名")
+    # 重名不变量与 create 同口径（2026-11-08 夜批对抗审查补口）：
+    # personal=同用户建的任何同名清单；family=全局 family 同名；都排除自身
+    vis = todos_store.lists_visible(_user["user_id"])
+    if any(r["id"] != lid and r["name"] == body.name
+           and (r["user_id"] == _user["user_id"] if lst["kind"] == "personal"
+                else r["kind"] == "family")
+           for r in vis):
+        raise HTTPException(status_code=409, detail="同名清单已存在")
     todos_store.rename_list(lid, body.name)
     return {"ok": True}
 
