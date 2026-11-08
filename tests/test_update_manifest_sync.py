@@ -201,6 +201,30 @@ class TestSyncManifest:
         assert (inst / "updates" / "app" / "index.json").is_file()
         assert not (inst / "updates" / "index.json").exists()
 
+    def test_artifact_copied_into_updates_dir(self, rel, tmp_path, monkeypatch):
+        """产物不在 updates/ 里时必须复制进去。
+
+        2026-11-08 实测踩到：发版脚本把 `build/out` 里那个 exe 的**文件名**写进
+        清单的 `latest.url`，但文件从来没被搬进 `updates/` —— 托盘照样 404。
+        清单只写文件名，Caddy 按 `/updates/*` 静态下发，产物必须在同一目录。
+        """
+        inst = self._setup(rel, tmp_path, monkeypatch)
+        build_out = tmp_path / "build"
+        build_out.mkdir()
+        exe = build_out / "LANShare-Setup-4.0.11.exe"
+        exe.write_bytes(b"installer-bytes")
+
+        rel.sync_update_manifest("server", "4.0.11", exe)
+
+        copied = inst / "updates" / "LANShare-Setup-4.0.11.exe"
+        assert copied.is_file(), "产物没被复制进 updates 目录"
+        data = json.loads((inst / "updates" / "index.json").read_text(encoding="utf-8"))
+        assert data["latest"]["url"] == copied.name
+        # 历史条目里凡是给了 url 的，都必须真能下到
+        for h in data["history"]:
+            if h.get("url"):
+                assert (inst / "updates" / h["url"]).is_file(), h["url"]
+
     def test_no_server_installed_is_quiet(self, rel, tmp_path, monkeypatch):
         """没装服务端（注册表没有）时安静跳过，不该让发版脚本失败。"""
         monkeypatch.setattr(rel, "find_install_dir", lambda: None)

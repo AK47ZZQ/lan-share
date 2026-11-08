@@ -42,18 +42,23 @@ import release  # noqa: E402  —— 复用同一个解析器，避免两套规�
 
 
 def artifact_for(dest: Path, version: str, suffix: str) -> Path | None:
-    """在目录里找某个版本对应的产物文件（按文件名里的版本号匹配）。
+    """找某个版本对应的产物文件。
+
+    先看清单目录本身（发版脚本会把它复制进去），找不到再去 `build/out`
+    —— 那里是构建产物落点，`updates/` 里没有说明清单和文件脱节了，
+    这正是本脚本要修的场景（2026-11-08：清单指向 4.0.12，目录里只有 4.0.11）。
 
     版本号前后不能紧邻数字，也不能再跟 `.数字`（否则 `4.0.1` 会误配
     `4.0.11`）。但 `.exe` 前面那个点是正常的 —— 所以不能用
     `(?![0-9.])`，那样连 `LANShare-Setup-4.0.11.exe` 都会被判成不匹配。
     """
-    if not dest.is_dir():
-        return None
     pat = re.compile(rf"(?<![0-9.]){re.escape(version)}(?!\d)(?!\.\d)")
-    for f in sorted(dest.iterdir()):
-        if f.is_file() and f.suffix.lower() == suffix and pat.search(f.name):
-            return f
+    for d in (dest, ROOT / "build" / "out"):
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if f.is_file() and f.suffix.lower() == suffix and pat.search(f.name):
+                return f
     return None
 
 

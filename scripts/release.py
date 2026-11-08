@@ -859,6 +859,18 @@ def sync_update_manifest(line: str, version: str, artifact: Path | None) -> None
     manifest = dest / "index.json"
     dest.mkdir(parents=True, exist_ok=True)
 
+    # 产物必须躺在清单同一个目录里 —— 清单只写文件名，Caddy 按 `/updates/*`
+    # 静态下发。2026-11-08 实测踩到：`latest` 指向了 `build/out` 里那个 exe 的
+    # 文件名，但那个文件从来没被复制进 `updates/`，托盘下载直接 404。
+    # 复制后 `latest.url` 才真的指得到东西。
+    if artifact is not None and artifact.parent.resolve() != dest.resolve():
+        target = dest / artifact.name
+        if not (target.is_file()
+                and target.stat().st_size == artifact.stat().st_size):
+            shutil.copy2(artifact, target)
+            ok(f"产物已复制到 {target.name}")
+        artifact = target
+
     hist = parse_update_history(CHANGELOG.read_text(encoding="utf-8"), line)
     if not hist:
         warn(f"CHANGELOG 里没解析出任何 {line} 线版本，清单保持原样")
