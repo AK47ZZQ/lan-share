@@ -86,6 +86,19 @@ namespace LanShare
         [STAThread]
         private static int Main(string[] args)
         {
+            // 看护副本的映像名只可能是更新看护。**参数丢了也绝不能落回托盘分支** ——
+            // 2026-11-08 实机：%TEMP% 里那个 LanShareUpdateWatcher.exe 以托盘身份
+            // 跑了 4 小时（30 分钟硬顶等于没生效），抢在安装器覆盖文件之前把服务
+            // 全拉了起来导致更新回滚，还占着单实例互斥量，用户点快捷方式毫无反应。
+            // 所以先按映像名兜底，再谈参数。
+            bool watcherImage = (Process.GetCurrentProcess().ProcessName ?? "")
+                .StartsWith("LanShareUpdateWatcher", StringComparison.OrdinalIgnoreCase);
+            if (watcherImage)
+            {
+                if (args == null || args.Length < 3) return 2;
+                return DetachedUpdateWatcher.Run(args);
+            }
+
             // 独立更新看护模式（2026-11-07）：安装器把托盘 exe 以不同文件名复制到
             // %TEMP% 后带此参数启动。**分支必须在单实例互斥量之前 return** ——
             // 看护不是第二个托盘实例，绝不能碰 Global\LanShareTraySingleInstance
@@ -325,6 +338,17 @@ namespace LanShare
                 {
                     try
                     {
+                        // 安装器在跑（或更新标记还没消）→ 绝不碰服务。
+                        // 服务此刻是**安装器故意停掉的**，它们必须保持停止，
+                        // 否则 Inno 覆盖 python.exe/*.dll 时文件被占 → 整体回滚。
+                        // 2026-11-08 实机就是这么把 4.0.12 装回去变成 4.0.10 的。
+                        if (InstallerBusy.IsRunning()
+                            || UpdateMarker.IsPending(_cfg.Version))
+                        {
+                            Log("安装器正在运行，本次启动不自动拉起服务"
+                                + "（避免抢占文件导致安装回滚）");
+                            return;
+                        }
                         int n = ServiceControl.EnsureRunning(_cfg);
                         if (n > 0) Log("托盘启动时自动拉起了 " + n + " 个服务");
                     }

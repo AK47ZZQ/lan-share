@@ -311,6 +311,46 @@ namespace LanShare
         }
     }
 
+    /// <summary>
+    /// 安装器是不是正在跑？
+    ///
+    /// 为什么要问这个 —— 2026-11-08 实机，一键更新失败的真实原因：
+    /// 安装器的 ssInstall 会把托盘 taskkill 掉（它自己会再拉起），但那 40 秒
+    /// 窗口里托盘又活过来了，按着「服务没了就拉起来」的老逻辑把三个服务全启。
+    /// 此时 Inno 正要覆盖 python.exe / caddy.exe / *.dll —— 文件被重新占住，
+    /// 复制失败、**整体回滚**（iss 的 CurStepChanged 注释里 3.97 就实测过
+    /// exit 5）。用户看到的是「点了更新，回来还是旧版」，界面上零提示。
+    ///
+    /// 所以：托盘启动时如果安装器在跑，只弹面板，绝不碰服务。
+    /// </summary>
+    internal static class InstallerBusy
+    {
+        private const string ImagePrefix = "LANShare-Setup";
+
+        public static bool IsRunning()
+        {
+            try
+            {
+                foreach (var p in Process.GetProcesses())
+                {
+                    try
+                    {
+                        var n = p.ProcessName ?? "";
+                        if (n.StartsWith(ImagePrefix, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                    catch (Exception) { }
+                    finally
+                    {
+                        try { p.Dispose(); } catch (Exception) { }
+                    }
+                }
+            }
+            catch (Exception) { }
+            return false;
+        }
+    }
+
     internal static class UpdateWatchdog
     {
         /// <summary>
