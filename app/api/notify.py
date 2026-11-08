@@ -239,6 +239,20 @@ def admin_save_draft(body: DraftBody, _admin=Depends(require_admin)):
     return {"ok": True, "id": bid}
 
 
+def _deliver_with_compensation(bid: str, title: str, body: str, targets) -> int:
+    """投递 + 崩溃补偿（2026-11-09 值守批三）：_deliver_broadcast 中途异常
+    时把 CAS 置位回滚成 draft —— 否则广播标 sent 却没人收到、重试 409。
+    与 trash put_back 同族的 claim-then-act 补偿。"""
+    try:
+        return _deliver_broadcast(bid, title, body, targets)
+    except Exception:
+        try:
+            notif_store.revert_broadcast_to_draft(bid)
+        except Exception:
+            pass   # 回滚失败 = 罕见中的罕见，异常链里已有原始错误
+        raise
+
+
 @router.post("/api/admin/notifications/draft/{bid}/send")
 def admin_send_draft(bid: str, _admin=Depends(require_admin)):
     row = notif_store.get_live_broadcast(bid)
@@ -252,7 +266,7 @@ def admin_send_draft(bid: str, _admin=Depends(require_admin)):
     if not notif_store.mark_broadcast_sent(bid, time.time(),
                                            json.dumps([t["id"] for t in targets])):
         raise HTTPException(status_code=409, detail="该广播已发送")
-    sent = _deliver_broadcast(bid, row["title"], row["body"] or "", targets)
+    sent = _deliver_with_compensation(bid, row["title"], row["body"] or "", targets)
     audit("broadcast_send", bid, f"sent={sent}")
     return {"ok": True, "sent": sent}
 
@@ -293,7 +307,7 @@ async def _fire_due_once():
         for r in rows:
             targets = _resolve_targets(json.loads(r["targets"] or "[]") or None)
             notif_store.mark_broadcast_sent(r["id"], time.time())
-            _deliver_broadcast(r["id"], r["title"], r["body"] or "", targets)
+            _deliver_with_compensation(r["id"], r["title"], r["body"] or "", targets)
             audit("broadcast_scheduled_send", r["id"], f"sent={len(targets)}")
         return len(rows)
 

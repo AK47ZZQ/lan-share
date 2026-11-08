@@ -318,3 +318,47 @@ def test_broadcast_send_draft_race_single_delivery(auth, client):
     assert codes == [200, 409], f"恰好一个赢家: {codes}"
     titles = [n["title"] for n in m.get("/api/notifications").json()["items"]]
     assert titles.count(title) == 1, f"成员只应收一条: {titles.count(title)} 条"
+
+
+def test_broadcast_delivery_crash_reverts_to_draft(auth, client, monkeypatch):
+    """2026-11-09 值守批三补偿钉：投递中途崩溃必须把 CAS 置位回滚成 draft
+    （否则广播标 sent 却没人收到、重试 409 = claim-then-act 无补偿）。
+
+    反向消融：剥掉 _deliver_with_compensation 的回滚 → 本钉红。"""
+    import app.api.notify as notify_mod
+
+    m = _member(client)
+    title = f"补偿钉-{_rand()}"
+    bid = auth.post("/api/admin/notifications/draft",
+                    json={"title": title, "body": "x"}).json()["id"]
+
+    real_deliver = notify_mod._deliver_broadcast
+    calls = {"n": 0}
+
+    def flaky(bid_, title_, body_, targets):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("投递中途崩溃（模拟）")
+        return real_deliver(bid_, title_, body_, targets)
+
+    monkeypatch.setattr(notify_mod, "_deliver_broadcast", flaky)
+
+    # 第一次发送：投递崩溃 → 500（TestClient 默认重抛服务端异常，两种形态都认）
+    try:
+        r1 = auth.post(f"/api/admin/notifications/draft/{bid}/send")
+        assert r1.status_code >= 500, f"崩溃应上抛: {r1.status_code}"
+    except RuntimeError:
+        pass   # TestClient raise_server_exceptions=True 的重抛形态
+    rows = [b for b in auth.get("/api/admin/notifications/sent").json()["items"]
+            if b["id"] == bid]
+    assert rows and rows[0]["status"] == "draft",         f"必须回滚可重试: {[b.get('status') for b in auth.get('/api/admin/notifications/sent').json()['items'] if b['id'] == bid]}"
+    # 成员此时不应收到
+    titles = [n["title"] for n in m.get("/api/notifications").json()["items"]]
+    assert titles.count(title) == 0
+
+    # 重试：成功且恰好一条
+    monkeypatch.setattr(notify_mod, "_deliver_broadcast", real_deliver)
+    r2 = auth.post(f"/api/admin/notifications/draft/{bid}/send")
+    assert r2.status_code == 200, r2.text
+    titles = [n["title"] for n in m.get("/api/notifications").json()["items"]]
+    assert titles.count(title) == 1

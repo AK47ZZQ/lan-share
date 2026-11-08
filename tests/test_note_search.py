@@ -14,6 +14,10 @@ from test_extras import _admin, _member_session, _mk_member, _rand
 
 from app.main import app
 from app.services import note_index
+from app.store import note_search as ns_store
+
+# conftest 建的 SHARE_ROOT 隔离目录（fixture 侧 os.environ 已钉死）
+from app.config import SHARE_ROOT
 
 
 @pytest.fixture(autouse=True)
@@ -24,10 +28,6 @@ def _reset_note_index_clock():
     note_index._last_refresh = 0.0
     yield
     note_index._last_refresh = 0.0
-from app.store import note_search as ns_store
-
-# conftest 建的 SHARE_ROOT 隔离目录（fixture 侧 os.environ 已钉死）
-from app.config import SHARE_ROOT
 
 
 def _write_note(rel: str, text: str) -> None:

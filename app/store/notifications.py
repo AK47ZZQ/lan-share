@@ -191,6 +191,17 @@ def mark_broadcast_sent(bid: str, now: float, targets_json: str | None = None) -
                   "AND status!='sent'", (now, bid))
 
 
+def revert_broadcast_to_draft(bid: str) -> int:
+    """投递崩溃补偿：把误标 sent 的广播回滚成 draft（可重试）。
+
+    2026-11-09 值守批三：mark_broadcast_sent 的 CAS 化关掉了双发竞态，
+    但 claim（置 sent）与 deliver 之间崩溃 = 标了 sent 却没人收到、
+    重试 409 —— claim-then-act 无补偿的老缺口（与 trash put_back 同族）。
+    双向 CAS（WHERE status='sent'）防与并发重发互踩。"""
+    return _write("UPDATE admin_broadcasts SET status='draft' "
+                  "WHERE id=? AND status='sent'", (bid,))
+
+
 def delete_draft(bid: str) -> int:
     """只允许删草稿/定时箱里的记录（已发送的走 purge）。"""
     return _write("DELETE FROM admin_broadcasts WHERE id=? AND status IN ('draft','scheduled')",
