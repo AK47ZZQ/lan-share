@@ -148,3 +148,24 @@ def test_badpwd_audit_key_uses_path_not_name(client):
         "SELECT target FROM audit_log WHERE action='share_badpwd' AND target=?",
         (rel,)).fetchone()
     assert row is not None, "badpwd 审计键必须是 rel 路径（同名混串修复钉）"
+
+
+def test_share_history_success_path_executes_new_sql(client, auth):
+    """v3.54 纪律补钉（2026-11-08 夜批）：share_history 成功路径此前零用例
+    （只有越权负例）——修复后的新 SQL（download/badpwd/locked 三 action 按
+    rel 路径单参数查询）必须被真实执行，否则 PG 门禁连"变红的机会都没有"。"""
+    from app.security import audit
+    rel = "2026/11/hist/记录.txt"
+    tok = secrets.token_urlsafe(8)
+    shares_store.create(tok, rel, "记录.txt", 1, time.time(),
+                        time.time() + 3600, None, None, None, None)
+    audit("share_download", rel)
+    audit("share_badpwd", rel)
+    audit("share_locked", rel, "30s")
+    audit("share_download", "别的路径/别分享.bin")   # 噪声行，不得混入
+    r = auth.get(f"/api/shares/{tok}/history")
+    assert r.status_code == 200, r.text
+    rows = r.json()
+    assert len(rows) == 3, rows
+    assert {x["action"] for x in rows} == {"share_download", "share_badpwd", "share_locked"}
+    assert all(x["ip"] is not None for x in rows)
