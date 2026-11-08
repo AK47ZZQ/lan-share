@@ -722,3 +722,45 @@ class TestServicePrefixValidation:
         monkeypatch.setattr(cli.subprocess, "run", fake_run)
         cli.write_registry_value("ServicePrefix", "Wei's Server", "LANShare")
         assert "'Wei''s Server'" in captured["script"], captured["script"]
+
+
+# ── PG 口令文件 ACL（2026-11-09 值守批 · P1 实证钉）────────────────
+
+
+@pytest.mark.skipif(os.name != "nt", reason="icacls 是 Windows 命令")
+def test_lock_pgpass_acl_removes_users_access(tmp_path):
+    """lock_pgpass_acl 必须让本机 Users 组读不到 PG 口令文件。
+
+    实证背景：生产 .lanshare-pgpass 的继承 ACL 是 Users:(M) +
+    Authenticated Users:(M) —— os.chmod(0o600) 在 Windows 不生效，本机
+    任意账号可读 PG 角色口令（→ 5433 全库读写）。本钉真跑 icacls 于
+    tmp 文件（无需管理员：文件属主是测试用户），断言收紧后输出里
+    不再有 Users / Authenticated Users，且 SYSTEM/Administrators 在。
+    回退 lock_pgpass_acl 内的 icacls 调用 → 本钉红。
+    """
+    import subprocess
+
+    from lanshare_cli.cli import lock_pgpass_acl
+
+    # 先造出生产的暴露形态（tmp 默认 ACL 本就干净，收不收紧分不出红绿）：
+    # 对父目录授 Users:(OI)(CI)M（*S-1-5-32-545 = Users，SID 防组名本地化），
+    # 文件自然**继承**带 (I) 标记的 Users:(M) —— 与生产继承链同构。
+    # ⚠ 不能对文件显式 /grant Users:M：lock 的 /inheritance:r 只清除
+    # 继承 ACE，显式 ACE 会残留 → 那样造出的暴露态修不掉，钉恒红。
+    subprocess.run(["icacls", str(tmp_path), "/grant", "*S-1-5-32-545:(OI)(CI)M"],
+                   capture_output=True, timeout=60)
+    f = tmp_path / ".lanshare-pgpass"
+    f.write_text("test-password", encoding="utf-8")
+
+    lock_pgpass_acl(f)
+
+    raw = subprocess.run(["icacls", str(f)], capture_output=True).stdout or b""
+    out = raw.decode("gbk", errors="replace")   # icacls 输出是 GBK（utf-8 解码崩）
+    # "Users:(" 只出现在 ACE 行（路径行是 C:\Users\... 不带 ":("）——
+    # icacls 的第一个 ACE 与文件路径同行，不能按行粗暴切片
+    assert not any("Users:(" in ln for ln in out.splitlines()), \
+        f"Users 仍可访问 PG 口令文件：{out}"
+    assert "SYSTEM:(" in out, f"SYSTEM 授权缺失：{out}"
+    assert "Administrators:(" in out, f"Administrators 授权缺失：{out}"
+    # 文件内容不受影响
+    assert f.read_text(encoding="utf-8") == "test-password"
