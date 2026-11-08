@@ -236,7 +236,11 @@ def resolve(user, path: str, need: str = "read") -> Path:
 
 
 def enforce_quota(user, dest, incoming_bytes: int):
-    """配额（M3 定稿）：仅 private 空间计逻辑字节；shared 不限额。dest 为物理路径。"""
+    """配额（M3 定稿）：仅 private 空间计逻辑字节；shared 不限额。dest 为物理路径。
+
+    incoming_bytes 可为负：覆盖型写入预检时（旧版尚在树内 + 新内容已在
+    tmp 落树），传 -旧版大小 抵扣旧版，扫描值-旧版 = 落位后的真实占用
+    （WebDAV PUT 用此约定，2026-11-08 值守批；负值语义 = 本次写入的净增量）。"""
     try:
         quota = user["quota_bytes"]
     except (IndexError, KeyError):

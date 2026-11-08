@@ -6,6 +6,7 @@
 同款收口）。客户端全部走 auth fixture（Cookie 会话过 _dav_auth）。
 """
 import base64
+import secrets
 
 from conftest import MEMBER_PASS
 from test_extras import _member_session, _rand
@@ -95,3 +96,76 @@ def test_dav_destination_traversal_blocked(auth):
                      headers={"Destination": "https://testserver/dav/private/admin/../../escape.txt"})
     assert r.status_code in (400, 403), r.text
     assert auth.get(f"/dav/private/admin/{old}").status_code == 200
+
+
+# ── PUT 覆盖 × 配额预检次序（2026-11-08 值守批缺陷钉）─────────────────
+
+
+def _mk_member_with_quota(auth, client, quota: int) -> tuple[str, object]:
+    """建 member + 设配额，返回 (username, member_session)。"""
+    from test_extras import _mk_member, _member_session
+    from app.db import _db
+    uname = f"davq{secrets.token_hex(3)}"
+    _mk_member(client, uname)
+    member = _member_session(client, uname)
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
+                        (uname,)).fetchone()["id"]
+    r = auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": quota})
+    assert r.status_code == 200, r.text
+    return uname, member
+
+
+def test_dav_put_overwrite_quota_fail_keeps_old_file(client, auth):
+    """配额预检失败不得动旧版。
+
+    原缺陷：PUT 覆盖先 move_to_trash 旧版再验配额 —— 验挂（409）时旧
+    文件已离开原位，失败的替换操作破坏既有状态（今天生产无人设配额，
+    属潜伏缺陷，仍按「失败必须零副作用」修）。修复后预检先于一切写动作，
+    计价 incoming=-old_size（净增量）。回退修复 → GET 原路径 404（旧文件
+    已进回收站）→ 本钉红。
+    """
+    import secrets as _secrets
+    uname, member = _mk_member_with_quota(auth, client, 1000)
+    name = f"davq{_rand()}.txt"
+    path = f"/dav/private/{uname}/{name}"
+    r = member.put(path, content=b"a" * 600)          # 首传 600B，占 600/1000
+    assert r.status_code in (200, 201, 204), r.text
+    # 覆盖为 1200B：落位后 1200 > 1000 → 409；旧文件必须原位原样
+    r = member.put(path, content=b"b" * 1200)
+    assert r.status_code == 409, r.text
+    g = member.get(path)
+    assert g.status_code == 200, f"旧文件必须还在原位: {g.status_code}"
+    assert g.content == b"a" * 600, "旧文件内容不得被换掉"
+    # 目录里不得留 .dav-uploading-* 半截 tmp
+    from app.config import SHARE_ROOT
+    residue = [p.name for p in (SHARE_ROOT / "private" / uname).iterdir()
+               if p.name.startswith(".dav-")]
+    assert residue == [], residue
+
+
+def test_dav_put_overwrite_within_quota_succeeds(client, auth):
+    """配额内覆盖照常成功且内容替换（修复不得误伤 happy path）。"""
+    uname, member = _mk_member_with_quota(auth, client, 2000)
+    name = f"davq{_rand()}.txt"
+    path = f"/dav/private/{uname}/{name}"
+    assert member.put(path, content=b"a" * 600).status_code in (200, 201, 204)
+    r = member.put(path, content=b"b" * 900)          # 落位后 900 ≤ 2000
+    assert r.status_code in (200, 204), r.text
+    assert member.get(path).content == b"b" * 900
+    # 旧版进了回收站（与界面覆盖语义一致）
+    from app.config import SHARE_ROOT
+    trash_has_old = any(
+        "davq" in p.name for p in (SHARE_ROOT / ".trash").rglob("*") if p.is_file())
+    assert trash_has_old
+
+
+def test_dav_put_create_over_quota_no_residue(client, auth):
+    """创建超配额 → 409 + 零 tmp 残留（同路径的创建分支也钉住）。"""
+    uname, member = _mk_member_with_quota(auth, client, 100)
+    name = f"davq{_rand()}.txt"
+    r = member.put(f"/dav/private/{uname}/{name}", content=b"x" * 500)
+    assert r.status_code == 409, r.text
+    from app.config import SHARE_ROOT
+    residue = [p.name for p in (SHARE_ROOT / "private" / uname).iterdir()
+               if p.name.startswith(".dav-")]
+    assert residue == [], residue

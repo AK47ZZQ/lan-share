@@ -289,18 +289,29 @@ async def _dav_put(request: Request, user, target: Path, exists: bool) -> Respon
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    # 配额预检必须在旧版被动过**之前**完成（2026-11-08 值守批缺陷修复）：
+    # 原实现「先 move_to_trash 旧版 → 再验配额」，配额验挂时旧文件已经
+    # 离开原位 —— PUT 失败（409）但原文件被换掉 = 状态破坏。可达性今天
+    # 受限（生产无人设配额），属潜伏缺陷，仍按"失败必须零副作用"修。
+    #
+    # 计价（精确，无双计）：
+    #   创建：tmp 已在树内，incoming=0 → 扫描值 = 落位后占用；
+    #   覆盖：tmp 与旧版都在树内，incoming=-old_size 抵扣旧版 → 扫描值
+    #         减旧版 = 落位后占用。enforce_quota 允许负 incoming（见其 docstring）。
+    old_size = 0
     if exists:
-        # 覆盖的旧版本进回收站，而不是直接丢失（.trash 在 private 树外，
-        # 不计入配额扫描；先移走旧文件，下一步的配额扫描即为最终占用）
-        move_to_trash(target, to_rel(target))
-    # 配额计价：此刻 private 树里已有 tmp（=即将落位的最终内容），旧版已
-    # 移出——扫描值即落位后的占用，incoming 传 0 才是精确校验。传 size 会
-    # 把 tmp 双计、误报配额不足。失败必须清掉 tmp 再抛，别留半截残留。
+        try:
+            old_size = target.stat().st_size
+        except OSError:
+            old_size = 0
     try:
-        enforce_quota(user, target, 0)
+        enforce_quota(user, target, -old_size if exists else 0)
     except HTTPException:
         tmp.unlink(missing_ok=True)
         raise
+    if exists:
+        # 预检已通过，旧版此时才进回收站（.trash 在 private 树外，不计入配额）
+        move_to_trash(target, to_rel(target))
     # 落位前复查 + 失败清理（R1-P2-5）：流传输期间目标处可能被并发建出
     # 同名目录（exists 是流开始前的旧值），os.replace 顶目录会 PermissionError
     if target.is_dir():
