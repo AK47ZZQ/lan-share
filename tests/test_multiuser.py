@@ -464,6 +464,92 @@ def test_upload_finish_quota_precheck_skips_reassembly(auth, make_user, monkeypa
     assert not any(".uploading-" in n for n in opened), opened
 
 
+def test_upload_overwrite_quota_no_double_count_old(auth, make_user):
+    """覆盖上传的配额计价不得双计旧版（2026-11-08 值守批二；与 WebDAV 同口径）。
+
+    原口径：预检 base+old+size、落位前 base+tmp+old —— 都比真实落位占用
+    多算一份旧版：同一文件「直传能过、覆盖上传必挂」，用户只会觉得配额坏了。
+    修后：incoming = size - old_size（预检）/ -old_size（落位前），三路写
+    （直传/分片/WebDAV）对同一状态给出同一判定。回退修复 → 本钉红。
+    """
+    member = make_user("member")
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
+                        (member.username,)).fetchone()["id"]
+    # 先建 600B 旧版（此时无配额）
+    r = member.post("/api/upload/private", files={"file": ("over2.bin", b"a" * 600, "application/octet-stream")})
+    assert r.status_code == 200, r.text
+    # 设配额 1000：旧口径预检 = 0+600+700 = 1300 > 1000 必拒；落位后真实占用 700
+    r = auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": 1000})
+    assert r.status_code == 200, r.text
+    # 分片覆盖上传 700B：落位后 700 ≤ 1000，必须成功
+    r = member.post("/api/upload/init", json={
+        "dest_dir": "private", "filename": "over2.bin", "size": 700})
+    assert r.status_code == 200, r.text
+    sid = r.json()["session"]
+    r = member.post(f"/api/upload/chunk/{sid}?index=0", content=b"b" * 700)
+    assert r.status_code == 200, r.text
+    r = member.post(f"/api/upload/finish/{sid}")
+    assert r.status_code == 200, r.text
+    r2 = member.get("/api/files", params={"path": "private"})
+    ok = r2.status_code == 200 and "over2.bin" in r2.text
+    assert ok, r2.text[:300]
+    # 落位后内容应为新内容 700B（覆盖成功），旧 600B 进回收站
+    assert "over2.bin" in r2.text
+    # 清理：撤配额（同库其他测试复用 member 名字空间，不许留全局状态）
+    auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": None})
+
+
+def test_direct_upload_overwrite_quota_no_double_count_old(auth, make_user):
+    """直传覆盖同样不双计旧版（save_upload 落位前计价，净增量口径）。
+
+    save_upload 扫描含 tmp+旧版，原口径传 0 把旧版双计：配额内覆盖被误拒。
+    回退 save_upload 的 -old_size → 本钉红（409）。
+    """
+    member = make_user("member")
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
+                        (member.username,)).fetchone()["id"]
+    r = member.post("/api/upload/private", files={"file": ("over3.bin", b"a" * 600, "application/octet-stream")})
+    assert r.status_code == 200, r.text
+    r = auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": 1000})
+    assert r.status_code == 200, r.text
+    r = member.post("/api/upload/private", files={"file": ("over3.bin", b"b" * 700, "application/octet-stream")})
+    assert r.status_code == 200, f"配额内覆盖被误拒: {r.status_code} {r.text[:150]}"
+    auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": None})
+
+
+def test_instant_overwrite_quota_fail_keeps_old_file(auth, make_user):
+    """秒传覆盖的配额预检必须先于 trash（2026-11-08 值守批二，F5 场景）。
+
+    原次序：旧版先进回收站再计价 —— 配额拒绝时旧文件已离开原位（与
+    _dav_put 修复前同源的破坏性失败路径）。构造：库里有 600B 内容 X 的
+    样例（blob），私人区已有 600B 内容 Y 的同名旧文件（base=1200），quota=800：
+    init 闸净增量 = 1200+100-600 = 700 ≤ 800 放行；秒传分支 incoming =
+    600-600 = 0 ⇒ 1200 > 800 → 409（init 过、秒传拒，判别成立），旧文件必须原位原样。回退秒传次序 → 本钉红
+    （GET 原路径 404）。
+    """
+    import hashlib
+    member = make_user("member")
+    uid = _db().execute("SELECT id FROM users WHERE username=?",
+                        (member.username,)).fetchone()["id"]
+    # 造样例 blob（600B 内容 X）
+    r = member.post("/api/upload/private", files={"file": ("sample-src.bin", b"S" * 600, "application/octet-stream")})
+    assert r.status_code == 200, r.text
+    # 旧文件 600B 内容 Y（与样例内容不同，不走 samefile 早退）
+    r = member.post("/api/upload/private", files={"file": ("over5.bin", b"Y" * 600, "application/octet-stream")})
+    assert r.status_code == 200, r.text
+    r = auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": 800})
+    assert r.status_code == 200, r.text
+    sha_x = hashlib.sha256(b"S" * 600).hexdigest()
+    r = member.post("/api/upload/init", json={
+        "dest_dir": "private", "filename": "over5.bin", "size": 100, "sha256": sha_x})
+    assert r.status_code == 409, f"应被秒传分支的配额预检拒绝: {r.status_code} {r.text[:150]}"
+    # /api/files 列目录只给元数据；用 WebDAV GET 验证旧文件原样
+    r2 = member.get("/dav/private/" + member.username + "/over5.bin")
+    assert r2.status_code == 200, f"旧文件必须原位: {r2.status_code}"
+    assert r2.content == b"Y" * 600, "旧文件内容不得被换掉"
+    auth.patch(f"/api/admin/users/{uid}", json={"quota_bytes": None})
+
+
 def test_upload_finish_postcheck_failure_cleans_tmp(make_user, monkeypatch):
     """重组后配额校验失败（模拟并发写满）也必须清 tmp——此前 409 直接上抛，
     .uploading-* 残留私人目录最长 1 天（U1b）。

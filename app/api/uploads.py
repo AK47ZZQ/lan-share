@@ -172,7 +172,16 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
     if row["total"] + body.size > MAX_CHUNKED_SIZE:
         raise HTTPException(status_code=429,
                             detail=f"未完成上传总量超限（≤{human_size(MAX_CHUNKED_SIZE)}）")
-    enforce_quota(_user, dest, body.size)
+    # 覆盖上传的 init 闸同口径（2026-11-08 值守批二）：净增量 = 新内容 -
+    # 旧版大小（旧版此刻仍在树内）。原口径 body.size 把旧版双计 ——
+    # 覆盖上传在 init 就被误拒，根本走不到 finish。
+    old_size = 0
+    try:
+        if dest.exists() and not dest.is_dir():
+            old_size = dest.stat().st_size
+    except OSError:
+        old_size = 0
+    enforce_quota(_user, dest, body.size - old_size)
 
     # 秒传：库里有同 sha256 内容（服务端算的，可信），直接硬链接
     if body.sha256:
@@ -212,8 +221,18 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                                         "size": sample_size, "size_human": human_size(sample_size)}
                         except OSError:
                             pass
+                        try:
+                            old_size = dest.stat().st_size
+                        except OSError:
+                            old_size = 0
+                    # 配额预检先于一切写动作（2026-11-08 值守批二，与 _dav_put /
+                    # finish 同口径）：incoming = 样例 - 旧版（净增量）⇒ 扫描值
+                    # + 净增量 = 落位后占用。原实现旧版先进回收站再计价 ——
+                    # 配额拒绝或 os.link 失败降级分片时旧文件已离开原位
+                    #（与 _dav_put 修复前同源的破坏性失败路径）。
+                    enforce_quota(_user, dest, sample_size - old_size)
+                    if dest.exists():
                         move_to_trash(dest, to_rel(dest))
-                    enforce_quota(_user, dest, sample_size)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     os.link(sample, dest)
                     audit("upload_instant", to_rel(dest),
@@ -344,8 +363,18 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
     # 重组前配额预检（2026-09-13 审查 U1）：重组要写出满额 tmp——配额缩水/
     # 并发写满后注定超限的 finish 不该白烧最长几十分钟重组 IO 与双倍磁盘
     # （超水位期这是现实约束）；落位前的正式校验仍保留（配额 used 可在此
-    # 间隙被并发改变，双保险）
-    enforce_quota(owner, dest, row["total_size"])
+    # 间隙被并发改变，双保险）。
+    # 覆盖上传计价用净增量（2026-11-08 值守批二，与 WebDAV 同口径）：
+    # 此刻旧版仍在树内，incoming = 新内容 - 旧版大小 ⇒ 扫描值+净增量 =
+    # 落位后真实占用。原口径（incoming=size）把旧版多算一份：覆盖上传比
+    # 直传更容易 409「配额不足」，落位后明明没超。
+    old_size = 0
+    try:
+        if dest.exists():
+            old_size = dest.stat().st_size
+    except OSError:
+        old_size = 0
+    enforce_quota(owner, dest, row["total_size"] - old_size)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.uploading-{os.getpid()}-{time.time_ns()}")
 
@@ -376,16 +405,12 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
         raise HTTPException(status_code=400, detail="SHA256 mismatch, please re-upload")
 
     try:
-        # 第三个参数传 0，不能传 size（2026-11-04 审查）。
-        #
-        # enforce_quota 的 used 是 `private/<user>` 全树 rglob 求和，而这时
-        # 重组出来的 tmp 文件**已经躺在那个目录里**了 —— 再传 size 等于把它
-        # 算两遍：判据退化成 base + 2*size > quota。
-        # 后果：单次上传超过剩余配额一半的文件必被 409 拒掉（覆盖上传还要
-        # 叠加旧文件大小，几乎必失败），而同一个文件走直传却能成功 ——
-        # 两条路径口径不一致，用户只会觉得「配额坏了」。
-        # webdav 的 _dav_put 早就传的是 0，这里对齐。
-        enforce_quota(owner, dest, 0)
+        # 计价与预检同口径（净增量）：tmp 已在树内（incoming 里不再算它），
+        # 覆盖场景旧版也还在树内 → 传 -old_size 抵扣旧版 ⇒ 扫描值 - 旧版 =
+        # 落位后真实占用。2026-11-04 审查把 size 改成 0 修掉了「tmp 双计」，
+        # 本批把「旧版双计」也修掉 —— 两处口径一致后，覆盖上传与直传、
+        # 与 WebDAV 三条路对同一状态给出同一判定。
+        enforce_quota(owner, dest, -old_size)
     except BaseException:
         # 重组后的校验失败同样要清 tmp（U1b）：此前 409 直接上抛，
         # .uploading-* 残留私人目录最长 1 天才被孤儿回收——配额超限者

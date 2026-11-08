@@ -281,7 +281,16 @@ async def save_upload(file: UploadFile, dest: Path, quota_user=None,
     if quota_user is not None:
         try:
             from app.spaces import enforce_quota
-            enforce_quota(quota_user, dest, 0)
+            # 覆盖上传计价净增量（2026-11-08 值守批二，与分片/WebDAV 同口径）：
+            # 扫描含 tmp 与旧版，-旧版抵扣 ⇒ 落位后真实占用。on_dup=overwrite
+            # 的旧版不经回收站直接替换，同样从扫描里抵扣。
+            old_size = 0
+            if dest.exists() and not dest.is_dir():
+                try:
+                    old_size = dest.stat().st_size
+                except OSError:
+                    old_size = 0
+            enforce_quota(quota_user, dest, -old_size)
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
