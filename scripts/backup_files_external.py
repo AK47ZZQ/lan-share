@@ -31,6 +31,9 @@ from app.config import SHARE_ROOT  # noqa: E402
 
 EXCLUDE_DIRS = [".thumbs", ".chunks", ".zips", ".trash", ".orphaned"]
 
+# 本工具落在目标侧的产物前缀（对账清点时跳过，不与用户数据混淆）
+ARTIFACT_PREFIXES = ("manifest-", "robocopy-")
+
 
 def _validate_dest(dest: Path) -> str | None:
     if not dest.exists():
@@ -45,15 +48,25 @@ def _validate_dest(dest: Path) -> str | None:
         return f"目标落在数据目录内部：{resolved}"
     if resolved in share.parents:
         return f"目标不能是数据目录的祖先目录（会污染其同级）：{resolved}"
-    if len(resolved.parts) <= 2:   # 例如 E:\ 或 C:\ —— 盘符根
+    if len(resolved.parts) < 2:   # 例如 E:\ 或 \srv\share（两层合法子目录不误伤）
         return f"拒绝写入盘符根，请在目标盘上指定一个子目录：{resolved}"
     return None
 
 
-def _tally(root: Path) -> tuple[int, int]:
+def _tally(
+    root: Path,
+    skip_dirs: tuple[str, ...] = (),
+    skip_prefixes: tuple[str, ...] = (),
+) -> tuple[int, int]:
+    """清点文件数与总字节。skip_dirs 只匹配顶层目录名；skip_prefixes 按文件名前缀跳过。"""
     files = bytes_ = 0
     for p in root.rglob("*"):
         if p.is_file():
+            rel = p.relative_to(root)
+            if skip_dirs and rel.parts[0] in skip_dirs:
+                continue
+            if skip_prefixes and rel.parts[-1].startswith(skip_prefixes):
+                continue
             try:
                 files += 1
                 bytes_ += p.stat().st_size
@@ -75,11 +88,15 @@ def main() -> int:
         return 2
 
     cmd = ["robocopy", str(SHARE_ROOT), str(dest), "/E", "/COPY:DAT", "/DCOPY:DAT",
-           "/R:2", "/W:5", "/NP", "/TEE", "/NFL", "/NDL"]
+           "/R:2", "/W:5", "/NP", "/NFL", "/NDL"]
     for d in EXCLUDE_DIRS:
         cmd += ["/XD", str(SHARE_ROOT / d)]
+    ts = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000:06d}"
+    log = dest / f"robocopy-{ts}.log"
     if args.dry_run:
         cmd.append("/L")
+    else:
+        cmd += ["/TEE", f"/LOG:{log}"]
 
     print("执行：", " ".join(cmd[:8]), "…")
     import subprocess
@@ -88,25 +105,36 @@ def main() -> int:
         print(f"robocopy 失败（退出码 {r.returncode}，>=8 才算失败）")
         return 1
 
-    files, bytes_ = _tally(dest)
+    src_files, src_bytes = _tally(SHARE_ROOT, skip_dirs=tuple(EXCLUDE_DIRS))
+    dest_files, dest_bytes = _tally(dest, skip_prefixes=ARTIFACT_PREFIXES)
+    match = src_files == dest_files and src_bytes == dest_bytes
     manifest = {
         "kind": "lan-share-external-backup",
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "manifest_ver": 2,
         "src": str(SHARE_ROOT),
         "dest": str(dest.resolve()),
-        "files": files,
-        "bytes": bytes_,
+        "src_files": src_files,
+        "src_bytes": src_bytes,
+        "dest_files": dest_files,
+        "dest_bytes": dest_bytes,
+        "match": match,
         "excluded": EXCLUDE_DIRS,
         "robocopy_rc": r.returncode,
+        "robocopy_log": str(log),
         "dry_run": bool(args.dry_run),
     }
     if not args.dry_run:
-        mp = dest / f"manifest-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        mp = dest / f"manifest-{ts}.json"
         mp.write_text(json.dumps(manifest, ensure_ascii=False, indent=1),
                       encoding="utf-8")
-        print(f"完成：{files} 个文件 / {bytes_ / 1e9:.2f} GB，清单 {mp}")
+        print(f"完成：源侧 {src_files} 文件 / {src_bytes / 1e9:.2f} GB；"
+              f"目标侧 {dest_files} 文件 / {dest_bytes / 1e9:.2f} GB"
+              f"{'；双侧一致' if match else '；双侧不一致（源侧运行中有写入或目标含预存文件，属预期，下次增量补齐）'}"
+              f"，清单 {mp}，日志 {log}")
     else:
-        print(f"试运行（未落盘）：预计目标侧共 {files} 文件 / {bytes_ / 1e9:.2f} GB")
+        print(f"试运行（未落盘）：预计源侧共 {src_files} 文件 / {src_bytes / 1e9:.2f} GB"
+              f"（robocopy rc={r.returncode}，1=有可拷内容）")
     return 0
 
 
