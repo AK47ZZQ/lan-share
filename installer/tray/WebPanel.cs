@@ -199,9 +199,19 @@ namespace LanShare
             _web.ZoomFactor = 1.0;
 
             _web.CoreWebView2.WebMessageReceived += OnWebMessage;
+            // 导航护栏（2026-11-09 值守批纵深）：只放行本应用自己的 file:// 页面。
+            // 桥上 24 个动作是服务控制类（重启/停止/下载/应用更新）—— 页面一旦
+            // 被换源（页面 JS 失控跳转、文件被换），这些动作就暴露给任意源。
+            // 正常页面无任何站内跳转（外链走 openWeb 用系统浏览器），护栏零误伤。
+            string selfUri = new Uri(indexPath).AbsoluteUri;
+            _web.CoreWebView2.NavigationStarting += (s2, e2) =>
+            {
+                if (!e2.Uri.StartsWith(selfUri, StringComparison.OrdinalIgnoreCase))
+                    e2.Cancel = true;
+            };
             // 加时间戳强制重新加载：WebView2 会缓存 file:// 页面，
             // 改了 index.html 之后不加这个，看到的还是上一次的内容（调了半天样式没反应）。
-            string url = new Uri(indexPath).AbsoluteUri
+            string url = selfUri
                        + "?v=" + DateTime.Now.Ticks;
             _web.CoreWebView2.Navigate(url);
 
