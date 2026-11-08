@@ -5,6 +5,8 @@ snippet 与 kind）/可见性越权过滤。索引引擎无关（普通表 + LIK
 归一两引擎大小写差异），SQLite 与 PG 分支同跑。
 """
 import os
+
+import pytest
 import time
 
 from conftest import ADMIN_PASS, ADMIN_USER, MEMBER_PASS
@@ -12,6 +14,16 @@ from test_extras import _admin, _member_session, _mk_member, _rand
 
 from app.main import app
 from app.services import note_index
+
+
+@pytest.fixture(autouse=True)
+def _reset_note_index_clock():
+    """note_index 的 5s 复扫节流是模块级时钟（87ae562）：直接落盘种子的
+    用例如果撞上前一个用例刚付过的复扫窗口，refresh 会零成本返回 →
+    假红。本文件所有用例先复位时钟，保证「种子→复扫」总能看到种子。"""
+    note_index._last_refresh = 0.0
+    yield
+    note_index._last_refresh = 0.0
 from app.store import note_search as ns_store
 
 # conftest 建的 SHARE_ROOT 隔离目录（fixture 侧 os.environ 已钉死）
@@ -186,9 +198,15 @@ def test_refresh_index_scales_to_max_notes(client):
     t1 = _t.perf_counter()
     steady = ni.refresh_index()
     steady_elapsed = _t.perf_counter() - t1
-    assert steady["updated"] == 0, f"稳态轮次不应有写入，实测 updated={steady['updated']}"
-    assert steady["gone"] == 0, f"稳态轮次不应有删除，实测 gone={steady['gone']}"
-    assert steady_elapsed < 30, f"稳态轮次耗时 {steady_elapsed:.1f}s 超预算"
+    # 87ae562 起第二轮落在 5s 复扫节流窗口内 → 零成本跳过（返回 {}）：
+    # 稳态的「零写入」语义现在由节流直接给出（连读都不读）。若节流被
+    # 摘掉，走全扫分支则沿用原断言（二轮不得退化为全量重写）。
+    if steady == {}:
+        assert steady_elapsed < 1, "节流跳过应近零成本"
+    else:
+        assert steady["updated"] == 0, f"稳态轮次不应有写入，实测 updated={steady['updated']}"
+        assert steady["gone"] == 0, f"稳态轮次不应有删除，实测 gone={steady['gone']}"
+        assert steady_elapsed < 30, f"稳态轮次耗时 {steady_elapsed:.1f}s 超预算"
 
 
 def test_search_snippets_pushes_private_filter_into_sql():
