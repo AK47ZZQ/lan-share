@@ -78,6 +78,11 @@ def main():
     fb2 = bench(c, "GET /api/feedback(第2轮)", lambda: c.get("/api/feedback"), k=a.k)
     se = bench(c, "GET /api/search?q=bench",
                lambda: c.get("/api/search", params={"q": "bench"}), k=a.k)
+    # 零命中查询（2026-11-09 值守批三教训）：文件命中 ≥50 会走短路把
+    # 笔记索引的成本整个藏起来 —— 87ae562 就是这么漏掉的。基线必须
+    # 同时有「命中」与「零命中」两条读数。
+    se0 = bench(c, "GET /api/search?q=zzz-no-hit",
+                lambda: c.get("/api/search", params={"q": "zzz-no-hit"}), k=a.k)
     re_ = bench(c, "GET /api/recent", lambda: c.get("/api/recent"), k=a.k)
     da = bench(c, "PROPFIND /dav/private/%s/" % a.user,
                lambda: c.request("PROPFIND", "/dav/private/%s/" % a.user,
