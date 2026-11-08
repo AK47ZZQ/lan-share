@@ -189,7 +189,7 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
     token = s["token"]
     remaining = _share_locked_remaining(token)
     if remaining:
-        audit("share_locked", s["name"], f"{remaining}s", client_ip(request))
+        audit("share_locked", s["path"], f"{remaining}s", client_ip(request))
         raise HTTPException(status_code=429,
                             detail=f"提取码错误次数过多，请 {remaining // 60 + 1} 分钟后重试")
     if not password:
@@ -221,7 +221,7 @@ def _check_share_password(request: Request, s: sqlite3.Row, password: Optional[s
                     token, hash_password(password), stored)
     if not ok:
         _record_share_fail(token)
-        audit("share_badpwd", s["name"], ip=client_ip(request))
+        audit("share_badpwd", s["path"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="Wrong password")
     with _share_fails_lock:
         _share_fails.pop(token, None)
@@ -369,8 +369,9 @@ def share_history(token: str, _user=Depends(require_user)):
     ensure_share_owner(_user, s)
     rows = _db().execute(
         "SELECT ts, ip, action FROM audit_log "
-        "WHERE (action='share_download' AND target=?) OR (action='share_badpwd' AND target=?) "
-        "ORDER BY id DESC LIMIT 50", (s["path"], s["name"])).fetchall()
+        "WHERE (action='share_download' OR action='share_badpwd' OR action='share_locked') "
+        "AND target=? "
+        "ORDER BY id DESC LIMIT 50", (s["path"],)).fetchall()
     return [{"ts": datetime.fromtimestamp(r["ts"]).isoformat(),
              "ip": r["ip"], "action": r["action"]} for r in rows]
 

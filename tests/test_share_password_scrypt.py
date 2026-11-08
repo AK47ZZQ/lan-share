@@ -131,3 +131,20 @@ def test_share_fails_empty_key_recycled(monkeypatch):
     monkeypatch.setattr(sh, "LOGIN_LOCK_SECONDS", 0)
     assert sh._share_locked_remaining(tok) == 0
     assert tok not in sh._share_fails
+
+
+def test_badpwd_audit_key_uses_path_not_name(client):
+    """2026-11-08 夜批 L1 修复钉：badpwd/locked 审计键统一到 rel 路径——
+    同名不同路径的两条分享，取件记录不得互相串线。
+    必须走真实 API（prepare 错误密码）触发实现写审计，手工插行=测试空转
+    （消融实证：手工插行形态下改坏实现钉仍绿）。"""
+    rel = "2026/11/b/报告.pdf"
+    tok = secrets.token_urlsafe(8)
+    shares_store.create(tok, rel, "报告.pdf", 1, time.time(),
+                        time.time() + 3600, "x" * 8, None, None, None)
+    r = client.post(f"/api/share/{tok}/prepare", json={"password": "错的"})
+    assert r.status_code == 403
+    row = _db().execute(
+        "SELECT target FROM audit_log WHERE action='share_badpwd' AND target=?",
+        (rel,)).fetchone()
+    assert row is not None, "badpwd 审计键必须是 rel 路径（同名混串修复钉）"
