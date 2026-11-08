@@ -181,11 +181,14 @@ def mark_broadcast_withdrawn(bid: str, now: float) -> int:
 
 def mark_broadcast_sent(bid: str, now: float, targets_json: str | None = None) -> int:
     """标记已发送；targets_json 非 None 时一并改写目标集（草稿发送时按实际解析重写）。"""
+    # CAS 条件（2026-11-08 夜批对抗审查）：并发 send_draft 双发竞态——
+    # 两个请求都读到 status=draft 再各自无条件置 sent，全员收两条。
+    # WHERE status!='sent' 保证状态转换只成功一次（rowcount=0 即输家）。
     if targets_json is not None:
         return _write("UPDATE admin_broadcasts SET status='sent', sent_at=?, targets=? "
-                      "WHERE id=?", (now, targets_json, bid))
-    return _write("UPDATE admin_broadcasts SET status='sent', sent_at=? WHERE id=?",
-                  (now, bid))
+                      "WHERE id=? AND status!='sent'", (now, targets_json, bid))
+    return _write("UPDATE admin_broadcasts SET status='sent', sent_at=? WHERE id=? "
+                  "AND status!='sent'", (now, bid))
 
 
 def delete_draft(bid: str) -> int:

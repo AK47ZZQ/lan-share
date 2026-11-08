@@ -247,8 +247,11 @@ def admin_send_draft(bid: str, _admin=Depends(require_admin)):
     if row["status"] == "sent":
         raise HTTPException(status_code=409, detail="该广播已发送")
     targets = _resolve_targets(json.loads(row["targets"] or "[]") or None)
-    notif_store.mark_broadcast_sent(bid, time.time(),
-                                    json.dumps([t["id"] for t in targets]))
+    # CAS 把关（竞态窗口在 get 与 mark 之间，上面的预检只是友好提示）：
+    # 并发双发时只有 rowcount>0 的赢家继续投递，输家 409
+    if not notif_store.mark_broadcast_sent(bid, time.time(),
+                                           json.dumps([t["id"] for t in targets])):
+        raise HTTPException(status_code=409, detail="该广播已发送")
     sent = _deliver_broadcast(bid, row["title"], row["body"] or "", targets)
     audit("broadcast_send", bid, f"sent={sent}")
     return {"ok": True, "sent": sent}

@@ -299,3 +299,22 @@ def test_global_sessions_purge_keeps_self(client):
     assert a1.get("/api/auth/me").status_code == 401
     assert a2.get("/api/auth/me").status_code == 401
     assert operator.get("/api/auth/me").status_code == 200
+
+
+def test_broadcast_send_draft_race_single_delivery(auth, client):
+    """2026-11-08 夜批对抗审查修复钉：并发双发 send_draft 只允许一次投递。
+    修复前两个并发请求都读到 status=draft 再各自无条件置 sent → 全员双份。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    m = _member(client)
+    title = f"竞态钉-{_rand()}"
+    bid = auth.post("/api/admin/notifications/draft",
+                    json={"title": title, "body": "x"}).json()["id"]
+    with ThreadPoolExecutor(2) as ex:
+        codes = list(ex.map(
+            lambda _: auth.post(f"/api/admin/notifications/draft/{bid}/send").status_code,
+            range(2)))
+    codes.sort()
+    assert codes == [200, 409], f"恰好一个赢家: {codes}"
+    titles = [n["title"] for n in m.get("/api/notifications").json()["items"]]
+    assert titles.count(title) == 1, f"成员只应收一条: {titles.count(title)} 条"
