@@ -131,9 +131,12 @@ class _HistoryEntryState extends State<HistoryEntry> {
                         fontSize: 11.5,
                         color: theme.colorScheme.onSurfaceVariant)),
               const SizedBox(width: 6),
-              if (h.build == widget.localBuild)
+              // build 为 0 说明这条数据没带 build（自定义源的清单可能没写），
+              // 此时**绝不能**跟同样为 0 的 localBuild/remoteBuild 判等 ——
+              // 否则整页每一行都会挂上「最新」（2026-11-08 实机踩到）。
+              if (widget.localBuild > 0 && h.build == widget.localBuild)
                 _tag(context, '当前', Colors.green)
-              else if (widget.remoteBuild != null &&
+              else if ((widget.remoteBuild ?? 0) > 0 &&
                   h.build == widget.remoteBuild)
                 _tag(context, '最新', theme.colorScheme.primary),
             ]),

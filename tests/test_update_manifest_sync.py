@@ -201,6 +201,28 @@ class TestSyncManifest:
         assert (inst / "updates" / "app" / "index.json").is_file()
         assert not (inst / "updates" / "index.json").exists()
 
+    def test_build_written_for_latest_and_history(self, rel, tmp_path, monkeypatch):
+        """build 必须写进清单。
+
+        2026-11-08 实机：清单里没有 build → App 拿到的全是 0 →
+        关于页显示「服务端分发版本 v4.1.0 (0)」，更新记录页**每一行**
+        都挂上「最新」标签（因为 0 == 0）。
+        """
+        inst = self._setup(rel, tmp_path, monkeypatch)
+        apk = inst / "updates" / "app" / "LANShare-App-1.1.25+138.apk"
+        apk.write_bytes(b"x")
+        monkeypatch.setattr(rel, "read_app_version", lambda: ("1.1.25", 138))
+        rel.sync_update_manifest("app", "1.1.25", apk)
+
+        data = json.loads((inst / "updates" / "app" / "index.json").read_text(encoding="utf-8"))
+        assert data["latest"]["build"] == 138, "latest.build 必须是真实 versionCode"
+        top = data["history"][0]
+        # 当前版本的历史条目也要被覆盖成真实 versionCode，
+        # 否则「当前 / 最新」两个标签对不上同一行。
+        assert top["version"] == "1.1.25" and top["build"] == 138
+        for h in data["history"]:
+            assert isinstance(h.get("build"), int) and h["build"] > 0, h
+
     def test_artifact_copied_into_updates_dir(self, rel, tmp_path, monkeypatch):
         """产物不在 updates/ 里时必须复制进去。
 

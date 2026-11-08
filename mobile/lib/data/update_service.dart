@@ -391,11 +391,15 @@ class UpdateService {
   }
 
   /// 清单里的 history 数组 → 历史条目。坏一条跳过，不影响整份。
+  ///
+  /// 上限不是 20 —— 之前的 `take(20)` 让「看全部更新记录」名不副实：清单里
+  /// 41 条却只进来 20 条（2026-11-08 实机截图：关于页说「40 个版本」，
+  /// 点进去只列出 20 个）。留 500 只是防别人塞超长清单把页面撑爆。
   static List<UpdateHistoryItem> _historyFromManifest(Map<String, dynamic> m) {
     final raw = m['history'];
     if (raw is! List) return const <UpdateHistoryItem>[];
     final out = <UpdateHistoryItem>[];
-    for (final item in raw.take(20)) {
+    for (final item in raw.take(500)) {
       final h = UpdateHistoryItem.fromManifest(item);
       if (h != null) out.add(h);
     }

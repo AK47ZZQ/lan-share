@@ -834,8 +834,16 @@ def parse_update_history(markdown: str, line: str) -> list[dict]:
             continue
         seen.add(ver)
         dm = re.search(r"(\d{4}-\d{2}-\d{2})", title)
+        parts = [int(x) for x in ver.split(".") if x.isdigit()]
         items.append({
             "version": ver,
+            # build 必须写进清单：App 用它对「当前 / 最新」定位。缺了它
+            # 客户端拿到的 build 全是 0，界面会出现「v4.1.0 (0)」而且
+            # 每一行都标「最新」（2026-11-08 实机踩到）。
+            # 这里的值是按版本号推出的兜底值；发版脚本会把它覆盖成真实
+            # versionCode（见 sync_update_manifest）。
+            "build": (parts[0] * 10000 + parts[1] * 100 + parts[2]
+                      if len(parts) == 3 else 0),
             "published": dm.group(1) if dm else "",
             "notes": _clean_note(_title_summary(title, ver) or _summary_for(body)),
         })
@@ -887,7 +895,8 @@ def sync_update_manifest(line: str, version: str, artifact: Path | None) -> None
 
     out_hist: list[dict] = []
     for h in hist:
-        item = {"version": h["version"], "published": h["published"], "notes": h["notes"]}
+        item = {"version": h["version"], "build": h["build"],
+                "published": h["published"], "notes": h["notes"]}
         for name, path in present.items():
             # 版本号前后不能紧邻数字，也不能再跟 `.数字`（`4.0.11.2`）；
             # 但 `.exe` 那个点是正常的 —— 所以不能用 `(?![0-9.])`，
@@ -899,7 +908,22 @@ def sync_update_manifest(line: str, version: str, artifact: Path | None) -> None
                 break
         out_hist.append(item)
 
-    latest = {"version": version, "published": next(
+    # latest 的 build 用**真实 versionCode**，不是按版本号推出来的那个：
+    # App 拿它跟本地 buildNumber 比对来标「当前 / 最新」，用推算值会全错。
+    real_build = next((h["build"] for h in hist if h["version"] == version), 0)
+    if line == "app":
+        try:
+            got_ver, got_build = read_app_version()
+            if got_ver == version:
+                real_build = got_build
+        except Exception:
+            pass
+    for item in out_hist:
+        if item["version"] == version:
+            item["build"] = real_build
+
+    latest = {"version": version,
+              "build": real_build, "published": next(
         (h["published"] for h in hist if h["version"] == version), ""),
         "notes": next((h["notes"] for h in hist if h["version"] == version), ""),
         "url": artifact.name if artifact else "",
