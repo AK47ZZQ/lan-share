@@ -73,6 +73,44 @@ Base URL：`https://<host>:8765`（经 Caddy）；开发模式 `http://127.0.0.1
 |------|------|------|------|
 | GET | `/api/notes/list?path=&q=&sort=` | 🔑 | `{total, items:[{name, path, category, ext, size_human, modified, mtime, ctime, summary}]}`；`category`=相对笔记目录的子路径（`""`=未分类）；`summary`=正文前 200 字纯文本（html 先去标签，只读文件头 8KB）；`q` 命中文件名或内容前 8KB（大小写不敏感）；`sort=modified`\|`created`\|`name`；单目录树聚合上限 2000 篇（防误选网盘根目录全盘扫描） |
 
+## 效率舱（App v1.1 / M0+M1）
+
+家庭待办与家庭清单（效率页签）。可见性：personal 清单仅创建者（admin 也不看）；
+family 清单 member+admin 全可见可协作；guest 无待办能力（403）。
+重名不变量：personal=同用户建的任何同名清单；family=全局 family 同名
+（create 与 rename 同口径，2026-11-09 夜批补齐 rename 侧）。
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/todos/lists` | 🔑 | `{lists:[{id, name, kind, owner_id, mine, open_count}], members}`；open_count=未完成数 |
+| POST | `/api/todos/lists` | 🔑 | `{name, kind}` 建清单（personal/family）；重名 409 |
+| PATCH | `/api/todos/lists/{lid}` | 🔑 | `{name}` 重命名；只有创建者（admin 可管 family）；重名 409（与 create 同口径，排除自身/no-op 放行） |
+| DELETE | `/api/todos/lists/{lid}` | 🔑 | 删清单（todos 级联物理删除）；只有创建者 |
+| GET | `/api/todos` | 🔑 | `{todos:[...], members, server_time}`；已软删的不下发 |
+| POST | `/api/todos` | `{list_id, title≤200, notes≤2000, due_at, priority∈0/1/2, assignee_id}` 建待办；指派他人→站内通知（合并窗口节流） |
+| PATCH | `/api/todos/{tid}` | 🔑 | 局部更新（title/notes/due_at/priority/assignee_id/status）；改期清空 reminded_at 重新计时；status=done 记 done_by；family 完成通知清单创建者 |
+| DELETE | `/api/todos/{tid}` | 🔑 | 软删除墓碑（30 天后物理清除） |
+
+## 通知与偏好
+
+站内通知统一出口（分享互动=share 组、管理广播=admin 组、其余=system 组）；
+偏好关闭的组不再落库。SSE 实时信号。
+
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/notifications` | 🔑 | `{unread, items:[{id, type, title, body, link, created_at, read}]}` |
+| POST | `/api/notifications/read` | 🔑 | 全部标记已读 |
+| POST | `/api/notifications/{nid}/read` | 🔑 | 单条已读 `{changed}` |
+| DELETE | `/api/notifications/{nid}` | 🔑 | 删除单条 |
+| GET/PUT | `/api/notifications/prefs` | 🔑 | `{share, admin, system}` 三组布尔偏好（PUT 局部更新） |
+
+管理端（⚙️ require_admin）：`POST /api/admin/notify`（广播，`{title≤80, body≤500, user_ids?}`，
+定向 404 当目标全不匹配）；`GET /api/admin/notifications/sent`（发送记录+未读/已读统计）；
+`POST .../broadcast/{bid}/withdraw`（撤回未读）；`POST .../broadcast/{bid}/remind`（未读提醒）；
+`POST /api/admin/notifications/draft`（草稿/定时）；`POST .../draft/{bid}/send`（立即发送，
+**并发双发 CAS 把关 409**，2026-11-09 夜批）；`DELETE .../draft/{bid}`（删草稿）；
+`DELETE /api/admin/notifications/{nid}`（管理删成员通知）；`GET /api/admin/notifications`。
+
 ## 回收站
 
 | 方法 | 路径 | 认证 | 说明 |
