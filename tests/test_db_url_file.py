@@ -37,7 +37,11 @@ def test_db_url_file_fallback(tmp_path, monkeypatch):
 
 
 def test_db_url_env_still_wins_and_absent_file_means_sqlite(tmp_path, monkeypatch):
-    """优先级回归：显式 DATABASE_URL 优先；文件路径无效时回退 SQLite（不炸）。"""
+    """优先级回归：显式 DATABASE_URL 优先；env 指向的文件读不到则 fail-fast。
+
+    契约在 2026-11-09 发布前复核时改过：原来是「读不到就静默回退 SQLite」，
+    那会让 API 带一个空库起来、被用户当成「文件全没了」。现在宁可服务起不来。
+    """
     f = tmp_path / ".lanshare-dburl"
     f.write_text("postgresql://u:p@127.0.0.1:5999/lanshare", encoding="utf-8")
     env = dict(os.environ)
@@ -55,6 +59,6 @@ def test_db_url_env_still_wins_and_absent_file_means_sqlite(tmp_path, monkeypatc
     env2["PYTHONIOENCODING"] = "utf-8"
     r2 = subprocess.run([sys.executable, "-c", _CODE], capture_output=True,
                         text=True, env=env2, timeout=60, cwd=Path(__file__).parents[1])
-    lines2 = r2.stdout.splitlines()   # no strip: first line is empty
-    assert r2.returncode == 0, r2.stderr[-300:]
-    assert lines2[0] == "" and lines2[1] == "False", lines2
+    # fail-fast：env 明确给了路径却读不到，绝不静默退 SQLite（空库比崩溃更难诊断）
+    assert r2.returncode != 0, f"读不到连接串文件必须失败，实测 rc=0 stdout={r2.stdout[:200]!r}"
+    assert "拒绝退回 SQLite" in (r2.stderr or ""), (r2.stderr or "")[-500:]

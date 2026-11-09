@@ -31,8 +31,16 @@ if not DATABASE_URL:
             from pathlib import Path as _Path
 
             DATABASE_URL = _Path(_url_file).read_text(encoding="utf-8").strip()
-        except OSError:
-            DATABASE_URL = ""
+        except OSError as exc:
+            # fail-fast（2026-11-09 发布前复核）：env 明确指向了连接串文件却读不到
+            # （ACL 收得过头 / 编码坏 / 文件被删）时，绝不能静默退回 SQLite ——
+            # 那会让 API 带着一个空库起来，用户看到的是「文件全没了」，
+            # 比启动失败更难诊断，也更容易被误当成数据丢失。宁可服务起不来。
+            raise RuntimeError(
+                f"LANSHARE_PG_URL_FILE 指向的连接串文件读不到：{_url_file}（{exc}）。"
+                "拒绝退回 SQLite —— 请检查文件是否存在及 ACL"
+                "（应仅 SYSTEM / Administrators 可读）。"
+            ) from exc
 USE_PG = DATABASE_URL.startswith("postgres")
 
 _db_local = threading.local()
