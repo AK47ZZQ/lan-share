@@ -354,6 +354,27 @@ def write_registry_value(
     )
 
 
+def delete_registry_value(name: str, key: str = REGISTRY_KEY_DEFAULT) -> None:
+    """删除一个注册表值；值或键不存在时静默（幂等）。
+
+    用于清理历史遗留的口令类值（2026-11-09 发布前复核：PgPassword 曾以
+    Users 可读的 ACL 留在 HKLM 里）。
+    """
+    if not key or not re.fullmatch(r"[A-Za-z0-9_\-]{1,64}", key):
+        raise ValueError(f"非法的注册表键名: {key!r}")
+
+    safe_name = name.replace("'", "''")
+    script = (
+        "$k='HKLM:\\SOFTWARE\\" + key + "'; "
+        "if (Test-Path $k) { Remove-ItemProperty -Path $k "
+        "-Name '" + safe_name + "' -ErrorAction SilentlyContinue }"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, timeout=30,
+    )
+
+
 def _acquire_install_lock():
     """拿一个进程级互斥锁，防止两个 install 同时跑。
 
@@ -404,10 +425,16 @@ def read_pg_password(data_dir: Path, reg_key: str) -> str:
     数据目录在哪，密码就在哪，这样卸载重装、换注册表键、换安装目录之类
     的操作都不会把库锁死。
     """
-    value = read_registry_value("PgPassword", reg_key)
-    if value:
-        return value
-
+    # 优先级：数据目录文件 → 注册表（仅老装机兼容）→ 新建。
+    #
+    # 2026-11-09 发布前复核：注册表 HKLM\SOFTWARE\<key>\PgPassword 的键 ACL
+    # 实测 BUILTIN\Users: ReadKey + ALL APPLICATION PACKAGES: ReadKey ——
+    # 本机任意账号都能读走生产库口令。口令的唯一真源改为数据目录里的
+    # .lanshare-pgpass（icacls 已收紧到 SYSTEM/Administrators），注册表只在
+    # 老装机（文件还没落地）时兜底，新装机不再写入（见 write_pg_password）。
+    #
+    # 换优先级的正确性前提：write_pg_password 历史上一直是两处同写，
+    # 所以读到的一定是同一个值（2026-11-09 生产实测两处一致）。
     f = data_dir / _PG_PASS_FILE
     if f.exists():
         try:
@@ -416,6 +443,10 @@ def read_pg_password(data_dir: Path, reg_key: str) -> str:
                 return value
         except OSError:
             pass
+
+    value = read_registry_value("PgPassword", reg_key)
+    if value:
+        return value
 
     return generate_password()
 
@@ -468,8 +499,14 @@ def lock_pgpass_acl(f: Path) -> None:
 
 
 def write_pg_password(data_dir: Path, reg_key: str, password: str) -> None:
-    """密码写两处：注册表（快查）+ 数据目录（跟着数据走，卸载也不丢）。"""
-    write_registry_value("PgPassword", password, reg_key)
+    """密码**只**写数据目录 .lanshare-pgpass（icacls 收紧）；注册表不再存。
+
+    为什么不双写了（2026-11-09 发布前复核）：原实现写注册表 + 文件两处，
+    而 HKLM\\SOFTWARE\\<key> 键的 ACL 是 BUILTIN\\Users: ReadKey —— 等于把
+    生产库口令交给本机任意账号与任何 AppContainer。文件那一份已收紧 ACL，
+    注册表这一份没有可收的余地（同一个键还要给 Users 读 InstallFolder 等
+    非敏感值），所以直接不写，并把历史遗留值删掉。
+    """
 
     f = data_dir / _PG_PASS_FILE
     try:
@@ -478,14 +515,20 @@ def write_pg_password(data_dir: Path, reg_key: str, password: str) -> None:
         os.chmod(f, 0o600)   # 形式保留：非 Windows / FAT 场景尽力而为
         lock_pgpass_acl(f)   # 真正的防线：icacls 收紧（Windows ACL）
     except OSError as exc:
-        # 写不进文件不致命 —— 注册表里已经有一份，下次还能读到
-        say(f"    WARN 密码文件写入失败（不影响安装）：{exc}")
+        # 写不进文件时**不能**退回注册表（那正是要消灭的暴露面）。安装会继续，
+        # 但下一次读会拿新生成的密码 → PG 认证失败。在「响亮失败」与
+        # 「悄悄把口令写回注册表」之间，选前者。
+        warn(f"密码文件写入失败：{exc}（口令不会写回注册表，PG 认证可能失败）")
+
+    # 清历史遗留：老装机/老版本写进注册表的那份口令（本机任意账号可读）。
+    # 幂等 —— 值不存在时静默。
+    delete_registry_value("PgPassword", reg_key)
 
 
 _DB_URL_FILE = ".lanshare-dburl"
 
 
-def write_dburl_file(data_dir: Path, url: str) -> Path:
+def write_dburl_file(data_dir: Path, url: str) -> Path | None:
     """把完整连接串写进数据目录并收紧 ACL，返回路径。
 
     为什么不直接进服务环境变量（原实现 DATABASE_URL=postgresql://...:pw@）：
@@ -1244,7 +1287,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     elif _delete_registry_key(reg_key):
         ok(f"已删除注册表 HKLM\SOFTWARE\{reg_key}")
     else:
-        fail(f"删除注册表 HKLM\SOFTWARE\{reg_key} 失败")
+        fail(f"删除注册表 HKLM\\SOFTWARE\\{reg_key} 失败")
 
     # ── 6. 系统 PATH ──
     if not dry:
@@ -1713,7 +1756,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--registry-key",
         default=REGISTRY_KEY_DEFAULT,
-        help="注册表键名（HKLM\SOFTWARE\<key>），默认 LANShare。"
+        help="注册表键名（HKLM\\SOFTWARE\\<key>），默认 LANShare。"
              "测试实例务必用独立键，否则会改到正式安装的配置",
     )
     parser.add_argument(
