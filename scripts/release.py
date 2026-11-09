@@ -1243,8 +1243,16 @@ def main() -> int:
     # 写在后面会报 unrecognized arguments。而人的直觉是写在最后
     # （`release.py server 3.78 --yes`），这个落差没必要让使用者记住。
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--dry-run", action="store_true", help="只检查，不执行")
-    common.add_argument("--yes", action="store_true", help="不交互确认")
+    # default=SUPPRESS 是必须的（2026-11-09 实测踩到）：这两个开关在父 parser
+    # 与每个子命令上各挂一份，好让 `--yes` 写在子命令前后都能用。但子命令的
+    # default=False 会在解析时**覆盖**父级已经解析出的 True —— 于是
+    # `release.py --yes server 4.0.14` 照样弹「继续？[y/N]」，在无 stdin 的
+    # 后台环境直接 EOFError。SUPPRESS 让子命令只在**真的写了这个开关**时才写
+    # namespace，父级的值才能活下来。
+    common.add_argument("--dry-run", action="store_true",
+                        default=argparse.SUPPRESS, help="只检查，不执行")
+    common.add_argument("--yes", action="store_true",
+                        default=argparse.SUPPRESS, help="不交互确认")
 
     ap = argparse.ArgumentParser(description="一条命令发版")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不执行")
