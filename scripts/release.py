@@ -181,7 +181,10 @@ def check_privacy() -> None:
     if not script.is_file():
         warn("没有 pre-open-source-check.py，跳过（新仓库要先补上）")
         return
-    res = run([sys.executable, str(script)], timeout=600)
+    # timeout 必须盖住整个扫描（2026-11-09 实测：它要遍历全部 git history，
+    # 本仓跑到 ~16 分钟）。原来 600 秒会被超时杀掉，输出里自然没有 ALL CLEAR，
+    # 于是「隐私检查没过」—— 一个纯粹由超时制造出来的假红。
+    res = run([sys.executable, str(script)], timeout=1800)
     out = (res.stdout or "") + (res.stderr or "")
     if "ALL CLEAR" not in out:
         tail = "\n".join(out.strip().splitlines()[-12:])

@@ -133,6 +133,15 @@ def main() -> int:
               f"目标侧 {dest_files} 文件 / {dest_bytes / 1e9:.2f} GB"
               f"{'；双侧一致' if match else '；双侧不一致（源侧运行中有写入或目标含预存文件，属预期，下次增量补齐）'}"
               f"，清单 {mp}，日志 {log}")
+        # 对账要能当判据用，不能只是打印一行字（2026-11-09 发布前复核）：
+        # 原来无论一致与否都 return 0，退出码形同虚设 —— 真丢了 500 个文件，
+        # cron 里也看不出来。只把「目标侧少于源侧」当失败（目标多出来的是
+        # 预存文件，属正常；源侧运行中新增会让 src 偏大，这种噪声只能人工看）。
+        if dest_files < src_files or dest_bytes < src_bytes:
+            print(f"FAIL 目标侧少于源侧：缺 {src_files - dest_files} 个文件 / "
+                  f"{(src_bytes - dest_bytes) / 1e9:.2f} GB —— 这不是「运行中有写入」，"
+                  f"是真漏拷，请复核 manifest 与 robocopy 日志")
+            return 1
     else:
         print(f"试运行（未落盘）：预计源侧共 {src_files} 文件 / {src_bytes / 1e9:.2f} GB"
               f"（robocopy rc={r.returncode}，1=有可拷内容）")

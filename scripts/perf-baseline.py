@@ -90,6 +90,7 @@ def main():
     ph = bench(c, "GET /api/photos",
                lambda: c.get("/api/photos", params={"limit": 120}), k=a.k)
     for key, xs in (("feedback", fb), ("feedback2", fb2), ("search", se),
+                    ("search_zero_hit", se0),
                     ("recent", re_), ("dav_propfind", da), ("photos", ph)):
         res[key + "_ms"] = {"p50": round(pctl(xs, 50), 1), "p95": round(pctl(xs, 95), 1)}
     out = a.out or os.path.join(os.environ.get("TEMP", "."), "perf-baseline.json")
