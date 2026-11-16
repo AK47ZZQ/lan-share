@@ -654,6 +654,18 @@ def _lan_addresses() -> list[str]:
     # 而真正能连的以太网 192.168.1.100 排在后面、WLAN 直接没进来。
     # 手机照着列表挨个试，前三个必然超时 —— 用户体感是「局域网连不上」。
     egress = _egress_ip()
+    # 2026-11-16：与出网口**同网段**的候选独占下发。
+    #
+    # 原实现只把两个已知虚拟前缀垫底，实测这台生产机仍把 WSL 的
+    # 172.24.160.1 / 172.30.208.1、Hyper-V 的 192.168.64.1 一起发给了 App
+    # （2026-11-16 对 /api/app/entries 的返回体实测）——App 每轮再发现都要
+    # 并行探测这些永远连不上的地址（各 2s 超时），还挤占 [:4] 名额。
+    # 有同网段候选时只留同网段；拿不到 egress 时 fail-open 退回旧行为。
+    if egress:
+        same_net_prefix = ".".join(egress.split(".")[:3]) + "."
+        same_net = [ip for ip in found if ip.startswith(same_net_prefix)]
+        if same_net:
+            found = same_net
     virtual_prefixes = ("192.168.56.", "192.168.192.")
 
     def _rank(ip: str) -> tuple:
