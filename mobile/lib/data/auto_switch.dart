@@ -409,7 +409,9 @@ class AutoSwitch {
     final backToLan = !isPublicAddress(url);
     _lastSwitchAt = DateTime.now();
     _lanFails = 0;
-    await ApiClient.I.switchServer(url);
+    // preserveToken：自动切换的候选只来自服务端 entries 自报与用户历史地址，
+    // 都是同一台服务器的入口 —— 见 ApiClient.switchServer 的注释。
+    await ApiClient.I.switchServer(url, preserveToken: true);
     if (backToLan) await _resumeAutoPaused();
     lastEvent.value = '$event · ${_hhmm(DateTime.now())}';
     debugPrint('[AutoSwitch] $event');

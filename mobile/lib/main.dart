@@ -41,7 +41,9 @@ void main() {
   final container = ProviderContainer();
   onUnauthorized = () {
     if (container.read(sessionProvider).loggedIn) {
-      container.read(sessionProvider.notifier).logout();
+      // 掉线（Token 被吊销 / 切服清掉）不是主动退出：保留一键登录凭据，
+      // 否则每次掉线都要手打密码（2026-11-16 用户报障「点进去不加载」同批）
+      container.read(sessionProvider.notifier).logout(keepCredentials: true);
     }
   };
   // 登录态 ↔ 传输引擎联动：登录后恢复队列（含杀进程遗留的续传任务），登出全部挂起

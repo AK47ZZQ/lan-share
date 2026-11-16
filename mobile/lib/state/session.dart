@@ -239,14 +239,16 @@ class SessionController extends StateNotifier<SessionState> {
         loggedIn: true, username: newName, role: state.role);
   }
 
-  Future<void> logout() async {
+  /// [keepCredentials] 掉线专用：Token 被吊销 / 本地已清时保留生物识别一键
+  /// 登录的凭据存档，用户点一下就能回去；主动「退出登录」不传此参数（彻底清）。
+  Future<void> logout({bool keepCredentials = false}) async {
     _username = '';
     _password = '';
     await SecureStore.clearToken();
     await Prefs.setUsername('');
     // 主动退出 = 要求彻底退出：生物识别一键登录的凭据存档一并清除
     // （Token 自然失效的掉线场景不清，那种情况正需要一键重登）
-    await SavedCredentialStore.clear();
+    if (!keepCredentials) await SavedCredentialStore.clear();
     // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
     await AuthCacheManager.I.emptyCache();
     await AutoSwitch.I.reset(); // 上一会话的自动切换痕迹一并清掉

@@ -40,6 +40,8 @@ class ApiClient {
   Future<Dio>? _building; // 并发首调复用同一次构建（R1-P3），落选实例的连接池滞留到 GC
   int _gen = 0; // switchServer 代际：在途 _build 完成时地址可能已再次切换（红队 P2）
   int _buildSeq = 0; // 构建序号（R2-P3-5）：旧代 build 完成时不得清掉新代的 _building
+  /// 掉线回调去重闸：一次 401 风暴（照片墙几十个并发请求）只跳一次登录页
+  bool _unauthorizedFired = false;
 
   Future<Dio> dio() async {
     final d = _dio;
@@ -124,9 +126,23 @@ class ApiClient {
           // 收紧为 sentTok == cur（R2-P2-3）：无凭据请求（sentTok==null）的 401
           // 可能是登出瞬间在途请求——误清刚重新登录保存的新 Token，形成
           // "登录→401→再踢"循环
-          if (!inLogin && cur != null && sentTok != null && sentTok == cur) {
-            await SecureStore.clearToken();
+          final staleToken = cur != null && sentTok != null && sentTok == cur;
+          // 2026-11-16（用户报障「查看存储点进去不加载 / 文件点进去不显示」）：
+          // 本地**根本没有** Token 时，此前直接落到 handler.next(e)——不跳登录
+          // 页、不提示，页面就那么干着，用户只看到"点了没反应"。而 switchServer
+          // 跨 host 切服（局域网 ↔ 公网）恰好会把 Token 清掉，制造这个静默态。
+          // 掉线必须让 UI 知道：本来就无效的凭据，跳登录页才是唯一出口。
+          final noLocalToken = cur == null || cur.isEmpty;
+          if (!inLogin &&
+              (staleToken || noLocalToken) &&
+              !_unauthorizedFired) {
+            _unauthorizedFired = true;
+            if (staleToken) await SecureStore.clearToken();
             onUnauthorized?.call();
+            // 闸只挡并发 401 风暴；后续真的再次掉线仍要能触发
+            Future<void>.delayed(const Duration(seconds: 2), () {
+              _unauthorizedFired = false;
+            });
           }
         }
         handler.next(e);
@@ -147,7 +163,12 @@ class ApiClient {
 
 
 
-  Future<void> switchServer(String url) async {
+  /// [preserveToken] 仅 auto_switch 用：它切的是**同一台服务器**的另一个入口
+  /// （局域网 ↔ 隧道，候选来自服务端 entries 自报与用户历史地址）。跨 host
+  /// 清 Token 的原意是"别把凭据发给第三方服务器"，对同一台服务器就是误杀 ——
+  /// 每次进出家门自动切换都掉登录，用户看到的就是"点开什么都不加载"。
+  /// 手动添加/扫码接入别人服务器仍走默认（清）。
+  Future<void> switchServer(String url, {bool preserveToken = false}) async {
     final prev = await Prefs.lastAddress();
     await Prefs.rememberAddress(url);
 
@@ -161,7 +182,7 @@ class ApiClient {
     //
     // 只比 host 不比端口：同一台服务器的局域网地址和隧道映射端口不同，
     // 但那是同一份数据，token 该保留。
-    if (hostOfAddress(prev) != hostOfAddress(url)) {
+    if (!preserveToken && hostOfAddress(prev) != hostOfAddress(url)) {
       await SecureStore.clearToken();
     }
 
