@@ -155,6 +155,42 @@ def create_session(request: Request, user_id: int) -> str:
     return token
 
 
+# ── 401 认证通道诊断（2026-11-16）─────────────────────────────
+# 用户报障「查看存储点进去不加载 / 文件点进去不显示」：根因是 App 的 Bearer
+# Token 掉了而客户端静默，服务端只能看到一片 401——分不清是"客户端根本没带
+# 凭据"（切服清了）还是"带了但不认"（被吊销/过期）。按 (ip, 通道) 每分钟
+# 记一行：只记有无与结论，**绝不记凭据本身**，也不影响主流程。
+_AUTH401_LAST: dict = {}
+_AUTH401_LOCK = threading.Lock()
+_AUTH401_INTERVAL = 60.0
+
+
+def _note_auth_401(request: Request) -> None:
+    try:
+        has_cookie = bool(request.cookies.get(COOKIE_NAME))
+        has_bearer = request.headers.get("authorization", "").startswith("Bearer ")
+        if has_cookie and has_bearer:
+            reason = "both_invalid"
+        elif has_cookie:
+            reason = "cookie_invalid"
+        elif has_bearer:
+            reason = "bearer_invalid"
+        else:
+            reason = "no_credential"
+        ip = client_ip(request)
+        now = time.time()
+        with _AUTH401_LOCK:
+            if now - _AUTH401_LAST.get((ip, reason), 0.0) < _AUTH401_INTERVAL:
+                return
+            if len(_AUTH401_LAST) > 512:   # 家用规模，兜底防无界增长
+                _AUTH401_LAST.clear()
+            _AUTH401_LAST[(ip, reason)] = now
+        logging.getLogger("lanshare.auth").warning(
+            "auth401 %s ip=%s path=%s", reason, ip, request.url.path)
+    except Exception:  # 诊断绝不影响认证主流程
+        pass
+
+
 def require_user(request: Request) -> sqlite3.Row:
     # 中间件已在本请求内做过会话查询（R1-P3-3）：结果挂在 request.state，
     # 复用之（False=已确认未登录），省掉每个认证请求的第二次 DB 往返
@@ -162,6 +198,7 @@ def require_user(request: Request) -> sqlite3.Row:
     if user is None:
         user = get_session_user(request) or get_bearer_user(request) or False
     if not user:
+        _note_auth_401(request)
         raise HTTPException(status_code=401, detail="Not authenticated")
     return cast(sqlite3.Row, user)
 
