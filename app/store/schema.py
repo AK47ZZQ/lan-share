@@ -249,8 +249,9 @@ _PG_SCHEMA = """
 """
 
 # 照片评论/表情回应（photo_comments / photo_reactions）已按改进建议
-# 9.6-P2-13 下线：不再建表（存量部署中的旧表与数据保留不动，只是没有
-# 代码再读写）。若从 SQLite 迁移到 PG，这两张表也不会再出现在目标库。
+# 9.6-P2-13 下线：不再建表。2026-11-16 主人授权后已从生产库 DROP
+# （两张表均 0 行、无外键依赖）；SQLite 旧库若还残留，migrate 脚本的
+# EXCLUDE 已排除，不会进新库。
 # 注意：不再使用，勿把两表加回 _PG_SEQUENCES。
 
 _PG_SEQUENCES = ("users", "audit_log", "trash", "grants", "notifications", "device_tokens",
@@ -560,7 +561,7 @@ def _migrate_v3():
                 status TEXT NOT NULL DEFAULT 'running'
             );
             -- 照片评论/表情回应两表（photo_comments/photo_reactions）已按
-            -- 改进建议 9.6-P2-13 下线，不再建表；存量库中的旧表保留不删
+            -- 改进建议 9.6-P2-13 下线，不再建表；生产库旧表已于 2026-11-16 DROP
             -- 索引不在这里写：统一来自 _INDEXES（单源，两引擎共用一份文本）
         """ + _INDEXES)
         # 仅当库内已无 admin 时才晋升（R1-P2-1）：此前每次启动无条件把最小 id
