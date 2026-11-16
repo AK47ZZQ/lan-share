@@ -109,13 +109,19 @@ def test_entries_are_login_free_and_carry_cert_fingerprint(client, auth):
 
 
 def test_lan_addresses_put_real_nic_first(monkeypatch):
-    """LAN 候选必须把「真的连着外面」的那张网卡排第一。
+    """LAN 候选只下发「真的连着外面」那张网卡所在的网段。
 
     2026-11-06 实机：下发的是 192.168.56.1（VirtualBox）/ 192.168.192.1
     （Hyper-V）/ 172.31.240.1（WSL），真正能连的 192.168.1.100 反而在后面。
     手机照着列表挨个试，前三个必然超时 —— 用户体感是「局域网连不上」。
+
+    2026-11-16 收紧契约：不同网段的虚拟网卡**直接不下发**，不再只是垫底。
+    原来的 `virtual_prefixes` 白名单只有 56/192 段，实测这台生产机仍把 WSL
+    的 172.24/172.30 与 192.168.64 段发给了 App；而 App 每轮再发现会对候选
+    并行探测（各 2s 超时），死地址纯属浪费。断言因此从「排第一」升级成
+    「只剩它」—— 比原来更严，不是为了让红变绿而放宽。
     """
-    import socket as _s
+    import socket as _s  # noqa: F401 —— 保留原导入形状，避免无谓 diff
     from app.api import appver
 
     fake = [
@@ -127,10 +133,8 @@ def test_lan_addresses_put_real_nic_first(monkeypatch):
     monkeypatch.setattr(appver, "_egress_ip", lambda: "192.168.1.100")
 
     out = appver._lan_addresses()
-    assert out[0] == "https://192.168.1.100:8765", "出口网卡必须排第一"
-    # 已知虚拟网卡垫底
-    assert out.index("https://192.168.56.1:8765") > 0
-    assert out.index("https://192.168.192.1:8765") > 0
+    assert out == ["https://192.168.1.100:8765"], (
+        "只留出口网卡同网段；不同网段的虚拟网卡（56/192 段）不下发")
 
 
 def test_egress_ip_is_safe_when_no_route(monkeypatch):
