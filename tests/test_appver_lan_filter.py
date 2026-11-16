@@ -1,7 +1,7 @@
 """`_lan_addresses()` 的同网段过滤（2026-11-16）。
 
-背景：这台生产机实测把 WSL / Hyper-V 虚拟网卡（172.24.160.1 /
-172.30.208.1 / 192.168.64.1）连同真实以太网一起下发给 App，App 每轮
+背景：这台生产机实测把 WSL / Hyper-V 虚拟网卡（10.99.1.1 /
+10.99.2.1 / 10.99.3.1）连同真实以太网一起下发给 App，App 每轮
 自动再发现都要并行探测这些永远连不上的地址。
 
 两条不变量：
@@ -21,34 +21,34 @@ def _infos(*ips):
 def test_lan_addresses_only_same_subnet_as_egress(monkeypatch):
     monkeypatch.setattr(
         appver.socket, "getaddrinfo",
-        lambda *a, **k: _infos("192.168.1.12", "172.24.160.1",
-                               "172.30.208.1", "192.168.64.1"))
-    monkeypatch.setattr(appver, "_egress_ip", lambda: "192.168.1.12")
+        lambda *a, **k: _infos("10.10.20.12", "10.99.1.1",
+                               "10.99.2.1", "10.99.3.1"))
+    monkeypatch.setattr(appver, "_egress_ip", lambda: "10.10.20.12")
 
-    assert appver._lan_addresses() == ["https://192.168.1.12:8765"]
+    assert appver._lan_addresses() == ["https://10.10.20.12:8765"]
 
 
 def test_lan_addresses_keeps_both_cards_on_same_subnet(monkeypatch):
     """有线 + WLAN 同在 192.168.1.x 时两个都要给（换网卡不该失联）。"""
     monkeypatch.setattr(
         appver.socket, "getaddrinfo",
-        lambda *a, **k: _infos("192.168.1.12", "192.168.1.11", "172.30.208.1"))
-    monkeypatch.setattr(appver, "_egress_ip", lambda: "192.168.1.12")
+        lambda *a, **k: _infos("10.10.20.12", "10.10.20.11", "10.99.2.1"))
+    monkeypatch.setattr(appver, "_egress_ip", lambda: "10.10.20.12")
 
     got = appver._lan_addresses()
-    assert set(got) == {"https://192.168.1.12:8765", "https://192.168.1.11:8765"}
+    assert set(got) == {"https://10.10.20.12:8765", "https://10.10.20.11:8765"}
 
 
 def test_lan_addresses_fail_open_without_egress(monkeypatch):
     """拿不到出网口 IP：退回旧行为（RFC1918 全收），绝不返回空表。"""
     monkeypatch.setattr(
         appver.socket, "getaddrinfo",
-        lambda *a, **k: _infos("192.168.1.12", "172.30.208.1"))
+        lambda *a, **k: _infos("10.10.20.12", "10.99.2.1"))
     monkeypatch.setattr(appver, "_egress_ip", lambda: "")
 
     got = appver._lan_addresses()
     assert len(got) == 2, got
-    assert "https://192.168.1.12:8765" in got
+    assert "https://10.10.20.12:8765" in got
 
 
 @pytest.mark.parametrize("ip", ["8.8.8.8", "127.0.0.1", "not-an-ip"])
