@@ -107,3 +107,28 @@ class TestNegativeCache:
         monkeypatch.setattr(m.urllib.request, "urlopen", c)
         assert m._github_app_releases() == good
         assert c.n == 0, "退避期内连请求都不该发"
+
+    def test_never_failed_sentinel_with_small_monotonic(self, monkeypatch):
+        """`fail_ts=0.0` 是「从未失败」的哨兵，不能跟真实时刻混为一谈。
+
+        `time.monotonic()` 的起点是**系统启动**：Linux runner / 容器里的进程
+        刚起来时它只有几十秒，此时 `now - 0.0 < _GH_NEG_TTL(60)` 恒成立 ——
+        「从没失败过」被算成「0.5 秒前刚失败过」，开机后一分钟内一次都不去
+        GitHub。本地 Windows 开机几天，monotonic 是几十万，这条永远撞不出来，
+        所以必须把钟显式钉小才能守住（2026-11-17 CI 上 7 项就是这么红的）。
+        """
+        import app.api.appver as m
+
+        class _Clock:
+            @staticmethod
+            def monotonic():
+                return 0.5      # 开机半秒
+
+        monkeypatch.setattr(m, "time", _Clock)
+        c = _Counter()
+        monkeypatch.setattr(m.urllib.request, "urlopen", c)
+        m._gh_cache.update({"ts": 0.0, "items": [], "fail_ts": 0.0})
+
+        assert m._github_app_releases() == []
+        assert c.n == 1, "哨兵 0.0 ≠ 0.5 秒前失败过，必须真去撞一次 GitHub"
+

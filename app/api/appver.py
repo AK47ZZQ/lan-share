@@ -92,7 +92,15 @@ def _github_app_releases(force: bool = False) -> list:
         # 2026-11-08：原实现失败分支只 `return 旧缓存` 而不记时间戳，于是
         # 「GitHub 不可达 + 全新部署没有本地 version.json」这条路上**每个请求
         # 都要白等 4s**（_GH_TIMEOUT），而它每次都注定失败。受众很窄但代价确定。
-        if not force and now - _gh_cache.get("fail_ts", 0.0) < _GH_NEG_TTL:
+        #
+        # ⚠ `fail_ts` 的哨兵值必须按**假值**判定。`time.monotonic()` 的起点是
+        # 系统启动：Linux runner / 容器里的进程刚起来时它只有几十秒，此时
+        # `now - 0.0 < _GH_NEG_TTL` 恒成立 ——「从未失败」会被算成「刚失败过」，
+        # 于是开机后一分钟内一次都不去 GitHub（本地 Windows 开机几天时
+        # monotonic 是几十万，永远撞不出来）。2026-11-17 CI 的 SQLite job 就是
+        # 被这个判据打红的 7 项。
+        fail_ts = _gh_cache.get("fail_ts", 0.0)
+        if not force and fail_ts and now - fail_ts < _GH_NEG_TTL:
             return _gh_cache["items"]
 
     items: list = []
