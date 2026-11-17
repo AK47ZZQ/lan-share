@@ -74,4 +74,26 @@ void main() {
     expect(find.textContaining('###'), findsNothing);
     expect(find.textContaining('`'), findsNothing);
   });
+
+  // v4.1.4 真机截图暴露的：正文里还留着 `> ` 引用符号，而且源码折行被
+  // 当成硬换行，一句话被劈成三截还带缩进 —— 因为历史正文现在是全量的，
+  // CHANGELOG 里那些写法全原样出现在手机上。
+  group('cleanNotes 清 CHANGELOG 残留', () {
+    test('行首引用符号 > 要清掉', () {
+      expect(UpdateHistoryPage.cleanNotes('> 你报的问题\n> 排查下来是 401'),
+          '你报的问题排查下来是 401');
+    });
+
+    test('软换行合并，列表项仍各占一行', () {
+      expect(
+          UpdateHistoryPage.cleanNotes(
+              '**401 必跳**：原来只在「token」时才清\n  凭据并回登录页。\n- **第二点**：说明'),
+          '401 必跳：原来只在「token」时才清凭据并回登录页。\n· 第二点：说明');
+    });
+
+    test('引用块与列表混排，空行分段保留', () {
+      expect(UpdateHistoryPage.cleanNotes('> 复述\n\n- 要点一\n- 要点二'),
+          '复述\n\n· 要点一\n· 要点二');
+    });
+  });
 }

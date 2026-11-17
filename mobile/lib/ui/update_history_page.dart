@@ -24,6 +24,46 @@ class UpdateHistoryPage extends StatelessWidget {
   final int localBuild;
   final int? remoteBuild;
 
+  /// 把 CHANGELOG 正文洗成手机能直接读的纯文本。
+  ///
+  /// 放在页面类（public）而不是 `_HistoryEntryState` 里，是为了能被测试直接
+  /// 调用 —— 这套清洗规则踩过两次真机 bug（`> ` 残留、软换行被当硬换行），
+  /// 塞在私有类里就只能靠肉眼看截图。
+  static String cleanNotes(String raw) {
+    var s = raw.replaceAll('\r\n', '\n');
+    // ⚠️ 这里的空白一律用 [ \t]，**不用 \s**：Dart 的 \s 包含 \n，
+    // 配 multiLine 的 ^ 时会跨行吃掉前面的空行，相邻段落就被粘成一段。
+    // 2026-11-17 真机截图 + 单元测试一起抓到的（空行凭空消失）。
+    s = s.replaceAll(RegExp(r'^#{1,6}[ \t]*', multiLine: true), '');   // 标题井号
+    // 引用块：CHANGELOG 里「> 你报的问题…」这类复述很常见，行首的 > 要清掉
+    s = s.replaceAll(RegExp(r'^>[ \t]?', multiLine: true), '');
+    s = s.replaceAll('**', '');                                      // 加粗
+    s = s.replaceAllMapped(RegExp(r'`([^`]*)`'),
+        (m) => m.group(1) ?? '');                                    // 行内代码
+    s = s.replaceAll(RegExp(r'^[ \t]*[-*][ \t]+', multiLine: true), '· '); // 列表
+    s = s.replaceAll(
+        RegExp(r'^[ \t]*\|.*\|[ \t]*$', multiLine: true), '');       // 表格行
+    s = s.replaceAll(RegExp(r'\n{3,}'), '\n\n');                      // 多余空行
+
+    // 合并软换行。CHANGELOG 源码为了写窄会折行，markdown 里那是同一段，
+    // 但 Text 会把每个 \n 都渲染成硬换行 —— 于是手机上一句话被劈成三截、
+    // 第二三行还带着缩进。判据：不以「· 」开头的行接到上一行。
+    final out = <String>[];
+    for (final line in s.split('\n')) {
+      final t = line.trim();
+      if (t.isEmpty) {
+        if (out.isNotEmpty && out.last.isNotEmpty) out.add('');
+        continue;
+      }
+      if (t.startsWith('· ') || out.isEmpty || out.last.isEmpty) {
+        out.add(t);
+      } else {
+        out[out.length - 1] = out.last + t;
+      }
+    }
+    return out.join('\n').trim();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -88,25 +128,11 @@ class HistoryEntry extends StatefulWidget {
 class _HistoryEntryState extends State<HistoryEntry> {
   bool _expanded = false;
 
-  /// markdown → 纯文本。只做最朴素的清洗：不引第三方渲染库，
-  /// 因为这里要的只是「能读」，不是「好看」。
-  static String cleanNotes(String raw) {
-    var s = raw.replaceAll('\r\n', '\n');
-    s = s.replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');   // 标题井号
-    s = s.replaceAll('**', '');                                      // 加粗
-    s = s.replaceAllMapped(RegExp(r'`([^`]*)`'),
-        (m) => m.group(1) ?? '');                                    // 行内代码
-    s = s.replaceAll(RegExp(r'^\s*[-*]\s+', multiLine: true), '· ');  // 列表
-    s = s.replaceAll(RegExp(r'^\s*\|.*\|\s*$', multiLine: true), ''); // 表格行
-    s = s.replaceAll(RegExp(r'\n{3,}'), '\n\n');                      // 多余空行
-    return s.trim();
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final h = widget.item;
-    final full = cleanNotes(h.notes);
+    final full = UpdateHistoryPage.cleanNotes(h.notes);
 
     // 超过这个长度才折叠。短说明（几个字）折叠反而多一步操作。
     const collapseOver = 140;
