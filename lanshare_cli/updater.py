@@ -32,6 +32,7 @@ source_url / source_error 三个字段。
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import re
@@ -41,11 +42,18 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urljoin, urlsplit
 
 REPO = "AK47ZZQ/lan-share"
 TIMEOUT = 8                 # 国内访问 GitHub 经常超时，别让 UI 干等
 PREFIX = "server-v"
+
+# R2 公网镜像（2026-11-17 新增）。实测同一时刻、同一条家宽：
+# R2 单连接 1.20 MB/s，GitHub 只有 0.035 MB/s —— 差 34 倍，所以先试它。
+# 但仍保留 GitHub 作为候选：R2 可能因为「发版时忘了跑同步」而落后，
+# 只信一个源就会变成「服务端发了新版、客户端永远看不到」。
+R2_BASE = "https://dl.ak47zzq.com/server"
 
 # 自定义更新源在注册表里的落点（跟 ApiPort / DataFolder 这些放在一起）
 UPDATE_URL_VALUE = "UpdateUrls"
@@ -681,6 +689,16 @@ def _empty_result(cur: str) -> dict:
     }
 
 
+def _fetch_r2(timeout: float = TIMEOUT,
+              extra_ca: Path | None = None) -> dict:
+    """R2 公网镜像源。
+
+    单独成函数只为**可 mock**：单测一旦真去请求 dl.ak47zzq.com，
+    就会变成「测试依赖生产站点的当前版本」，随机红（2026-11-17 实测踩到）。
+    """
+    return fetch_custom(R2_BASE, timeout, extra_ca=extra_ca)
+
+
 def check(install_dir: Path, timeout: float = TIMEOUT,
           *, sources: list[str] | None = None) -> dict:
     """完整的一次检查。永远返回字典，绝不抛异常 —— 调用方是 UI。
@@ -734,9 +752,34 @@ def check(install_dir: Path, timeout: float = TIMEOUT,
         _write_cache(install_dir, out)
         return out
 
-    # ── ② GitHub ──
-    try:
-        got = fetch_github(timeout)
+    # ── ② 公网源：R2 镜像 + GitHub **并发**，取版本更高的那个 ──
+    #
+    # 并发而不是串行：串行会让「R2 不可达」变成「先等 R2 超时、再等 GitHub
+    # 超时」，检查更新的耗时凭空翻倍（2026-11-17 加 R2 时差点踩到）。
+    #
+    # 两路都要查再取高版本：R2 可能因为发版时忘了跑 scripts/r2_upload.py
+    # 而落后，只信一个源就会变成「发了新版、客户端永远看不到」——
+    # 正是 2026-11-01「两条通道」教训的翻版。
+    probes: dict[str, Callable[[], dict]] = {
+        "r2": lambda: _fetch_r2(timeout, extra_ca),
+        "github": lambda: fetch_github(timeout),
+    }
+    best: tuple[str, dict] | None = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(probes)) as pool:
+        futures = {pool.submit(fn): name for name, fn in probes.items()}
+        for fut in concurrent.futures.as_completed(futures):
+            name = futures[fut]
+            try:
+                got = fut.result()
+            except (ValueError, RuntimeError) as exc:
+                failures.append(f"{name}（{exc}）")
+                continue
+            if best is None or _ver_key(got["latest"]["version"]) > _ver_key(
+                    best[1]["latest"]["version"]):
+                best = (name, got)
+
+    if best is not None:
+        name, got = best
         item = got["latest"]
         out.update(
             latest=item["version"],
@@ -746,14 +789,12 @@ def check(install_dir: Path, timeout: float = TIMEOUT,
             notes=item["notes"],
             published=item["published"],
             history=got["history"],
-            source="github",
+            source=name,
             source_error="；".join(failures),
         )
         out["has_update"] = is_newer(item["version"], cur)
         _write_cache(install_dir, out)
         return out
-    except RuntimeError as exc:
-        failures.append(f"GitHub（{exc}）")
 
     # ── ③ 缓存 ──
     cached = _read_cache(install_dir)

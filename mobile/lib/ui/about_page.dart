@@ -380,7 +380,7 @@ class _AboutPageState extends State<AboutPage> {
                         child: Text(
                           _source == 'custom'
                               ? '来源：自定义地址 $_sourceUrl'
-                              : '来源：${_source == 'github' ? 'GitHub' : '自家服务端'}',
+                              : '来源：${_source == 'github' ? 'GitHub' : _source == 'r2' ? '公网镜像' : '自家服务端'}',
                           style: TextStyle(
                               fontSize: 11,
                               color: Theme.of(context).colorScheme.outline),

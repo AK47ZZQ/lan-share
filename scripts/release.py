@@ -853,6 +853,34 @@ def parse_update_history(markdown: str, line: str) -> list[dict]:
     return items
 
 
+def sync_r2(line: str, *, limit: int = 3) -> None:
+    """把本次产物同步到 Cloudflare R2 公网源（2026-11-17）。
+
+    **失败只 warn，不中断发版** —— 本地发版的价值（用户能装上）不该被
+    一个外部服务卡住；R2 落后了下次手动补跑 scripts/r2_upload.py 就行。
+    凭据在 %HERMES_HOME%/.env 的 R2_* 三件套，没配就由子脚本报错、这里只提示。
+    """
+    script = ROOT / "scripts" / "r2_upload.py"
+    if not script.is_file():
+        warn("找不到 scripts/r2_upload.py，跳过 R2 同步")
+        return
+    try:
+        r = subprocess.run(
+            [sys.executable, str(script), "--line", line, "--limit", str(limit)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(ROOT), timeout=1800,
+        )
+    except Exception as exc:            # 发版不能因为外部同步失败而中断
+        warn(f"R2 同步异常（不影响发版）：{exc}")
+        return
+    if r.returncode == 0:
+        ok("R2 公网源已同步（https://dl.ak47zzq.com）")
+    else:
+        tail = (r.stderr or r.stdout or "").strip().splitlines()
+        warn("R2 同步失败（不影响发版，可手动补跑 scripts/r2_upload.py）："
+             + (tail[-1] if tail else f"rc={r.returncode}"))
+
+
 def sync_update_manifest(line: str, version: str, artifact: Path | None) -> None:
     """按 CHANGELOG 重建更新源清单。找不到本机服务端就安静跳过。
 
@@ -1169,6 +1197,7 @@ def cmd_server(args) -> int:
     # 托盘的自定义更新源读 <安装目录>/updates/index.json。这份清单此前
     # 没有生成者（手工维护、和 CHANGELOG 脱节），历史永远是残的。
     sync_update_manifest("server", target, exe)
+    sync_r2("server")
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")
@@ -1231,6 +1260,7 @@ def cmd_app(args) -> int:
     # App 线的自定义更新源清单（updates/app/index.json），和上面 versions.json
     # 同一个源但不同落点：那个给 /api/app/history，这个给 App 的「自定义更新地址」。
     sync_update_manifest("app", target, apk)
+    sync_r2("app")
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")

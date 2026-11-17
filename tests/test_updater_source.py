@@ -21,6 +21,20 @@ from lanshare_cli import updater
 SHA = "a" * 64
 
 
+@pytest.fixture(autouse=True)
+def _no_r2_in_tests(monkeypatch):
+    """默认把 R2 镜像当作「不可达」。
+
+    默认源现在是「R2 + GitHub 取高版本」（2026-11-17），不打通桩的话
+    这些用例会真的请求 dl.ak47zzq.com —— 断言随线上版本漂移，
+    而且单测不该依赖生产站点。
+    """
+    def _boom(*a, **k):
+        raise RuntimeError("R2 unavailable (test)")
+
+    monkeypatch.setattr(updater, "_fetch_r2", _boom)
+
+
 def _manifest(**over) -> dict:
     latest = {
         "version": "3.96",
@@ -303,11 +317,32 @@ class TestCheckFallback:
     def test_github_only_when_no_sources(self, tmp_path, monkeypatch):
         monkeypatch.setattr(updater, "fetch_github",
                             lambda timeout: _fake_github("3.97"))
+        # R2 也是默认源。这里让它「通但版本更低」：结果必须仍取 GitHub，
+        # 而且 source_error 要干净 —— 没出错就不许有噪音。
+        monkeypatch.setattr(updater, "_fetch_r2",
+                            lambda *a, **k: _fake_github("3.90"))
         (tmp_path / "VERSION").write_text("3.95", encoding="utf-8")
 
         out = updater.check(tmp_path, sources=[])
         assert out["source"] == "github"
         assert out["source_error"] == ""
+
+    def test_prefers_r2_when_it_is_newer(self, tmp_path, monkeypatch):
+        """R2 版本更高时必须取 R2。
+
+        真实场景：包已经传到 R2，GitHub Release 还没发（或者相反）。
+        只认单一源就会让「已经能下到的新版」永远不提示。
+        """
+        monkeypatch.setattr(updater, "fetch_github",
+                            lambda timeout: _fake_github("3.95"))
+        monkeypatch.setattr(updater, "_fetch_r2",
+                            lambda *a, **k: _fake_github("3.98"))
+        (tmp_path / "VERSION").write_text("3.95", encoding="utf-8")
+
+        out = updater.check(tmp_path, sources=[])
+        assert out["source"] == "r2"
+        assert out["latest"] == "3.98"
+        assert out["has_update"] is True
 
     def test_everything_down_reports_error(self, tmp_path, monkeypatch):
         def boom(*a, **k):

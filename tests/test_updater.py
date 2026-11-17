@@ -25,6 +25,21 @@ def _no_proxy_in_tests(monkeypatch):
     monkeypatch.setattr(updater, "_opener", lambda extra_ca=None: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_r2_in_tests(monkeypatch):
+    """默认把 R2 镜像当作「不可达」。
+
+    2026-11-17 加了 R2 源之后，原先那些「把 GitHub 打桩成报错、期望走
+    缓存」的用例会真的去请求 dl.ak47zzq.com，拿到线上当前版本 —— 断言
+    随线上数据漂移，而且单测不该碰生产站点。要测 R2 分支的用例自己覆盖
+    `_fetch_r2`。
+    """
+    def _boom(*a, **k):
+        raise RuntimeError("R2 unavailable (test)")
+
+    monkeypatch.setattr(updater, "_fetch_r2", _boom)
+
+
 class TestCurrentVersion:
     def test_reads_plain_version(self, tmp_path):
         (tmp_path / "VERSION").write_text("3.78\n2026-11-02 10:00:00\n",

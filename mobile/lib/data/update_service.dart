@@ -129,7 +129,8 @@ class UpdateInfo {
   /// [base] 是清单所在地址：清单里的相对 url 按它解析（契约原文
   /// 「相对路径也接受，按清单地址解析」），不传时相对地址无法落地、
   /// 条目作废 —— 和缺 url 同罪。
-  static UpdateInfo? fromManifest(Object? raw, {String base = ''}) {
+  static UpdateInfo? fromManifest(Object? raw,
+      {String base = '', String source = 'custom'}) {
     if (raw is! Map) return null;
     final j = Map<String, dynamic>.from(raw);
 
@@ -147,7 +148,7 @@ class UpdateInfo {
       available: true,
       size: (j['size'] as num?)?.toInt(),
       url: url,
-      source: 'custom',
+      source: source,
     );
   }
 }
@@ -351,10 +352,11 @@ class UpdateService {
       }
     }
 
-    // ── ② 默认双源（服务端 + GitHub 并发，取版本高的那个）──
+    // ── ② 默认三源（服务端 + GitHub + R2 并发，取版本高的那个）──
     final results = await Future.wait<_SourceResult>([
       _checkServer(),
       _checkGitHub(),
+      _checkR2(),
     ]);
     final candidates = results
         .where((r) => r.info != null)
@@ -363,7 +365,7 @@ class UpdateService {
       ..sort((a, b) => _compareVersion(b.version, a.version));
 
     final anyReachable = results.any((r) => r.reachable);
-    // 顺序和 Future.wait 一致：0 = 服务端，1 = GitHub。
+    // 顺序和 Future.wait 一致：0 = 服务端，1 = GitHub，2 = R2。
     // 两个都要带上，UI 靠它们给出针对性的 VPN 建议。
     final serverOk = results[0].reachable;
     final githubOk = results[1].reachable;
@@ -434,6 +436,29 @@ class UpdateService {
       }
       return _SourceResult(
           UpdateInfo.fromGitHub(Map<String, dynamic>.from(r.data as Map)), true);
+    } catch (_) {
+      return const _SourceResult(null, false);
+    }
+  }
+
+  /// R2 公网镜像源（2026-11-17 新增的第四条通道）。
+  ///
+  /// 实测同一条家宽、同一时刻：R2 单连接 1.20 MB/s（8 路 3.67 MB/s），
+  /// GitHub 只有 0.035 MB/s —— 相差 34~105 倍。所以三路里它的定位是
+  /// **公网兜底**：局域网内仍然走服务端（千兆内网更快，且不耗 Cloudflare
+  /// 额度），R2 挂了也不影响另外两路（三路并发，互不阻塞）。
+  static const String r2Base = 'https://dl.ak47zzq.com/app';
+
+  static Future<_SourceResult> _checkR2() async {
+    try {
+      // 单独压一个总超时：三路是并发跑的，但 Future.wait 要等**最慢的那个**。
+      // 裸用 fetch 的 5s connect + 8s receive，R2 一旦不可达就会让「检查更新」
+      // 白转 13 秒 —— 一个可选源不该有这个代价。
+      final manifest = await UpdateSourceClient.fetch(r2Base)
+          .timeout(const Duration(seconds: 6));
+      final info =
+          UpdateInfo.fromManifest(manifest['latest'], base: r2Base, source: 'r2');
+      return _SourceResult(info, info != null);
     } catch (_) {
       return const _SourceResult(null, false);
     }
@@ -597,7 +622,9 @@ class UpdateService {
             IOHttpClientAdapter(createHttpClient: TrustStore.createHttpClient);
         await TrustStore.I.warmup();
       }
-      await raw.download(info.url!, path, onReceiveProgress: onProgress);
+      // 第三方源一律走分片并发：R2 单连接实测 1.20 MB/s（102MB 要 85 秒），
+      // 8 路 3.67 MB/s（27.8 秒）—— 单连接是限速、不是带宽封顶。
+      await _downloadParallel(raw, info.url!, path, onProgress: onProgress);
     } else {
       final dio = await ApiClient.I.dio();
       await dio.download('/api/app/download', path,
@@ -620,6 +647,97 @@ class UpdateService {
       throw StateError('安装包校验失败（sha256 不符），已删除下载文件');
     }
     return path;
+  }
+
+  /// 分片并发下载（第三方源专用）。
+  ///
+  /// 为什么要它：同一时刻、同一台机器实测 R2 公网下载 ——
+  /// 1 路 1.20 MB/s（102MB / 85 秒）、4 路 2.10 MB/s、8 路 3.67 MB/s
+  /// （27.8 秒）。倍数随并发涨，说明**单连接被限速**而不是带宽封顶，
+  /// 分片能把等待砍掉三分之二。GitHub 那条收益更大（原本 50 分钟级）。
+  ///
+  /// 只有响应头明确写了 `accept-ranges: bytes` 才分片：有的 CDN 对 Range
+  /// 请求仍回 200 全量，那样每个分片都会下一次完整文件 —— 比单线程还糟。
+  /// 探不到头就老实单线程，不拿下载当赌注。
+  static Future<void> _downloadParallel(
+    Dio dio,
+    String url,
+    String path, {
+    void Function(int received, int total)? onProgress,
+    int parts = 8,
+  }) async {
+    var total = 0;
+    var rangeOk = false;
+    try {
+      final head = await dio.head(url);
+      total =
+          int.tryParse(head.headers.value(Headers.contentLengthHeader) ?? '') ??
+              0;
+      final ar = (head.headers.value('accept-ranges') ?? '').toLowerCase();
+      // 太小的包分片没有意义（额外 8 个连接 + 合并开销反而更慢）
+      rangeOk = ar.contains('bytes') && total > (8 << 20);
+    } catch (_) {
+      // HEAD 被拒也走单线程
+    }
+    if (!rangeOk) {
+      await dio.download(url, path, onReceiveProgress: onProgress);
+      return;
+    }
+
+    final chunk = (total + parts - 1) ~/ parts;
+    final temps = <File>[];
+    final gotPerPart = List<int>.filled(parts, 0);
+    var done = 0;
+    onProgress?.call(0, total);
+
+    Future<void> one(int i) async {
+      final start = i * chunk;
+      final end = (start + chunk - 1).clamp(0, total - 1);
+      if (start > end) return;
+      final tmp = File('$path.part$i');
+      temps.add(tmp);
+      await dio.download(
+        url,
+        tmp.path,
+        options: Options(
+          headers: {'Range': 'bytes=$start-$end'},
+          receiveTimeout: const Duration(minutes: 20),
+        ),
+        onReceiveProgress: (r, _) {
+          done += r - gotPerPart[i];
+          gotPerPart[i] = r;
+          onProgress?.call(done, total);
+        },
+      );
+    }
+
+    try {
+      await Future.wait([for (var i = 0; i < parts; i++) one(i)]);
+    } catch (e) {
+      for (final t in temps) {
+        try {
+          await t.delete();
+        } catch (_) {}
+      }
+      rethrow;
+    }
+
+    // 合并：流式拼，102MB 级不能整块读进内存（R2-P2 的 OOM 教训）
+    final sink = File(path).openWrite();
+    for (final t in temps) {
+      await sink.addStream(t.openRead());
+    }
+    await sink.flush();
+    await sink.close();
+    for (final t in temps) {
+      try {
+        await t.delete();
+      } catch (_) {}
+    }
+    final got = await File(path).length();
+    if (got != total) {
+      throw StateError('分片下载合并后大小不符（期望 $total，实际 $got）');
+    }
   }
 
   /// 安装包文件名判定（纯函数，单测锚点）：分发约定 lanshare-<版本>.apk
