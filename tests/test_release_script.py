@@ -298,6 +298,40 @@ class TestChangelogHistory:
     def test_empty(self, rel):
         assert rel.parse_changelog_history("") == []
 
+    def test_early_title_without_app_prefix(self, rel):
+        """早期标题省略「App」，靠 build 号认。
+
+        CHANGELOG 里 0.21.1 ~ 0.24.0 这 8 个版本都写成
+        `— v0.24.0+69：知识库与图谱`，只认 `App vX.Y.Z` 会把它们全漏掉，
+        用户在历史页看到的是从 0.25.0 直接跳到 0.21.x 的断层。
+        """
+        md = """## 2026-09-10 — v0.24.0+69：知识库与图谱
+
+- 双链 / 图谱 / agent 三层
+
+## 2026-09-09 — v0.21.1+62：首页欢迎头热修
+
+- 真机反馈
+"""
+        items = rel.parse_changelog_history(md)
+        assert [i["version"] for i in items] == ["0.24.0", "0.21.1"]
+
+    def test_batch_note_with_build_is_not_a_version(self, rel):
+        """「随 v0.28.3+77 发版」的批次记录不能被当成 0.28.3。
+
+        这类标题的版本号在括号里、不在日期破折号后面。用「标题里出现 +N
+        就算」当判据会凭空多出几个版本，且它们带着批次说明冒充正式发布。
+        """
+        md = """## 2026-09-11 — App 整改批次 A 复查（4 轮 review + 3 轮对抗性审查，随 v0.28.3+77 发版）
+
+- 批次记录
+
+## 2026-09-11 — App 结构与护栏整改（批次 A，随 v0.28.3+77 发版）
+
+- 批次记录二
+"""
+        assert rel.parse_changelog_history(md) == []
+
 
 class TestFindLocalShareDir:
     def test_returns_none_when_no_registry(self, rel, monkeypatch):
