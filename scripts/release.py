@@ -582,6 +582,9 @@ def parse_changelog_history(markdown: str) -> list[dict]:
             # 复查（随 v0.28.3+77 发版）」这类批次描述会被误认成 0.28.3。
             m = re.search(r"—\s*v(\d+\.\d+\.\d+)\+(\d+)", title)
         if not m:
+            # 最早那批把版本挂在句末（`…，v0.4.1+5`）
+            m = re.search(r"，\s*v(\d+\.\d+\.\d+)\+(\d+)", title)
+        if not m:
             continue
         ver = m.group(1)
         if ver in seen:
@@ -715,6 +718,9 @@ _APP_TITLE_RE = re.compile(r"App\s+v?(\d+\.\d+\.\d+)")
 # 日期破折号，否则「App 整改批次 A 复查（随 v0.28.3+77 发版）」这类批次
 # 描述会被误认成一个独立版本。
 _BUILD_TITLE_RE = re.compile(r"—\s*v(\d+\.\d+\.\d+)\+(\d+)")
+# 最早那批（0.4.x ~ 0.6.1）连破折号都没有，版本号挂在句末：
+#   `2026-09-01（深夜 III）— 品牌启动图标：…，v0.4.1+5`
+_TAIL_VER_RE = re.compile(r"，\s*v(\d+\.\d+\.\d+)\+(\d+)")
 # 服务端线不能用「v 加数字就收」—— CHANGELOG 里 `App v1.1.20：…` 这种标题
 # 也带 v，照收就会把 App 版本混进服务端历史（2026-11-08 自测抓到的真实 bug）。
 # 所以先取出所有候选，再排除紧跟在 `App` 后面的那些。
@@ -724,6 +730,16 @@ _APP_BEFORE_RE = re.compile(r"App\s*\+?\s*$", re.I)
 
 def _pick_server_version(title: str) -> str | None:
     """从标题里挑**服务端**版本号；整条只有 App 版本时返回 None。"""
+    # 句末挂 build 号（`…，v0.4.1+5`）或破折号后直接挂版本（`— v0.8.4+11`）
+    # 都是 App 版本的写法。这类标题里没有「App」字样可排除，只能靠形态认——
+    # 否则它们会被当成服务端版本混进去（2026-11-17 补历史时实测：App 100 条、
+    # 服务端 123 条，43 个重叠）。
+    if _TAIL_VER_RE.search(title) or _BUILD_TITLE_RE.search(title):
+        return None
+    # 「…（随 v0.28.3+77 发版）」是批次记录，版本号在括号里说明「这一批跟着
+    # 哪个版本发的」，本身不是发布。这类标题既不该进 App 历史，也不该进服务端。
+    if "随" in title and "发版" in title:
+        return None
     for m in _VER_ANY_RE.finditer(title):
         if _APP_BEFORE_RE.search(title[:m.start()]):
             continue
@@ -844,6 +860,9 @@ def parse_update_history(markdown: str, line: str) -> list[dict]:
             if not m:
                 # 早期标题没写「App」，靠 build 号认（见 _BUILD_TITLE_RE 注释）
                 m = _BUILD_TITLE_RE.search(title)
+            if not m:
+                # 最早那批把版本挂在句末（见 _TAIL_VER_RE 注释）
+                m = _TAIL_VER_RE.search(title)
             ver = m.group(1) if m else None
         if not ver:
             continue
