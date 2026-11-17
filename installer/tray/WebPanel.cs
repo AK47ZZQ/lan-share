@@ -58,6 +58,7 @@ namespace LanShare
         /// 不能每次都发 HTTP（服务挂住时会拖住界面）；只在 force 刷新时同步读一次。</summary>
         private string _wanCached = "";
         private bool _pageReady;
+        private bool _autoUpdateDone;   // 启动自检只跑一次（导航会重复触发 NavigationCompleted）
         private bool _busy;
         private DateTime _lastPush = DateTime.MinValue;
         private string _lastQrSrc;
@@ -229,6 +230,26 @@ namespace LanShare
             {
                 await Task.Delay(120);
                 PushStateAsync(true);
+
+                // 启动自检（2026-11-17）：托盘以前只有手动「检查更新」按钮，
+                // 用户不主动点、不打开面板，就永远不知道有新版本。
+                // 延迟 30 秒错开启动高峰；结果走原有 "update" 消息，
+                // 面板开着就能直接看到，关着也不影响 —— 下次打开仍在。
+                // 导航会重复触发本事件，所以用 _autoUpdateDone 保证只跑一次。
+                if (_autoUpdateDone) return;
+                _autoUpdateDone = true;
+                await Task.Delay(TimeSpan.FromSeconds(30));
+                if (IsDisposed || _web == null) return;
+                try
+                {
+                    AppendLog("启动自检：检查更新");
+                    CheckUpdate();
+                }
+                catch (Exception ex)
+                {
+                    // 自检失败绝不能让托盘崩：更新是附加能力
+                    AppendLog("启动自检失败：" + ex.Message);
+                }
             };
         }
 

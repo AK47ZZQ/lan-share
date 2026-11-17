@@ -9,6 +9,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/api/api_client.dart';
 import '../data/auto_switch.dart';
@@ -19,7 +20,9 @@ import '../data/local/prefs.dart';
 import '../data/local/saved_credential.dart';
 import '../data/local/verifier_store.dart';
 import '../data/totp.dart';
+import '../data/update_service.dart';
 import '../state/session.dart';
+import '../transfer/transfer_task.dart' show humanSize;
 import 'invite_redeem_page.dart';
 import 'scan_page.dart';
 import 'theme/app_theme.dart';
@@ -55,6 +58,14 @@ class _LoginPageState extends ConsumerState<LoginPage>
   final _rcCtrl = TextEditingController(); // 恢复码文本框
   List<TotpEntry> _verifierEntries = const []; // 本机验证器（needTotp 一键回填）
 
+  // ── 未登录时的更新检测（2026-11-17）──
+  // 别人从 GitHub 下 App、又没有自己的服务端时，永远进不到「关于」页，
+  // 也就永远不知道有新版本。R2 与 GitHub 两条源都是免登录可查的，
+  // 所以这里能在登录之前就把新版本查出来。
+  UpdateInfo? _pendingUpdate;
+  bool _updating = false;
+  double _updateProgress = 0;
+
   late final AnimationController _shake = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 420));
 
@@ -72,6 +83,8 @@ class _LoginPageState extends ConsumerState<LoginPage>
         _runProbe(); // 初始地址也做一次连通性预检
       }
     }();
+    // 与登录流程完全独立：连不上服务器的设备也该能收到新版本
+    _checkUpdateSilently();
   }
 
   @override
@@ -82,6 +95,49 @@ class _LoginPageState extends ConsumerState<LoginPage>
     _rcCtrl.dispose();
     _shake.dispose();
     super.dispose();
+  }
+
+  /// 静默检查新版本。**失败一律吞掉** —— 更新检查不该拦住登录。
+  ///
+  /// 服务端那条路在未登录时必然 401（`_checkServer` 内部已静默降级），
+  /// 于是这里实际依赖 R2 与 GitHub 两条免登录源。
+  Future<void> _checkUpdateSilently() async {
+    try {
+      final res =
+          await UpdateService.check().timeout(const Duration(seconds: 18));
+      final pkg = await PackageInfo.fromPlatform();
+      final localBuild = int.tryParse(pkg.buildNumber) ?? 0;
+      final info = res.info;
+      if (!mounted || info == null || !info.available) return;
+      if (UpdateService.isNewer(info, localBuild, localVersion: pkg.version)) {
+        setState(() => _pendingUpdate = info);
+      }
+    } catch (_) {
+      // 没网、源全挂、还没填服务器地址 —— 这些都不该在登录页弹错
+    }
+  }
+
+  Future<void> _downloadUpdate(UpdateInfo info) async {
+    if (_updating) return;
+    setState(() {
+      _updating = true;
+      _updateProgress = 0;
+    });
+    try {
+      final path = await UpdateService.download(info, onProgress: (r, t) {
+        if (!mounted || t <= 0) return;
+        setState(() => _updateProgress = r / t);
+      });
+      if (!mounted) return;
+      setState(() => _updating = false);
+      await UpdateService.install(path);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _updating = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('更新失败：$e')),
+      );
+    }
   }
 
   /// 本机验证器中与当前登录用户名匹配的条目（needTotp 一键回填）
@@ -412,6 +468,15 @@ class _LoginPageState extends ConsumerState<LoginPage>
               ? _pairBody(context, session)
               : _passwordBody(context, session),
         ),
+        if (_pendingUpdate != null) ...[
+          const SizedBox(height: Gap.sm),
+          _UpdateBanner(
+            info: _pendingUpdate!,
+            busy: _updating,
+            progress: _updateProgress,
+            onTap: () => _downloadUpdate(_pendingUpdate!),
+          ),
+        ],
         const SizedBox(height: Gap.xl),
         FilledButton(
           style: FilledButton.styleFrom(
@@ -826,6 +891,75 @@ class _VerifierFillCardState extends State<_VerifierFillCard> {
             ),
             Icon(Icons.touch_app_outlined, size: IconSizes.md, color: cs.onSurfaceVariant),
           ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// 登录页的新版本提示条。
+///
+/// 用横条而不是弹窗：登录页的主任务是登录，弹窗会打断节奏；
+/// 不抢焦点的横条既能让人看见，也不拦住想直接登录的人。
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner({
+    required this.info,
+    required this.busy,
+    required this.progress,
+    required this.onTap,
+  });
+
+  final UpdateInfo info;
+  final bool busy;
+  final double progress;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: busy ? null : onTap,
+      borderRadius: BorderRadius.circular(Radii.card),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: cs.primaryContainer.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(Radii.card),
+          border: Border.all(color: cs.primary.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.system_update_alt, size: 20, color: cs.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '发现新版本 v${info.version} (${info.build})',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onPrimaryContainer,
+                    ),
+                  ),
+                  if (busy) ...[
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(value: progress),
+                  ] else
+                    Text(
+                      '点击下载并安装 · ${humanSize(info.size ?? 0)}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: cs.onPrimaryContainer.withValues(alpha: 0.8),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (!busy)
+              Icon(Icons.chevron_right, size: 18, color: cs.primary),
+          ],
         ),
       ),
     );

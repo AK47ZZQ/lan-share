@@ -449,6 +449,17 @@ class UpdateService {
   /// 额度），R2 挂了也不影响另外两路（三路并发，互不阻塞）。
   static const String r2Base = 'https://dl.ak47zzq.com/app';
 
+  /// 默认源的同域校验：R2 的包必须落在 R2 的域下。
+  ///
+  /// 单独抽成 public 方法是为了**可测** —— 塞进 private 分支就测不到，
+  /// 防线容易在后续重构里悄悄丢掉（对抗测试里那条「任意 https 都被放行」
+  /// 说的是通用实现，默认源额外收紧的正是这里）。
+  static bool isSameHostAsR2(String url) {
+    final u = Uri.tryParse(url);
+    if (u == null || u.host.isEmpty) return false;
+    return u.host == Uri.parse(r2Base).host;
+  }
+
   static Future<_SourceResult> _checkR2() async {
     try {
       // 单独压一个总超时：三路是并发跑的，但 Future.wait 要等**最慢的那个**。
@@ -458,7 +469,23 @@ class UpdateService {
           .timeout(const Duration(seconds: 6));
       final info =
           UpdateInfo.fromManifest(manifest['latest'], base: r2Base, source: 'r2');
-      return _SourceResult(info, info != null);
+      if (info == null) return const _SourceResult(null, false);
+
+      // 默认源必须同域（2026-11-17 对抗测试后的收紧）。
+      //
+      // 通用实现允许清单里的 url 指向**任意 https 域名** —— 对用户自填的
+      // 自定义源是合理的（GitHub 的包就在另一个域），但对「我们自己的默认源」
+      // 等于把分发权交给了任何能改这份清单的人：换个 url 指到第三方站点、
+      // 连带把 sha256 一起换掉，客户端会照单全收。
+      //
+      // 这里只做**纵深防御**：挡住「包被指到外部域」这条路。真正能从根上
+      // 解决的是清单签名（私钥不在 R2 上，写权限被夺也发不出可信清单），
+      // 那是下一步的事，见 data/笔记/R2更新源方案.md。
+      final u = Uri.tryParse(info.url ?? '');
+      if (u == null || !isSameHostAsR2(u.toString())) {
+        return const _SourceResult(null, false);
+      }
+      return _SourceResult(info, true);
     } catch (_) {
       return const _SourceResult(null, false);
     }
