@@ -205,7 +205,8 @@ class TestLocalGuardEndToEnd:
         return app
 
     def test_loopback_direct_allowed_via_endpoint(self):
-        c = TestClient(self._app(), client=("127.0.0.1", 51000))
+        c = TestClient(self._app(), client=("127.0.0.1", 51000),
+                       base_url="http://127.0.0.1:8766")
         assert c.get("/probe").status_code == 200
 
     def test_spoofed_xff_via_proxy_shape_denied(self):
@@ -219,7 +220,8 @@ class TestLocalGuardEndToEnd:
         """真实链路形态：尾值 = 我们 Caddy 看到的本机请求来源。托盘经
         Caddy 的场景不存在（托盘直连 8766），但局域网浏览器经 Caddy 的
         尾值 = 局域网 IP → 应 403；只有真本机才 200。"""
-        c = TestClient(self._app(), client=("127.0.0.1", 51000))
+        c = TestClient(self._app(), client=("127.0.0.1", 51000),
+                       base_url="http://127.0.0.1:8766")
         r = c.get("/probe", headers={
             "X-Forwarded-For": "192.168.1.99, 127.0.0.1"})
         assert r.status_code == 200

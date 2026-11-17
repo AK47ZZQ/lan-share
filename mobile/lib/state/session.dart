@@ -15,7 +15,7 @@ import '../data/local/saved_credential.dart';
 import '../data/local/secure_store.dart';
 
 class SessionState {
-  final bool checking;   // 请求进行中
+  final bool checking; // 请求进行中
   final bool loggedIn;
   final String? username;
   final String? nickname; // 显示层昵称（v0.17）：登录/路径仍用 username
@@ -26,18 +26,27 @@ class SessionState {
   String? get displayName =>
       ((nickname ?? '').trim().isNotEmpty ? nickname : username);
   final String? error;
-  final bool needTotp;   // 服务端要求动态验证码
+  final bool needTotp; // 服务端要求动态验证码
   final TrustRequiredError? trustIssue; // 自签证书待确认
-  const SessionState(
-      {this.checking = false, this.loggedIn = false, this.username,
-      this.nickname, this.avatarPath, this.role, this.userId, this.error,
-      this.needTotp = false, this.trustIssue});
+  const SessionState({
+    this.checking = false,
+    this.loggedIn = false,
+    this.username,
+    this.nickname,
+    this.avatarPath,
+    this.role,
+    this.userId,
+    this.error,
+    this.needTotp = false,
+    this.trustIssue,
+  });
 }
 
 class SessionController extends StateNotifier<SessionState> {
   String _username = '';
   String _password = '';
-  bool _busy = false;    // 登录流程互斥（连点/双入口防重入）
+  bool _busy = false; // 登录流程互斥（连点/双入口防重入）
+  bool _loggingOut = false; // 登出互斥（401 风暴下防重入，见 logout() 注释）
 
   SessionController() : super(const SessionState(checking: true));
 
@@ -54,12 +63,13 @@ class SessionController extends StateNotifier<SessionState> {
       final name = r.data['username'] as String?;
       await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
       state = SessionState(
-          loggedIn: true,
-          username: name,
-          nickname: r.data['nickname'] as String?,
-          avatarPath: r.data['avatar_path'] as String?,
-          role: r.data['role'] as String?,
-          userId: (r.data['id'] as num?)?.toInt());
+        loggedIn: true,
+        username: name,
+        nickname: r.data['nickname'] as String?,
+        avatarPath: r.data['avatar_path'] as String?,
+        role: r.data['role'] as String?,
+        userId: (r.data['id'] as num?)?.toInt(),
+      );
     } on DioException catch (e) {
       if (e.response?.statusCode != 401) {
         // 非凭据问题（服务器不可达等）：不假装登出，给出提示
@@ -87,7 +97,9 @@ class SessionController extends StateNotifier<SessionState> {
       await ApiClient.I.switchServer(server);
       AutoSwitch.I.noteManualPick(); // 登录时选的入口粘性 10 分钟（防自动切回）
       final r = await SessionApi.loginWithPassword(
-          username: username, password: password);
+        username: username,
+        password: password,
+      );
       if (r.data['totp_required'] == true) {
         state = const SessionState(needTotp: true);
         return;
@@ -112,10 +124,17 @@ class SessionController extends StateNotifier<SessionState> {
       await ApiClient.I.switchServer(server);
       AutoSwitch.I.noteManualPick();
       final r = await SessionApi.loginTotp(
-          username: _username, password: _password, code: code);
+        username: _username,
+        password: _password,
+        code: code,
+      );
       await _exchangeToken(r);
     } on DioException catch (e) {
-      state = SessionState(error: _errMsg(e), needTotp: true, trustIssue: _trustOf(e));
+      state = SessionState(
+        error: _errMsg(e),
+        needTotp: true,
+        trustIssue: _trustOf(e),
+      );
     } catch (e) {
       state = SessionState(error: _brief(e), needTotp: true);
     } finally {
@@ -137,18 +156,21 @@ class SessionController extends StateNotifier<SessionState> {
     try {
       await ApiClient.I.switchServer(server);
       final r = await SessionApi.pairClaim(
-          code: code, deviceName: await Prefs.deviceName());
+        code: code,
+        deviceName: await Prefs.deviceName(),
+      );
       await SecureStore.saveToken(r.data['token'] as String);
       final me = await SessionApi.me(loginFlow: true);
       final name = me.data['username'] as String?;
       await Prefs.setUsername(name ?? '');
       state = SessionState(
-          loggedIn: true,
-          username: name,
-          nickname: me.data['nickname'] as String?,
-          avatarPath: me.data['avatar_path'] as String?,
-          role: me.data['role'] as String?,
-          userId: (me.data['id'] as num?)?.toInt());
+        loggedIn: true,
+        username: name,
+        nickname: me.data['nickname'] as String?,
+        avatarPath: me.data['avatar_path'] as String?,
+        role: me.data['role'] as String?,
+        userId: (me.data['id'] as num?)?.toInt(),
+      );
     } on DioException catch (e) {
       state = SessionState(error: _errMsg(e), trustIssue: _trustOf(e));
     } catch (e) {
@@ -160,29 +182,34 @@ class SessionController extends StateNotifier<SessionState> {
 
   /// 登录会话 Cookie 只用这一次：立即换长效设备 Token（M-A0 契约）
   Future<void> _exchangeToken(Response r) async {
-    try {
-      final cookie = cookieHeaderFrom(r.headers['set-cookie']);
-      final deviceName = await Prefs.deviceName();
-      final tr = await SessionApi.exchangeDeviceToken(
-          cookieHeader: cookie, deviceName: deviceName);
-      await SecureStore.saveToken(tr.data['token'] as String);
+    final cookie = cookieHeaderFrom(r.headers['set-cookie']);
+    final deviceName = await Prefs.deviceName();
+    final tr = await SessionApi.exchangeDeviceToken(
+      cookieHeader: cookie,
+      deviceName: deviceName,
+    );
+    await SecureStore.saveToken(tr.data['token'] as String);
 
-      final me = await SessionApi.me(loginFlow: true);
-      final name = me.data['username'] as String?;
-      await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
-      state = SessionState(
-          loggedIn: true,
-          username: name,
-          nickname: me.data['nickname'] as String?,
-          avatarPath: me.data['avatar_path'] as String?,
-          role: me.data['role'] as String?,
-          userId: (me.data['id'] as num?)?.toInt());
-    } finally {
-      // Token 换取结束即清内存明文密码（R2-P3-7 + 9.9 复审 P1-4）：成功自不必
-      // 说，失败路径也不残留。TOTP 二步重试语义只存在于进入本函数之前，
-      // 此后密码再无用途
-      _password = '';
-    }
+    final me = await SessionApi.me(loginFlow: true);
+    final name = me.data['username'] as String?;
+    await Prefs.setUsername(name ?? ''); // 备份引擎（后台 isolate）要用
+    state = SessionState(
+      loggedIn: true,
+      username: name,
+      nickname: me.data['nickname'] as String?,
+      avatarPath: me.data['avatar_path'] as String?,
+      role: me.data['role'] as String?,
+      userId: (me.data['id'] as num?)?.toInt(),
+    );
+    // 只有真正换到 Token 并完成登录后才清内存密码。
+    //
+    // 原来写在 finally 里无条件清掉，而 TOTP 二步失败时 UI 仍停在 needTotp
+    // （loginTotp 的 catch 保留 needTotp: true）—— 用户重输验证码会带着
+    // **空密码**提交，服务端连判 5 次失败直接锁号 15 分钟，界面上却只显示
+    // 「用户名或密码错误」，完全无法推断是本地把密码抹了。
+    // 2026-11-17 review 发现的 P1。失败时保留（只在内存，登出即清），
+    // 让二步重试这条正常路径能走通。
+    _password = '';
   }
 
   /// 资料更新（v0.17）：改昵称后原地刷新状态，免重新拉 /me
@@ -190,12 +217,13 @@ class SessionController extends StateNotifier<SessionState> {
     final r = await SessionApi.updateProfile(nickname: nickname);
     final nick = (r.data['nickname'] as String?) ?? '';
     state = SessionState(
-        loggedIn: state.loggedIn,
-        username: state.username,
-        nickname: nick,
-        avatarPath: state.avatarPath,
-        role: state.role,
-        userId: state.userId);
+      loggedIn: state.loggedIn,
+      username: state.username,
+      nickname: nick,
+      avatarPath: state.avatarPath,
+      role: state.role,
+      userId: state.userId,
+    );
   }
 
   /// 头像上传后重取 /me：同步 avatarPath（昵称/角色一起以服务端为准）
@@ -204,12 +232,13 @@ class SessionController extends StateNotifier<SessionState> {
     // 别让陈旧 Token 的 /me 静默失败
     final me = await SessionApi.me();
     state = SessionState(
-        loggedIn: state.loggedIn,
-        username: me.data['username'] as String?,
-        nickname: me.data['nickname'] as String?,
-        avatarPath: me.data['avatar_path'] as String?,
-        role: me.data['role'] as String?,
-        userId: (me.data['id'] as num?)?.toInt());
+      loggedIn: state.loggedIn,
+      username: me.data['username'] as String?,
+      nickname: me.data['nickname'] as String?,
+      avatarPath: me.data['avatar_path'] as String?,
+      role: me.data['role'] as String?,
+      userId: (me.data['id'] as num?)?.toInt(),
+    );
   }
 
   static TrustRequiredError? _trustOf(DioException e) {
@@ -235,31 +264,44 @@ class SessionController extends StateNotifier<SessionState> {
   /// 设备 Token 不变、会话保持；prefs 用户名缓存由调用方更新
   void applyRename(String newName) {
     _username = newName;
-    state = SessionState(
-        loggedIn: true, username: newName, role: state.role);
+    state = SessionState(loggedIn: true, username: newName, role: state.role);
   }
 
   /// [keepCredentials] 掉线专用：Token 被吊销 / 本地已清时保留生物识别一键
   /// 登录的凭据存档，用户点一下就能回去；主动「退出登录」不传此参数（彻底清）。
   Future<void> logout({bool keepCredentials = false}) async {
-    _username = '';
-    _password = '';
-    await SecureStore.clearToken();
-    await Prefs.setUsername('');
-    // 主动退出 = 要求彻底退出：生物识别一键登录的凭据存档一并清除
-    // （Token 自然失效的掉线场景不清，那种情况正需要一键重登）
-    if (!keepCredentials) await SavedCredentialStore.clear();
-    // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
-    await AuthCacheManager.I.emptyCache();
-    await AutoSwitch.I.reset(); // 上一会话的自动切换痕迹一并清掉
-    // 失败负缓存同上：账号 A 无权看被记 404 的 URL，B 可能有权
-    AuthCacheManager.I.clearFailureCache();
+    // 互斥：登录态下轮询一旦拿到 401 就会回调这里，而清理链里有
+    // AuthCacheManager.emptyCache()（删几千个缓存文件，秒级）。原来没有闸，
+    // 401 风暴会让两个 logout 并发跑 emptyCache，任一抛 FileSystemException
+    // 就永远停在「state 还是 loggedIn、Token 已清」——全页面 401、每 2 秒
+    // 再触发一轮，只能杀进程。2026-11-17 review 发现的 P1。
+    if (_loggingOut) return;
+    _loggingOut = true;
+    // state 必须在第一个 await **之前**置空：原来放在最后，上面那个窗口
+    // 正是「中间的清理跑着，UI 还以为自己登录着」造成的。
     state = const SessionState();
+    try {
+      _username = '';
+      _password = '';
+      await SecureStore.clearToken();
+      await Prefs.setUsername('');
+      // 主动退出 = 要求彻底退出：生物识别一键登录的凭据存档一并清除
+      // （Token 自然失效的掉线场景不清，那种情况正需要一键重登）
+      if (!keepCredentials) await SavedCredentialStore.clear();
+      // 换账号后缩略图缓存必须清空（缓存 key 不含账号，防跨账号残留）
+      await AuthCacheManager.I.emptyCache();
+      await AutoSwitch.I.reset(); // 上一会话的自动切换痕迹一并清掉
+      // 失败负缓存同上：账号 A 无权看被记 404 的 URL，B 可能有权
+      AuthCacheManager.I.clearFailureCache();
+    } finally {
+      _loggingOut = false;
+    }
   }
 }
 
-final sessionProvider =
-    StateNotifierProvider<SessionController, SessionState>((ref) {
+final sessionProvider = StateNotifierProvider<SessionController, SessionState>((
+  ref,
+) {
   final c = SessionController();
   c.bootstrap();
   return c;

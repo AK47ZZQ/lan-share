@@ -60,7 +60,10 @@ void main() {
     });
 
     test('半截下载/非包文件不算（缓存复用必须跳过）', () {
-      expect(UpdateService.isInstallerName('lanshare-1.0.0.apk.part'), isFalse);
+      // 2026-11-17：isInstallerName 只供**清运**使用（cachedInstaller 自己拼
+      // 路径 + 校验 size/sha，不依赖它）。所以残包必须被判为 true 才会被回收；
+      // 缓存复用仍不会误用半截包，那条防线在 size/sha 校验里。
+      expect(UpdateService.isInstallerName('lanshare-1.0.0.apk.part'), isTrue);
       expect(UpdateService.isInstallerName('lanshare.apk'), isFalse);
       expect(UpdateService.isInstallerName('note.md'), isFalse);
     });

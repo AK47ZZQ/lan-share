@@ -149,7 +149,15 @@ def clear_all() -> int:
 
 def _write(sql: str, params: tuple) -> int:
     with _db_lock:
-        cur = _db().execute(sql, params)
-        if not _dbmod.in_transaction():
-            _db().commit()
-        return cur.rowcount
+        try:
+            cur = _db().execute(sql, params)
+            if not _dbmod.in_transaction():
+                _db().commit()
+            return cur.rowcount
+        except Exception:
+            # 写失败必须回滚，否则留下持锁的悬挂写事务（见 devices._write）
+            try:
+                _db().rollback()
+            except Exception:
+                pass
+            raise

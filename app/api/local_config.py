@@ -52,6 +52,23 @@ def _require_local(request: Request) -> None:
     ip = effective_client_ip(request)
     if ip not in _LOOPBACKS:
         raise HTTPException(status_code=403, detail="该接口仅限本机访问")
+    # 第三道门，且不依赖 is_public_entry：Host 必须明确是回环地址。
+    #
+    # 为什么需要：隧道流量经 frpc → Caddy → 127.0.0.1，来源恒为回环，所以
+    # 上面那道 `ip in _LOOPBACKS` 挡不住它；唯一能区分「本机直连」与「公网经
+    # 隧道进来」的就是 Host。而 is_public_entry 的 fail-closed 分支在
+    # `_is_private_host(host)` 为真时直接跳过 —— 攻击者发
+    # `Host: 192.168.1.50:8765` 就能让整组 /local/* 对公网敞开
+    # （2026-11-17 实测：两步即可把整库 pg_dump 到攻击者 SMB）。
+    #
+    # 所以这里反向要求「Host 必须是回环」，而不是「不像公网就当本机」。
+    _host = (request.headers.get("host") or "").strip().lower()
+    if _host.startswith("["):
+        _host = _host[: _host.find("]") + 1]
+    else:
+        _host = _host.split(":")[0]
+    if _host not in ("127.0.0.1", "localhost", "[::1]", "::1"):
+        raise HTTPException(status_code=403, detail="该接口仅限本机访问")
 
 
 class PublicUrlBody(BaseModel):

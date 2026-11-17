@@ -110,8 +110,20 @@ def set_max_downloads(token: str, max_downloads: int) -> None:
 
 def _write(sql: str, params: tuple) -> int:
     with _db_lock:
-        cur = _db().execute(sql, params)
-        n = cur.rowcount
-        if not _dbmod.in_transaction():
-            _db().commit()
-        return n
+        try:
+            cur = _db().execute(sql, params)
+            n = cur.rowcount
+            if not _dbmod.in_transaction():
+                _db().commit()
+            return n
+        except Exception:
+            # 写失败必须回滚。SQLite 里一条被拒的写（UNIQUE 冲突、NOT NULL、
+            # 外键）会在连接上留下**悬挂的写事务**，它持着库锁 —— 别的线程
+            # 再写就是 database is locked，直到本线程下一次 commit 才释放。
+            # 2026-11-17 review 实测：IntegrityError 之后 in_transaction=True，
+            # 另一连接写入直接超时。原来 16 处写出口没有一个回滚。
+            try:
+                _db().rollback()
+            except Exception:
+                pass
+            raise

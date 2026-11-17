@@ -243,8 +243,16 @@ def _write(sql: str, params: tuple) -> int:
     处在 `db.transaction()` 块内时**不自行 commit**——由最外层收束。
     """
     with _db_lock:
-        cur = _db().execute(sql, params)
-        n = cur.rowcount
-        if not _dbmod.in_transaction():
-            _db().commit()
-        return n
+        try:
+            cur = _db().execute(sql, params)
+            n = cur.rowcount
+            if not _dbmod.in_transaction():
+                _db().commit()
+            return n
+        except Exception:
+            # 写失败必须回滚，否则 SQLite 留下持锁的悬挂写事务（见 devices._write）
+            try:
+                _db().rollback()
+            except Exception:
+                pass
+            raise

@@ -410,6 +410,11 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
     # 一并排除（与 visible() 对齐）。guest 仍走 Python 过滤（grants 已有缓存）
     role = user["role"] if "role" in user.keys() else MEMBER
     pushdown = False
+    # 兜底初始化：guest 和非 ASCII 用户名都进不了下面的下推分支，但
+    # photos_store.list_for_gallery 无条件要用 `_args`。原来这个变量只在
+    # 分支体内赋值，于是 guest 打开照片墙必然 500（UnboundLocalError）——
+    # 整个角色不可用，且错误信息是 Python 内部字符串。2026-11-17 review 实测复现。
+    args: list = []
     # 非 ASCII 用户名不做下推（R3-P3-4）：SQLite LIKE 只折叠 ASCII 大小写，
     # 与 _normcase 的全 Unicode 折叠在改名（Windows 保留旧大小写）场景下
     # 会分叉——本人照片 fail-closed 消失；退回 Python 过滤

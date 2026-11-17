@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -84,7 +85,8 @@ async def create_directory(request: Request, path: str, _user=Depends(require_us
     parts = [p for p in path.replace("\\", "/").split("/") if p not in ("", ".")]
     cleaned = [clean_filename(p) for p in parts]
     target = resolve(_user, "/".join(cleaned), "write")
-    target.mkdir(parents=True, exist_ok=True)
+    # mkdir 在慢盘/网络盘上可能几百毫秒，不能占着事件循环
+    await run_in_threadpool(target.mkdir, parents=True, exist_ok=True)
     rel = to_rel(target)
     audit("mkdir", rel, ip=client_ip(request))
     invalidate_listing()
@@ -244,7 +246,8 @@ async def delete_file(request: Request, path: str, _user=Depends(require_user)):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Not found")
     # 回收站登记物理相对路径（此前存请求原样 vpath，visible() 无法判定归属）
-    move_to_trash(target, to_rel(target))
+    # rename 失败会退化成整树 shutil.move（跨卷），同步跑会冻住事件循环
+    await run_in_threadpool(move_to_trash, target, to_rel(target))
     # 审计同样记物理相对路径（R1-P3-1）：vpath 形态（private:x.jpg）进动态流
     # 后 visible() 无法归一，会泄漏到全员可见
     audit("trash", to_rel(target), ip=client_ip(request))

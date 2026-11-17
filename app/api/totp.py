@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from app.db import _db_lock
 from app.security import (audit, clear_login_fails, client_ip, is_public_entry,
-                          record_login_fail, require_user)
+                          login_locked_remaining, record_login_fail, require_user)
 from app.services.passwords import verify_pw as _verify_pw
 from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy
 from app.store import users as users_store
@@ -163,7 +163,19 @@ async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require
     row = users_store.get(user["user_id"])
     if not row["totp_enabled"]:
         raise HTTPException(status_code=400, detail="两步验证未启用")
+    # 密码复核必须计入防爆破锁定（2026-11-17 review）：原来这两个端点既没
+    # 查 login_locked_remaining 也没 record_login_fail，只剩全局 120/分的
+    # 令牌桶。会话被劫持者可对这里约 3 次/秒持续猜密码，永远触发不了
+    # 「5 次/15 分钟」的账号锁 —— 猜中即重刷恢复码，把第二因子彻底换掉。
+    pub = is_public_entry(request)
+    remaining = login_locked_remaining(row["username"], pub)
+    if remaining:
+        audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
+        raise HTTPException(
+            status_code=429,
+            detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await _verify_pw(body.old_password, row["password_hash"]):
+        record_login_fail(row["username"], pub)
         audit("totp_rc_regen_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     codes, rc_json = _gen_recovery_codes()
@@ -177,7 +189,18 @@ async def totp_rc_regen(request: Request, body: TotpRcBody, user=Depends(require
 async def totp_disable(request: Request, body: TotpDisableBody, user=Depends(require_user)):
     """关闭两步验证：需原密码确认（会话被劫持时不能随手关掉）。"""
     row = users_store.get(user["user_id"])
+    # 与 totp_rc_regen 同款：关 2FA 比换恢复码更敏感，必须计入锁定。
+    # 原来漏了这道，等于给「会话被劫持后无限猜密码」留了后门 ——
+    # 猜中即可解除第二因子，之后单密码就能登录。
+    pub = is_public_entry(request)
+    remaining = login_locked_remaining(row["username"], pub)
+    if remaining:
+        audit("login_locked", row["username"], f"{remaining}s", client_ip(request))
+        raise HTTPException(
+            status_code=429,
+            detail=f"失败次数过多，已锁定，请 {remaining // 60 + 1} 分钟后重试")
     if not await _verify_pw(body.old_password, row["password_hash"]):
+        record_login_fail(row["username"], pub)
         audit("totp_disable_fail", row["username"], ip=client_ip(request))
         raise HTTPException(status_code=403, detail="原密码错误")
     with _db_lock:

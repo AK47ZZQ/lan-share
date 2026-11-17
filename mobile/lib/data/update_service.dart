@@ -8,13 +8,16 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'api/api_client.dart';
 import 'api/appver_api.dart';
 import 'api/trust.dart';
+
 import 'package:dio/io.dart';
+
 import 'update_source.dart';
 
 class UpdateInfo {
@@ -32,18 +35,26 @@ class UpdateInfo {
   /// 来源标记：'server' | 'github'。UI 上用来告诉用户这版从哪查到的。
   final String source;
 
-  UpdateInfo({required this.version, required this.build, required this.notes,
-      required this.sha256, required this.available, required this.size,
-      this.url, this.source = 'server'});
+  UpdateInfo({
+    required this.version,
+    required this.build,
+    required this.notes,
+    required this.sha256,
+    required this.available,
+    required this.size,
+    this.url,
+    this.source = 'server',
+  });
 
   factory UpdateInfo.fromJson(Map<String, dynamic> j) => UpdateInfo(
-      version: j['version'] as String? ?? '',
-      build: (j['build'] as num?)?.toInt() ?? 0,
-      notes: j['notes'] as String? ?? '',
-      sha256: j['sha256'] as String?,
-      available: j['available'] as bool? ?? false,
-      size: (j['size'] as num?)?.toInt(),
-      source: 'server');
+    version: j['version'] as String? ?? '',
+    build: (j['build'] as num?)?.toInt() ?? 0,
+    notes: j['notes'] as String? ?? '',
+    sha256: j['sha256'] as String?,
+    available: j['available'] as bool? ?? false,
+    size: (j['size'] as num?)?.toInt(),
+    source: 'server',
+  );
 
   /// 从 GitHub Release 的 JSON 构造。
   ///
@@ -131,8 +142,11 @@ class UpdateInfo {
   /// [base] 是清单所在地址：清单里的相对 url 按它解析（契约原文
   /// 「相对路径也接受，按清单地址解析」），不传时相对地址无法落地、
   /// 条目作废 —— 和缺 url 同罪。
-  static UpdateInfo? fromManifest(Object? raw,
-      {String base = '', String source = 'custom'}) {
+  static UpdateInfo? fromManifest(
+    Object? raw, {
+    String base = '',
+    String source = 'custom',
+  }) {
     if (raw is! Map) return null;
     final j = Map<String, dynamic>.from(raw);
 
@@ -161,15 +175,20 @@ class UpdateHistoryItem {
   final int build;
   final String date;
   final String notes;
-  UpdateHistoryItem({required this.version, required this.build,
-      required this.date, required this.notes});
+  UpdateHistoryItem({
+    required this.version,
+    required this.build,
+    required this.date,
+    required this.notes,
+  });
 
   factory UpdateHistoryItem.fromJson(Map<String, dynamic> j) =>
       UpdateHistoryItem(
-          version: j['version'] as String? ?? '',
-          build: (j['build'] as num?)?.toInt() ?? 0,
-          date: j['date'] as String? ?? '',
-          notes: j['notes'] as String? ?? '');
+        version: j['version'] as String? ?? '',
+        build: (j['build'] as num?)?.toInt() ?? 0,
+        date: j['date'] as String? ?? '',
+        notes: j['notes'] as String? ?? '',
+      );
 
   /// 从 GitHub Release 构造历史条目（2026-11-01，更新历史改从 GitHub 拉）。
   ///
@@ -200,10 +219,11 @@ class UpdateHistoryItem {
 
     final rawDate = '${j['published_at'] ?? ''}';
     return UpdateHistoryItem(
-        version: version,
-        build: build,
-        date: rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate,
-        notes: '${j['body'] ?? ''}');
+      version: version,
+      build: build,
+      date: rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate,
+      notes: '${j['body'] ?? ''}',
+    );
   }
 
   /// 从自定义源的清单条目构造（字段少，缺什么就空着）。
@@ -360,11 +380,9 @@ class UpdateService {
       _checkGitHub(),
       _checkR2(),
     ]);
-    final candidates = results
-        .where((r) => r.info != null)
-        .map((r) => r.info!)
-        .toList()
-      ..sort((a, b) => _compareVersion(b.version, a.version));
+    final candidates =
+        results.where((r) => r.info != null).map((r) => r.info!).toList()
+          ..sort((a, b) => _compareVersion(b.version, a.version));
 
     final anyReachable = results.any((r) => r.reachable);
     // 顺序和 Future.wait 一致：0 = 服务端，1 = GitHub，2 = R2。
@@ -423,7 +441,9 @@ class UpdateService {
     try {
       final r = await AppverApi.latest();
       return _SourceResult(
-          UpdateInfo.fromJson(Map<String, dynamic>.from(r.data as Map)), true);
+        UpdateInfo.fromJson(Map<String, dynamic>.from(r.data as Map)),
+        true,
+      );
     } catch (_) {
       return const _SourceResult(null, false);
     }
@@ -437,7 +457,9 @@ class UpdateService {
         return const _SourceResult(null, false);
       }
       return _SourceResult(
-          UpdateInfo.fromGitHub(Map<String, dynamic>.from(r.data as Map)), true);
+        UpdateInfo.fromGitHub(Map<String, dynamic>.from(r.data as Map)),
+        true,
+      );
     } catch (_) {
       return const _SourceResult(null, false);
     }
@@ -518,8 +540,11 @@ class UpdateService {
       if (!await verifyR2Manifest(manifest)) {
         return const _SourceResult(null, false);
       }
-      final info =
-          UpdateInfo.fromManifest(manifest['latest'], base: r2Base, source: 'r2');
+      final info = UpdateInfo.fromManifest(
+        manifest['latest'],
+        base: r2Base,
+        source: 'r2',
+      );
       if (info == null) return const _SourceResult(null, false);
 
       // 默认源必须同域（2026-11-17 对抗测试后的收紧）。
@@ -541,7 +566,6 @@ class UpdateService {
       return const _SourceResult(null, false);
     }
   }
-
 
   /// 把 CHANGELOG.md 解析成更新历史。
   ///
@@ -575,12 +599,14 @@ class UpdateService {
           ? parts[0]! * 10000 + parts[1]! * 100 + parts[2]!
           : 0;
 
-      items.add(UpdateHistoryItem(
-        version: ver,
-        build: build,
-        date: dm?.group(1) ?? '',
-        notes: lines.skip(1).join('\n'),
-      ));
+      items.add(
+        UpdateHistoryItem(
+          version: ver,
+          build: build,
+          date: dm?.group(1) ?? '',
+          notes: lines.skip(1).join('\n'),
+        ),
+      );
     }
     return items;
   }
@@ -637,8 +663,10 @@ class UpdateService {
     try {
       final r = await AppverApi.history();
       final items = (r.data['items'] as List? ?? const [])
-          .map((e) =>
-              UpdateHistoryItem.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) =>
+                UpdateHistoryItem.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
           .toList();
       return items;
     } catch (_) {
@@ -655,7 +683,11 @@ class UpdateService {
   /// 只比数字的话，已装 1.1.18 的用户会看到 10118 > 125 而被反复提示更新，
   /// 而且万一哪天回退到旧 Release 也判不出来。version 字符串才是版本先后的
   /// 唯一真相，build 只在版本号相同时用来区分同版本的重新打包。
-  static bool isNewer(UpdateInfo remote, int localBuild, {String? localVersion}) {
+  static bool isNewer(
+    UpdateInfo remote,
+    int localBuild, {
+    String? localVersion,
+  }) {
     final local = (localVersion ?? '').trim();
     if (local.isNotEmpty && remote.version.isNotEmpty) {
       final cmp = _compareVersion(remote.version, local);
@@ -681,7 +713,8 @@ class UpdateService {
   /// 的安装包静默清掉；隔离子目录后 purge 只扫自家地盘。
   static Future<Directory> _updateDir() async {
     final dl = Directory(
-        '${(await getApplicationDocumentsDirectory()).path}/Downloads');
+      '${(await getApplicationDocumentsDirectory()).path}/Downloads',
+    );
     final dir = Directory('${dl.path}/updates');
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return dir;
@@ -691,8 +724,10 @@ class UpdateService {
   /// 完整性校验（R1-P1 + 红队 P2）：sha256 与服务端下发值比对，缺失即拒装
   /// （fail closed，服务端 /api/app/latest 自算兜底）——http 入口下链路内
   /// 攻击者可换包，未校验直接交系统安装器等于 RCE 通道。校验失败删包并抛错。
-  static Future<String> download(UpdateInfo info,
-      {void Function(int received, int total)? onProgress}) async {
+  static Future<String> download(
+    UpdateInfo info, {
+    void Function(int received, int total)? onProgress,
+  }) async {
     final dir = await _updateDir();
     // 版本号消毒：只留白名单字符，防 path 拼接注入（version 来自服务端 JSON）
     final safeVer = info.version.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
@@ -701,18 +736,21 @@ class UpdateService {
       // 第三方源（GitHub Release asset）：直链下载，不带自家会话凭据。
       // 独立 Dio——不要为了图省事复用 ApiClient，那会把 Bearer token 一并
       // 发到 github.com，等于把登录凭据给第三方。
-      final raw = Dio(BaseOptions(
-        connectTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(minutes: 30),
-      ));
+      final raw = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(minutes: 30),
+        ),
+      );
       if (info.source == 'custom') {
         // 自定义源的下载地址多半就是自家服务器（Caddy 内部 CA 自签）——
         // 裸 Dio 过不了证书校验，会出现「清单拉到了、包下不动」的怪病
         // （清单走 TrustStore、下载走裸 Dio，两条链的 TLS 策略不一致）。
         // 统一成和清单拉取同一套 TOFU 钉扎；公共 CA 的地址不受影响
         //（回调根本不会被触发）。
-        raw.httpClientAdapter =
-            IOHttpClientAdapter(createHttpClient: TrustStore.createHttpClient);
+        raw.httpClientAdapter = IOHttpClientAdapter(
+          createHttpClient: TrustStore.createHttpClient,
+        );
         await TrustStore.I.warmup();
       }
       // 第三方源一律走分片并发：R2 单连接实测 1.20 MB/s（102MB 要 85 秒），
@@ -720,9 +758,12 @@ class UpdateService {
       await _downloadParallel(raw, info.url!, path, onProgress: onProgress);
     } else {
       final dio = await ApiClient.I.dio();
-      await dio.download('/api/app/download', path,
-          onReceiveProgress: onProgress,
-          options: Options(receiveTimeout: const Duration(minutes: 30)));
+      await dio.download(
+        '/api/app/download',
+        path,
+        onReceiveProgress: onProgress,
+        options: Options(receiveTimeout: const Duration(minutes: 30)),
+      );
     }
     final f = File(path);
     // 红队 P2：sha256 与 size 同信道可整段伪造，size 校验只防意外损坏。
@@ -765,7 +806,7 @@ class UpdateService {
       final head = await dio.head(url);
       total =
           int.tryParse(head.headers.value(Headers.contentLengthHeader) ?? '') ??
-              0;
+          0;
       final ar = (head.headers.value('accept-ranges') ?? '').toLowerCase();
       // 太小的包分片没有意义（额外 8 个连接 + 合并开销反而更慢）
       rangeOk = ar.contains('bytes') && total > (8 << 20);
@@ -789,7 +830,7 @@ class UpdateService {
       if (start > end) return;
       final tmp = File('$path.part$i');
       temps.add(tmp);
-      await dio.download(
+      final resp = await dio.download(
         url,
         tmp.path,
         options: Options(
@@ -802,6 +843,20 @@ class UpdateService {
           onProgress?.call(done, total);
         },
       );
+      // 分片响应必须真是 206（2026-11-17 review）：
+      // 只有 HEAD 阶段查过 accept-ranges，GET 阶段什么都没验。有的 CDN/代理
+      // 对 HEAD 回 accept-ranges: bytes、对 GET 却回 200 + 全量 —— 于是 8 个
+      // 分片各写一份完整包（102MB × 8 = 816MB），进度条跳到 800%，最后
+      // 合并大小不符才报错，而这个 816MB 的残包要等 1 小时后才被清掉。
+      // 低配机直接 ENOSPC，同时还把用户流量打光。
+      if (resp.statusCode != 206) {
+        throw StateError('服务器没有按 Range 返回（分片 $i 期望 206，实得 ${resp.statusCode}）');
+      }
+      final actual = await tmp.length();
+      final expect = end - start + 1;
+      if (actual != expect) {
+        throw StateError('分片 $i 长度不符（期望 $expect，实际 $actual）');
+      }
     }
 
     try {
@@ -815,13 +870,31 @@ class UpdateService {
       rethrow;
     }
 
-    // 合并：流式拼，102MB 级不能整块读进内存（R2-P2 的 OOM 教训）
-    final sink = File(path).openWrite();
-    for (final t in temps) {
-      await sink.addStream(t.openRead());
+    // 合并：流式拼，102MB 级不能整块读进内存（R2-P2 的 OOM 教训）。
+    //
+    // 先写 <path>.tmp 再 rename 到最终路径：同目录 rename 在 NTFS/ext4 上
+    // 都是原子的。原来直接 openWrite(path) 截断写入，中途失败（磁盘满、
+    // 源断流、OOM）会留下一个半截的同名文件，还可能被 cachedInstaller 当成
+    // 缓存命中（它靠 size+sha 判，半截包必然不符所以不会装，但那个残包
+    // 会一直躺着）。2026-11-17 review。
+    final tmpPath = '$path.tmp';
+    final sink = File(tmpPath).openWrite();
+    try {
+      for (final t in temps) {
+        await sink.addStream(t.openRead());
+      }
+      await sink.flush();
+      await sink.close();
+    } catch (e) {
+      try {
+        await sink.close();
+      } catch (_) {}
+      try {
+        await File(tmpPath).delete();
+      } catch (_) {}
+      rethrow;
     }
-    await sink.flush();
-    await sink.close();
+    await File(tmpPath).rename(path);
     for (final t in temps) {
       try {
         await t.delete();
@@ -829,14 +902,25 @@ class UpdateService {
     }
     final got = await File(path).length();
     if (got != total) {
+      // 尺寸不符也要删：留着只会占地方，且 purge 要等 1 小时才扫到
+      try {
+        await File(path).delete();
+      } catch (_) {}
       throw StateError('分片下载合并后大小不符（期望 $total，实际 $got）');
     }
   }
 
   /// 安装包文件名判定（纯函数，单测锚点）：分发约定 lanshare-<版本>.apk
+  ///
+  /// 也认分片与合并中间产物：下载中被杀进程会留下 `lanshare-x.apk.part0..7`，
+  /// 每次约一整包大小（102MB 级）。原来只认 `.apk` 结尾，这些永远扫不到 ——
+  /// 沙盒只增不减，反复失败几次就把可用空间吃穿（2026-11-17 review）。
   static bool isInstallerName(String name) {
     final n = name.toLowerCase();
-    return n.startsWith('lanshare-') && n.endsWith('.apk');
+    if (!n.startsWith('lanshare-')) return false;
+    return n.endsWith('.apk') ||
+        n.contains('.apk.part') ||
+        n.endsWith('.apk.tmp');
   }
 
   /// 本版安装包在本地是否已存在且校验通过；有则返回路径，可直接安装。
@@ -874,8 +958,9 @@ class UpdateService {
   /// 调用时机：登录启动后 / 进入关于页 / 再次下载前。minAge 内的新文件
   /// 跳过——刚下载完正交给系统安装器的包（安装器点"安装"时才流式读源
   /// 文件）不能被同会话内的重进关于页/重登清掉（审查 P1）。
-  static Future<int> purgeInstallers(
-      {Duration minAge = const Duration(hours: 1)}) async {
+  static Future<int> purgeInstallers({
+    Duration minAge = const Duration(hours: 1),
+  }) async {
     try {
       final dir = await _updateDir();
       final now = DateTime.now();
@@ -901,7 +986,43 @@ class UpdateService {
   /// OpenFilex 返回 permissionDenied；ROM 没有安装器时返回 noAppToOpen。
   /// 原来这里直接 `await` 把结果丢了，用户看到的就是「进度条走完，
   /// 然后什么都没发生」—— 没有报错、没有提示，只能靠猜。
+  static const _apkChannel = MethodChannel('lanshare/apk');
+
+  /// 装之前校验 APK 身份：包名与签名都必须和本 App 一致。
+  ///
+  /// 为什么必须校验：`download()` 只保证「落盘字节 == 清单里的 sha256」，
+  /// 而自定义源与服务端两路的 sha256 与 url 同源 —— 源被拿下就能一起换。
+  /// 系统安装器只在「同包名 + 不同签名」时才拒绝；**不同包名等于新装一个
+  /// 应用**，图标名字都能照抄。2026-11-17 review 的 H1。
+  ///
+  /// 校验不了就返回 false（fail-closed）：宁可让用户重下一次，也不能装来路
+  /// 不明的包。
+  static Future<bool> verifyInstallerIdentity(String apkPath) async {
+    try {
+      final r = await _apkChannel.invokeMapMethod<String, dynamic>('verify', {
+        'path': apkPath,
+      });
+      if (r == null) return false;
+      return r['samePackage'] == true && r['signatureMatch'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<OpenResult> install(String apkPath) async {
-    return OpenFilex.open(apkPath, type: 'application/vnd.android.package-archive');
+    if (!await verifyInstallerIdentity(apkPath)) {
+      // 身份不符的包直接删掉，别留在沙盒里被 cachedInstaller 反复命中
+      try {
+        await File(apkPath).delete();
+      } catch (_) {}
+      return OpenResult(
+        type: ResultType.error,
+        message: '安装包身份校验未通过（包名或签名与本应用不符），已删除该文件',
+      );
+    }
+    return OpenFilex.open(
+      apkPath,
+      type: 'application/vnd.android.package-archive',
+    );
   }
 }

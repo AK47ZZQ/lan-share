@@ -181,7 +181,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
             old_size = dest.stat().st_size
     except OSError:
         old_size = 0
-    enforce_quota(_user, dest, body.size - old_size)
+    await run_in_threadpool(enforce_quota, _user, dest, body.size - old_size)
 
     # 秒传：库里有同 sha256 内容（服务端算的，可信），直接硬链接
     if body.sha256:
@@ -230,7 +230,7 @@ async def upload_init(request: Request, body: UploadInitBody, _user=Depends(requ
                     # + 净增量 = 落位后占用。原实现旧版先进回收站再计价 ——
                     # 配额拒绝或 os.link 失败降级分片时旧文件已离开原位
                     #（与 _dav_put 修复前同源的破坏性失败路径）。
-                    enforce_quota(_user, dest, sample_size - old_size)
+                    await run_in_threadpool(enforce_quota, _user, dest, sample_size - old_size)
                     if dest.exists():
                         move_to_trash(dest, to_rel(dest))
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -374,7 +374,7 @@ async def upload_finish(request: Request, sid: str, _user=Depends(require_user))
             old_size = dest.stat().st_size
     except OSError:
         old_size = 0
-    enforce_quota(owner, dest, row["total_size"] - old_size)
+    await run_in_threadpool(enforce_quota, owner, dest, row["total_size"] - old_size)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f"{dest.name}.uploading-{os.getpid()}-{time.time_ns()}")
 

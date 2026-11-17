@@ -22,6 +22,7 @@ from app.security import (audit, allow_rate, clear_login_fails, client_ip,
 from app.services.accounts import clean_username
 from app.services.passwords import verify_pw as _verify_pw
 from app.services.passwords import verify_pw_with_dummy as _verify_pw_with_dummy
+from app.store import devices as devices_store
 from app.store import users as users_store
 
 
@@ -79,6 +80,14 @@ async def setup(body: AuthBody, request: Request, response: Response):
         # 廉价预检（锁内还有复查兜底双管理员）：setup 关闭后未认证请求
         # 不必白烧 100-300ms 的 scrypt（R2-P3）
         raise HTTPException(status_code=403, detail="管理员已存在")
+    # 首次初始化只允许局域网/本机（2026-11-17 review）：README 把「清空
+    # users 表再跑 /api/setup」写成官方找回管理员密码的流程，也就是说
+    # 「表为空 + 服务在线」是文档鼓励出现的状态。若这时公网入口（frp/隧道）
+    # 已经在跑，任何扫描器都能抢注成 admin —— 而 /api/auth/state 还会
+    # 主动告诉匿名者 needs_setup: true。
+    if is_public_entry(request):
+        raise HTTPException(
+            status_code=403, detail="请在局域网内完成初始化（公网入口已关闭此接口）")
     # scrypt 求值（约 100-300ms）放全局锁外 + 线程池，避免占住 _db_lock 并阻塞事件循环
     new_hash = await run_in_threadpool(hash_password, body.password)
     # 检查 + 插入同锁（否则空库并发 setup 可建出双管理员）。
@@ -136,6 +145,15 @@ async def logout(request: Request, response: Response):
     tok = request.cookies.get(COOKIE_NAME)
     if tok:
         await run_in_threadpool(_drop_session, _sha(tok))
+    # Bearer 也要吊销（2026-11-17 review 实测：原来只删 Cookie，App 的
+    # 设备 Token 在「退出登录」后仍可调 /api/auth/me 返回 200，还能用 90 天）。
+    # 这条链路是 App 唯一的认证方式，不吊销等于登出只是清了个浏览器会话。
+    auth = request.headers.get("authorization") or ""
+    if auth[:7].lower() == "bearer ":
+        bearer = auth[7:].strip()
+        if bearer:
+            await run_in_threadpool(
+                lambda: devices_store.delete_by_token_hash(_sha(bearer)))
     audit("logout", ip=client_ip(request))
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"ok": True}

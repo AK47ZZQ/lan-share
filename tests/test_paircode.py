@@ -93,6 +93,10 @@ def test_pair_code_validation_and_authz(client):
     admin = _admin(client)
     bare = _bare(client)
 
+    # 自己先造一条 pair_code_create，不要指望别的测试跑在前面 —— 原来这条
+    # 断言依赖执行顺序，单独跑必红（2026-11-17 修 P1 时发现）。
+    assert admin.post("/api/pair/code").status_code == 200
+
     # 未登录不可生成；未登录 claim 是正常路径（无 Cookie）
     assert bare.post("/api/pair/code").status_code == 401
 

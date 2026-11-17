@@ -109,6 +109,18 @@ def delete_for_user(uid: int) -> int:
     return _write("DELETE FROM device_tokens WHERE user_id=?", (uid,))
 
 
+def delete_by_token_hash(token_hash: str) -> int:
+    """按 token 哈希吊销单台设备（App 登出时用）。
+
+    为什么必须有：`/api/logout` 原实现只删 Cookie 会话，完全没碰
+    device_tokens。而 App 的整条链路走 Bearer —— 用户点「退出登录」后
+    那个 Token 还能用 90 天（且滑动续期），与 SECURITY.md 承诺的
+    「登出即吊销」直接矛盾。被窃取的 Token（备份提取、恶意软件、
+    转手的旧手机）只能靠用户手动逐台吊销，几乎没有用户会这么做。
+    """
+    return _write("DELETE FROM device_tokens WHERE token_hash=?", (token_hash,))
+
+
 def delete_expired(now: float) -> int:
     """清理循环：过期设备行。"""
     return _write("DELETE FROM device_tokens WHERE expires_at < ?", (now,))
@@ -116,8 +128,20 @@ def delete_expired(now: float) -> int:
 
 def _write(sql: str, params: tuple) -> int:
     with _db_lock:
-        cur = _db().execute(sql, params)
-        n = cur.rowcount
-        if not _dbmod.in_transaction():
-            _db().commit()
-        return n
+        try:
+            cur = _db().execute(sql, params)
+            n = cur.rowcount
+            if not _dbmod.in_transaction():
+                _db().commit()
+            return n
+        except Exception:
+            # 写失败必须回滚。SQLite 里一条被拒的写（UNIQUE 冲突、NOT NULL、
+            # 外键）会在连接上留下**悬挂的写事务**，它持着库锁 —— 别的线程
+            # 再写就是 database is locked，直到本线程下一次 commit 才释放。
+            # 2026-11-17 review 实测：IntegrityError 之后 in_transaction=True，
+            # 另一连接写入直接超时。原来 16 处写出口没有一个回滚。
+            try:
+                _db().rollback()
+            except Exception:
+                pass
+            raise

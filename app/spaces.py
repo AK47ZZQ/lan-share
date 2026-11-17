@@ -58,11 +58,19 @@ def _normcase_eq(a: str, b: str) -> bool:
 
 
 def _clean_parts(rest: str) -> list[str]:
-    """分隔符归一 + 段级清洗（E13 反斜杠、E1 穿越、点前缀隐藏目录、8.3 别名）。"""
+    """分隔符归一 + 段级清洗（E13 反斜杠、E1 穿越、点前缀隐藏目录、8.3 别名、尾随点）。"""
     parts = [p for p in rest.replace("\\", "/").split("/") if p not in ("", ".")]
     # 8.3 别名（P0，2026-09-27）：本卷短名生成未关，.meta.db→META~1.DB、
     # .trash→TRASH~1——短名不以点开头，只拦点前缀挡不住。safe_path 同步拦截
     if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    # 尾随点/空格（P0，2026-11-17 实测复现）：Win32 打开路径时会**静默剥掉**
+    # 每段的尾随点和空格，而下面各保留段的判定是精确比较（_normcase_eq）。
+    # 于是 `private.\alice\secret.txt` 判不中「private」→ 落进「shared 默认
+    # 全员可读」分支 → 普通成员能读别人的私人空间、`/api/zip` 能整目录打包；
+    # 同理 `App安装包.` 绕过管理员写限制，可投递恶意 APK（RCE 链）。
+    # fail-closed：归一后与原串不一致就拒，顺带封掉 `tmp.`/`incoming.` 全族。
+    if any(p != p.rstrip(" .") for p in parts):
         raise HTTPException(status_code=403, detail="Forbidden")
     return parts
 

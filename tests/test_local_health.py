@@ -66,8 +66,12 @@ class TestAccessControl:
         """
         app = FastAPI()
         app.include_router(router)
-        tc = TestClient(app, client=("127.0.0.1", 51234))
-        resp = tc.get("http://t/local/health")
+        # base_url 让 Host 也是回环形态 —— `_require_local` 2026-11-17 加了第三道门，
+        # 要求 Host 明确是回环（防隧道流量伪造私网 Host 骗过 is_public_entry）。
+        # 真机上托盘直连 127.0.0.1:8766，Host 本来就是回环，所以这是还原真实形态。
+        tc = TestClient(app, client=("127.0.0.1", 51234),
+                        base_url="http://127.0.0.1:8766")
+        resp = tc.get("/local/health")
         assert resp.status_code == 200
         data = resp.json()
         for key in ("ts", "disk_used_pct", "disk_free_gb", "loops_failing",

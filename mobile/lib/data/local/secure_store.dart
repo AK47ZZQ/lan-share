@@ -4,13 +4,25 @@
 // 设备 Token（服务端 90 天滑动过期，可随时吊销）。
 // 双写双读：写入两路都写；读取 Keystore 优先、异常或为空时读副本。
 // （互斥方案的教训：Keystore 写成功即清副本，冷启动读失败时无路可退→掉登录）
+//
+// ⚠️ 已知代价（2026-11-17 代码 review 记录，**有意保留**）：
+//   `device_token_fb` 是**明文**，落在 /data/data/<pkg>/shared_prefs/
+//   FlutterSharedPreferences.xml。拿到该文件（root / 物理取证 / 恶意 ROM）
+//   就不必破解 Keystore，可直接冒充这台设备。
+//   为什么不改成「Keystore 成功就不写副本」：试过，结果是一部分机型的
+//   Keystore 冷启动解密失败，副本又已清掉 → 用户每次冷启动都要重登，
+//   而 Android 上「莫名反复掉登录」比「root 才能利用的明文」更伤用户。
+//   `android:allowBackup="false"` 已堵掉 adb backup 抽 SP 这条路。
+//   若要彻底收紧：副本改存「不可逆的设备指纹 + 服务端可吊销的引用」，
+//   但那需要服务端配合新增一种低权限凭据，属于下一轮设计。
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SecureStore {
   static const _storage = FlutterSecureStorage(
-      aOptions: AndroidOptions(encryptedSharedPreferences: true));
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
   static const _kToken = 'device_token';
   static const _kTokenFallback = 'device_token_fb';
 

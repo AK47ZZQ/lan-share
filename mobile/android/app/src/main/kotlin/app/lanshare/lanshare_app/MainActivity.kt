@@ -63,6 +63,18 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
             }
         }
         ShareInbox.channel = shareChannel
+        // 安装包身份校验（2026-11-17 review）：装之前必须确认这个 APK 的包名
+        // 与签名都和本 App 一致。否则任何能写更新源的人都能让用户「更新」成
+        // 一个包名不同的假 App —— 系统安装器只在**同包名不同签名**时才拒绝，
+        // 不同包名等于新装一个应用，图标和名字都可以照抄。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lanshare/apk")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "verify" -> result.success(
+                        call.argument<String>("path")?.let { verifyApkIdentity(it) })
+                    else -> result.notImplemented()
+                }
+            }
         // 媒体库通道（0.6.2 修复）：排除相册页在主 isolate 调 buckets()/query()，
         // 此前只有 Worker 后台 isolate 注册过该通道——主引擎侧永远
         // MissingPluginException，页面一直显示"无法读取相册列表"
@@ -169,6 +181,47 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
         val granted = grantResults.isNotEmpty() &&
             grantResults[0] == PackageManager.PERMISSION_GRANTED
         r.success(mapOf("granted" to granted))
+    }
+
+    /**
+     * 读目标 APK 的包名与签名，与自身比对。
+     *
+     * 读不到一律返回 null —— fail-closed：校验不了就不该让它装上去。
+     */
+    private fun verifyApkIdentity(path: String): Map<String, Any>? = try {
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            PackageManager.GET_SIGNING_CERTIFICATES
+        else @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
+        val target = packageManager.getPackageArchiveInfo(path, flags)
+        val self = packageManager.getPackageInfo(packageName, flags)
+        if (target == null) {
+            null
+        } else {
+            val a = signaturesOf(target).toSet()
+            val b = signaturesOf(self).toSet()
+            mapOf(
+                "packageName" to (target.packageName ?: ""),
+                "selfPackage" to packageName,
+                "samePackage" to (target.packageName == packageName),
+                "signatureMatch" to
+                    (a.isNotEmpty() && b.isNotEmpty() && a.intersect(b).isNotEmpty()),
+            )
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun signaturesOf(info: android.content.pm.PackageInfo): List<String> {
+        val raw: List<android.content.pm.Signature> =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info.signingInfo?.apkContentsSigners?.toList() ?: emptyList()
+            } else {
+                @Suppress("DEPRECATION") (info.signatures?.toList() ?: emptyList())
+            }
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        return raw.map { s ->
+            md.digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+        }
     }
 
     override fun onDestroy() {

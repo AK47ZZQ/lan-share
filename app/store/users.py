@@ -298,6 +298,15 @@ def _write(sql: str, params: tuple) -> None:
     否则会切断事务、丢失原子性（11 号复审批次 3，P2-6）。
     """
     with _db_lock:
-        _db().execute(sql, params)
-        if not _dbmod.in_transaction():
-            _db().commit()
+        try:
+            _db().execute(sql, params)
+            if not _dbmod.in_transaction():
+                _db().commit()
+        except Exception:
+            # 写失败必须回滚（用户表尤其重要）：不回滚会让后续登录/改名
+            # 一直撞 database is locked，表现成「整个服务卡住」。见 devices._write
+            try:
+                _db().rollback()
+            except Exception:
+                pass
+            raise

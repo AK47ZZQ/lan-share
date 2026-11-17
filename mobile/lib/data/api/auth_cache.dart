@@ -30,7 +30,9 @@ class _Semaphore {
   /// "发请求+等响应头"，几十路并发流照样抢带宽，公网限流形同虚设
   Future<void> acquire() {
     final c = Completer<void>();
-    _queue.add(() async { c.complete(); });
+    _queue.add(() async {
+      c.complete();
+    });
     _pump();
     return c.future;
   }
@@ -72,8 +74,10 @@ class AuthFileService extends FileService {
   Future<String?> _getToken() async =>
       _cachedToken ??= await SecureStore.token();
 
-  Future<http.StreamedResponse> _send(String url,
-      {Map<String, String>? headers}) async {
+  Future<http.StreamedResponse> _send(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
     await TrustStore.I.warmup();
     final req = http.Request('GET', Uri.parse(url));
     final token = await _getToken();
@@ -85,8 +89,10 @@ class AuthFileService extends FileService {
   }
 
   @override
-  Future<FileServiceResponse> get(String url,
-      {Map<String, String>? headers}) async {
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
     // 公网弱网加固（2026-09-03）：并发数按入口动态调整
     // （局域网 8 路 / 公网 3 路，见 _Semaphore 注释）
     _semaphore.setMax(isPublicAddress(await Prefs.lastAddress()) ? 3 : 8);
@@ -161,12 +167,24 @@ class _ScopedGetResponse extends HttpGetResponse {
       StreamSubscription<List<int>>? sub;
       ctrl = StreamController<List<int>>(
         onListen: () {
-          sub ??= super.content.listen(ctrl.add, onError: ctrl.addError,
-              onDone: () {
-                _releaseOnce();
-                ctrl.close();
-              },
-              cancelOnError: true);
+          sub ??= super.content.listen(
+            ctrl.add,
+            onError: (Object e, StackTrace st) {
+              // 必须自己释放：cancelOnError 只取消订阅，**不会**触发
+              // controller 的 onCancel，也不触发 onDone。漏掉这一支的话
+              // 每次 body 中途断流都会永久吃掉一个并发槽（公网上限 3），
+              // 累计 3 次后整屏缩略图不再发任何请求，停在占位图且无报错。
+              // 2026-11-17 代码 review 发现的 P0。
+              _releaseOnce();
+              ctrl.addError(e, st);
+              ctrl.close();
+            },
+            onDone: () {
+              _releaseOnce();
+              ctrl.close();
+            },
+            cancelOnError: true,
+          );
         },
         onPause: () => sub?.pause(),
         onResume: () => sub?.resume(),
@@ -201,7 +219,7 @@ class AuthCacheManager extends CacheManager {
 
   void rememberResolved(String url, File f) {
     while (_resolved.length >= _resolvedMax) {
-      _resolved.remove(_resolved.keys.first);   // FIFO 淘汰（R2-P3-6）
+      _resolved.remove(_resolved.keys.first); // FIFO 淘汰（R2-P3-6）
     }
     _resolved[url] = f;
   }
@@ -235,11 +253,16 @@ class AuthCacheManager extends CacheManager {
   void clearFailureCache() => _failed.clear();
 
   AuthCacheManager._()
-      : super(Config('authCachedImageData', fileService: AuthFileService(),
+    : super(
+        Config(
+          'authCachedImageData',
+          fileService: AuthFileService(),
           // 默认 200 个对象——上千张照片的时间线会把缓存反复挤掉，
           // "每次都转圈"的元凶之一；缩略图单张几十 KB，放宽到 5000/180 天
           maxNrOfCacheObjects: 5000,
-          stalePeriod: const Duration(days: 180)));
+          stalePeriod: const Duration(days: 180),
+        ),
+      );
 }
 
 /// 相对路径（如 /thumb/a/b.jpg）→ 服务器绝对 URL

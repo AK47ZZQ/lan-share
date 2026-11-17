@@ -94,8 +94,7 @@ class PhotosPage extends ConsumerStatefulWidget {
   /// facets 命中按分布取上一个更晚月，否则按日历回退；[nowM] 为当前
   /// 自然月上限——不前插未来的月份。
   @visibleForTesting
-  static String? newerMonth(
-      Map<String, int>? months, String m, String nowM) {
+  static String? newerMonth(Map<String, int>? months, String m, String nowM) {
     String? next;
     if (months != null && months.isNotEmpty) {
       final keys = months.keys.where((k) => k.length == 7).toList()
@@ -106,7 +105,9 @@ class PhotosPage extends ConsumerStatefulWidget {
     next ??= () {
       final y = int.tryParse(m.substring(0, 4)) ?? 2026;
       final mo = int.tryParse(m.substring(5, 7)) ?? 1;
-      return mo == 12 ? '${y + 1}-01' : '$y-${(mo + 1).toString().padLeft(2, '0')}';
+      return mo == 12
+          ? '${y + 1}-01'
+          : '$y-${(mo + 1).toString().padLeft(2, '0')}';
     }();
     return next.compareTo(nowM) > 0 ? null : next;
   }
@@ -136,19 +137,19 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   bool _done = false;
   bool _deleting = false;
   int _offset = 0;
-  int _gen = 0;                 // 加载代际：刷新后丢弃过期响应，防重复/漂移
-  int? _lastBackupDone;         // 备份完成时间戳快照：变了才触发整页刷新
+  int _gen = 0; // 加载代际：刷新后丢弃过期响应，防重复/漂移
+  int? _lastBackupDone; // 备份完成时间戳快照：变了才触发整页刷新
   Timer? _backupWatch;
-  Timer? _pulse;                // 服务端脉搏轮询（0.7.2）：任何来源的新照片自动上墙
+  Timer? _pulse; // 服务端脉搏轮询（0.7.2）：任何来源的新照片自动上墙
   Map<String, Object?>? _pulseSnap; // 脉搏快照（total+首张路径），变了才整页强刷
-  String _mediaFilter = 'all';  // all | photo | video
-  String? _month;               // YYYY-MM 按月快跳（null=全部）
+  String _mediaFilter = 'all'; // all | photo | video
+  String? _month; // YYYY-MM 按月快跳（null=全部）
   // v0.20 排序维度：false=按拍摄时间（时间线默认）；true=按入库时间
   // （二维码/网页刚传的照片按 EXIF 落历史月份"看不到新图"——入库序
   // 新上传永远在最前，平板视图不分组直接平铺）
   bool _byAdded = false;
-  Map<String, int>? _months;    // facets 缓存（月份选择页/跳月轴共用）
-  List<_Album>? _albums;        // 精选专辑（0.8.0，管理员维护）
+  Map<String, int>? _months; // facets 缓存（月份选择页/跳月轴共用）
+  List<_Album>? _albums; // 精选专辑（0.8.0，管理员维护）
   // 自定义展示范围（20260913211718-b58a）：空 = 全部文件夹；非空 = 只展示
   // 命中前缀的照片（服务端 include_dirs 下推，分页/脉搏口径都由服务端保证）
   Set<String> _includedDirs = {};
@@ -156,8 +157,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   int get _limit => isPublicAddress(_base ?? '') ? 60 : 120;
 
   // ── 1.0.2 批次新增状态 ──────────────────────────────────
-  bool _jumping = false;        // 月视图切换进行中（挡新切换与拖选）
-  String _jumpingLabel = '正在打开时间线…';   // 底部悬浮提示文案（进/出方向不同）
+  bool _jumping = false; // 月视图切换进行中（挡新切换与拖选）
+  String _jumpingLabel = '正在打开时间线…'; // 底部悬浮提示文案（进/出方向不同）
   // 月视图无缝续流（1.1.5，反馈 ddb0/0471/7e15）：`_month`=锚月（横幅/轴），
   // `_mCursor`=正在追加的月份（从锚月起向过去推进），`_mOffset`=游标月内偏移。
   // 临近底部就把更早月份**追加**到墙上（不清空不跳变），直到没有更早月份。
@@ -167,17 +168,17 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   // 复位为锚月。向前插入会移动既有内容的滚动位置，补偿见 _prependNewerMonth。
   String? _topCursor;
   bool _prepending = false;
-  int _emptyPrepends = 0;   // 连续前插到空月计数（熔断防一路空打到未来）
+  int _emptyPrepends = 0; // 连续前插到空月计数（熔断防一路空打到未来）
   // 月份轴高亮（跟随滚动）。用 ValueNotifier 而非 setState：滚动中每到月份
   // 边界就会变——setState 会重建整页（全部 sliver 树 + O(n) 分组重算），
   // 快滑跨月时就是一串重建风暴（31cd「滑动特别卡」主因之一）；收敛到轴自身重建
   final ValueNotifier<String?> _railMonthN = ValueNotifier<String?>(null);
-  Timer? _railTick;             // 滚动高亮节流
-  bool _dragSelecting = false;  // 拖拽连选进行中
-  bool _dragAdd = true;         // 拖拽方向：true=勾选 false=取消
+  Timer? _railTick; // 滚动高亮节流
+  bool _dragSelecting = false; // 拖拽连选进行中
+  bool _dragAdd = true; // 拖拽方向：true=勾选 false=取消
   final _dragTouched = <int>{}; // 本次拖拽已处理过的格子（防来回抖动）
-  Offset? _lastDragPos;         // 自动滚动 tick 的命中测试位置
-  Timer? _dragScroll;           // 拖拽边缘自动滚动
+  Offset? _lastDragPos; // 自动滚动 tick 的命中测试位置
+  Timer? _dragScroll; // 拖拽边缘自动滚动
   bool _pendingRefresh = false; // 多选中暂缓的自动刷新（退出后补一次）
 
   @override
@@ -193,14 +194,16 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     Prefs.addressNotifier.addListener(_onAddressChanged);
     _loadMore();
     _loadAlbums();
-    _ensureMonths();   // 年月快滚轴数据源（v0.11），失败静默
+    _ensureMonths(); // 年月快滚轴数据源（v0.11），失败静默
     _restoreWallDirs();
     _scroll.addListener(_onScroll);
     // 照片墙准实时：备份引擎完成一轮会写 backup_last_done_at，变化即
     // 增量合并刷新（服务端 refresh=1 放宽扫描节流到 5s）。轮询只读本地
     // prefs，开销可忽略
     _backupWatch = Timer.periodic(
-        const Duration(seconds: 10), (_) => _checkBackupDone());
+      const Duration(seconds: 10),
+      (_) => _checkBackupDone(),
+    );
     // 0.7.2 起触发面不只本机备份：20s 脉搏 ping 一次 limit=1&refresh=1
     // （服务端 force 独立 5s 节流，响应只有一个缩略项，开销可忽略），
     // total/首张变了即增量合并刷新——网页、别的手机、文件页、分享接收
@@ -221,7 +224,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// （新增/删除/最新一张换人）→ 增量合并刷新。
   Future<void> _pulseCheck() async {
     // 生命周期闸门（R1-P2-2，对齐 AutoSwitch）：退后台/锁屏后不再打网络
-    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
     // 页签闸门（v1.1.13，15 号挂账 P2 收编）：本页挂 IndexedStack 常驻，
     // 非当前页签时探测与服务端 refresh=1 都是无谓开销——静默跳过，
     // 回到页签时由 _tabChanged 立即补查一次
@@ -243,7 +248,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   Future<void> _checkBackupDone() async {
     // 生命周期闸门（R1-P2-2）：退后台不轮询
-    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) return;
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
     // 页签闸门（v1.1.13，15 号挂账 P2 收编）：本页挂 IndexedStack 常驻，
     // 非当前页签时不打网络（prefs.reload 也是真实 IO）
     if (homeTabIndex.value != kPhotosTabIndex) return;
@@ -262,32 +269,37 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 末页按 want 截断请求长度——此前固定要 300 条但只留 want 条，白烧
   /// 服务端扫描与流量）。供翻页(_loadMore)、增量合并(_refreshSoft)、
   /// 时间轴跳月(_jumpToMonth)共用；过期响应由调用方的 _gen 机制丢弃。
-  Future<(List<PhotoItem>, bool)> _fetchBatch(int from, int want,
-      {String? monthOverride}) async {
-    final month = monthOverride ?? _month;   // 月视图续流按游标月取数
+  Future<(List<PhotoItem>, bool)> _fetchBatch(
+    int from,
+    int want, {
+    String? monthOverride,
+  }) async {
+    final month = monthOverride ?? _month; // 月视图续流按游标月取数
     const page = 300;
     final out = <PhotoItem>[];
-    final seen = <String>{};   // 并行分页与远端数据漂移的去重保险
+    final seen = <String>{}; // 并行分页与远端数据漂移的去重保险
     var offset = from;
     var endReached = false;
     while (!endReached && out.length < want && mounted) {
-      final offs = <(int, int)>[];   // (offset, limit)
-      for (var o = offset;
-          o < offset + page * 4 && o < from + want;
-          o += page) {
+      final offs = <(int, int)>[]; // (offset, limit)
+      for (
+        var o = offset;
+        o < offset + page * 4 && o < from + want;
+        o += page
+      ) {
         offs.add((o, (from + want - o).clamp(1, page)));
       }
       if (offs.isEmpty) break;
       final lists = await Future.wait([
         for (final (o, lim) in offs)
           PhotosApi.list(
-              limit: lim,
-              offset: o,
-              mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
-              month: month,
-              byAdded: _byAdded,
-              includeDirs:
-                  _includedDirs.isEmpty ? null : _includedDirs.join(','))
+            limit: lim,
+            offset: o,
+            mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
+            month: month,
+            byAdded: _byAdded,
+            includeDirs: _includedDirs.isEmpty ? null : _includedDirs.join(','),
+          ),
       ]);
       var got = 0;
       for (var i = 0; i < lists.length; i++) {
@@ -326,7 +338,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (_month == null) {
         // ── 全时间线模式：原有全局翻页 ──
         final (list, endReached) = await _fetchBatch(_offset, limit);
-        if (!mounted || gen != _gen) return;   // 已刷新过：丢弃过期响应
+        if (!mounted || gen != _gen) return; // 已刷新过：丢弃过期响应
         setState(() {
           _items.addAll(list);
           _offset = _items.length;
@@ -344,8 +356,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         var got = 0;
         var emptyStreak = 0;
         while (got < limit && mounted && gen == _gen && !_done) {
-          final (list, endReached) =
-              await _fetchBatch(_mOffset, limit - got, monthOverride: _mCursor);
+          final (list, endReached) = await _fetchBatch(
+            _mOffset,
+            limit - got,
+            monthOverride: _mCursor,
+          );
           if (!mounted || gen != _gen) return;
           if (list.isNotEmpty) {
             setState(() => _items.addAll(list));
@@ -354,15 +369,24 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           }
           if (endReached) {
             final cur = _mCursor;
-            if (cur == null) break;   // 游标丢失：当月到底（防御，正常不会发生）
+            if (cur == null) break; // 游标丢失：当月到底（防御，正常不会发生）
             final next = _nextOlderMonth(cur);
             if (next == null) {
-              setState(() { _done = true; _failed = false; });
+              setState(() {
+                _done = true;
+                _failed = false;
+              });
               break;
             }
-            setState(() { _mCursor = next; _mOffset = 0; });
+            setState(() {
+              _mCursor = next;
+              _mOffset = 0;
+            });
           } else {
-            setState(() { _mOffset += list.length; _failed = false; });
+            setState(() {
+              _mOffset += list.length;
+              _failed = false;
+            });
           }
           // facets 失败/漂移时按日历回退逐月探，连 12 个空月就当到底，
           // 防止一路空打到最早年份
@@ -391,8 +415,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 返回 null。facets 可用时优先（跳过空月），否则按日历回退。
   String? _newerMonth(String m) {
     final now = DateTime.now();
-    return PhotosPage.newerMonth(_months, m,
-        '${now.year}-${now.month.toString().padLeft(2, '0')}');
+    return PhotosPage.newerMonth(
+      _months,
+      m,
+      '${now.year}-${now.month.toString().padLeft(2, '0')}',
+    );
   }
 
   /// 月视图顶部无缝前插（1.1.6，反馈 5d2d）：滚到月视图顶且上方还有更晚
@@ -405,7 +432,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         _prepending ||
         _loading ||
         _jumping ||
-        _selected.isNotEmpty ||   // 多选中下标即选中集，前插会移位——暂停
+        _selected.isNotEmpty || // 多选中下标即选中集，前插会移位——暂停
         _dragSelecting ||
         !mounted) {
       return;
@@ -424,7 +451,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (anchorDay != null) {
         final c = _hdrCtxs[anchorDay];
         final ro = c?.findRenderObject();
-        if (c != null && c.mounted && ro is RenderBox && ro.attached && ro.hasSize) {
+        if (c != null &&
+            c.mounted &&
+            ro is RenderBox &&
+            ro.attached &&
+            ro.hasSize) {
           anchorCtx = c;
           preY = ro.localToGlobal(Offset.zero).dy;
         }
@@ -434,8 +465,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       var off = 0;
       var end = false;
       while (!end && mounted && gen == _gen && fetched.length <= 2400) {
-        final (list, endReached) =
-            await _fetchBatch(off, 600, monthOverride: next);
+        final (list, endReached) = await _fetchBatch(
+          off,
+          600,
+          monthOverride: next,
+        );
         fetched.addAll(list);
         off += list.length;
         end = endReached || list.isEmpty;
@@ -447,7 +481,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (_selected.isNotEmpty || _dragSelecting) return;
       if (fetched.isEmpty) {
         // 空月（facets 缺失按日历回退才会碰到）：推进游标下次再试
-        if (++_emptyPrepends > 12) return;   // 一路空到当前月：视为已到顶
+        if (++_emptyPrepends > 12) return; // 一路空到当前月：视为已到顶
         _topCursor = next;
         return;
       }
@@ -464,10 +498,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       setState(() => _items.insertAll(0, fetched));
       _topCursor = next;
       if (anchorCtx != null && mounted) {
-        await WidgetsBinding.instance.endOfFrame;   // 等插入后的布局
+        await WidgetsBinding.instance.endOfFrame; // 等插入后的布局
         if (!mounted || !anchorCtx.mounted) return;
         final ro = anchorCtx.findRenderObject();
-        if (ro is RenderBox && ro.attached && ro.hasSize && _scroll.hasClients) {
+        if (ro is RenderBox &&
+            ro.attached &&
+            ro.hasSize &&
+            _scroll.hasClients) {
           final postY = ro.localToGlobal(Offset.zero).dy;
           final delta = postY - preY;
           if (delta > 0) _scroll.jumpTo(_scroll.offset + delta);
@@ -480,7 +517,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   /// 硬刷新（下拉/切筛选/看图删除后）：清空重拉，回到墙顶。
   Future<void> _refresh() async {
-    if (!mounted) return;   // R1-P2-4：彻底删除/查看器回调路径可能在 dispose 后触发
+    if (!mounted) return; // R1-P2-4：彻底删除/查看器回调路径可能在 dispose 后触发
     _gen++;
     setState(() {
       _items.clear();
@@ -500,7 +537,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // 快滚轴和按月列表——用户感知"照片墙不同步"的第二根源
     _months = null;
     await _ensureMonths();
-    if (mounted) setState(() {});   // 快滚轴/侧栏月份数目刷新
+    if (mounted) setState(() {}); // 快滚轴/侧栏月份数目刷新
   }
 
   /// 增量合并刷新（20260914042013-6e62 / 20260914042829-def1）：脉搏/备份
@@ -520,12 +557,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       _pendingRefresh = true;
       return;
     }
-    final gen = ++_gen;          // 换代：作废在途翻页响应，防重放追加
+    final gen = ++_gen; // 换代：作废在途翻页响应，防重放追加
     final anchorDay = _dayOfFlat(_topVisibleFlat());
     setState(() => _loading = true);
     try {
-      final (list, endReached) =
-          await _fetchBatch(0, _items.length + _limit);
+      final (list, endReached) = await _fetchBatch(0, _items.length + _limit);
       if (!mounted || gen != _gen) return;
       var same = list.length == _items.length;
       if (same) {
@@ -536,9 +572,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           }
         }
       }
-      if (same) return;    // 零变化：不 setState，滚动与已加载图片全保持
+      if (same) return; // 零变化：不 setState，滚动与已加载图片全保持
       setState(() {
-        _items..clear()..addAll(list);
+        _items
+          ..clear()
+          ..addAll(list);
         _offset = _items.length;
         _done = endReached;
         _failed = false;
@@ -569,9 +607,9 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     if (months != null) return months;
     try {
       months = await PhotosApi.monthFacets(
-          mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
-          includeDirs:
-              _includedDirs.isEmpty ? null : _includedDirs.join(','));
+        mediaType: _mediaFilter == 'all' ? null : _mediaFilter,
+        includeDirs: _includedDirs.isEmpty ? null : _includedDirs.join(','),
+      );
       _months = months;
       return months;
     } catch (_) {
@@ -648,14 +686,17 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           _scroll.jumpTo(abs < 0 ? 0 : abs);
           await Future.delayed(const Duration(milliseconds: 300));
           if (!ctx.mounted) return;
-          await Scrollable.ensureVisible(ctx,
-              duration: const Duration(milliseconds: 250), alignment: 0);
+          await Scrollable.ensureVisible(
+            ctx,
+            duration: const Duration(milliseconds: 250),
+            alignment: 0,
+          );
           if (mounted) _updateRailMonth();
           return;
         }
       }
       final est = _estimateDayOffset(day);
-      if (est == null) return;   // 目标日不在已加载数据里
+      if (est == null) return; // 目标日不在已加载数据里
       final jump = _calibrate(day, est) ?? est;
       _scroll.jumpTo(jump < 0 ? 0 : jump);
     }
@@ -687,7 +728,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final groups = _computeGroups();
     final cols = context.gridColumns();
     final cw = MediaQuery.sizeOf(context).width / cols;
-    const headerH = 54.0;   // 日期头：上下边距 12+8 + 内边距 7*2 + 文本行
+    const headerH = 54.0; // 日期头：上下边距 12+8 + 内边距 7*2 + 文本行
     const spacing = 2.0;
     var acc = 0.0;
     for (final (day, flatIdx) in groups) {
@@ -771,9 +812,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _railCtxs[m];
       if (ctx != null) {
-        Scrollable.ensureVisible(ctx,
-            alignment: 0.5,
-            duration: const Duration(milliseconds: 150));
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.5,
+          duration: const Duration(milliseconds: 150),
+        );
       }
     });
   }
@@ -787,13 +830,15 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // 会整体移位 → 批量删除删错照片（ADV1 P1）
     if (_deleting || _jumping || _prepending) return;
     _dragTouched.clear();
-    _dragAdd = !_selected.contains(flat);   // 起始格已选中 → 拖动为取消
+    _dragAdd = !_selected.contains(flat); // 起始格已选中 → 拖动为取消
     _toggleSelect(flat);
     _dragTouched.add(flat);
     _dragSelecting = true;
     _lastDragPos = pos;
     _dragScroll ??= Timer.periodic(
-        const Duration(milliseconds: 32), (_) => _dragTick());
+      const Duration(milliseconds: 32),
+      (_) => _dragTick(),
+    );
   }
 
   void _dragMove(Offset pos) {
@@ -817,9 +862,12 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final ro = ctx.findRenderObject();
       if (ro is RenderBox && ro.attached && ro.hasSize) {
         final tl = ro.localToGlobal(Offset.zero);
-        if (Rect.fromLTWH(tl.dx, tl.dy, ro.size.width, ro.size.height)
-            .inflate(2)
-            .contains(pos)) {
+        if (Rect.fromLTWH(
+          tl.dx,
+          tl.dy,
+          ro.size.width,
+          ro.size.height,
+        ).inflate(2).contains(pos)) {
           _dragTouched.add(flat);
           if (_dragAdd && !_selected.contains(flat)) {
             _toggleSelect(flat);
@@ -847,7 +895,8 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     if (v == 0) return;
     _scroll.jumpTo(
-        (_scroll.offset + v).clamp(0.0, _scroll.position.maxScrollExtent));
+      (_scroll.offset + v).clamp(0.0, _scroll.position.maxScrollExtent),
+    );
     final pos = _lastDragPos;
     if (pos != null) _dragHitTest(pos);
   }
@@ -882,64 +931,85 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     final sel = Set<String>.from(_includedDirs);
     await showModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (bctx) => SafeArea(
-                child: StatefulBuilder(
-                    builder: (bctx, setB) => Container(
-                        constraints: BoxConstraints(
-                            maxHeight:
-                                MediaQuery.of(bctx).size.height * 0.7),
-                        padding: const EdgeInsets.fromLTRB(
-                            Gap.md, Gap.xxs, Gap.md, Gap.sm),
-                        child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Row(children: [
-                                const Expanded(
-                                    child: Text('照片墙展示范围',
-                                        style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.bold))),
-                                if (sel.isNotEmpty)
-                                  TextButton(
-                                      onPressed: () => setB(() => sel.clear()),
-                                      child: const Text('清空')),
-                              ]),
-                              Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Text('不选任何文件夹 = 展示全部',
-                                      style: TextStyle(
-                                          fontSize: 11.5,
-                                          color: Theme.of(bctx)
-                                              .colorScheme
-                                              .onSurfaceVariant))),
-                              const SizedBox(height: Gap.xxs),
-                              Flexible(
-                                  child: ListView(shrinkWrap: true, children: [
-                                for (final f in folders)
-                                  CheckboxListTile(
-                                      dense: true,
-                                      controlAffinity:
-                                          ListTileControlAffinity.leading,
-                                      title: Text(f.dir,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
-                                      subtitle: Text('${f.count} 项'),
-                                      value: sel.contains(f.dir),
-                                      onChanged: (v) => setB(() => v == true
-                                          ? sel.add(f.dir)
-                                          : sel.remove(f.dir))),
-                              ])),
-                              const SizedBox(height: Gap.xxs),
-                              FilledButton(
-                                  onPressed: () => Navigator.pop(bctx),
-                                  child: const Text('完成')),
-                            ])))));
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (bctx) => SafeArea(
+        child: StatefulBuilder(
+          builder: (bctx, setB) => Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(bctx).size.height * 0.7,
+            ),
+            padding: const EdgeInsets.fromLTRB(Gap.md, Gap.xxs, Gap.md, Gap.sm),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '照片墙展示范围',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    if (sel.isNotEmpty)
+                      TextButton(
+                        onPressed: () => setB(() => sel.clear()),
+                        child: const Text('清空'),
+                      ),
+                  ],
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '不选任何文件夹 = 展示全部',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: Theme.of(bctx).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: Gap.xxs),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final f in folders)
+                        CheckboxListTile(
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(
+                            f.dir,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text('${f.count} 项'),
+                          value: sel.contains(f.dir),
+                          onChanged: (v) => setB(
+                            () =>
+                                v == true ? sel.add(f.dir) : sel.remove(f.dir),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: Gap.xxs),
+                FilledButton(
+                  onPressed: () => Navigator.pop(bctx),
+                  child: const Text('完成'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
     if (!mounted) return;
-    final same = sel.length == _includedDirs.length &&
-        sel.every(_includedDirs.contains);
+    final same =
+        sel.length == _includedDirs.length && sel.every(_includedDirs.contains);
     if (same) return;
     setState(() => _includedDirs = sel);
     await _persistWallDirs();
@@ -954,31 +1024,45 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // 闭包内无法提升可空局部变量：先物化成 final 列表再用
     final monthEntries = months.entries.toList();
     final sel = await showModalBottomSheet<String>(
-        context: context,
-        builder: (ctx) => SafeArea(
-            child: monthEntries.isEmpty
-                ? ListView(shrinkWrap: true, children: const [
-                    Padding(
-                        padding: EdgeInsets.all(Gap.xl),
-                        child: Center(child: Text('还没有照片'))),
-                  ])
-                : ListView(shrinkWrap: true, children: [
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: monthEntries.isEmpty
+            ? ListView(
+                shrinkWrap: true,
+                children: const [
+                  Padding(
+                    padding: EdgeInsets.all(Gap.xl),
+                    child: Center(child: Text('还没有照片')),
+                  ),
+                ],
+              )
+            : ListView(
+                shrinkWrap: true,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.calendar_today_outlined),
+                    title: const Text('全部月份'),
+                    selected: _month == null,
+                    onTap: () => Navigator.pop(ctx, ''),
+                  ),
+                  for (final e in monthEntries)
                     ListTile(
-                        leading: const Icon(Icons.calendar_today_outlined),
-                        title: const Text('全部月份'),
-                        selected: _month == null,
-                        onTap: () => Navigator.pop(ctx, '')),
-                    for (final e in monthEntries)
-                      ListTile(
-                          leading: const Icon(Icons.calendar_view_month),
-                          title: Text(_monthLabel(e.key)),
-                          trailing: Text('${e.value} 张',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(ctx).colorScheme.outline)),
-                          selected: _month == e.key,
-                          onTap: () => Navigator.pop(ctx, e.key)),
-                  ])));
+                      leading: const Icon(Icons.calendar_view_month),
+                      title: Text(_monthLabel(e.key)),
+                      trailing: Text(
+                        '${e.value} 张',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(ctx).colorScheme.outline,
+                        ),
+                      ),
+                      selected: _month == e.key,
+                      onTap: () => Navigator.pop(ctx, e.key),
+                    ),
+                ],
+              ),
+      ),
+    );
     if (sel == null || !mounted) return;
     // 与右缘月份轴走同一条月视图切换路径（横幅/接续/高亮行为一致）
     if (sel.isEmpty) {
@@ -994,9 +1078,11 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     try {
       final list = await AlbumApi.list();
       if (!mounted) return;
-      setState(() => _albums = list
-          .map((e) => _Album.fromJson(e as Map<String, dynamic>))
-          .toList());
+      setState(
+        () => _albums = list
+            .map((e) => _Album.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
     } catch (_) {}
   }
 
@@ -1007,12 +1093,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // controller 生命周期由 PromptDialog 自持（v0.13：旧写法在退场动画中
     // dispose 触发 framework 断言，点"下一步"必崩红屏——E2E 实测）
     final title = await showDialog<String>(
-        context: context,
-        builder: (d) => const PromptDialog(
-              title: '新建精选专辑',
-              label: '标题（如"暑假合集"）',
-              hint: '暑假合集',
-            ));
+      context: context,
+      builder: (d) => const PromptDialog(
+        title: '新建精选专辑',
+        label: '标题（如"暑假合集"）',
+        hint: '暑假合集',
+      ),
+    );
     if (title == null || title.trim().isEmpty || !mounted) return;
     try {
       final id = await AlbumApi.create(title.trim());
@@ -1022,13 +1109,18 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         _loadAlbums();
         return;
       }
-      await Navigator.push<bool>(context, MaterialPageRoute(
+      await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
           builder: (_) => AlbumDetailPage(
-              id: id,
-              title: title.trim(),
-              createdBy: ref.read(sessionProvider).username ?? '',
-              openPicker: true)));
-      if (mounted) _loadAlbums();   // 添加了照片/直接返回都刷新列表计数
+            id: id,
+            title: title.trim(),
+            createdBy: ref.read(sessionProvider).username ?? '',
+            openPicker: true,
+          ),
+        ),
+      );
+      if (mounted) _loadAlbums(); // 添加了照片/直接返回都刷新列表计数
     } catch (e) {
       showToast(errDetail(e));
     }
@@ -1036,12 +1128,17 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
 
   /// 打开专辑详情；返回 true 表示内容有变（删专辑/移出/加入），刷新列表
   Future<void> _openAlbum(_Album a) async {
-    final changed = await Navigator.push<bool>(context, MaterialPageRoute(
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
         builder: (_) => AlbumDetailPage(
-            id: a.id,
-            title: a.title,
-            createdBy: a.createdBy,
-            month: a.month)));
+          id: a.id,
+          title: a.title,
+          createdBy: a.createdBy,
+          month: a.month,
+        ),
+      ),
+    );
     if (changed == true && mounted) _loadAlbums();
   }
 
@@ -1051,71 +1148,84 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final canDelete =
         ref.read(sessionProvider).role == 'admin' || a.createdBy == me;
     await showModalBottomSheet<void>(
-        context: context,
-        builder: (ctx) => SafeArea(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Padding(
-                  padding: const EdgeInsets.all(Gap.md),
-                  child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(a.title,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold)),
-                            const SizedBox(height: Gap.xxs),
-                            Text(
-                                '${a.count > 0 ? "${a.count} 项 · " : ""}'
-                                '${a.createdBy.isEmpty ? "" : "由 ${a.createdBy} 创建"}',
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey)),
-                          ]))),
-              const Divider(height: 1),
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Gap.md),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      a.title,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: Gap.xxs),
+                    Text(
+                      '${a.count > 0 ? "${a.count} 项 · " : ""}'
+                      '${a.createdBy.isEmpty ? "" : "由 ${a.createdBy} 创建"}',
+                      style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('查看专辑'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openAlbum(a);
+              },
+            ),
+            if (canDelete)
               ListTile(
-                  leading: const Icon(Icons.photo_library_outlined),
-                  title: const Text('查看专辑'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _openAlbum(a);
-                  }),
-              if (canDelete)
-                ListTile(
-                    leading: const Icon(Icons.delete_outline),
-                    title: const Text('删除专辑'),
-                    iconColor: Theme.of(context).colorScheme.error,
-                    textColor: Theme.of(context).colorScheme.error,
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      // ignore: discarded_futures
-                      _deleteAlbum(a);
-                    }),
-              const SizedBox(height: Gap.xs),
-            ])));
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('删除专辑'),
+                iconColor: Theme.of(context).colorScheme.error,
+                textColor: Theme.of(context).colorScheme.error,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  // ignore: discarded_futures
+                  _deleteAlbum(a);
+                },
+              ),
+            const SizedBox(height: Gap.xs),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _deleteAlbum(_Album a) async {
     final ok = await showDialog<bool>(
-        context: context,
-        builder: (d) => AlertDialog(
-                title: Text('删除专辑「${a.title}」？'),
-                content: const Text('只移除专辑条目，不影响照片。'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(d, false),
-                      child: const Text('取消')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(d, true),
-                      child: const Text('删除')),
-                ]));
+      context: context,
+      builder: (d) => AlertDialog(
+        title: Text('删除专辑「${a.title}」？'),
+        content: const Text('只移除专辑条目，不影响照片。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(d, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
     if (ok != true || !mounted) return;
     try {
       // v0.11 端点：admin 或创建者可删（403 由服务端兜底）
       await AlbumApi.delete(a.id);
       if (!mounted) return;
-      setState(() =>
-          _albums = _albums?.where((x) => x.id != a.id).toList());
+      setState(() => _albums = _albums?.where((x) => x.id != a.id).toList());
       showToast('已删除');
     } catch (e) {
       showToast(errDetail(e));
@@ -1156,8 +1266,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   static final _vidExts = kVidExtsNoDot;
 
   Future<void> _pickAndUpload() async {
-    final res = await FilePicker.platform
-        .pickFiles(type: FileType.media, allowMultiple: true);
+    final res = await FilePicker.platform.pickFiles(
+      type: FileType.media,
+      allowMultiple: true,
+    );
     if (res == null || res.files.isEmpty) return;
     final username = ref.read(sessionProvider).username ?? '';
     final engine = TransferEngine.I;
@@ -1168,10 +1280,10 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       final ext = f.extension?.toLowerCase() ?? '';
       final isVideo = _vidExts.contains(ext);
       final t = engine.enqueueUpload(
-          localPath: f.path!,
-          destDir:
-              '${isVideo ? "视频" : "照片"}/$username/$kManualUploadAlbum',
-          name: f.name);
+        localPath: f.path!,
+        destDir: '${isVideo ? "视频" : "照片"}/$username/$kManualUploadAlbum',
+        name: f.name,
+      );
       if (t != null) {
         enqueued.add(t);
         n++;
@@ -1190,19 +1302,23 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     if (!mounted) return;
     showSnackTracked(
-        ScaffoldMessenger.of(context),
-        SnackBar(
-            content: Text(n > 0 ? '已加入上传队列 $n 张' : '照片已在队列中'),
-            duration: const Duration(seconds: 2)),
-        autoClose: const Duration(seconds: 2, milliseconds: 500));
+      ScaffoldMessenger.of(context),
+      SnackBar(
+        content: Text(n > 0 ? '已加入上传队列 $n 张' : '照片已在队列中'),
+        duration: const Duration(seconds: 2),
+      ),
+      autoClose: const Duration(seconds: 2, milliseconds: 500),
+    );
   }
 
   // ── 多选模式 ──────────────────────────────────────────────
 
   void _toggleSelect(int flat) {
-    setState(() => _selected.contains(flat)
-        ? _selected.remove(flat)
-        : _selected.add(flat));
+    setState(
+      () => _selected.contains(flat)
+          ? _selected.remove(flat)
+          : _selected.add(flat),
+    );
     if (_selected.isEmpty) _afterSelectionEnd();
   }
 
@@ -1227,34 +1343,43 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     for (final i in _selected) {
       final it = _items[i];
       final t = await engine.enqueueDownload(
-          remotePath: it.path, name: it.name, size: 0);
+        remotePath: it.path,
+        name: it.name,
+        size: 0,
+      );
       if (t != null) n++;
     }
     _exitSelection();
     if (!mounted) return;
     showSnackTracked(
-        ScaffoldMessenger.of(context),
-        SnackBar(
-            content: Text(n > 0 ? '已加入下载队列 $n 张' : '任务已在队列中'),
-            duration: const Duration(seconds: 2)),
-        autoClose: const Duration(seconds: 2, milliseconds: 500));
+      ScaffoldMessenger.of(context),
+      SnackBar(
+        content: Text(n > 0 ? '已加入下载队列 $n 张' : '任务已在队列中'),
+        duration: const Duration(seconds: 2),
+      ),
+      autoClose: const Duration(seconds: 2, milliseconds: 500),
+    );
   }
 
   Future<void> _deleteSelected() async {
     final paths = _selected.map((i) => _items[i]).toList();
     final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dctx) => AlertDialog(
-                title: Text('删除 ${paths.length} 张照片？'),
-                content: const Text('照片将进入服务端回收站，可随时恢复。'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(dctx, false),
-                      child: const Text('取消')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(dctx, true),
-                      child: const Text('删除')),
-                ]));
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text('删除 ${paths.length} 张照片？'),
+        content: const Text('照片将进入服务端回收站，可随时恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
     if (confirmed != true || !mounted) return;
     setState(() => _deleting = true);
     var ok = 0, failed = 0;
@@ -1277,21 +1402,20 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
         }
       }
 
-      await Future.wait(
-          [for (var i = 0; i < 4; i++) worker()]);
+      await Future.wait([for (var i = 0; i < 4; i++) worker()]);
     } catch (_) {
       failed += paths.length - ok;
     }
     if (!mounted) return;
     setState(() => _deleting = false);
     showSnackTracked(
-        ScaffoldMessenger.of(context),
-        SnackBar(
-            content: Text(failed > 0
-                ? '已删 $ok 张，$failed 张失败'
-                : '已删除 $ok 张'),
-            duration: const Duration(seconds: 2)),
-        autoClose: const Duration(seconds: 2, milliseconds: 500));
+      ScaffoldMessenger.of(context),
+      SnackBar(
+        content: Text(failed > 0 ? '已删 $ok 张，$failed 张失败' : '已删除 $ok 张'),
+        duration: const Duration(seconds: 2),
+      ),
+      autoClose: const Duration(seconds: 2, milliseconds: 500),
+    );
     await _refresh();
   }
 
@@ -1301,23 +1425,28 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   Future<void> _purgeSelected() async {
     final paths = _selected.map((i) => _items[i]).toList();
     final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dctx) => AlertDialog(
-                title: Text('彻底删除 ${paths.length} 张照片？'),
-                content: const Text(
-                    '不经过回收站，直接从服务端磁盘删除，无法恢复。\n\n'
-                    '手机上已备份的原照片不受影响；删除后服务端空间立即释放。'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(dctx, false),
-                      child: const Text('取消')),
-                  FilledButton(
-                      style: FilledButton.styleFrom(
-                          backgroundColor:
-                              Theme.of(dctx).colorScheme.error),
-                      onPressed: () => Navigator.pop(dctx, true),
-                      child: const Text('彻底删除')),
-                ]));
+      context: context,
+      builder: (dctx) => AlertDialog(
+        title: Text('彻底删除 ${paths.length} 张照片？'),
+        content: const Text(
+          '不经过回收站，直接从服务端磁盘删除，无法恢复。\n\n'
+          '手机上已备份的原照片不受影响；删除后服务端空间立即释放。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(dctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(dctx, true),
+            child: const Text('彻底删除'),
+          ),
+        ],
+      ),
+    );
     if (confirmed != true || !mounted) return;
     setState(() => _deleting = true);
     try {
@@ -1325,11 +1454,13 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
       if (!mounted) return;
       _exitSelection();
       showSnackTracked(
-          ScaffoldMessenger.of(context),
-          SnackBar(
-              content: Text(res.report),
-              duration: const Duration(seconds: 3)),
-          autoClose: const Duration(seconds: 3, milliseconds: 600));
+        ScaffoldMessenger.of(context),
+        SnackBar(
+          content: Text(res.report),
+          duration: const Duration(seconds: 3),
+        ),
+        autoClose: const Duration(seconds: 3, milliseconds: 600),
+      );
     } finally {
       // 编排层任何异常都不能把底栏永久藏掉
       if (mounted) setState(() => _deleting = false);
@@ -1354,58 +1485,66 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     return Scaffold(
       appBar: AppBar(
         leading: selecting
-            ? IconButton(icon: const Icon(Icons.close), onPressed: _exitSelection)
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitSelection,
+              )
             : null,
         title: Text(selecting ? '已选 ${_selected.length} 张' : '照片'),
         actions: selecting
             ? [
                 TextButton(
-                    onPressed: () => setState(() {
-                          if (_selected.length == _items.length) {
-                            _selected.clear();
-                          } else {
-                            _selected
-                              ..clear()
-                              ..addAll(List.generate(_items.length, (i) => i));
-                          }
-                        }),
-                    child: Text(_selected.length == _items.length ? '全不选' : '全选')),
+                  onPressed: () => setState(() {
+                    if (_selected.length == _items.length) {
+                      _selected.clear();
+                    } else {
+                      _selected
+                        ..clear()
+                        ..addAll(List.generate(_items.length, (i) => i));
+                    }
+                  }),
+                  child: Text(_selected.length == _items.length ? '全不选' : '全选'),
+                ),
               ]
             : [
                 IconButton(
-                    tooltip: _byAdded
-                        ? '当前：按入库时间（点此切回拍摄时间）'
-                        : '刚上传的照片不在最前？切换为按入库时间',
-                    icon: Icon(_byAdded
-                        ? Icons.history
-                        : Icons.fiber_new_outlined),
-                    onPressed: () {
-                      setState(() => _byAdded = !_byAdded);
-                      _refresh();
-                    }),
+                  tooltip: _byAdded
+                      ? '当前：按入库时间（点此切回拍摄时间）'
+                      : '刚上传的照片不在最前？切换为按入库时间',
+                  icon: Icon(
+                    _byAdded ? Icons.history : Icons.fiber_new_outlined,
+                  ),
+                  onPressed: () {
+                    setState(() => _byAdded = !_byAdded);
+                    _refresh();
+                  },
+                ),
                 IconButton(
-                    tooltip: _month == null
-                        ? '按月跳转'
-                        : '当前：${_monthLabel(_month!)}',
-                    icon: const Icon(Icons.calendar_month_outlined),
-                    onPressed: _byAdded ? null : _pickMonth),
+                  tooltip: _month == null
+                      ? '按月跳转'
+                      : '当前：${_monthLabel(_month!)}',
+                  icon: const Icon(Icons.calendar_month_outlined),
+                  onPressed: _byAdded ? null : _pickMonth,
+                ),
                 IconButton(
-                    tooltip: '新建精选专辑',
-                    icon: const Icon(Icons.auto_awesome_mosaic_outlined),
-                    onPressed: ref.read(sessionProvider).role == 'guest'
-                        ? null
-                        : () => _addAlbum()),
+                  tooltip: '新建精选专辑',
+                  icon: const Icon(Icons.auto_awesome_mosaic_outlined),
+                  onPressed: ref.read(sessionProvider).role == 'guest'
+                      ? null
+                      : () => _addAlbum(),
+                ),
                 IconButton(
-                    tooltip: '上传照片/视频',
-                    icon: const Icon(Icons.add_photo_alternate_outlined),
-                    onPressed: _pickAndUpload),
+                  tooltip: '上传照片/视频',
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                  onPressed: _pickAndUpload,
+                ),
               ],
       ),
       body: _deleting
           ? const Center(child: CircularProgressIndicator())
           : _base == null
-              ? const Center(child: CircularProgressIndicator())
-              : _monthBody(selecting),
+          ? const Center(child: CircularProgressIndicator())
+          : _monthBody(selecting),
       bottomNavigationBar: selecting && !_deleting ? _selectionBar() : null,
     );
   }
@@ -1415,146 +1554,164 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   /// 否则两者在同一手势上撞车（实测：前插取数期间刷新换代，前插被丢弃）。
   /// 月视图下同步新照片走顶部横幅/轴「全部」回全时间线后下拉刷新。
   Widget _monthBody(bool selecting) {
-    final inner = Column(children: [
-                    // 精选专辑行（v0.14 文件夹式）：封面缩略图迷你卡，
-                    // 点按进专辑详情（勾选添加/移出/下载），长按删除入口
-                    if (_albums != null && _albums!.isNotEmpty)
-                      SizedBox(
-                          height: 92,
-                          child: ListView(
-                              scrollDirection: Axis.horizontal,
-                              padding:
-                                  const EdgeInsets.fromLTRB(10, 6, 10, 0),
-                              children: [
-                                for (final a in _albums!)
-                                  Padding(
-                                      padding:
-                                          const EdgeInsets.only(right: Gap.xs),
-                                      child: GestureDetector(
-                                          onTap: () => _openAlbum(a),
-                                          onLongPress: () =>
-                                              _albumSheet(a),
-                                          child: Container(
-                                              width: 92,
-                                              padding: const EdgeInsets
-                                                  .fromLTRB(5, 5, 5, Gap.xxs),
-                                              decoration: BoxDecoration(
-                                                  color: Theme.of(context)
-                                                      .colorScheme
-                                                      .surfaceContainerHighest,
-                                                  borderRadius:
-                                                      Radii.bSm),
-                                              child: Column(children: [
-                                                Expanded(
-                                                    child: ClipRRect(
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(7),
-                                                        child:
-                                                            SizedBox.expand(
-                                                                child: (a.cover
-                                                                            ?.isNotEmpty ??
-                                                                        false) &&
-                                                                    _base !=
-                                                                        null
-                                                            ? AuthImage(
-                                                                url:
-                                                                    '$_base/thumb/${encPath(a.cover!)}')
-                                                            : Icon(
-                                                                Icons
-                                                                    .auto_awesome_mosaic_outlined,
-                                                                color: Theme.of(
-                                                                        context)
-                                                                    .colorScheme
-                                                                    .primary)))),
-                                                const SizedBox(height: 3),
-                                                Text(a.title,
-                                                    maxLines: 1,
-                                                    overflow: TextOverflow
-                                                        .ellipsis,
-                                                    style: const TextStyle(
-                                                        fontSize: 11,
-                                                        fontWeight:
-                                                            FontWeight.w600)),
-                                                Text(
-                                                    a.count > 0
-                                                        ? '${a.count} 项'
-                                                        : '空的',
-                                                    style: TextStyle(
-                                                        fontSize: 9.5,
-                                                        color: Theme.of(
-                                                                context)
-                                                                .colorScheme
-                                                                .outline)),
-                                              ])))),
-                              ])),
-                    // 类型筛选 + 月份 chip 行
-                    SizedBox(
-                        height: 44,
-                        child: ListView(scrollDirection: Axis.horizontal,
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            children: [
-                              for (final (v, label) in const [
-                                ('all', '全部'),
-                                ('photo', '照片'),
-                                ('video', '视频'),
-                              ])
-                                Padding(
-                                    padding: const EdgeInsets.only(right: 6),
-                                    child: ChoiceChip(
-                                        label: Text(label),
-                                        selected: _mediaFilter == v,
-                                        visualDensity: VisualDensity.compact,
-                                        onSelected: (_) => _setFilter(v))),
-                              if (_month != null)
-                                Padding(
-                                    padding: const EdgeInsets.only(left: 2),
-                                    child: InputChip(
-                                        visualDensity: VisualDensity.compact,
-                                        avatar:
-                                            const Icon(Icons.calendar_month,
-                                                size: IconSizes.sm),
-                                        label:
-                                            Text(_monthLabel(_month!)),
-                                        onDeleted: _exitMonthView,
-                                        onPressed: _pickMonth)),
-                              // 自定义展示范围入口（20260913211718-b58a）
-                              Padding(
-                                  padding: const EdgeInsets.only(left: 2),
-                                  child: InputChip(
-                                      visualDensity: VisualDensity.compact,
-                                      avatar: const Icon(
-                                          Icons.folder_copy_outlined,
-                                          size: IconSizes.sm),
-                                      label: Text(_includedDirs.isEmpty
-                                          ? '文件夹'
-                                          : '自定义 · ${_includedDirs.length}'),
-                                      onPressed: _pickFolders,
-                                      onDeleted: _includedDirs.isEmpty
-                                          ? null
-                                          : () {
-                                              setState(
-                                                  () => _includedDirs = {});
-                                              // ignore: discarded_futures
-                                              _persistWallDirs();
-                                              _refresh();
-                                            })),
-                            ])),
-                    Expanded(child: _gridOrEmpty(selecting)),
-                  ]);
+    final inner = Column(
+      children: [
+        // 精选专辑行（v0.14 文件夹式）：封面缩略图迷你卡，
+        // 点按进专辑详情（勾选添加/移出/下载），长按删除入口
+        if (_albums != null && _albums!.isNotEmpty)
+          SizedBox(
+            height: 92,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+              children: [
+                for (final a in _albums!)
+                  Padding(
+                    padding: const EdgeInsets.only(right: Gap.xs),
+                    child: GestureDetector(
+                      onTap: () => _openAlbum(a),
+                      onLongPress: () => _albumSheet(a),
+                      child: Container(
+                        width: 92,
+                        padding: const EdgeInsets.fromLTRB(5, 5, 5, Gap.xxs),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          borderRadius: Radii.bSm,
+                        ),
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(7),
+                                child: SizedBox.expand(
+                                  child:
+                                      (a.cover?.isNotEmpty ?? false) &&
+                                          _base != null
+                                      ? AuthImage(
+                                          url:
+                                              '$_base/thumb/${encPath(a.cover!)}',
+                                        )
+                                      : Icon(
+                                          Icons.auto_awesome_mosaic_outlined,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                        ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              a.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              a.count > 0 ? '${a.count} 项' : '空的',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                color: Theme.of(context).colorScheme.outline,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        // 类型筛选 + 月份 chip 行
+        SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            children: [
+              for (final (v, label) in const [
+                ('all', '全部'),
+                ('photo', '照片'),
+                ('video', '视频'),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(label),
+                    selected: _mediaFilter == v,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (_) => _setFilter(v),
+                  ),
+                ),
+              if (_month != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 2),
+                  child: InputChip(
+                    visualDensity: VisualDensity.compact,
+                    avatar: const Icon(
+                      Icons.calendar_month,
+                      size: IconSizes.sm,
+                    ),
+                    label: Text(_monthLabel(_month!)),
+                    onDeleted: _exitMonthView,
+                    onPressed: _pickMonth,
+                  ),
+                ),
+              // 自定义展示范围入口（20260913211718-b58a）
+              Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: InputChip(
+                  visualDensity: VisualDensity.compact,
+                  avatar: const Icon(
+                    Icons.folder_copy_outlined,
+                    size: IconSizes.sm,
+                  ),
+                  label: Text(
+                    _includedDirs.isEmpty
+                        ? '文件夹'
+                        : '自定义 · ${_includedDirs.length}',
+                  ),
+                  onPressed: _pickFolders,
+                  onDeleted: _includedDirs.isEmpty
+                      ? null
+                      : () {
+                          setState(() => _includedDirs = {});
+                          // ignore: discarded_futures
+                          _persistWallDirs();
+                          _refresh();
+                        },
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: _gridOrEmpty(selecting)),
+      ],
+    );
     if (_month != null) return inner;
     return RefreshIndicator(onRefresh: _refresh, child: inner);
   }
 
   Widget _gridOrEmpty(bool selecting) {
     if (_items.isEmpty && !_loading) {
-      return ListView(children: [
-        const SizedBox(height: 100),
-        Center(child: Text(_failed ? '加载失败' : '这里还是空的')),
-        const SizedBox(height: Gap.xs),
-        Center(child: FilledButton.tonal(
-            onPressed: _refresh, child: const Text('重新加载'))),
-      ]);
+      return ListView(
+        children: [
+          const SizedBox(height: 100),
+          Center(child: Text(_failed ? '加载失败' : '这里还是空的')),
+          const SizedBox(height: Gap.xs),
+          Center(
+            child: FilledButton.tonal(
+              onPressed: _refresh,
+              child: const Text('重新加载'),
+            ),
+          ),
+        ],
+      );
     }
     return _buildTimeline(selecting);
   }
@@ -1571,7 +1728,7 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     final months = _months;
     if (months == null || months.length < 2) return null;
     final entries = months.entries.toList()
-      ..sort((a, b) => b.key.compareTo(a.key));   // 新月份在顶
+      ..sort((a, b) => b.key.compareTo(a.key)); // 新月份在顶
     // 按年分组（7e15）：年行默认折叠、只占一行；当前高亮年自动展开月份行
     // 供细粒度跳转。点年行 = 跳到该年最新月份。
     final byYear = <String, List<MapEntry<String, int>>>{};
@@ -1580,86 +1737,130 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     final yearKeys = byYear.keys.toList()..sort((a, b) => b.compareTo(a));
     final cs = Theme.of(context).colorScheme;
-    Widget entry(String label, String month, String? monthKey,
-        {int? count, required bool on, required VoidCallback onTap}) {
+    Widget entry(
+      String label,
+      String month,
+      String? monthKey, {
+      int? count,
+      required bool on,
+      required VoidCallback onTap,
+    }) {
       return InkWell(
-          key: monthKey == null ? null : ValueKey<String>('rail-$monthKey'),
-          onTap: onTap,
-          child: _CtxReg(
-              registry: _railCtxs,
-              tag: monthKey ?? '',
-              child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: on ? cs.primary.withValues(alpha: 0.18) : null,
-                      borderRadius: BorderRadius.circular(6)),
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Text(label,
-                        style: TextStyle(
-                            fontSize: 9.5,
-                            height: 1.15,
-                            fontWeight: on ? FontWeight.w800 : FontWeight.w500,
-                            color: on ? cs.primary : cs.outline)),
-                    if (count != null)
-                      Text('$count',
-                          style: TextStyle(
-                              fontSize: 8, height: 1.1, color: cs.outline)),
-                  ]))));
+        key: monthKey == null ? null : ValueKey<String>('rail-$monthKey'),
+        onTap: onTap,
+        child: _CtxReg(
+          registry: _railCtxs,
+          tag: monthKey ?? '',
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+            decoration: BoxDecoration(
+              color: on ? cs.primary.withValues(alpha: 0.18) : null,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    height: 1.15,
+                    fontWeight: on ? FontWeight.w800 : FontWeight.w500,
+                    color: on ? cs.primary : cs.outline,
+                  ),
+                ),
+                if (count != null)
+                  Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 8,
+                      height: 1.1,
+                      color: cs.outline,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     return ClipRRect(
-        borderRadius: const BorderRadius.horizontal(left: Radius.circular(Radii.sm)),
-        child: Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
-            decoration: BoxDecoration(
-                color: cs.surface.withValues(alpha: 0.92),
-                border: Border(
-                    left: BorderSide(
-                        color: cs.outline.withValues(alpha: 0.25),
-                        width: 0.5))),
-            child: ValueListenableBuilder<String?>(
-                valueListenable: _railMonthN,
-                builder: (_, railMonth, _) => SingleChildScrollView(
-                    controller: _railScroll,
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      entry('全部', '', null,
-                          on: railMonth == null || railMonth.isEmpty,
-                          onTap: () {
-                            if (_month != null) {
-                              _exitMonthView();
-                              return;
-                            }
-                            if (_scroll.hasClients) {
-                              _scroll.animateTo(0,
-                                  duration:
-                                      const Duration(milliseconds: 300),
-                                  curve: Curves.easeOutCubic);
-                            }
-                          }),
-                      for (final y in yearKeys) ...[
-                        entry(y, 'y-$y', null,
-                            count: byYear[y]!
-                                .fold<int>(0, (s, e) => s + e.value),
-                            on: railMonth != null &&
-                                railMonth.isNotEmpty &&
-                                railMonth.startsWith(y),
-                            onTap: () =>
-                                _jumpToMonth(byYear[y]!.first.key)),
-                        // 高亮年展开月份行（跟随手滑/跳转所在月份）
-                        if (railMonth != null &&
-                            railMonth.isNotEmpty &&
-                            railMonth.startsWith(y))
-                          for (final e in byYear[y]!)
-                            Padding(
-                                padding: const EdgeInsets.only(left: 5),
-                                child: entry(e.key.substring(5), e.key,
-                                    e.key,
-                                    count: e.value,
-                                    on: railMonth == e.key,
-                                    onTap: () => _jumpToMonth(e.key))),
-                      ],
-                    ])))));
+      borderRadius: const BorderRadius.horizontal(
+        left: Radius.circular(Radii.sm),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+        decoration: BoxDecoration(
+          color: cs.surface.withValues(alpha: 0.92),
+          border: Border(
+            left: BorderSide(
+              color: cs.outline.withValues(alpha: 0.25),
+              width: 0.5,
+            ),
+          ),
+        ),
+        child: ValueListenableBuilder<String?>(
+          valueListenable: _railMonthN,
+          builder: (_, railMonth, _) => SingleChildScrollView(
+            controller: _railScroll,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                entry(
+                  '全部',
+                  '',
+                  null,
+                  on: railMonth == null || railMonth.isEmpty,
+                  onTap: () {
+                    if (_month != null) {
+                      _exitMonthView();
+                      return;
+                    }
+                    if (_scroll.hasClients) {
+                      _scroll.animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeOutCubic,
+                      );
+                    }
+                  },
+                ),
+                for (final y in yearKeys) ...[
+                  entry(
+                    y,
+                    'y-$y',
+                    null,
+                    count: byYear[y]!.fold<int>(0, (s, e) => s + e.value),
+                    on:
+                        railMonth != null &&
+                        railMonth.isNotEmpty &&
+                        railMonth.startsWith(y),
+                    onTap: () => _jumpToMonth(byYear[y]!.first.key),
+                  ),
+                  // 高亮年展开月份行（跟随手滑/跳转所在月份）
+                  if (railMonth != null &&
+                      railMonth.isNotEmpty &&
+                      railMonth.startsWith(y))
+                    for (final e in byYear[y]!)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 5),
+                        child: entry(
+                          e.key.substring(5),
+                          e.key,
+                          e.key,
+                          count: e.value,
+                          on: railMonth == e.key,
+                          onTap: () => _jumpToMonth(e.key),
+                        ),
+                      ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _selectionBar() {
@@ -1667,37 +1868,46 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // guest 只读：删除/分享必然失败（服务端会拒），不给出入口
     final canManage = ref.read(sessionProvider).role != 'guest';
     return SafeArea(
-        child: Container(
-            decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border(
-                    top: BorderSide(
-                        color: Theme.of(context).dividerColor, width: 0.5))),
-            child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _op(Icons.download_outlined, '下载', _downloadSelected),
-                  if (!multi && canManage)
-                    _op(Icons.link_outlined, '分享', _shareSingle),
-                  if (canManage)
-                    _op(Icons.delete_outline, '删除', _deleteSelected),
-                  if (canManage)
-                    _op(Icons.delete_forever_outlined, '彻底删除',
-                        _purgeSelected),
-                ])));
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(
+            top: BorderSide(color: Theme.of(context).dividerColor, width: 0.5),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _op(Icons.download_outlined, '下载', _downloadSelected),
+            if (!multi && canManage)
+              _op(Icons.link_outlined, '分享', _shareSingle),
+            if (canManage) _op(Icons.delete_outline, '删除', _deleteSelected),
+            if (canManage)
+              _op(Icons.delete_forever_outlined, '彻底删除', _purgeSelected),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _op(IconData icon, String label, VoidCallback onTap) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: InkWell(
-          onTap: onTap,
-          borderRadius: Radii.bSm,
-          child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Gap.md, vertical: 6),
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Icon(icon, size: 22),
-                const SizedBox(height: 2),
-                Text(label, style: const TextStyle(fontSize: 12)),
-              ]))));
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: Radii.bSm,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: Gap.md, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22),
+            const SizedBox(height: 2),
+            Text(label, style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+      ),
+    ),
+  );
 
   /// 按拍摄日分组（与网页时间线一致）：**Sliver 虚拟化**时间线——每组一个
   /// SliverMainAxisGroup（置顶日期头 + SliverGrid）。
@@ -1709,18 +1919,18 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     // v0.20 入库序：不按日分组，整列平铺（新上传永远置顶，日期头无意义）
     final groups = _computeGroups();
     final body = NotificationListener<ScrollNotification>(
-        onNotification: (n) {
-          if (n is OverscrollNotification) {
-            // 底部过滚动（ddb0）：当月内容不足一屏/已滚到硬底时 position
-            // 不再变化、onScroll 不会再触发——过滚动通知是"还想往下看"的
-            // 唯一信号，驱动月视图续流取更早月份
-            if (n.overscroll > 0) _loadMore();
-            // 顶部过滚动（5d2d 无缝上滑）：月视图里把更新的月份前插进来
-            if (n.overscroll < 0) _prependNewerMonth();
-          }
-          return false;
-        },
-        child: CustomScrollView(
+      onNotification: (n) {
+        if (n is OverscrollNotification) {
+          // 底部过滚动（ddb0）：当月内容不足一屏/已滚到硬底时 position
+          // 不再变化、onScroll 不会再触发——过滚动通知是"还想往下看"的
+          // 唯一信号，驱动月视图续流取更早月份
+          if (n.overscroll > 0) _loadMore();
+          // 顶部过滚动（5d2d 无缝上滑）：月视图里把更新的月份前插进来
+          if (n.overscroll < 0) _prependNewerMonth();
+        }
+        return false;
+      },
+      child: CustomScrollView(
         controller: _scroll,
         // 提前构建缓存区（默认 250px）：缩略图请求提前起步，快滑到时已在
         // 下载/解码路上，减少落地后的转圈（31cd「加载慢」感知优化）。
@@ -1732,46 +1942,56 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
           // 月视图横幅（1.1.4 时间线重构）：明示当前口径 + 一键回全时间线
           if (_month != null)
             SliverToBoxAdapter(
-                key: const ValueKey<String>('month-banner'),
-                child: Padding(
-                    padding:
-                        const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, 0),
-                    child: InkWell(
-                        onTap: _exitMonthView,
-                        borderRadius: Radii.bSm,
-                        child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: Gap.md, vertical: Gap.xs),
-                            decoration: BoxDecoration(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .secondaryContainer,
-                                borderRadius:
-                                    BorderRadius.circular(Radii.sm)),
-                            child: Row(children: [
-                              Icon(Icons.filter_alt_outlined,
-                                  size: 14,
+              key: const ValueKey<String>('month-banner'),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(Gap.sm, Gap.xs, Gap.sm, 0),
+                child: InkWell(
+                  onTap: _exitMonthView,
+                  borderRadius: Radii.bSm,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: Gap.md,
+                      vertical: Gap.xs,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.filter_alt_outlined,
+                          size: 14,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSecondaryContainer,
+                        ),
+                        const SizedBox(width: Gap.xxs),
+                        Expanded(
+                          child: Text(
+                            '正在看 ${_monthLabel(_month!)} 起（往下滑自动接更早月份）· 点此返回全部时间线',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
                                   color: Theme.of(context)
                                       .colorScheme
-                                      .onSecondaryContainer),
-                              const SizedBox(width: Gap.xxs),
-                              Expanded(
-                                  child: Text(
-                                      '正在看 ${_monthLabel(_month!)} 起（往下滑自动接更早月份）· 点此返回全部时间线',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .labelSmall
-                                          ?.copyWith(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onSecondaryContainer))),
-                              Icon(Icons.close,
-                                  size: 14,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSecondaryContainer),
-                            ]))))),
+                                      .onSecondaryContainer,
+                                ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.close,
+                          size: 14,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSecondaryContainer,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           for (final (day, flatIdx) in groups) ...[
             // 日期头随内容滚动（不用置顶 SliverAppBar——悬浮文字压在照片上
             // 很难看，真机反馈 0.4.5）；入库序无日期头。
@@ -1784,28 +2004,32 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
               SliverToBoxAdapter(
                 key: ValueKey<String>('grp-h-$day'),
                 child: _CtxReg(
-                    registry: _hdrCtxs,
-                    tag: day,
-                    child: Container(
-                        width: double.infinity,
-                        margin:
-                            const EdgeInsets.fromLTRB(Gap.sm, 12, Gap.sm, 8),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: Gap.md, vertical: 7),
-                        decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(Radii.sm)),
-                        child: Text(_dayLabel(day),
-                            style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 15,
-                                letterSpacing: 0.2,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .primary))))),
+                  registry: _hdrCtxs,
+                  tag: day,
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.fromLTRB(Gap.sm, 12, Gap.sm, 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: Gap.md,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                    ),
+                    child: Text(
+                      _dayLabel(day),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        letterSpacing: 0.2,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             // 瀑布流：SliverWaterfallFlow 保留 Sliver 虚拟化（0.4.4 教训不回退），
             // 格子高度来自服务端探测的真实宽高比；未知的回退方格。
             // v0.11 用 flutter_staggered_grid_view 的 SliverMasonryGrid：
@@ -1813,38 +2037,39 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
             // （上游 issue #265/#286/#338），按日分组=每天一个=真机必卡死，
             // v0.13 换 waterfall_flow（该包即为此修复的社区版，API 同型）。
             SliverWaterfallFlow(
-                key: ValueKey<String>('grp-${day.isEmpty ? "~" : day}'),
-                gridDelegate:
-                    SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
-                        // v1.0 响应式：列数随窗口档位自适应（手机 3 / 横屏 4 /
-                        // 平板 6）。此前固定 3 列，平板上缩略图被撑到 300+ px，
-                        // 一屏只看得到 6 张；改列数只动 delegate 参数，Sliver
-                        // 结构与虚拟化路径不变（性能红线）
-                        crossAxisCount: context.gridColumns(),
-                        mainAxisSpacing: 2, crossAxisSpacing: 2),
-                delegate: SliverChildBuilderDelegate(
-                    addRepaintBoundaries: true,
-                    // 格子按路径找新下标（31cd）：合并刷新后元素随路径复用，
-                    // AuthImage 状态原封不动——插入新照片不再把视口内
-                    // 未变的格子打回转圈重拉。key 形如 cell-<path>，截前缀还路径
-                    findChildIndexCallback: (key) {
-                      final p = (key as ValueKey<String>).value.substring(5);
-                      for (var j = 0; j < flatIdx.length; j++) {
-                        if (_items[flatIdx[j]].path == p) return j;
-                      }
-                      return null;
-                    },
-                    (context, j) {
-                      final flat = flatIdx[j];
-                      final selected = _selected.contains(flat);
-                      final item = _items[flat];
-                      return _CellReg(
-                          key: ValueKey<String>('cell-${item.path}'),
-                          flat: flat,
-                          registry: _cellCtxs,
-                          child: AspectRatio(
-                          aspectRatio: item.aspect,
-                          child: GestureDetector(
+              key: ValueKey<String>('grp-${day.isEmpty ? "~" : day}'),
+              gridDelegate: SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
+                // v1.0 响应式：列数随窗口档位自适应（手机 3 / 横屏 4 /
+                // 平板 6）。此前固定 3 列，平板上缩略图被撑到 300+ px，
+                // 一屏只看得到 6 张；改列数只动 delegate 参数，Sliver
+                // 结构与虚拟化路径不变（性能红线）
+                crossAxisCount: context.gridColumns(),
+                mainAxisSpacing: 2,
+                crossAxisSpacing: 2,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                addRepaintBoundaries: true,
+                // 格子按路径找新下标（31cd）：合并刷新后元素随路径复用，
+                // AuthImage 状态原封不动——插入新照片不再把视口内
+                // 未变的格子打回转圈重拉。key 形如 cell-<path>，截前缀还路径
+                findChildIndexCallback: (key) {
+                  final p = (key as ValueKey<String>).value.substring(5);
+                  for (var j = 0; j < flatIdx.length; j++) {
+                    if (_items[flatIdx[j]].path == p) return j;
+                  }
+                  return null;
+                },
+                (context, j) {
+                  final flat = flatIdx[j];
+                  final selected = _selected.contains(flat);
+                  final item = _items[flat];
+                  return _CellReg(
+                    key: ValueKey<String>('cell-${item.path}'),
+                    flat: flat,
+                    registry: _cellCtxs,
+                    child: AspectRatio(
+                      aspectRatio: item.aspect,
+                      child: GestureDetector(
                         onTap: selecting
                             ? () => _toggleSelect(flat)
                             : () => _openViewer(flat),
@@ -1856,69 +2081,104 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
                             _dragMove(d.globalPosition),
                         onLongPressEnd: (_) => _dragEnd(),
                         onLongPressCancel: _dragEnd,
-                        child: Stack(fit: StackFit.expand, children: [
-                          Hero(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Hero(
                               tag: 'ph-${item.path}',
                               child: AuthImage(
-                                  url: '$_base/thumb/${encPath(item.path)}',
-                                  // 无障碍（v1.0）：缩略图网格里没有任何文字，
-                                  // 读屏至少要知道这是照片还是视频
-                                  semanticLabel:
-                                      item.isVideo ? '视频' : '照片')),
-                          // 视频角标：▶ + 时长（0.6.0）
-                          if (item.isVideo)
-                            Positioned(
+                                url: '$_base/thumb/${encPath(item.path)}',
+                                // 无障碍（v1.0）：缩略图网格里没有任何文字，
+                                // 读屏至少要知道这是照片还是视频
+                                semanticLabel: item.isVideo ? '视频' : '照片',
+                              ),
+                            ),
+                            // 视频角标：▶ + 时长（0.6.0）
+                            if (item.isVideo)
+                              Positioned(
                                 left: 4,
                                 bottom: 4,
                                 child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: Gap.xxs, vertical: 1),
-                                    decoration: BoxDecoration(
-                                        color: Colors.black54,
-                                        borderRadius:
-                                            BorderRadius.circular(4)),
-                                    child: Row(mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(Icons.play_arrow,
-                                              size: 12, color: Colors.white),
-                                          if (item.durationLabel.isNotEmpty)
-                                            Text(item.durationLabel,
-                                                style: const TextStyle(
-                                                    fontSize: 10,
-                                                    color: Colors.white)),
-                                        ]))),
-                          if (selecting)
-                            Positioned(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: Gap.xxs,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black54,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.play_arrow,
+                                        size: 12,
+                                        color: Colors.white,
+                                      ),
+                                      if (item.durationLabel.isNotEmpty)
+                                        Text(
+                                          item.durationLabel,
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            if (selecting)
+                              Positioned(
                                 top: 6,
                                 right: 6,
                                 child: Container(
-                                    width: 22,
-                                    height: 22,
-                                    decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: selected
-                                            ? Theme.of(context).colorScheme.primary
-                                            : Colors.black38,
-                                        border: Border.all(
-                                            color: Colors.white, width: 1.5)),
-                                    child: selected
-                                        ? const Icon(Icons.check,
-                                            size: 15, color: Colors.white)
-                                        : null)),
-                        ])),
-                      ));
-                    },
-                    childCount: flatIdx.length)),
+                                  width: 22,
+                                  height: 22,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: selected
+                                        ? Theme.of(context).colorScheme.primary
+                                        : Colors.black38,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  child: selected
+                                      ? const Icon(
+                                          Icons.check,
+                                          size: 15,
+                                          color: Colors.white,
+                                        )
+                                      : null,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+                childCount: flatIdx.length,
+              ),
+            ),
           ],
           if (!_done)
             const SliverPadding(
-                padding: EdgeInsets.all(Gap.md),
-                sliver: SliverToBoxAdapter(
-                    child: Center(
-                        child: SizedBox(width: 18, height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2))))),
-        ]));
+              padding: EdgeInsets.all(Gap.md),
+              sliver: SliverToBoxAdapter(
+                child: Center(
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
     // 6b09 根修：CustomScrollView 必须永远占据本方法返回树的**同一槽位、
     // 同一层级**。此前包裹结构随状态变形——月份轴出现/消失（_months 加载
     // 完成、进多选、按月过滤、入库序）时 body ↔ Stack([body, rail]) 互切，
@@ -1935,28 +2195,43 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
     }
     if (_jumping) {
       // 跳月定位中：底部悬浮进度提示（拉取+校准滚动一般 1~3 秒）
-      children.add(Positioned(
+      children.add(
+        Positioned(
           left: 0,
           right: 0,
           bottom: 28,
           child: Center(
-              child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: Gap.md, vertical: Gap.xs),
-                  decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(20)),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white)),
-                    const SizedBox(width: 8),
-                    Text(_jumpingLabel,
-                        style: const TextStyle(
-                            fontSize: 12, color: Colors.white)),
-                  ])))));
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Gap.md,
+                vertical: Gap.xs,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _jumpingLabel,
+                    style: const TextStyle(fontSize: 12, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
     }
     return Stack(children: children);
   }
@@ -1969,10 +2244,22 @@ class _PhotosPageState extends ConsumerState<PhotosPage> {
   }
 
   void _openViewer(int index) {
+    // 必须传副本：PhotosPage 后台刷新时会 _items..clear()..addAll(list)（原地改写
+    // 同一个 List），而预览页是按下标取项的（photo_viewer.dart:352）。共享引用时
+    // 一旦新照片插到队首，下标整体位移 —— 用户点「彻底删除」删掉的是另一张照片，
+    // 且不可逆。2026-11-17 代码 review 发现的 P0。
     // ignore: discarded_futures
-    Navigator.push<bool>(context, MaterialPageRoute(
-        builder: (_) => PhotoViewerPage(base: _base!, items: _items, initial: index),
-        fullscreenDialog: true)).then((deleted) {
+    Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PhotoViewerPage(
+          base: _base!,
+          items: List<PhotoItem>.of(_items),
+          initial: index,
+        ),
+        fullscreenDialog: true,
+      ),
+    ).then((deleted) {
       if (deleted == true) _refresh();
     });
   }
@@ -1985,8 +2272,12 @@ class _CellReg extends StatefulWidget {
   final int flat;
   final Map<int, BuildContext> registry;
   final Widget child;
-  const _CellReg(
-      {super.key, required this.flat, required this.registry, required this.child});
+  const _CellReg({
+    super.key,
+    required this.flat,
+    required this.registry,
+    required this.child,
+  });
 
   @override
   State<_CellReg> createState() => _CellRegState();
@@ -2000,8 +2291,11 @@ class _CtxReg extends StatefulWidget {
   final Map<String, BuildContext> registry;
   final String tag;
   final Widget child;
-  const _CtxReg(
-      {required this.registry, required this.tag, required this.child});
+  const _CtxReg({
+    required this.registry,
+    required this.tag,
+    required this.child,
+  });
   @override
   State<_CtxReg> createState() => _CtxRegState();
 }
@@ -2075,10 +2369,10 @@ class _Album {
   final int count;
   final String? cover;
   _Album.fromJson(Map<String, dynamic> j)
-      : id = j['id'] as String? ?? '',
-        title = j['title'] as String? ?? '',
-        month = j['month'] as String? ?? '',
-        createdBy = j['created_by'] as String? ?? '',
-        count = (j['count'] as num?)?.toInt() ?? 0,
-        cover = j['cover'] as String?;
+    : id = j['id'] as String? ?? '',
+      title = j['title'] as String? ?? '',
+      month = j['month'] as String? ?? '',
+      createdBy = j['created_by'] as String? ?? '',
+      count = (j['count'] as num?)?.toInt() ?? 0,
+      cover = j['cover'] as String?;
 }

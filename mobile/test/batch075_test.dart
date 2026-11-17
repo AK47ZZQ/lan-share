@@ -95,8 +95,9 @@ void main() {
       expect(UpdateService.isInstallerName('lanshare.apk'), isFalse); // 少连字符
       expect(UpdateService.isInstallerName('photo.jpg'), isFalse);
       expect(UpdateService.isInstallerName('backup-lanshare-1.apk'), isFalse);
-      expect(UpdateService.isInstallerName('lanshare-0.16.0.apk.part'),
-          isFalse);
+      // 2026-11-17 改：分片残包**要**被清运认领。原来断言 isFalse 是旧规格，
+      // 而旧实现恰恰因此永远扫不到 .partN，每次下载失败泄漏约一整包（102MB 级）。
+      expect(UpdateService.isInstallerName('lanshare-0.16.0.apk.part'), isTrue);
       expect(UpdateService.isInstallerName('xlanshare-1.0.apk'), isFalse);
     });
   });

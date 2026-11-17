@@ -93,6 +93,10 @@ def safe_path(rel: str) -> Path:
     parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
     if any(p == ".." or p.startswith(".") or _83_ALIAS_RE.search(p) for p in parts):
         raise HTTPException(status_code=403, detail="Forbidden")
+    # 尾随点/空格（P0，2026-11-17）：Win32 会静默剥掉，精确比较判不中保留段。
+    # 详见 spaces._clean_parts 的说明，两处必须同款，否则会留下半个口子。
+    if any(p != p.rstrip(" .") for p in parts):
+        raise HTTPException(status_code=403, detail="Forbidden")
     target = SHARE_ROOT.joinpath(*parts) if parts else SHARE_ROOT
     root = os.path.normcase(str(SHARE_ROOT.absolute()))
     tgt = os.path.normcase(str(target.absolute()))
@@ -112,6 +116,18 @@ def clean_filename(name: str | None) -> str:
         n = '_' + n
     if RESERVED_NAME.match(n):
         n = '_' + n
+    # 8.3 短名（P1，2026-11-17 实测）：resolve() 解析的**路径段**早就拦了
+    # `~1` 形态，但「目录 resolve + clean_filename(filename) 拼末段」这条
+    # 从来没走过闸。NTFS 上 `LANSHA~1` 就是 `.lanshare-pgpass` 的短名，
+    # 于是上传一个叫 `TEAM-S~1` 的文件可以覆盖/搬走同目录的点文件——
+    # 读被拦、写不拦，同一个文件两套结论。fallback 到默认 SQLite 时
+    # `META~1.DB` 还能动到 .meta.db。
+    #
+    # 注意必须**替换**短名标记而不是加前缀：`_LANSHA~1` 仍然匹配
+    # _83_ALIAS_RE（测试抓到的），那样文件写得进去、safe_path 却拦着自己
+    # 读不出来 —— 「写进得去读不出来」比直接拒绝更糟。
+    if _83_ALIAS_RE.search(n):
+        n = _83_ALIAS_RE.sub('_', n)
     # 截断必须再剥一次结尾点/空格：上面的 rstrip 发生在 [:200] 之前，
     # 足够长的名字会在第 200 个字符处重新落出点/空格（"aaa….txt" → "aaa…."），
     # 而 NTFS 会静默剥离它们——登记名与磁盘实际名就此分叉。

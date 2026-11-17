@@ -305,13 +305,13 @@ async def _dav_put(request: Request, user, target: Path, exists: bool) -> Respon
         except OSError:
             old_size = 0
     try:
-        enforce_quota(user, target, -old_size if exists else 0)
+        await run_in_threadpool(enforce_quota, user, target, -old_size if exists else 0)
     except HTTPException:
         tmp.unlink(missing_ok=True)
         raise
     if exists:
         # 预检已通过，旧版此时才进回收站（.trash 在 private 树外，不计入配额）
-        move_to_trash(target, to_rel(target))
+        await run_in_threadpool(move_to_trash, target, to_rel(target))
     # 落位前复查 + 失败清理（R1-P2-5）：流传输期间目标处可能被并发建出
     # 同名目录（exists 是流开始前的旧值），os.replace 顶目录会 PermissionError
     if target.is_dir():
