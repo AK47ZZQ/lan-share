@@ -38,6 +38,7 @@ R2 对象本身单次可传 5 GiB，但 Cloudflare 各档计划的**请求体上
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -51,6 +52,49 @@ except ImportError:         # pragma: no cover - 生产运行时不需要它
 
 BUCKET = "lanshare-updates"
 PUBLIC_BASE = "https://dl.ak47zzq.com"
+
+# 清单签名的覆盖范围（契约，App 与 CLI 两侧必须逐字一致）：
+#   v1|<version>|<build>|<url>|<sha256>|<size>
+# 为什么不签整份 JSON：Python 与 Dart 的序列化在键序/浮点/转义上并不一致，
+# 重序列化必然对不上；字段拼接既稳定又刚好覆盖了所有关键点
+# （版本、包地址、包哈希、大小），history 不参与自动更新，不签。
+SIG_PREFIX = "v1"
+
+
+def _sig_payload(latest: dict) -> bytes:
+    return "|".join([
+        SIG_PREFIX,
+        str(latest.get("version", "")),
+        str(latest.get("build", "")),
+        str(latest.get("url", "")),
+        str(latest.get("sha256", "")),
+        str(latest.get("size", "")),
+    ]).encode("utf-8")
+
+
+def sign_manifest(manifest: dict) -> dict:
+    """给清单盖上 Ed25519 签名（原地修改并返回）。
+
+    私钥来自 %HERMES_HOME%/.env 的 UPDATE_SIGNING_KEY，**绝不进仓库**。
+    没有私钥时直接报错而不是「跳过签名」—— 静默跳过会让客户端在
+    「验签变可选」的假象下继续工作，等于没做。
+    """
+    from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    e = _env()
+    raw = e.get("UPDATE_SIGNING_KEY", "")
+    if not raw:
+        raise SystemExit(
+            "缺少 UPDATE_SIGNING_KEY（Ed25519 私钥，base64 raw）。"
+            "它在 %HERMES_HOME%/.env 里；丢了就只能换公钥并强制所有人升级。"
+        )
+    key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(raw))
+    manifest.pop("signature", None)
+    manifest["signature"] = base64.b64encode(
+        key.sign(_sig_payload(manifest.get("latest") or {}))
+    ).decode("ascii")
+    return manifest
 
 # 生产安装目录（安装器布局）——清单与包的真实落点
 INSTALL_DIR = Path(r"C:/lanshare")
@@ -219,6 +263,7 @@ def main() -> int:
     prefix = "app" if args.line == "app" else "server"
 
     # 1) 清单先传（no-cache），让指向立刻正确
+    sign_manifest(trimmed)
     body = json.dumps(trimmed, ensure_ascii=False, indent=2).encode("utf-8")
     n = r2_put(client, f"{prefix}/index.json", body, "application/json; charset=utf-8",
                "no-cache")

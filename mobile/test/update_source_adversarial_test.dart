@@ -157,4 +157,72 @@ void main() {
           reason: 'build 高但版本低 → 不是新版（跨源编号体系不同）');
     });
   });
+
+  group('清单签名（跨语言契约：Python 签、Dart 验）', () {
+    // 这份 fixture 由 scripts/r2_upload.py 的同一套逻辑用私钥签出，
+    // payload 逐字为：v1|4.1.3|142|LANShare-App-4.1.3+142.apk|<sha>|107021489
+    // 两侧任何一边改了拼接格式，这条会立刻红。
+    final fixture = <String, dynamic>{
+      'schema': 1,
+      'latest': <String, dynamic>{
+        'version': '4.1.3',
+        'build': 142,
+        'url': 'LANShare-App-4.1.3+142.apk',
+        'sha256':
+            'a50a559b1707053a000000000000000000000000000000000000000000000000',
+        'size': 107021489,
+      },
+      'signature':
+          'W/b18H/KJowL34gXNmft7mYZEjvFq3Fh3JfiRRvwqsWv37st0aSK9MeFAs9+6K5WV5y7k7QZioVmB0FUync4Bw==',
+    };
+
+    test('Python 产的签名，App 公钥能验过', () async {
+      expect(await UpdateService.verifyR2Manifest(fixture), isTrue);
+    });
+
+    test('篡改 sha256 → 验不过（签名覆盖了包哈希）', () async {
+      final t = <String, dynamic>{
+        ...fixture,
+        'latest': <String, dynamic>{
+          ...(fixture['latest'] as Map).cast<String, dynamic>(),
+          'sha256': 'b' * 64,
+        },
+      };
+      expect(await UpdateService.verifyR2Manifest(t), isFalse);
+    });
+
+    test('篡改 url（指向外部域）→ 验不过', () async {
+      final t = <String, dynamic>{
+        ...fixture,
+        'latest': <String, dynamic>{
+          ...(fixture['latest'] as Map).cast<String, dynamic>(),
+          'url': 'https://evil.example.com/x.apk',
+        },
+      };
+      expect(await UpdateService.verifyR2Manifest(t), isFalse);
+    });
+
+    test('篡改版本号（伪造新版）→ 验不过', () async {
+      final t = <String, dynamic>{
+        ...fixture,
+        'latest': <String, dynamic>{
+          ...(fixture['latest'] as Map).cast<String, dynamic>(),
+          'version': '9.9.9',
+        },
+      };
+      expect(await UpdateService.verifyR2Manifest(t), isFalse);
+    });
+
+    test('缺 signature / 签名乱码 → 一律拒且不抛异常', () async {
+      expect(
+          await UpdateService.verifyR2Manifest(
+              {'latest': fixture['latest']}),
+          isFalse);
+      expect(
+          await UpdateService.verifyR2Manifest(
+              {...fixture, 'signature': 'not-base64!!!'}),
+          isFalse);
+      expect(await UpdateService.verifyR2Manifest({}), isFalse);
+    });
+  });
 }

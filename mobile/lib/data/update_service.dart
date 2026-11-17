@@ -2,9 +2,11 @@
 // 下载 /api/app/download 到沙盒 → OpenFilex 拉起系统安装器。
 // 契约见 app/api/appver.py；管理员把新 APK + version.json 放进共享空间
 // 「App安装包/」即完成发版。
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart';
 import 'package:dio/dio.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -460,6 +462,51 @@ class UpdateService {
     return u.host == Uri.parse(r2Base).host;
   }
 
+  /// 清单签名公钥（Ed25519 raw，base64）。
+  ///
+  /// 私钥只在发版机 %HERMES_HOME%/.env 里，**永远不进仓库**。
+  /// 这把公钥换成新的一代 = 所有人都必须升级到带新公钥的版本才能继续收更新，
+  /// 所以它一旦发布就基本不能改。
+  static const String updatePubKeyB64 =
+      'LfG4PfBoxFPXg2aTgtDiJcUpo0ddSjOE82BqDc2VGwE=';
+
+  /// 验证默认源清单的 Ed25519 签名。
+  ///
+  /// 覆盖范围与 `scripts/r2_upload.py::_sig_payload` **逐字一致**：
+  ///   v1|version|build|url|sha256|size
+  /// 不签整份 JSON 是因为 Python 与 Dart 的序列化在键序/浮点上不一致。
+  ///
+  /// 为什么必须验：R2 上的清单是**远端可控**的，而包哈希就写在同一份清单里。
+  /// 没有签名时，任何能写 bucket 的人都能推任意 APK；有了签名，私钥不在
+  /// 那台机器上，写权限被夺也发不出 App 会接受的清单。
+  static Future<bool> verifyR2Manifest(Map<String, dynamic> manifest) async {
+    final sigB64 = manifest['signature'];
+    final latest = manifest['latest'];
+    if (sigB64 is! String || sigB64.isEmpty || latest is! Map) return false;
+    try {
+      final payload = [
+        'v1',
+        '${latest['version'] ?? ''}',
+        '${latest['build'] ?? ''}',
+        '${latest['url'] ?? ''}',
+        '${latest['sha256'] ?? ''}',
+        '${latest['size'] ?? ''}',
+      ].join('|');
+      return await Ed25519().verify(
+        utf8.encode(payload),
+        signature: Signature(
+          base64Decode(sigB64),
+          publicKey: SimplePublicKey(
+            base64Decode(updatePubKeyB64),
+            type: KeyPairType.ed25519,
+          ),
+        ),
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<_SourceResult> _checkR2() async {
     try {
       // 单独压一个总超时：三路是并发跑的，但 Future.wait 要等**最慢的那个**。
@@ -467,6 +514,10 @@ class UpdateService {
       // 白转 13 秒 —— 一个可选源不该有这个代价。
       final manifest = await UpdateSourceClient.fetch(r2Base)
           .timeout(const Duration(seconds: 6));
+      // 先验签再解析：签名不过就整条丢弃，绝不允许「先信再问」
+      if (!await verifyR2Manifest(manifest)) {
+        return const _SourceResult(null, false);
+      }
       final info =
           UpdateInfo.fromManifest(manifest['latest'], base: r2Base, source: 'r2');
       if (info == null) return const _SourceResult(null, false);
