@@ -593,6 +593,21 @@ class UpdateService {
   ///
   /// GitHub Release 的正文就是更新日志，直接拉，和 App 检查更新同源。
   static Future<List<UpdateHistoryItem>> history() async {
+    // 0. R2 清单里的 history：免登录、国内直连、自带签名可验。
+    //    这是「别人从 GitHub 下载后也能看历史」唯一可行的来源——
+    //    CHANGELOG 要经过 GitHub（国内常常几十秒），自家服务端他们根本没有。
+    //    失败一律静默，掉到下面的兜底，历史页空着比报错好。
+    try {
+      final manifest = await UpdateSourceClient.fetch(r2Base)
+          .timeout(const Duration(seconds: 8));
+      if (await verifyR2Manifest(manifest)) {
+        final items = _historyFromManifest(manifest);
+        if (items.isNotEmpty) return items;
+      }
+    } catch (_) {
+      // 掉到下一步
+    }
+
     // 1. CHANGELOG.md：最完整，且不会被 Release 清理影响
     try {
       final md = await AppverApi.githubChangelog();
