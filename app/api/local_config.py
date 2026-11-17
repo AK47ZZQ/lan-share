@@ -58,7 +58,7 @@ def _require_local(request: Request) -> None:
     # 上面那道 `ip in _LOOPBACKS` 挡不住它；唯一能区分「本机直连」与「公网经
     # 隧道进来」的就是 Host。而 is_public_entry 的 fail-closed 分支在
     # `_is_private_host(host)` 为真时直接跳过 —— 攻击者发
-    # `Host: 192.168.1.50:8765` 就能让整组 /local/* 对公网敞开
+    # `Host: <一个私网地址>:8765` 就能让整组 /local/* 对公网敞开
     # （2026-11-17 实测：两步即可把整库 pg_dump 到攻击者 SMB）。
     #
     # 所以这里反向要求「Host 必须是回环」，而不是「不像公网就当本机」。
@@ -83,7 +83,7 @@ def _normalize(raw: str) -> tuple[str, str]:
     用户可能输入：
         xxx.frp-any.com:35391       → 补 https://
         https://xxx.frp-any.com:35391/
-        http://192.168.1.100:8765    → 允许，但要提醒这不是公网地址
+        http://<私网地址>:8765    → 允许，但要提醒这不是公网地址
 
     空字符串表示「清除配置」，合法。
     """
