@@ -54,6 +54,9 @@ namespace LanShare
 
         private WebView2 _web;
         private System.Windows.Forms.Timer _timer;
+        /// <summary>公网地址缓存。BuildLocalPayload 每 4 秒要拼一次状态，
+        /// 不能每次都发 HTTP（服务挂住时会拖住界面）；只在 force 刷新时同步读一次。</summary>
+        private string _wanCached = "";
         private bool _pageReady;
         private bool _busy;
         private DateTime _lastPush = DateTime.MinValue;
@@ -250,6 +253,14 @@ namespace LanShare
             if (!force && (DateTime.Now - _lastPush).TotalSeconds < 5) return;
             _lastPush = DateTime.Now;
 
+            // 2026-11-17 修：`wanUrl` 原来在 BuildLocalPayload 里被硬编码成 ""，
+            // 而唯一读 /local/public-url 的 BuildPayload（旧全量版）没有任何调用点。
+            // 结果：用户在托盘里配好的公网地址，面板每 4 秒被刷回「未配置」——
+            // 库里和公网其实都好好的，纯粹是显示层在骗人。
+            // 只在 force（打开面板 / 保存后 / 点清除后）时同步读一次本地接口，
+            // 定时刷新继续用缓存，保证「服务没起时不拖界面」。
+            if (force) RefreshWanCache();
+
             // 🔴 状态刷新完全不碰 CLI。
             //
             // 2026-11-02 用户实测「状态更新很卡很慢，局域网状态的更新根本没有」。
@@ -281,6 +292,20 @@ namespace LanShare
             }
         }
 
+        /// <summary>读一次公网地址并写进缓存（同步，只在 force 刷新时调用）。
+        /// 读不到时**保留上次值** —— 服务短暂不可用不该把已配好的地址显示成「未配置」，
+        /// 那正是这个 bug 让用户以为「配置丢了」的原因。</summary>
+        private void RefreshWanCache()
+        {
+            try
+            {
+                string err;
+                var d = _cli.GetLocal("/local/public-url", 1500, out err);
+                if (d != null) _wanCached = Str(d, "url");
+            }
+            catch (Exception) { /* 保留上次值 */ }
+        }
+
         /// <summary>
         /// 只靠本机信息拼一份状态：服务行查 SCM，局域网/二维码沿用上一次
         /// CLI 的结果。用来让界面第一帧就有内容，不用干等 CLI。
@@ -297,7 +322,7 @@ namespace LanShare
                 { "lanOn", false },
                 { "lanUrl", "" },
                 { "lanHint", "正在读取局域网状态…" },
-                { "wanUrl", "" },
+                { "wanUrl", _wanCached },
                 { "qr", null },
                 { "certTrusted", true },
                 { "backup", FetchBackupState() },
