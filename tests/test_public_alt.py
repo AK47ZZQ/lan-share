@@ -121,7 +121,6 @@ def test_lan_addresses_put_real_nic_first(monkeypatch):
     并行探测（各 2s 超时），死地址纯属浪费。断言因此从「排第一」升级成
     「只剩它」—— 比原来更严，不是为了让红变绿而放宽。
     """
-    import socket as _s  # noqa: F401 —— 保留原导入形状，避免无谓 diff
     from app.api import appver
 
     fake = [

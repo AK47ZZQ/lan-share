@@ -14,8 +14,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "backup_files_external.py"
+
+# 本文件锁的是 scripts/backup_files_external.py —— robocopy + 盘符根 + %TEMP% 的
+# Windows 专用脚本。在 ubuntu runner 上跑只会全红（KeyError: 'TEMP'、
+# 'C:\\lansbak-test-*' 建不出来、robocopy 缺失），且这些红与被测逻辑无关。
+# 所以 CI 的 Linux job 一律跳过；本机 Windows 上 check.bat 照跑，覆盖率不减。
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Windows 专用：robocopy + 盘符根 + %TEMP%",
+)
 
 
 def _load_module():
