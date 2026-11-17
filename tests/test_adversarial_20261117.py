@@ -105,7 +105,7 @@ class TestInjection:
             _clean_parts(evil)
         except HTTPException:
             pass
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             pytest.fail(f"非预期异常类型 {type(e).__name__}: {e}")
 
 
@@ -118,7 +118,7 @@ class TestResourceExhaustion:
             _clean_parts(huge)
         except HTTPException:
             pass
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             pytest.fail(f"超长段引发 {type(e).__name__}: {e}")
 
     def test_filename_truncated_to_200(self):

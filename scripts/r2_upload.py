@@ -79,7 +79,6 @@ def sign_manifest(manifest: dict) -> dict:
     没有私钥时直接报错而不是「跳过签名」—— 静默跳过会让客户端在
     「验签变可选」的假象下继续工作，等于没做。
     """
-    from cryptography.hazmat.primitives import serialization as ser
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     e = _env()

@@ -426,7 +426,7 @@ def list_photos(request: Request, limit: int = Query(default=120, ge=0, le=500),
         if role == ADMIN:
             cond = ("(path NOT LIKE 'private/%' OR path LIKE ? ESCAPE '\\')"
                     " AND path NOT LIKE '.%' AND path NOT LIKE '%/.%'")
-            args: list = [own_priv]
+            args = [own_priv]
         else:
             cond = ("((path NOT LIKE 'private/%' AND path NOT LIKE 'incoming/%')"
                     " OR path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')"
