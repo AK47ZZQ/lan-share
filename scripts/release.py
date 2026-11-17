@@ -576,6 +576,12 @@ def parse_changelog_history(markdown: str) -> list[dict]:
         title = lines[0].strip()
         m = re.search(r"App\s+v?(\d+\.\d+\.\d+)", title)
         if not m:
+            # 早期 App 版本标题省略了「App」（`— v0.24.0+69：知识库与图谱`）。
+            # 判别依据：服务端版本**从不带 build 号**，App 才老是写 +N。
+            # 但必须要求版本号紧跟日期破折号 —— 否则「App 整改批次 A
+            # 复查（随 v0.28.3+77 发版）」这类批次描述会被误认成 0.28.3。
+            m = re.search(r"—\s*v(\d+\.\d+\.\d+)\+(\d+)", title)
+        if not m:
             continue
         ver = m.group(1)
         if ver in seen:
@@ -704,6 +710,11 @@ def sync_to_local_server(apk: Path, history: list[dict]) -> None:
 # 这两类标题不是「发过的版本」，一律不进历史
 _UNRELEASED_RE = re.compile(r"未发布|未发版")
 _APP_TITLE_RE = re.compile(r"App\s+v?(\d+\.\d+\.\d+)")
+# 早期 App 版本标题省略了「App」（`2026-09-10 — v0.24.0+69：知识库与图谱`）。
+# 判别依据是 build 号 `+N` —— 服务端版本从不带它。但必须要求版本号紧跟
+# 日期破折号，否则「App 整改批次 A 复查（随 v0.28.3+77 发版）」这类批次
+# 描述会被误认成一个独立版本。
+_BUILD_TITLE_RE = re.compile(r"—\s*v(\d+\.\d+\.\d+)\+(\d+)")
 # 服务端线不能用「v 加数字就收」—— CHANGELOG 里 `App v1.1.20：…` 这种标题
 # 也带 v，照收就会把 App 版本混进服务端历史（2026-11-08 自测抓到的真实 bug）。
 # 所以先取出所有候选，再排除紧跟在 `App` 后面的那些。
@@ -830,6 +841,9 @@ def parse_update_history(markdown: str, line: str) -> list[dict]:
             ver = _pick_server_version(title)
         else:
             m = _APP_TITLE_RE.search(title)
+            if not m:
+                # 早期标题没写「App」，靠 build 号认（见 _BUILD_TITLE_RE 注释）
+                m = _BUILD_TITLE_RE.search(title)
             ver = m.group(1) if m else None
         if not ver:
             continue
