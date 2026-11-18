@@ -192,30 +192,127 @@ def check_privacy() -> None:
     ok("隐私检查 ALL CLEAR")
 
 
-def check_tests() -> None:
-    py = ROOT / ".venv" / "Scripts" / "python.exe"
-    if not py.is_file():
-        warn("找不到 .venv，跳过 Python 测试")
-    else:
-        res = run([str(py), "-m", "pytest", "tests/", "-q"], timeout=1800)
-        tail = (res.stdout or "").strip().splitlines()[-3:]
-        if res.returncode != 0:
-            raise Abort("Python 测试失败：\n" + "\n".join(tail))
-        ok("Python 测试通过：" + (tail[-1] if tail else "?"))
+STAMP = ROOT / ".release_test_stamp"
 
-    flutter = ROOT / "env" / "flutter" / "bin" / "flutter.bat"
-    if flutter.is_file():
-        # 必须在 mobile/ 里跑 —— 那里才有 pubspec.yaml。在仓库根跑会
-        # 「没找到项目」直接退出，而且 stdout 是空的，报错看起来像
-        # 「Flutter 测试失败：（空白）」，完全没法排查。
-        res = run([str(flutter), "test"], timeout=1800, cwd=ROOT / "mobile")
-        if res.returncode != 0:
-            out = ((res.stdout or "")[-1500:] + (res.stderr or "")[-1500:]).strip()
-            raise Abort("Flutter 测试失败：\n" + (out or "（命令没有输出，退出码 "
-                                                  f"{res.returncode}）"))
-        ok("Flutter 测试通过")
+
+def _changed_since_last_tag() -> list[str]:
+    """这次要发的内容改了哪些文件（相对最近一个 tag）。
+
+    拿不到 tag（比如首个版本）就退回 HEAD~1。返回空列表表示「判断不出来」，
+    调用方按「全跑」处理 —— 宁可多跑，不可漏跑。
+    """
+    base = ""
+    r = run(["git", "describe", "--tags", "--abbrev=0"], cwd=ROOT)
+    if r.returncode == 0:
+        base = (r.stdout or "").strip()
+    if not base:
+        base = "HEAD~1"
+    r2 = run(["git", "diff", "--name-only", f"{base}..HEAD"], cwd=ROOT)
+    if r2.returncode != 0:
+        return []
+    return [ln.strip() for ln in (r2.stdout or "").splitlines() if ln.strip()]
+
+
+def _affects_python(changed: list[str]) -> bool:
+    if not changed:
+        return True
+    return any(f.startswith(("app/", "tests/", "lanshare_cli/", "installer/",
+                             "scripts/", "contracts/"))
+               for f in changed)
+
+
+def _affects_flutter(changed: list[str]) -> bool:
+    if not changed:
+        return True
+    return any(f.startswith("mobile/") for f in changed)
+
+
+def check_tests(reuse: bool = False) -> None:
+    """跑测试。两道省时间的闸（2026-11-18 加的）：
+
+    ① `reuse=True` 且 HEAD 没变 → 直接复用上次全绿的结果。
+       痛点：人工先跑一遍全量（11 分钟），发版脚本又跑一遍，纯重复。
+    ② 按改动决定跑哪套：只改了 `app/` 就别跑 Flutter，只改了 `mobile/`
+       就别跑 pytest。服务端发版跑 Dart 测试本来就是逻辑错误。
+
+    两道闸都**只会少跑确定无关的**，判断不出来时一律全跑。
+    """
+    head = ""
+    r = run(["git", "rev-parse", "HEAD"], cwd=ROOT)
+    if r.returncode == 0:
+        head = (r.stdout or "").strip()
+
+    if reuse and head and STAMP.is_file():
+        try:
+            st = json.loads(STAMP.read_text(encoding="utf-8"))
+            if (st.get("head") == head and st.get("python_ok")
+                    and st.get("flutter_ok")):
+                age = (time.time() - float(st.get("ts", 0))) / 60
+                ok(f"复用 {age:.0f} 分钟前的全量测试结果"
+                   f"（HEAD 未变 {head[:8]}）")
+                return
+            ok("上次结果与当前 HEAD 不符，重新跑测试")
+        # 戳文件坏了就当没有
+        except Exception:
+            pass
+
+    changed = _changed_since_last_tag()
+    need_py = _affects_python(changed)
+    need_dart = _affects_flutter(changed)
+    if changed:
+        hit = [f for f in changed if f.startswith(("app/", "mobile/"))][:3]
+        ok(f"待发改动 {len(changed)} 个文件"
+           + (f"（如 {', '.join(hit)}）" if hit else ""))
+        if not need_py:
+            ok("没动后端/脚本 → 跳过 Python 测试")
+        if not need_dart:
+            ok("没动 mobile/ → 跳过 Flutter 测试")
+
+    py_ok = False
+    dart_ok = False
+
+    py = ROOT / ".venv" / "Scripts" / "python.exe"
+    if need_py:
+        if not py.is_file():
+            warn("找不到 .venv，跳过 Python 测试")
+        else:
+            res = run([str(py), "-m", "pytest", "tests/", "-q"], timeout=1800)
+            tail = (res.stdout or "").strip().splitlines()[-3:]
+            if res.returncode != 0:
+                raise Abort("Python 测试失败：\n" + "\n".join(tail))
+            ok("Python 测试通过：" + (tail[-1] if tail else "?"))
+            py_ok = True
     else:
-        warn("找不到 flutter，跳过 Dart 测试")
+        py_ok = True   # 明确不需要跑，视为通过
+
+    if need_dart:
+        flutter = ROOT / "env" / "flutter" / "bin" / "flutter.bat"
+        if flutter.is_file():
+            # 必须在 mobile/ 里跑 —— 那里才有 pubspec.yaml。在仓库根跑会
+            # 「没找到项目」直接退出，而且 stdout 是空的，报错看起来像
+            # 「Flutter 测试失败：（空白）」，完全没法排查。
+            res = run([str(flutter), "test"], timeout=1800, cwd=ROOT / "mobile")
+            if res.returncode != 0:
+                out = ((res.stdout or "")[-1500:]
+                       + (res.stderr or "")[-1500:]).strip()
+                raise Abort("Flutter 测试失败：\n" + (out or "（命令没有输出，退出码 "
+                                                      f"{res.returncode}）"))
+            ok("Flutter 测试通过")
+            dart_ok = True
+        else:
+            warn("找不到 flutter，跳过 Dart 测试")
+            dart_ok = True
+    else:
+        dart_ok = True
+
+    # 只在「两边都真的过了一遍」时写戳 —— 跳过的那些不算全量
+    if head and py_ok and dart_ok and need_py and need_dart:
+        try:
+            STAMP.write_text(json.dumps(
+                {"head": head, "python_ok": True, "flutter_ok": True,
+                 "ts": time.time()}), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def commit_if_changed(paths: list[Path], message: str) -> bool:
@@ -580,7 +677,7 @@ def parse_changelog_history(markdown: str) -> list[dict]:
             # 判别依据：服务端版本**从不带 build 号**，App 才老是写 +N。
             # 但必须要求版本号紧跟日期破折号 —— 否则「App 整改批次 A
             # 复查（随 v0.28.3+77 发版）」这类批次描述会被误认成 0.28.3。
-            m = re.search(r"—\s*v(\d+\.\d+\.\d+)\+(\d+)", title)
+            m = re.search(r"—\s*v?(\d+\.\d+\.\d+)\+(\d+)", title)
         if not m:
             # 最早那批把版本挂在句末（`…，v0.4.1+5`）
             m = re.search(r"，\s*v(\d+\.\d+\.\d+)\+(\d+)", title)
@@ -593,8 +690,20 @@ def parse_changelog_history(markdown: str) -> list[dict]:
 
         dm = re.search(r"(\d{4}-\d{2}-\d{2})", title)
         parts = [int(x) for x in ver.split(".") if x.isdigit()]
-        build = (parts[0] * 10000 + parts[1] * 100 + parts[2]
-                 if len(parts) == 3 else 0)
+        # build 号优先取标题里真实写的 `+N`。
+        #
+        # 原来一律用 version 折算（4.1.2 → 40102），而那是个**假的** build：
+        # App 端判断「当前 / 最新」标签靠的是 `h.build == localBuild`
+        # （localBuild 来自真实 +149），假 build 永远不等于它，于是
+        # 更新历史里「当前」和「最新」两个标签**一个都不显示**
+        # （2026-11-18 主人反馈「更新详情和版本数都没更新」时顺带查出来的）。
+        bm = re.search(r"\+(\d+)", title)
+        if bm:
+            build = int(bm.group(1))
+        else:
+            # 早期标题没写 build，才用折算值兜底
+            build = (parts[0] * 10000 + parts[1] * 100 + parts[2]
+                     if len(parts) == 3 else 0)
         items.append({
             "version": ver,
             "build": build,
@@ -717,7 +826,7 @@ _APP_TITLE_RE = re.compile(r"App\s+v?(\d+\.\d+\.\d+)")
 # 判别依据是 build 号 `+N` —— 服务端版本从不带它。但必须要求版本号紧跟
 # 日期破折号，否则「App 整改批次 A 复查（随 v0.28.3+77 发版）」这类批次
 # 描述会被误认成一个独立版本。
-_BUILD_TITLE_RE = re.compile(r"—\s*v(\d+\.\d+\.\d+)\+(\d+)")
+_BUILD_TITLE_RE = re.compile(r"—\s*v?(\d+\.\d+\.\d+)\+(\d+)")
 # 最早那批（0.4.x ~ 0.6.1）连破折号都没有，版本号挂在句末：
 #   `2026-09-01（深夜 III）— 品牌启动图标：…，v0.4.1+5`
 _TAIL_VER_RE = re.compile(r"，\s*v(\d+\.\d+\.\d+)\+(\d+)")
@@ -878,8 +987,12 @@ def parse_update_history(markdown: str, line: str) -> list[dict]:
             # 每一行都标「最新」（2026-11-08 实机踩到）。
             # 这里的值是按版本号推出的兜底值；发版脚本会把它覆盖成真实
             # versionCode（见 sync_update_manifest）。
-            "build": (parts[0] * 10000 + parts[1] * 100 + parts[2]
-                      if len(parts) == 3 else 0),
+            # 真实 build 优先（标题里的 +149）。折算值（4.1.9 → 40109）是假的：
+            # App 端  判「当前 / 最新」，假值永不相等，
+            # 两个标签一个都不显示（2026-11-18 主人反馈「历史没更新」查出）。
+            "build": (int(_bm.group(1)) if (_bm := re.search(r"\+(\d+)", title))
+                      else (parts[0] * 10000 + parts[1] * 100 + parts[2]
+                            if len(parts) == 3 else 0)),
             "published": dm.group(1) if dm else "",
             "notes": _clean_note(_title_summary(title, ver) or _summary_for(body)),
         })
@@ -1210,7 +1323,7 @@ def cmd_server(args) -> int:
     if args.skip_tests:
         warn("已跳过测试（仅当刚跑过全绿时才该这么用）")
     else:
-        check_tests()
+        check_tests(reuse=args.reuse_tests)
 
     step(4, total, "构建安装包")
     exe = build_server()
@@ -1329,12 +1442,16 @@ def main() -> int:
     p_srv.add_argument("--skip-smoke", action="store_true")
     p_srv.add_argument("--skip-tests", action="store_true",
                        help="跳过测试（只在刚跑过全绿、本轮只是补发版时用）")
+    p_srv.add_argument("--reuse-tests", action="store_true",
+                        help="复用 .release_test_stamp 里同一 HEAD 的全量结果")
 
     p_app = sub.add_parser("app", parents=[common], help="发 App")
     p_app.add_argument("version", nargs="?", help="新版本号，省略则沿用当前（build 不变）")
     p_app.add_argument("--skip-smoke", action="store_true", help="跳过模拟器冒烟")
     p_app.add_argument("--skip-tests", action="store_true",
                        help="跳过测试（只在刚跑过全绿、本轮只是补发版时用）")
+    p_app.add_argument("--reuse-tests", action="store_true",
+                        help="复用 .release_test_stamp 里同一 HEAD 的全量结果")
 
     args = ap.parse_args()
 
