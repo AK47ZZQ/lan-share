@@ -201,6 +201,10 @@ class _LoginPageState extends ConsumerState<LoginPage>
   }
 
   Future<void> _applyAddress(String url) async {
+    // 换了地址，上一台的错误提示就作废了。不清的话会出现
+    // 「绿点服务器在线」和「红字服务器暂时不可达」同时挂在屏幕上
+    // （2026-11-18 真机验收撞到）。
+    ref.read(sessionProvider.notifier).clearError();
     // 规范化：扫码/选择器给来的可能是无协议形式的 192.168.x.x:8765
     final normalized = normalizeServerUrl(url);
     _server.text = normalized;

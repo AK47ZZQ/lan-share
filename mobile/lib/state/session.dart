@@ -147,6 +147,16 @@ class SessionController extends StateNotifier<SessionState> {
     if (!_busy) state = const SessionState();
   }
 
+  /// 换服务器地址时清掉上一台的错误提示。
+  ///
+  /// 不清的后果（2026-11-18 真机验收撞到）：顶部服务器条已经是绿点
+  /// 「服务器在线」，下面还挂着上一台的红字「服务器暂时不可达」——
+  /// 用户看到一片红，会以为新地址也没连上，其实早就通了。
+  /// 只在空闲时清：登录请求进行中不能把 busy/checking 一起抹掉。
+  void clearError() {
+    if (!_busy) state = const SessionState();
+  }
+
   /// 配对码登录（免账号密码）：Web 端已登录会话生成一次性 6 位码，
   /// 此处 /api/pair/claim 直接换长效设备 Token。凭据规则与密码登录一致。
   Future<void> loginByPair(String code, {required String server}) async {

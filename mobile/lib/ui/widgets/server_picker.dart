@@ -280,7 +280,10 @@ class _ServerPickerSheetState extends State<_ServerPickerSheet> {
                   // 用占位符写法而不是具体 IP：这是给公开分发的 App，
                   // 任何写死的地址都会被当成「作者的服务器」。
                   hintText: 'https://你的服务器IP:8765',
-                  helperText: '局域网和公网都用 8765 端口，填哪个都行',
+                  // 不能只提 8765：Cloudflare Tunnel 走标准 443，用户照旧文案
+                  // 在域名后面补个 :8765 就连不上了。也不能给死例子 ——
+                  // 这是公开分发的 App，写死任何地址都会被当成「作者的服务器」。
+                  helperText: '局域网一般带 :8765；公网域名通常不用端口，照抄电脑端显示的地址',
                   isDense: true),
               keyboardType: TextInputType.url,
               autocorrect: false,
