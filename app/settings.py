@@ -15,6 +15,14 @@ from app.db import _db, _db_lock
 
 # ── key 常量（唯一事实源，新 key 必须加在这里）──────────
 PUBLIC_BASE_URL = "public_base_url"
+# 公网入口的接入方式："frp" | "cloudflare"；空串 = 未配置。
+# 只描述"当前对外公布的那条路是哪来的"，不控制任何隧道进程。
+# 读取时兼容存量数据：mode 为空且 url 非空 → 推导为 "frp"（改造前只有 FRP）。
+PUBLIC_ACCESS_MODE = "public_access_mode"
+# 本套部署的唯一标识（UUID4），首次需要时生成，此后固定。
+# 用途：公网入口的同源校验 —— 从外面访问 <域名>/api/instance-id，
+# 返回值和本机一致，才说明那个域名指向的就是这台机器。
+INSTANCE_ID = "instance_id"
 # 遗留字段：备用公网入口已于 2026-11-04 删除，没有任何读取方。
 # 保留常量只为一件事 —— 保存主地址时把它写成空串，清掉历史残留值
 # （那条值曾被填成另一条隧道的地址，App 会把它当成能连的备用入口）。
@@ -47,9 +55,54 @@ def get_setting(key: str, default: str = "") -> str:
 
 
 def set_setting(key: str, value: str) -> None:
-    """Upsert 单 key。多 key 原子写入场景请自持 _db_lock 并保持单事务。"""
+    """Upsert 单 key。多 key 原子写入场景请用 set_settings。"""
     with _db_lock:
         _db().execute(
             "INSERT INTO settings(key, value) VALUES(?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
         _db().commit()
+
+
+def set_settings(pairs: dict) -> None:
+    """多 key 原子写：一次事务、一次 commit。
+
+    为什么不能循环调 set_setting：那个每键都 commit，两次调用之间崩掉会留下
+    「URL 已改成公网域名、MODE 还是 frp」这种自相矛盾的状态，而 MODE 会被
+    托盘和排查逻辑当作事实读取。
+    """
+    with _db_lock:
+        conn = _db()
+        for key, value in pairs.items():
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+        conn.commit()
+
+
+_INSTANCE_ID_CACHE: list = []
+
+
+def ensure_instance_id() -> str:
+    """取实例 UUID，没有就生成并落库（幂等，进程内缓存）。
+
+    这是「公网入口同源校验」的锚点：从公网访问 <域名>/api/instance-id，
+    返回值与本机一致才说明那个域名指向的是这套部署。所以：
+    - 一旦生成就不能变（不要加"每次启动重新生成"之类的逻辑）
+    - 并发首次调用必须只生成一个（下面整个读-生成-写都在 _db_lock 内）
+    """
+    if _INSTANCE_ID_CACHE:
+        return _INSTANCE_ID_CACHE[0]
+    import uuid as _uuid
+    with _db_lock:
+        if _INSTANCE_ID_CACHE:            # 双检：等锁期间别人可能已生成
+            return _INSTANCE_ID_CACHE[0]
+        current = get_setting(INSTANCE_ID)
+        if not current:
+            current = str(_uuid.uuid4())
+            _db().execute(
+                "INSERT INTO settings(key, value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (INSTANCE_ID, current))
+            _db().commit()
+        _INSTANCE_ID_CACHE.append(current)
+        return current

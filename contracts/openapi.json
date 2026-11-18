@@ -801,6 +801,17 @@
     "title": "PrefsBody",
     "type": "object"
    },
+   "ProbeBody": {
+    "properties": {
+     "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "title": "ProbeBody",
+    "type": "object"
+   },
    "ProfileBody": {
     "properties": {
      "nickname": {
@@ -1432,6 +1443,11 @@
    },
    "app__api__local_config__PublicUrlBody": {
     "properties": {
+     "mode": {
+      "default": "frp",
+      "title": "Mode",
+      "type": "string"
+     },
      "url": {
       "default": "",
       "title": "Url",
@@ -4414,6 +4430,23 @@
      }
     },
     "summary": "List Files"
+   }
+  },
+  "/api/instance-id": {
+   "get": {
+    "description": "公开的实例标识 —— 只给「公网入口同源校验」用。\n\n场景：用户在托盘里填 `https://自己的域名`，程序要确认「这个域名指向的就是\n这台机器」。做法是从本机和从公网各读一次本端点，比对 UUID 是否相同。\n所以它**必须免鉴权**（探针经隧道进来时没有登录态）。\n\n## 为什么只回一个 UUID，一个字段都不多加\n\n加 `version` 是最容易犯的「顺手友好」错误：那等于给攻击者一份\n「该用哪个已知漏洞」的清单。加 `name`/`user_count` 则直接泄露部署信息。\n\n## 暴露风险评估（已记入 docs/SECURITY.md）\n\n最坏情况：别人能知道「这两个域名属于同一套部署」。不含用户数、内容、\n版本、文件结构。UUID 本身是随机值，无法反推任何东西。可接受。\n\n## 响应头\n\n- `Cache-Control: no-store`：别让 CDN 或浏览器缓存实例标识\n- `X-Robots-Tag: noindex`：别让搜索引擎把 UUID 收进结果页",
+    "operationId": "instance_id_api_instance_id_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Instance Id"
    }
   },
   "/api/invites/redeem": {
@@ -7821,6 +7854,43 @@
     "summary": "Set Public Url"
    }
   },
+  "/local/public-url/probe": {
+   "post": {
+    "description": "检测一个公网域名是否可用、是否指向本机。只读，不落库。\n\n返回结构见 app/services/public_probe.py::probe。\n`ok=true` 才应该允许保存；环境检测项（cloudflared 装没装、TUN 开没开）\n只做提示，不影响 ok。",
+    "operationId": "probe_public_url_local_public_url_probe_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ProbeBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Probe Public Url"
+   }
+  },
   "/local/qr": {
    "get": {
     "description": "本机专用的 QR 码，免登录。\n\n存在的理由：桌面托盘 / 控制面板没有登录态，调不动 /api/qr，\n但又需要在窗口里显示「手机扫码访问局域网地址」的二维码。\n\nformat=png 是给桌面端准备的 —— WinForms 的 PictureBox 直接能显示 PNG，\n而 SVG 在 .NET Framework 里没有内置渲染器，为了一个二维码引入\nSVG 库不值得。\n\n内容限制：只是一段带进局域网地址的文本，不是秘密 ——\n真正保护数据的是那些接口自己的 require_user。",
@@ -7870,6 +7940,57 @@
      }
     },
     "summary": "Local Qr"
+   }
+  },
+  "/local/tunnel": {
+   "get": {
+    "description": "隧道当前状态（服务名 / 状态 / 进程 / 能否可靠启停）。",
+    "operationId": "get_tunnel_local_tunnel_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Tunnel"
+   }
+  },
+  "/local/tunnel/start": {
+   "post": {
+    "description": "启动本机的 cloudflared 服务（仅服务形态可行）。",
+    "operationId": "start_tunnel_local_tunnel_start_post",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Start Tunnel"
+   }
+  },
+  "/local/tunnel/stop": {
+   "post": {
+    "description": "停掉本机的 cloudflared 隧道。\n\n⚠️ 这会**真的断开公网访问**，不只是改一个显示字段。\n服务形态可以再启动回来；前台进程形态杀掉后程序无能为力（不知道启动参数）。\n返回里的 `method` 区分这两种情形，`detail` 是给用户看的结果说明。",
+    "operationId": "stop_tunnel_local_tunnel_stop_post",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Stop Tunnel"
    }
   },
   "/login": {

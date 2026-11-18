@@ -57,6 +57,8 @@ namespace LanShare
         /// <summary>公网地址缓存。BuildLocalPayload 每 4 秒要拼一次状态，
         /// 不能每次都发 HTTP（服务挂住时会拖住界面）；只在 force 刷新时同步读一次。</summary>
         private string _wanCached = "";
+        /// <summary>公网入口的接入方式（frp / cloudflare / 空）。和 _wanCached 一起刷新。</summary>
+        private string _wanModeCached = "";
         private bool _pageReady;
         private bool _autoUpdateDone;   // 启动自检只跑一次（导航会重复触发 NavigationCompleted）
         private bool _busy;
@@ -322,7 +324,13 @@ namespace LanShare
             {
                 string err;
                 var d = _cli.GetLocal("/local/public-url", 1500, out err);
-                if (d != null) _wanCached = Str(d, "url");
+                if (d != null)
+                {
+                    _wanCached = Str(d, "url");
+                    // mode 用来在状态行显示「已配置 · Cloudflare Tunnel」。
+                    // 老后端没有这个字段 → 保持原值（不把已有方式刷成空）。
+                    if (d.ContainsKey("mode")) _wanModeCached = Str(d, "mode");
+                }
             }
             catch (Exception) { /* 保留上次值 */ }
         }
@@ -344,6 +352,7 @@ namespace LanShare
                 { "lanUrl", "" },
                 { "lanHint", "正在读取局域网状态…" },
                 { "wanUrl", _wanCached },
+                { "wanMode", _wanModeCached },
                 { "qr", null },
                 { "certTrusted", true },
                 { "backup", FetchBackupState() },
@@ -695,6 +704,81 @@ namespace LanShare
             }
         }
 
+
+        /// <summary>
+        /// 检测 Cloudflare 域名是否可用、是否指向本机，通过则保存为当前入口。
+        ///
+        /// 为什么要先检测再保存：光验「HTTPS 能通」不够 —— 用户少打一个字母，
+        /// 域名就指到别人的 LANShare 上去了，验证照样通过。后端 probe 的最后一步
+        /// 会比对两边的 /api/instance-id，不一致就拒绝。
+        ///
+        /// probe 内部最长会跑 30 秒（15 秒超时 + 重试 1 次），必须放 RunBusy 里，
+        /// 否则 UI 线程会卡住整整半分钟。
+        /// </summary>
+        private void ProbeAndEnableCloudflare(string url)
+        {
+            url = (url ?? "").Trim();
+            if (url.Length == 0)
+            {
+                SendToast("先填域名，例如 https://lanshareapi.example.com");
+                return;
+            }
+            if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                SendToast("必须以 https:// 开头（Cloudflare 只走 443）");
+                return;
+            }
+
+            RunBusy("正在检测公网域名（解析 → 连通 → 同源），最多 30 秒…", () =>
+            {
+                string json = "{\"url\": " + Quote(url) + "}";
+                var res = ApiPostJson("/local/public-url/probe", json, 45000);
+                if (res == null) return "检测失败：服务没有响应";
+
+                // 分步结果推给面板渲染（四步 + 环境检测逐条）
+                Send("cfProbe", res);
+
+                bool ok = false;
+                try { ok = Convert.ToBoolean(res["ok"]); } catch (Exception) { }
+                if (!ok)
+                {
+                    string hint = res.ContainsKey("hint") ? Str(res, "hint") : "";
+                    AppendLog("Cloudflare 检测未通过: " + url + " / " + hint);
+                    return "检测未通过" + (hint.Length > 0 ? "：" + hint : "");
+                }
+
+                string saveJson = "{\"url\": " + Quote(url) + ", \"mode\": \"cloudflare\"}";
+                if (!ApiPost("/local/public-url", saveJson))
+                    return "检测通过，但保存失败（服务没有响应）";
+
+                AppendLog("Cloudflare 入口已启用: " + url);
+                return "已启用：" + url;
+            });
+        }
+
+        /// <summary>
+        /// 启停本机 cloudflared 隧道。
+        ///
+        /// 和「切换入口」是两件事：切换只改对外公布的地址，这里才是真的断开/恢复
+        /// 公网访问。服务形态能可靠重启；前台进程杀掉后程序无能为力（不知道启动
+        /// 参数），后端会把这句话原样带回来，这里不加工。
+        /// </summary>
+        private void ControlTunnel(bool start)
+        {
+            RunBusy(start ? "正在启动隧道…" : "正在停止隧道…", () =>
+            {
+                string path = start ? "/local/tunnel/start" : "/local/tunnel/stop";
+                var res = ApiPostJson(path, "{}", 60000);
+                if (res == null) return "操作失败：服务没有响应";
+
+                bool ok = false;
+                try { ok = Convert.ToBoolean(res["ok"]); } catch (Exception) { }
+                string detail = res.ContainsKey("detail") ? Str(res, "detail") : "";
+                AppendLog((start ? "启动隧道: " : "停止隧道: ")
+                          + (ok ? "成功" : "失败") + " / " + detail);
+                return ok ? detail : ("失败：" + detail);
+            });
+        }
 
         /// <summary>
         /// 保存公网访问地址。
@@ -1416,6 +1500,17 @@ namespace LanShare
                     break;
                 case "setWanUrl":
                     SaveWanUrl(msg.ContainsKey("url") ? Str(msg, "url") : "");
+                    break;
+
+                // Cloudflare 栏目：检测 → 通过则启用；隧道启停是独立的两件事
+                case "cfProbe":
+                    ProbeAndEnableCloudflare(msg.ContainsKey("url") ? Str(msg, "url") : "");
+                    break;
+                case "tunnelStart":
+                    ControlTunnel(true);
+                    break;
+                case "tunnelStop":
+                    ControlTunnel(false);
                     break;
 
                 case "wanAttach":

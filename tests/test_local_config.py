@@ -24,6 +24,9 @@ from app.api.local_config import _normalize, router
 def client():
     app = FastAPI()
     app.include_router(router)
+    # 这个 fixture 专门验「远程直连必须 403」：
+    # TestClient 默认 Host 是 `testserver`、client 是 `testclient`，
+    # 两者都不是回环 —— 正好模拟公网/其他机器来敲门。
     return TestClient(app)
 
 
@@ -153,6 +156,12 @@ class TestRoundTrip:
         monkeypatch.setattr(mod.settings, "get_setting", lambda k, d="": store.get(k, d))
         monkeypatch.setattr(
             mod.settings, "set_setting", lambda k, v: store.__setitem__(k, v)
+        )
+        # 多键原子写在 2026-11-18 引入了 set_settings（URL + MODE 一次落库）。
+        # 替身必须同步覆盖它，否则写操作会穿透到真实数据库、而读还在内存 dict 里，
+        # 表现就是「POST 200 但 GET 读回空」—— 这条正是本批踩到的。
+        monkeypatch.setattr(
+            mod.settings, "set_settings", lambda pairs: store.update(pairs)
         )
 
         app = FastAPI()

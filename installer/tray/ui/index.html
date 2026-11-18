@@ -169,6 +169,18 @@ button.link {
 .state.blocked .dot { background: var(--warn); }
 
 .hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; word-break: break-word; overflow-wrap: anywhere; }
+/* 警示文案（切换公网入口时那句「不会关闭隧道」）。刻意用醒目色而不靠字号。 */
+.hint.warn { color: #c97a00; }
+.hint.err { color: #d33; }
+/* 公网访问里的两个方式分区：上面是 FRP，下面是 Cloudflare。
+   用一条细分割线隔开，避免用户以为它们共享同一组输入框。 */
+.wanblock { border-top: 1px solid var(--line, #2a2a2a); margin-top: 8px; padding-top: 8px; }
+.wanblock-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; opacity: .85; }
+/* 检测结果逐条：左侧一个小圆点表状态，失败项带提示 */
+.wanstep { font-size: 11.5px; line-height: 1.7; display: flex; gap: 6px; }
+.wanstep .k { min-width: 34px; opacity: .7; }
+.wanstep .v { flex: 1; word-break: break-word; }
+.wanstep .hint { display: block; margin-top: 1px; }
 
 /* ── 磁盘水位条 ── */
 .diskbar {
@@ -409,21 +421,43 @@ button.link {
         </div>
         <div class="hint" id="wanhint"></div>
 
-        <!-- 一键接入：穿透工具给你的是一个陌生域名，Caddy 本来不认它。
-             填进来由程序写进 Caddyfile + 重签证书 + 自检，成功后自动填下面的地址。 -->
-        <div class="addr">
-          <input id="wanhost" value="" placeholder="隧道域名，如 cn-bj.frp.one:35123">
-          <button class="mini primary" id="wanattach">一键接入</button>
+        <!-- 切换只在「程序对外公布哪个地址」这一层生效，关不掉任何隧道。
+             用户很容易以为点一下就安全了，所以这句话必须常驻，不能藏进帮助。 -->
+        <div class="hint warn" id="wanswitchwarn" style="display:none"></div>
+
+        <div class="wanblock">
+          <div class="wanblock-title">方式一：穿透服务（FRP）</div>
+          <!-- 一键接入：穿透工具给你的是一个陌生域名，Caddy 本来不认它。
+               填进来由程序写进 Caddyfile + 重签证书 + 自检，成功后自动填下面的地址。 -->
+          <div class="addr">
+            <input id="wanhost" value="" placeholder="隧道域名，如 cn-bj.frp.one:35123">
+            <button class="mini primary" id="wanattach">一键接入</button>
+          </div>
+
+          <div class="addr">
+            <input id="wanaddr" value="" placeholder="https://你的域名:端口">
+            <button class="mini" data-copy="wan">复制</button>
+          </div>
+          <div class="btnrow">
+            <button class="mini primary" id="wansave">保存</button>
+            <button class="mini" id="wantest">验证</button>
+            <button class="mini danger" id="wanclear">清除</button>
+          </div>
         </div>
 
-        <div class="addr">
-          <input id="wanaddr" value="" placeholder="https://你的域名:端口">
-          <button class="mini" data-copy="wan">复制</button>
-        </div>
-        <div class="btnrow">
-          <button class="mini primary" id="wansave">保存</button>
-          <button class="mini" id="wantest">验证</button>
-          <button class="mini danger" id="wanclear">清除</button>
+        <div class="wanblock">
+          <div class="wanblock-title">方式二：Cloudflare Tunnel</div>
+          <div class="addr">
+            <input id="cfhost" value="" placeholder="https://你的域名（不带端口）">
+            <button class="mini primary" id="cfprobe">检测并启用</button>
+          </div>
+          <div class="hint" id="cfhint"></div>
+          <div id="cfsteps"></div>
+          <div class="btnrow" style="margin-top:6px">
+            <button class="mini" id="cftunnelstart">启动隧道</button>
+            <button class="mini danger" id="cftunnelstop">停止隧道</button>
+            <span class="hint" id="cftunnelstate" style="margin-left:8px"></span>
+          </div>
         </div>
       </div>
 
@@ -602,6 +636,7 @@ if (host) {
     else if (m && m.type === 'updateState') setUpdateBusy(m.payload && m.payload.busy);
     else if (m && m.type === 'update') onUpdate(m.payload);
     else if (m && m.type === 'updateSource') renderUpdateSource(m.payload);
+    else if (m && m.type === 'cfProbe') renderCfProbe(m.payload);
   });
 }
 
@@ -942,12 +977,30 @@ function render(s) {
 
   // 公网
   const wanOn = !!(s.wanUrl && s.wanUrl.length);
+  const wanMode = s.wanMode || '';
+  const MODE_LABEL = { frp: '穿透服务（FRP）', cloudflare: 'Cloudflare Tunnel' };
   const wanState = document.getElementById('wanstate');
   wanState.className = 'state' + (wanOn ? ' on' : '');
-  document.getElementById('wanstatetext').textContent = wanOn ? '已配置' : '未配置';
+  document.getElementById('wanstatetext').textContent = wanOn
+    ? ('已配置 · ' + (MODE_LABEL[wanMode] || '未知方式'))
+    : '未配置';
   document.getElementById('wanhint').textContent = wanOn
-    ? '局域网外可通过这个地址访问'
-    : '配好穿透后在下面填入地址，别人在外面也能访问';
+    ? ('局域网外可通过这个地址访问：' + s.wanUrl)
+    : '配好穿透或隧道后在下面填入地址，别人在外面也能访问';
+
+  // 切换警示：配了公网入口就常驻显示。
+  // 这不是一次性通知 —— 用户随时可能以为「切了就等于关了」，那句话得一直在。
+  var sw = document.getElementById('wanswitchwarn');
+  if (sw) {
+    if (wanOn) {
+      sw.style.display = '';
+      sw.textContent = '切换入口只会改变这里公布的地址，不会关闭任何隧道'
+        + '（frpc / cloudflared 仍在运行）。要真正关掉某条路，'
+        + '请点「停止隧道」或手动停掉对应客户端。';
+    } else {
+      sw.style.display = 'none';
+    }
+  }
   // 用户正在输入时不要覆盖 —— 状态每 5~10 秒刷一次，硬写会把人家
   // 刚敲的字冲掉。只有失焦状态下才同步。
   var wanEl = document.getElementById('wanaddr');
@@ -1096,6 +1149,58 @@ document.getElementById('wansave').onclick = () => {
   var el = document.getElementById('wanaddr');
   post({ action: 'setWanUrl', url: (el && el.value || '').trim() });
 };
+
+// ── Cloudflare Tunnel 栏目 ─────────────────────────────────
+// 检测并启用：先跑后端 probe（格式 → 解析 → 连通 → 同源），
+// 全过才保存。同源那步很重要 —— 它证明这个域名指向的确实是本机，
+// 用户填错一个字母就会连到别人家去。
+document.getElementById('cfprobe').onclick = () => {
+  var el = document.getElementById('cfhost');
+  var v = (el && el.value || '').trim();
+  if (!v) { if (el) el.focus(); return; }
+  var hint = document.getElementById('cfhint');
+  if (hint) { hint.textContent = ''; hint.className = 'hint'; }
+  document.getElementById('cfsteps').innerHTML = '';
+  post({ action: 'cfProbe', url: v });
+};
+
+document.getElementById('cftunnelstart').onclick = () => post({ action: 'tunnelStart' });
+document.getElementById('cftunnelstop').onclick = () => post({ action: 'tunnelStop' });
+
+// 渲染 probe 的分步结果。一律用 textContent —— 后端会把解析到的 IP、
+// 证书颁发者这类外部内容塞进 detail，innerHTML 就是个现成的 XSS 落点。
+function renderCfProbe(res) {
+  var box = document.getElementById('cfsteps');
+  var hintEl = document.getElementById('cfhint');
+  if (!box) return;
+  box.innerHTML = '';
+  var steps = (res && res.steps) || [];
+  steps.forEach(function (s) {
+    var row = document.createElement('div');
+    row.className = 'wanstep';
+    var icon = s.ok ? '✓' : ((s.level === 'warn') ? '!' : '✕');
+    var k = document.createElement('span');
+    k.className = 'k';
+    k.textContent = icon + ' ' + (s.label || s.key || '');
+    var v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.detail || '';
+    if (!s.ok && s.hint) {
+      var h = document.createElement('span');
+      h.className = 'hint';
+      h.textContent = s.hint;
+      v.appendChild(document.createElement('br'));
+      v.appendChild(h);
+    }
+    row.appendChild(k);
+    row.appendChild(v);
+    box.appendChild(row);
+  });
+  if (hintEl) {
+    hintEl.textContent = (res && res.hint) || '';
+    hintEl.className = 'hint' + ((res && res.ok) ? '' : ' err');
+  }
+}
 
 // 一键接入：把穿透域名交给后端写进 Caddyfile（成功会自动填上面的地址）
 document.getElementById('wanattach').onclick = () => {

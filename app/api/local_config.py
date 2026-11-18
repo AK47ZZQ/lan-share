@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app import settings
 from app.security import effective_client_ip, is_public_entry
@@ -75,6 +76,22 @@ class PublicUrlBody(BaseModel):
     # 备用入口已删除（2026-11-04 用户要求）。旧版托盘仍会多传一个 url_alt
     # 字段，Pydantic 默认忽略未知字段，所以旧客户端不会因此报错。
     url: str = ""
+    # 接入方式："frp" | "cloudflare"。缺省 frp —— 改造前只有 FRP 这条路，
+    # 老客户端不传这个字段时行为必须与以前完全一致。
+    mode: str = "frp"
+
+
+_MODE_LABELS = {"frp": "穿透服务（FRP）", "cloudflare": "Cloudflare Tunnel"}
+
+
+def _coerce_mode(stored: str, url: str) -> str:
+    """把库里的 mode 推导成有效值（读时兼容存量数据）。
+
+    改造前只可能是 FRP，所以「有地址但没 mode」一定是历史 FRP 配置。
+    """
+    if stored in _MODE_LABELS:
+        return stored
+    return "frp" if url else ""
 
 
 def _normalize(raw: str) -> tuple[str, str]:
@@ -115,10 +132,14 @@ async def get_public_url(request: Request):
     _require_local(request)
     try:
         primary = settings.get_setting(settings.PUBLIC_BASE_URL)
+        stored_mode = settings.get_setting(settings.PUBLIC_ACCESS_MODE)
     # 读不到要说出来，不能装作空配置（项目已 ignore BLE001，无需 noqa）
     except Exception as exc:
-        return {"url": "", "available": False, "error": f"读取配置失败：{exc}"}
-    return {"url": primary or "", "available": True, "error": ""}
+        return {"url": "", "mode": "", "available": False,
+                "error": f"读取配置失败：{exc}"}
+    mode = _coerce_mode(stored_mode, primary)
+    return {"url": primary or "", "mode": mode, "available": True, "error": "",
+            "mode_label": _MODE_LABELS.get(mode, "")}
 
 
 @router.post("/local/public-url")
@@ -134,12 +155,34 @@ async def set_public_url(request: Request, body: PublicUrlBody):
     if err:
         raise HTTPException(status_code=422, detail=err)
 
+    mode = (body.mode or "frp").strip().lower()
+    if mode not in _MODE_LABELS:
+        raise HTTPException(status_code=422,
+                            detail=f"未知的接入方式：{body.mode}")
+    # 清空地址时 mode 一起清掉，避免「没有地址却记着方式」的悬空状态
+    if not primary:
+        mode = ""
+
+    # Cloudflare 这条路对地址形态有硬要求（不能带端口/路径）。probe 会查，
+    # 但后端自己也拦一道 —— 托盘不是唯一的调用方，将来 CLI 也会写这个端点。
+    if mode == "cloudflare" and primary:
+        from app.services.public_probe import check_format
+
+        fmt_ok, fmt_detail, fmt_hint, _host = check_format(primary)
+        if not fmt_ok:
+            raise HTTPException(status_code=422, detail=fmt_hint or fmt_detail)
+
     try:
-        settings.set_setting(settings.PUBLIC_BASE_URL, primary)
-        # 顺手清掉历史备用地址：这个字段已经没有读取方，留着只会在
-        # App 的入口清单里冒出一个连不上的旧地址（2026-11-04 实机见过
-        # 一个指向另一条隧道端口的僵尸值）。
-        settings.set_setting(settings.PUBLIC_BASE_URL_ALT, "")
+        # 原子写：URL / MODE / 清历史备用地址，一次事务一次 commit。
+        # 分三次 set_setting 会在中途失败时留下「地址已改、方式没改」的矛盾态。
+        settings.set_settings({
+            settings.PUBLIC_BASE_URL: primary,
+            settings.PUBLIC_ACCESS_MODE: mode,
+            # 顺手清掉历史备用地址：这个字段已经没有读取方，留着只会在
+            # App 的入口清单里冒出一个连不上的旧地址（2026-11-04 实机见过
+            # 一个指向另一条隧道端口的僵尸值）。
+            settings.PUBLIC_BASE_URL_ALT: "",
+        })
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
 
@@ -273,3 +316,65 @@ async def set_feedback_config(request: Request, body: FeedbackConfigBody):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
     return {"ok": True}
+
+
+# ───────────────────── 公网域名检测 / 隧道启停（2026-11-18）─────────────────────
+# 托盘「公网访问 → Cloudflare Tunnel」栏目的后端。
+#
+# 设计要点见 docs/_internal/设计-公网域名栏目-20261118.md，这里只强调三件事：
+#   1. probe 是**只读**的，不落库 —— 用户可以先看检测结果再决定是否启用
+#   2. probe 内部全是同步网络 IO（urllib + DNS + tasklist），必须走线程池，
+#      直接 await 会把整个事件循环卡住最长 30 秒（这正是本批 review 修过的
+#      「阻塞调用留在 async def」那一类问题）
+#   3. probe 的最后一步是**同源校验**：比对公网与本机的 /api/instance-id，
+#      防止用户把域名填成别人的服务器
+
+
+class ProbeBody(BaseModel):
+    url: str = ""
+
+
+@router.post("/local/public-url/probe")
+async def probe_public_url(request: Request, body: ProbeBody):
+    """检测一个公网域名是否可用、是否指向本机。只读，不落库。
+
+    返回结构见 app/services/public_probe.py::probe。
+    `ok=true` 才应该允许保存；环境检测项（cloudflared 装没装、TUN 开没开）
+    只做提示，不影响 ok。
+    """
+    _require_local(request)
+    from app.services.public_probe import probe
+
+    return await run_in_threadpool(probe, body.url)
+
+
+@router.get("/local/tunnel")
+async def get_tunnel(request: Request):
+    """隧道当前状态（服务名 / 状态 / 进程 / 能否可靠启停）。"""
+    _require_local(request)
+    from app.services.tunnel_ctl import tunnel_status
+
+    return await run_in_threadpool(tunnel_status)
+
+
+@router.post("/local/tunnel/stop")
+async def stop_tunnel(request: Request):
+    """停掉本机的 cloudflared 隧道。
+
+    ⚠️ 这会**真的断开公网访问**，不只是改一个显示字段。
+    服务形态可以再启动回来；前台进程形态杀掉后程序无能为力（不知道启动参数）。
+    返回里的 `method` 区分这两种情形，`detail` 是给用户看的结果说明。
+    """
+    _require_local(request)
+    from app.services.tunnel_ctl import tunnel_stop
+
+    return await run_in_threadpool(tunnel_stop)
+
+
+@router.post("/local/tunnel/start")
+async def start_tunnel(request: Request):
+    """启动本机的 cloudflared 服务（仅服务形态可行）。"""
+    _require_local(request)
+    from app.services.tunnel_ctl import tunnel_start
+
+    return await run_in_threadpool(tunnel_start)
