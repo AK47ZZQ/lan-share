@@ -125,7 +125,7 @@ TEMPLATE = """\
 \t#
 \t# 为什么必须在 Caddy 这一层就拦死：API 那边的 _require_local 靠 IP + Host
 \t# 判定，但这两个都能被隧道改写 —— TCP 型隧道（frpc type=tcp）把原始字节流
-\t# 原样透传，攻击者可以自填 `Host: 127.0.0.1:8765`，于是「Host 必须是回环」
+\t# 原样透传，攻击者可以自填 `Host: 127.0.0.1:<web端口>`，于是「Host 必须是回环」
 \t# 那道门被他一句话绕过去。2026-11-18 三路 review 实测：绕过之后能改公网
 \t# 入口，配合 /local/backup/dir + /local/backup/run 可把整库 pg_dump 到
 \t# 攻击者的 SMB —— 与 2026-11-04、11-17 两次 P0 同一后果，只是换个入口。
