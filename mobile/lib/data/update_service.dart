@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -381,35 +382,56 @@ class UpdateService {
       _checkR2(),
     ]);
     final candidates =
-        results.where((r) => r.info != null).map((r) => r.info!).toList()
-          ..sort((a, b) => _compareVersion(b.version, a.version));
-
-    final anyReachable = results.any((r) => r.reachable);
-    // 顺序和 Future.wait 一致：0 = 服务端，1 = GitHub，2 = R2。
-    // 两个都要带上，UI 靠它们给出针对性的 VPN 建议。
-    final serverOk = results[0].reachable;
-    final githubOk = results[1].reachable;
-    final customErr = failures.join('；');
-
-    if (candidates.isNotEmpty) {
+        results.where((r) => r.info != null).map((r) => r.info!).toList();
+    final best = pickBest(candidates);
+    if (best != null) {
       return UpdateCheckResult(
-        info: candidates.first,
+        info: best,
         reachable: true,
-        serverReachable: serverOk,
-        githubReachable: githubOk,
+        serverReachable: results[0].reachable,
+        githubReachable: results[1].reachable,
         // 回落到默认源了，但必须说清为什么没用自定义源 ——
         // 否则用户以为「我的源里没有新版」
-        source: candidates.first.source,
-        sourceError: customErr,
+        source: best.source,
+        sourceError: failures.join('；'),
       );
     }
     return UpdateCheckResult(
       info: null,
-      reachable: anyReachable,
-      serverReachable: serverOk,
-      githubReachable: githubOk,
-      sourceError: customErr,
+      reachable: results.any((r) => r.reachable),
+      serverReachable: results[0].reachable,
+      githubReachable: results[1].reachable,
+      sourceError: failures.join('；'),
     );
+  }
+
+  /// 从多个源查到的版本里挑一个最该用的。
+  ///
+  /// 规则：版本高的优先；**版本相同时按国内可达性 tie-break**（R2 > 服务端 > GitHub）。
+  ///
+  /// 为什么需要 tie-break：三个源几乎总是返回同一个版本（同一份 CHANGELOG），
+  /// 只比版本号时比较结果恒为 0，而 Dart 的 List.sort **不保证稳定排序** ——
+  /// 谁排第一不确定，可能选中 GitHub 的下载地址。国内直连 GitHub 只有
+  /// 几十 KB/s，100MB 的包会卡在个位数百分比（2026-11-18 实机截图：8% 不动，
+  /// 界面还提示「开 VPN 会快很多」）。R2 是自家域名（dl.ak47zzq.com，
+  /// 走 Cloudflare），国内可达性远好于 GitHub。
+  ///
+  /// 抽成 static 纯函数是为了能直接单测 —— 打桩三个源的网络调用太笨重。
+  @visibleForTesting
+  static UpdateInfo? pickBest(List<UpdateInfo> candidates) {
+    if (candidates.isEmpty) return null;
+    const sourceRank = <String, int>{'r2': 0, 'server': 1, 'github': 2};
+    final sorted = [...candidates]..sort((a, b) {
+        final byVersion = _compareVersion(b.version, a.version);
+        if (byVersion != 0) return byVersion;
+        // 版本号相同时还要比 build：两条源同步有先后（R2 慢半拍是常态），
+        // 会出现同一 4.1.7 但一边是 147、一边是 148 的情况。
+        // 只比 version 会把它们当等价，然后按 source 选 —— 可能选到旧 build。
+        final byBuild = b.build.compareTo(a.build);
+        if (byBuild != 0) return byBuild;
+        return (sourceRank[a.source] ?? 9).compareTo(sourceRank[b.source] ?? 9);
+      });
+    return sorted.first;
   }
 
   /// 清单里的 history 数组 → 历史条目。坏一条跳过，不影响整份。
