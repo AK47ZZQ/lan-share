@@ -732,11 +732,13 @@ namespace LanShare
             RunBusy("正在检测公网域名（解析 → 连通 → 同源），最多 30 秒…", () =>
             {
                 string json = "{\"url\": " + Quote(url) + "}";
-                var res = ApiPostJson("/local/public-url/probe", json, 45000);
+                var res = ApiPostJson("/local/public-url/probe", json, 90000);
                 if (res == null) return "检测失败：服务没有响应";
 
-                // 分步结果推给面板渲染（四步 + 环境检测逐条）
-                Send("cfProbe", res);
+                // 分步结果推给面板渲染（四步 + 环境检测逐条）。
+                // 必须用 SendFromAnyThread —— 这段代码跑在线程池线程上，
+                // CoreWebView2 是 STA 对象，直接调 Send 会抛 RPC_E_WRONG_THREAD。
+                SendFromAnyThread("cfProbe", res);
 
                 bool ok = false;
                 try { ok = Convert.ToBoolean(res["ok"]); } catch (Exception) { }
@@ -768,7 +770,7 @@ namespace LanShare
             RunBusy(start ? "正在启动隧道…" : "正在停止隧道…", () =>
             {
                 string path = start ? "/local/tunnel/start" : "/local/tunnel/stop";
-                var res = ApiPostJson(path, "{}", 60000);
+                var res = ApiPostJson(path, "{}", 90000);
                 if (res == null) return "操作失败：服务没有响应";
 
                 bool ok = false;
@@ -797,7 +799,7 @@ namespace LanShare
                 SendToast("地址要以 http:// 或 https:// 开头");
                 return;
             }
-            string json = "{\"url\": " + Quote(url) + "}";
+            string json = "{\"url\": " + Quote(url) + ", \"mode\": \"frp\"}";
             if (!ApiPost("/local/public-url", json))
             {
                 SendToast("保存失败：服务没有响应");
@@ -888,7 +890,7 @@ namespace LanShare
                 // 成功就地保存，省掉用户再点一次「保存」
                 if (pub.Length > 0)
                 {
-                    string json = "{\"url\": " + Quote(pub) + "}";
+                    string json = "{\"url\": " + Quote(pub) + ", \"mode\": \"frp\"}";
                     if (ApiPost("/local/public-url", json))
                         AppendLog("WanAttach: 已自动写入公网地址 " + pub);
                     else
@@ -1408,6 +1410,33 @@ namespace LanShare
             var msg = new Dictionary<string, object> { { "type", type }, { "payload", payload } };
             string json = new JavaScriptSerializer().Serialize(msg);
             _web.CoreWebView2.PostWebMessageAsJson(json);
+        }
+
+        /// <summary>
+        /// 从**任意线程**安全地把一条消息推给面板。
+        ///
+        /// 为什么需要它：CoreWebView2 是 STA 对象，有自己的线程亲和性。
+        /// RunBusy 的 work() 跑在线程池线程上，如果直接在里头调 Send()，
+        /// 要么抛 COMException 0x8001010E（RPC_E_WRONG_THREAD），要么被 COM
+        /// 代理解析回 UI 线程、投递顺序不确定。全文件其它十余处 Send 都在
+        /// ContinueWith(..., TaskScheduler.FromCurrentSynchronizationContext())
+        /// 里跑，只有新加的 cfProbe 忘了 —— 而它的异常点正好在建档保存之前，
+        /// 结果就是「检测明明通过却不落库，用户只看到一句出错」。
+        /// </summary>
+        private void SendFromAnyThread(string type, object payload)
+        {
+            if (_web == null) return;
+            try
+            {
+                if (_web.InvokeRequired)
+                    _web.BeginInvoke((Action)(() => Send(type, payload)));
+                else
+                    Send(type, payload);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("推送 " + type + " 失败：" + ex.Message);
+            }
         }
 
         // T7：系统级气球提示。_balloon 为 null（WinForms 回退面板 / 测试环境）
@@ -2389,6 +2418,21 @@ namespace LanShare
                     string msg = (t.Status == TaskStatus.RanToCompletion && t.Result != null)
                         ? t.Result
                         : "操作已结束（没有返回信息）";
+
+                    // 🔴 先把 _busy 放下来，再刷状态。
+                    //
+                    // PushStateAsync 第一句就是 `if (_busy) return;`（第 274 行），
+                    // 而 _busy 原来是在 finally 里才复位的 —— 于是这次强制刷新
+                    // 100% 被丢掉。wanUrl/wanMode 只在 force 时才重新读
+                    // /local/public-url（第 285 行），定时器推的是 force=false，
+                    // 所以「保存成功」之后面板顶部会一直停在「未配置」，
+                    // 直到重启托盘程序。这个 bug 之前就有（一键接入、清除地址
+                    // 同样中招），新栏目把它放大了（2026-11-18 三路 review 抓到）。
+                    if (isCurrent)
+                    {
+                        _busy = false;
+                        SendBusy(false, null);
+                    }
                     SendToast(msg);
                     PushStateAsync(true);
                 }

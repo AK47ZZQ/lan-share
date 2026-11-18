@@ -25,11 +25,24 @@ Docker 里根本没有本机进程）。瞎猜着去杀进程，很可能误杀�
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+import time
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# 用绝对路径调系统命令。
+# lan-share-api 以 LocalSystem 运行，而 CreateProcess 解析裸名会先搜应用目录
+# （NSSM 的 AppDirectory=C:\lanshare）和当前目录 —— 任何能往这些目录写文件的
+# 低权用户，放一个 sc.exe 就能在用户点「停止隧道」时以 SYSTEM 执行任意程序。
+_SYSTEM32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+
+
+def _exe(name: str) -> str:
+    path = os.path.join(_SYSTEM32, name)
+    return path if os.path.isfile(path) else name
 
 # 按可能性排序。第一项是我们自己的安装器用的名字。
 _SERVICE_CANDIDATES = ("LANShareTunnel", "cloudflared", "Cloudflared",
@@ -43,13 +56,19 @@ _STATE_NAMES = {1: "stopped", 2: "start_pending", 3: "stop_pending",
 
 def _run(args: list, timeout: int = 20) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout,
+                          # 中文 Windows 的 sc / tasklist 输出是 GBK，而本机
+                          # PYTHONUTF8=1 时 text=True 会按 UTF-8 解码，在
+                          # subprocess 的 reader 线程里抛 UnicodeDecodeError
+                          # （异常被吞、stdout 变空 → 服务被判成「不存在」）。
+                          # 2026-11-18 审查实测：每次 status 刷 4 段 traceback。
+                          encoding="utf-8", errors="replace",
                           creationflags=_CREATE_NO_WINDOW)
 
 
 def _service_state(name: str) -> str:
     """查服务状态。不存在返回 ""，存在返回 running/stopped/... """
     try:
-        proc = _run(["sc", "query", name])
+        proc = _run([_exe("sc.exe"), "query", name])
     except Exception:
         return ""
     out = (proc.stdout or "") + (proc.stderr or "")
@@ -61,13 +80,29 @@ def _service_state(name: str) -> str:
     return _STATE_NAMES.get(int(match.group(1)), "unknown")
 
 
+# 算「活着」的状态：这些都不该掉进进程兜底分支
+_ALIVE_STATES = ("running", "start_pending", "stop_pending",
+                 "continue_pending", "paused")
+
+
 def _find_service() -> tuple:
-    """找出一条已安装的 cloudflared 服务。返回 (name, state)，找不到 ("", "")。"""
+    """找出一条 cloudflared 服务。**优先返回活着的那个**。
+
+    为什么不能「第一个存在就返回」：若 LANShareTunnel 已 stopped、机器上另有
+    cloudflared 在 running，返回前者会让停止/启动/状态三处全部对准错的对象 ——
+    用户看到「隧道没跑」，而公网其实正连着（2026-11-18 审查实测）。
+    """
+    found = []
     for name in _SERVICE_CANDIDATES:
         state = _service_state(name)
         if state:
+            found.append((name, state))
+    if not found:
+        return "", ""
+    for name, state in found:
+        if state in _ALIVE_STATES:
             return name, state
-    return "", ""
+    return found[0]
 
 
 def _process_running() -> tuple:
@@ -75,7 +110,7 @@ def _process_running() -> tuple:
     if sys.platform != "win32":
         return False, 0
     try:
-        proc = _run(["tasklist", "/FI", "IMAGENAME eq cloudflared.exe", "/FO", "CSV", "/NH"])
+        proc = _run([_exe("tasklist.exe"), "/FI", "IMAGENAME eq cloudflared.exe", "/FO", "CSV", "/NH"])
     except Exception:
         return False, 0
     text = (proc.stdout or "").strip()
@@ -136,25 +171,55 @@ def tunnel_stop() -> dict:
         return {"ok": False, "method": "", "detail": "当前平台不支持"}
 
     name, state = _find_service()
-    if name and state == "running":
+
+    # ⚠️ 只要找到了服务，就**绝不**掉进下面的进程兜底分支。
+    #
+    # 原来写的是 `if name and state == "running"`，于是 stop_pending / paused /
+    # stopped 全部漏到 taskkill —— 而那是**服务**进程，/F 强杀会让 SCM 记成
+    # 异常终止。用户连点两次「停止」（第一次刚把服务置为 STOP_PENDING，
+    # 第二次正好命中）就能触发，返回还说「程序无法帮你重新启动」，
+    # 而它明明可以 sc start 起回来（2026-11-18 审查实测三种状态全中）。
+    if name:
+        if state == "stopped":
+            return {"ok": True, "method": "service",
+                    "detail": f"服务 {name} 已经是停止状态"}
+
+        if state == "stop_pending":
+            return {"ok": True, "method": "service",
+                    "detail": "隧道正在停止中，请稍候几秒"}
+
+        if state == "paused":
+            # 暂停态先恢复再停止，否则 sc stop 不生效
+            try:
+                _run([_exe("sc.exe"), "continue", name], timeout=20)
+            except Exception:
+                pass
+
         try:
-            proc = _run(["sc", "stop", name], timeout=30)
+            proc = _run([_exe("sc.exe"), "stop", name], timeout=30)
         except Exception as exc:
             return {"ok": False, "method": "service", "detail": f"停止服务失败：{exc}"}
         if proc.returncode != 0:
             return {"ok": False, "method": "service",
                     "detail": (proc.stderr or proc.stdout or "sc stop 失败").strip()[:200]}
-        after = _service_state(name)
-        if after in ("stopped", "stop_pending"):
-            return {"ok": True, "method": "service",
-                    "detail": f"已停止服务 {name}（可通过「启动隧道」恢复）"}
+
+        # 等它真的停（sc stop 是异步的，最多等 10 秒）
+        after = state
+        for _ in range(20):
+            time.sleep(0.5)
+            after = _service_state(name)
+            if after in ("stopped", ""):
+                return {"ok": True, "method": "service",
+                        "detail": f"已停止服务 {name}（可点「启动隧道」恢复）"}
+            if after != "stop_pending":
+                break
         return {"ok": False, "method": "service",
                 "detail": f"下发停止指令后状态仍是 {after}"}
 
     running, pid = _process_running()
     if running and pid:
         try:
-            proc = _run(["taskkill", "/PID", str(pid), "/F"], timeout=15)
+            proc = _run([_exe("taskkill.exe"), "/PID", str(pid), "/F"], timeout=15)
         except Exception as exc:
             return {"ok": False, "method": "process", "detail": f"结束进程失败：{exc}"}
         still, _ = _process_running()
@@ -189,7 +254,7 @@ def tunnel_start() -> dict:
         return {"ok": True, "method": "service", "detail": f"服务 {name} 已经在运行"}
 
     try:
-        proc = _run(["sc", "start", name], timeout=40)
+        proc = _run([_exe("sc.exe"), "start", name], timeout=40)
     except Exception as exc:
         return {"ok": False, "method": "service", "detail": f"启动服务失败：{exc}"}
 

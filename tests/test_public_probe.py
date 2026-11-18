@@ -40,7 +40,9 @@ def local_client():
     ("https://ok.example.com:8443", False, "端口"),
     ("https://ok.example.com/path", False, "路径"),
     ("https://ok.example.com?x=1", False, "路径"),
-    ("https://192.168.1.12", False, "IP"),
+    # 用 TEST-NET-1（RFC 5737 文档保留段），不要写真实私网地址 ——
+    # 仓库是开源的，隐私检查会拦。判据只看「是不是 IP 字面量」，与具体网段无关。
+    ("https://203.0.113.1", False, "IP"),
     ("https://localhost", False, "域名"),
     ("https://foo.pages.dev", False, "Cloudflare 自己的域名"),
     ("https://x.cfargotunnel.com", False, "Cloudflare 自己的域名"),

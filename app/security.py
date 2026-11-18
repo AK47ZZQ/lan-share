@@ -343,7 +343,24 @@ def is_public_entry(request: Request) -> bool:
     # 而局域网设备用内网 DNS 域名（nas.home 之类）访问时，来源是真实内网 IP,
     # 仍然按 LAN 处理 —— 家人不该因为我们用了个域名就突然被判成公网
     # （healthz 消失、登录失败记到公网账上）。
-    if public and not _is_private_host(host):
+    # 🔴 失败关闭（fail-closed），且**不能以「已经配了公网入口」为前提**。
+    #
+    # 原来的写法是 `if public and not _is_private_host(host)`，于是
+    # PUBLIC_BASE_URL 为空时（刚装好、刚清空、或者用户根本没配）这一段整个
+    # 跳过 → 隧道送进来的公网流量被当成 LAN。后果不只是 /local/* 敞开：
+    # 公网登录失败会被记进 **LAN** 的锁键（5 次/15 分钟），攻击者每 15 分钟
+    # 发 5 个错密码就能让全家人的局域网登录持续被锁 —— 正是注释里说要防的
+    # 那类 DoS，只是配置没写完时它会复发（2026-11-18 三路 review 指出）。
+    #
+    # 判据不需要知道「配了哪个域名」，只需要认出隧道的指纹：
+    #   **域名 Host + 回环来源** = 穿透进来的请求（frpc/cloudflared 都从 127.0.0.1 连）
+    #
+    # 而下面这些都不会误伤：
+    #   · 本机托盘直连 8766      → Host 是 127.0.0.1:8766，私网形态
+    #   · 本机浏览器开 localhost  → 同上
+    #   · 家里人用 192.168.x.x    → 同上
+    #   · 局域网设备用内网域名    → 来源是真实内网 IP，不是回环
+    if not _is_private_host(host):
         try:
             if effective_client_ip(request) in ("127.0.0.1", "::1", "localhost"):
                 return True

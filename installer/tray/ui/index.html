@@ -174,7 +174,7 @@ button.link {
 .hint.err { color: #d33; }
 /* 公网访问里的两个方式分区：上面是 FRP，下面是 Cloudflare。
    用一条细分割线隔开，避免用户以为它们共享同一组输入框。 */
-.wanblock { border-top: 1px solid var(--line, #2a2a2a); margin-top: 8px; padding-top: 8px; }
+.wanblock { border-top: 1px solid var(--border, #E4E8F0); margin-top: 8px; padding-top: 8px; }
 .wanblock-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; opacity: .85; }
 /* 检测结果逐条：左侧一个小圆点表状态，失败项带提示 */
 .wanstep { font-size: 11.5px; line-height: 1.7; display: flex; gap: 6px; }
@@ -1003,9 +1003,17 @@ function render(s) {
   }
   // 用户正在输入时不要覆盖 —— 状态每 5~10 秒刷一次，硬写会把人家
   // 刚敲的字冲掉。只有失焦状态下才同步。
+  // 按方式分流回填。CF 模式下 wanUrl 属于方式二，绝不能塞进方式一的地址框 ——
+  // 那个框旁边就是「保存」，用户点一下就 post setWanUrl（只带 url 不带 mode），
+  // 后端把 mode 落成默认的 frp，状态行会从 Cloudflare 悄悄变回 FRP，地址却一样。
   var wanEl = document.getElementById('wanaddr');
-  if (wanEl && document.activeElement !== wanEl) {
-    wanEl.value = s.wanUrl || '';
+  var cfEl = document.getElementById('cfhost');
+  if (s.wanMode === 'cloudflare') {
+    if (wanEl && document.activeElement !== wanEl) wanEl.value = '';
+    if (cfEl && document.activeElement !== cfEl) cfEl.value = s.wanUrl || '';
+  } else {
+    if (wanEl && document.activeElement !== wanEl) wanEl.value = s.wanUrl || '';
+    if (cfEl && document.activeElement !== cfEl) cfEl.value = '';
   }
 
   // 证书警告条
@@ -1174,8 +1182,9 @@ function renderCfProbe(res) {
   var hintEl = document.getElementById('cfhint');
   if (!box) return;
   box.innerHTML = '';
-  var steps = (res && res.steps) || [];
+  var steps = (res && Array.isArray(res.steps)) ? res.steps : [];
   steps.forEach(function (s) {
+    if (!s || typeof s !== 'object') return;
     var row = document.createElement('div');
     row.className = 'wanstep';
     var icon = s.ok ? '✓' : ((s.level === 'warn') ? '!' : '✕');

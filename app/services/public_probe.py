@@ -63,13 +63,28 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 # Cloudflare 自己的域名后缀 —— 用户不该把自己的入口填成这些
-_CF_OWN_SUFFIXES = (".pages.dev", ".workers.dev", ".r2.dev", ".cfargotunnel.com")
+_CF_OWN_SUFFIXES = (".pages.dev", ".workers.dev", ".r2.dev",
+                    ".cfargotunnel.com", ".trycloudflare.com")
+
+# 主机名白名单。对抗测试（2026-11-18 A1）证明：不加这条，
+# `ok.example.com%2fevil` 这类编码绕过会整个通到 DNS 那一步。
+# punycode 的 `xn--` 也落在 [a-z0-9-] 里，不会被误伤。
+_HOST_RE = re.compile(r"[a-z0-9.\-]+")
+
+# 系统命令用绝对路径：lan-share-api 以 LocalSystem 运行，裸名会先搜应用
+# 目录和当前目录，给了 PATH/当前目录劫持面（2026-11-18 审查 P2）。
+_SYSTEM32 = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
 
 PROBE_TIMEOUT = 15      # 比普通请求宽：慢上行下首次 TLS 握手就要 1-3 秒
 PROBE_RETRIES = 1       # 超时 / 5xx 重试一次；4xx 不重试
 
 
 # ── 单步检测 ────────────────────────────────────────────
+
+
+def _sys_exe(name: str) -> str:
+    path = os.path.join(_SYSTEM32, name)
+    return path if os.path.isfile(path) else name
 
 
 def _step(key: str, label: str, ok: bool, detail: str,
@@ -80,15 +95,22 @@ def _step(key: str, label: str, ok: bool, detail: str,
 
 
 def check_format(raw: str) -> tuple:
-    """第一步：纯字符串校验，不碰网络。
+    """第一步：纯字符串校验，不碰网络、**不抛异常**。
 
     返回 (ok, detail, hint, host)。
+
+    `urlsplit` 对畸形 IPv6 写法（`https://[`、`https://[::1`）会抛 ValueError，
+    而这个函数的契约是不抛 —— 它被 probe 和保存端点直接调用，抛出去就是 500。
     """
     raw = (raw or "").strip()
     if not raw:
         return False, "地址为空", "请填写 https://你的域名", ""
 
-    parts = urlsplit(raw)
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return False, "地址格式不合法", \
+            "检查域名写法（方括号只用于 IPv6 地址）", ""
 
     if parts.scheme != "https":
         got = parts.scheme or "空"
@@ -110,6 +132,38 @@ def check_format(raw: str) -> tuple:
     if not host:
         return False, "没有主机名", "请填写完整域名", ""
 
+    # ── 下面几条是对抗测试（2026-11-18 A1 轮）抓出来的绕过 ──────────
+    #
+    # ① 反斜杠：`urlsplit` 把它当主机分隔符，于是
+    #    `https://你的域名.com\@evil.com` 解析出的 host 是 **evil.com** ——
+    #    用户看着像自己的域名，实际连到攻击者那里。这是最危险的一条，
+    #    它正好绕过「同源校验」，因为探针会去 evil.com 拿 UUID。
+    if "\\" in raw:
+        return False, "地址里不能有反斜杠", \
+            "只填域名。反斜杠会被解析成主机分隔符，可能把你带到别的站点", ""
+
+    # ② userinfo：`https://user:pass@host` 里的凭据会被一起发出去，
+    #    而且 `https://自己的域名@evil.com` 同样是钓鱼形状。Cloudflare
+    #    这条链路不需要任何 userinfo。
+    if "@" in (parts.netloc or ""):
+        return False, "地址里不能带 @", "只填域名，不要带用户名或凭据", ""
+
+    # ③ 主机名白名单：只允许字母、数字、点、连字符。
+    #    这样 `ok.example.com%2fevil`（编码斜杠）、各种编码绕过都进不来。
+    #    IDN 走 punycode（xn-- 开头）时仍在白名单内，所以没有被误伤。
+    if not _HOST_RE.fullmatch(host):
+        return False, f"域名里有非法字符：{host[:40]}", \
+            "只填域名本身，不要带编码符号或其它字符", ""
+
+    # ④ 长度：RFC 1035 规定单个 label ≤63、整个域名 ≤253。
+    #    放过去只会让 DNS 解析失败，不如在这里给人话。
+    if len(host) > 253:
+        return False, "域名太长", "整个域名最多 253 个字符", ""
+    for label in host.split("."):
+        if not label or len(label) > 63:
+            return False, "域名分段不合法", \
+                "两个点之间的部分不能超过 63 个字符，也不能为空", ""
+
     try:
         ipaddress.ip_address(host)
         return False, "填的是 IP 地址", "要填域名，不是 IP", ""
@@ -130,10 +184,53 @@ def check_format(raw: str) -> tuple:
     return True, "格式正确", "", host
 
 
+def _resolve_public_ips(host: str) -> tuple:
+    """解析 host 并把结果分成「公网」与「非公网」。
+
+    返回 (公网IP列表, 错误说明)。**有错误说明就代表不能继续** —— 这是 SSRF 防线：
+    probe 会向用户填的地址发请求，如果这个地址指向内网，就等于给了调用方
+    一个内网扫描器（对抗测试实测 `127.0.0.1.nip.io` 能连通本机 443）。
+
+    判据用 `ipaddress.is_global`：private / loopback / link_local / reserved /
+    multicast / unspecified / CGNAT(100.64/10) 全部落在 False。
+    """
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return [], ("域名还没有解析记录。去 Cloudflare 加一条 CNAME 指向 "
+                    "<隧道ID>.cfargotunnel.com，并打开橙色云朵")
+    except Exception as exc:
+        return [], f"解析出错：{type(exc).__name__}"
+
+    ips = sorted({str(info[4][0]) for info in infos})
+    if not ips:
+        return [], "域名没有解析到任何地址"
+
+    public, bad = [], []
+    for ip in ips:
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            bad.append(ip)
+            continue
+        if addr.is_global:
+            public.append(ip)
+        else:
+            bad.append(ip)
+
+    if not public:
+        return [], (f"解析到非公网地址：{', '.join(bad[:3])}。"
+                    "这个域名指向内网/回环/保留地址，不能作为公网入口")
+    return public, ""
+
+
 def check_dns(host: str) -> tuple:
     """第二步：解析 + 判断是否走 Cloudflare。**仅用于诊断，不阻塞。**
 
     返回 (ok, detail, hint)。
+
+    真正的「非公网地址」拦截在 _resolve_public_ips，那一步是阻塞的；
+    这里只负责把解析结果讲清楚（用户看得懂才排得动障）。
 
     为什么不要求「必须是 CNAME 到 cfargotunnel.com」：橙云代理会把 CNAME
     **压平**，查询只能拿到 Cloudflare 的 A 记录。按 CNAME 判必然误判。
@@ -151,19 +248,19 @@ def check_dns(host: str) -> tuple:
     v4 = [ip for ip in ips if ":" not in ip]
 
     if not v4:
-        return False, f"只解析到 IPv6：{', '.join(ips)}", \
+        return False, f"只解析到 IPv6：{', '.join(ips[:3])}", \
             "本机可能没有 IPv6 出口，建议在 Cloudflare 保留 A 记录"
 
     private = []
     for ip in v4:
         try:
-            if ipaddress.ip_address(ip).is_private:
+            if not ipaddress.ip_address(ip).is_global:
                 private.append(ip)
         except ValueError:
             pass
     if private:
-        return False, f"解析到内网地址：{', '.join(private)}", \
-            "外部访问不了内网地址，检查 DNS 记录"
+        return False, f"解析到非公网地址：{', '.join(private[:3])}", \
+            "这个域名指向内网或保留地址，不能作为公网入口"
 
     on_cf = [ip for ip in v4
              if any(ipaddress.ip_address(ip) in net for net in _CF_NETS)]
@@ -267,6 +364,11 @@ def _cf_error_hint(status: int, body: bytes) -> tuple:
         title, hint = _MAP[cf_code]
         return f"Cloudflare {cf_code}：{title}", hint
 
+    if status == 526:
+        return "HTTP 526：源站证书无效",             "把 Cloudflare 的 SSL/TLS 模式改成 Full（或 Flexible）"
+    if status == 530:
+        return "HTTP 530：隧道或 DNS 未就绪",             "确认隧道在线、DNS 记录已生效（刚建好要等一两分钟）"
+
     if status in (502, 504):
         return f"HTTP {status}：隧道到源站失败", \
             "隧道通了但本机服务没响应，检查 LANShare 主服务是否在跑"
@@ -300,10 +402,20 @@ def check_https(base_url: str) -> tuple:
     if status == 200:
         return True, "证书有效，接口返回 200", ""
 
+    # 401/403：**有响应就说明链路是通的**。
+    #
+    # 这里原来是死代码 —— 判断写成 `if status in (401, 403) and not hint`，
+    # 而 _cf_error_hint 对 401/403 永远返回非空 hint，所以那个分支从来没执行过。
+    # 后果：在 Cloudflare 上给 /api/* 加了 WAF 或 Access 规则的域名，链路明明
+    # 正常，却永远判「不通」，用户根本存不进去。
+    #
+    # 注意 1010（UA 被当爬虫）也走这条：它同样只影响我们的探针，不影响 App。
+    if status in (401, 403):
+        detail, _hint = _cf_error_hint(status, body)
+        return True, f"{detail}（链路是通的）", \
+            "对方有响应，说明隧道和源站都正常。这个拦截只影响检测脚本，不影响 App"
+
     detail, hint = _cf_error_hint(status, body)
-    if status in (401, 403) and not hint:
-        # 有响应就说明链路是通的，只是被拦了
-        return True, detail, "链路是通的（对方有响应），可以继续"
     return False, detail, hint or "链路不通，按上面的提示排查"
 
 
@@ -370,11 +482,37 @@ def _windows_task_running(image: str) -> bool:
         return False
     try:
         out = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {image}", "/NH"],
+            [_sys_exe("tasklist.exe"), "/FI", f"IMAGENAME eq {image}", "/NH"],
             capture_output=True, text=True, timeout=5,
+            # 必须显式指定：中文 Windows 的 tasklist 输出是 GBK，而本机
+            # PYTHONUTF8=1 时 text=True 会按 UTF-8 解码，在 reader 线程里
+            # 抛 UnicodeDecodeError（异常被吞、结果恒为 False）。
+            encoding="utf-8", errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return image.lower() in (out.stdout or "").lower()
+    except Exception:
+        return False
+
+
+def _tun_route_present() -> bool:
+    """真 TUN 模式的特征：路由表里有 198.18.0.0/15（Clash 的 fake-ip 段）。
+
+    为什么不能只看进程：Clash 系客户端（clash-verge 等）几乎人人常驻开机自启，
+    但 TUN 是可关的开关。按进程判会在绝大多数正常机器上误报红色警告，
+    把真正的故障淹没掉 —— 2026-11-18 在本机实测就是「Clash 在跑、TUN 关着、
+    隧道好好的」被报了 danger。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(
+            [_sys_exe("route.exe"), "print", "198.18.0.0"],
+            capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return "198.18.0.0" in (out.stdout or "")
     except Exception:
         return False
 
@@ -390,11 +528,11 @@ def env_check() -> list:
     # 1) cloudflared 是否安装
     path = _find_cloudflared()
     if path:
-        items.append(_step("env_installed", "环境", True,
+        items.append(_step("env_installed", "cloudflared", True,
                            f"已找到 cloudflared：{path}",
                            blocking=False))
     else:
-        items.append(_step("env_installed", "环境", False,
+        items.append(_step("env_installed", "cloudflared", False,
                            "本机没找到 cloudflared",
                            "如果隧道跑在别的机器上可以忽略。本机要跑的话去 "
                            "Cloudflare 下载 cloudflared-windows-amd64.exe",
@@ -402,20 +540,20 @@ def env_check() -> list:
 
     # 2) 进程是否在跑
     if not is_win:
-        items.append(_step("env_process", "环境", True,
+        items.append(_step("env_process", "进程", True,
                            "当前平台不支持进程检测（已跳过）", blocking=False))
     elif _windows_task_running("cloudflared.exe"):
-        items.append(_step("env_process", "环境", True,
+        items.append(_step("env_process", "进程", True,
                            "cloudflared 进程正在运行", blocking=False))
     else:
-        items.append(_step("env_process", "环境", False,
+        items.append(_step("env_process", "进程", False,
                            "cloudflared 进程没在跑",
                            "域名大概率连不上。启动隧道客户端，或用「启动隧道」按钮",
                            blocking=False, level="warn"))
 
-    # 3) TUN 模式 —— 唯一给红色的一项
+    # 3) TUN 模式 —— 按「有没有 TUN 路由」判，不按「代理进程在不在」
     if not is_win:
-        items.append(_step("env_tun", "环境", True,
+        items.append(_step("env_tun", "代理", True,
                            "当前平台不支持 TUN 检测（已跳过）", blocking=False))
     else:
         tun_hit = ""
@@ -424,14 +562,23 @@ def env_check() -> list:
             if _windows_task_running(image):
                 tun_hit = image
                 break
-        if tun_hit:
-            items.append(_step("env_tun", "环境", False,
-                               f"检测到代理客户端在运行（{tun_hit}）",
-                               "如果它的 TUN 模式开着，隧道一定连不上：TUN 会把 "
-                               "DNS 换成 198.18.x.x 假地址。先关掉 TUN 再测",
+        route_on = _tun_route_present()
+
+        if route_on:
+            # 只有真的存在 fake-ip 路由才给红字 —— 那是百分之百会断的情况
+            items.append(_step("env_tun", "代理", False,
+                               "检测到 TUN 模式已开启（198.18.0.0/15 路由存在）",
+                               "TUN 会把所有 DNS 换成 198.18.x.x 假地址，"
+                               "cloudflared 连不到真边缘。先关掉 TUN 再测",
                                blocking=False, level="danger"))
+        elif tun_hit:
+            # 有代理进程但没 TUN 路由：绝大多数人都是这个状态，不该报警
+            items.append(_step("env_tun", "代理", True,
+                               f"代理客户端在运行（{tun_hit}），未检测到 TUN 路由",
+                               "TCG 模式不影响隧道；只有开 TUN 时才会阻断",
+                               blocking=False))
         else:
-            items.append(_step("env_tun", "环境", True,
+            items.append(_step("env_tun", "代理", True,
                                "没检测到代理客户端占用", blocking=False))
 
     return items
@@ -458,7 +605,26 @@ def probe(raw_url: str) -> dict:
     if not ok:
         return {"ok": False, "steps": steps, "hint": hint}
 
-    # ② 解析 —— 非阻塞，只做诊断
+    # 用归一化后的 URL，不要用 raw_url。
+    # `https://example.com.` 这种带尾点的写法格式上合法（FQDN 表示法），
+    # 但直接拿去做 SNI 会握手失败 —— 用户被引去查证书和橙云，方向完全错。
+    # 格式检查已经把 host 归一化（去尾点、转小写），这里重建最稳：
+    # 端口已证明是 443 或未写、路径/query/fragment 已证明为空，重建是安全的。
+    url = f"https://{host}"
+
+    # ② 解析 —— 指向非公网地址是**阻塞失败**（SSRF 防线）
+    #
+    # probe 会向用户填的地址发请求。如果这个地址指向内网，等于给了调用方
+    # 一个内网扫描器 —— 对抗测试实测 `https://127.0.0.1.nip.io` 能让本机
+    # 443 端口收到连接（那个域名解析到 127.0.0.1，但格式检查只挡 IP 字面量）。
+    public_ips, resolve_err = _resolve_public_ips(host)
+    if resolve_err:
+        steps.append(_step("dns", "解析", False, resolve_err,
+                           "域名必须指向公网地址，才能作为公网入口",
+                           blocking=True))
+        return {"ok": False, "steps": steps, "hint": resolve_err}
+
+    # 解析成功后再跑一次诊断版（判断是否走 Cloudflare 代理）
     d_ok, d_detail, d_hint = check_dns(host)
     steps.append(_step("dns", "解析", d_ok, d_detail,
                        d_hint if not d_ok else "", blocking=False,

@@ -32,6 +32,70 @@
 新增 39 项测试（格式矩阵 / UUID 幂等与单字段 / 环境检测不阻塞 / 隧道启停打桩 /
 `/local/*` 的 Host 守卫）。服务端 pytest 全绿。
 
+## 2026-11-18 — 服务端 v4.0.17 后续：三路 review + 三轮对抗的修复
+
+> 功能写完之后又做了一轮「3 路独立审查 + 3 轮对抗测试」（安全 / 正确性 / 集成交互
+> 三个视角，加上格式绕过 / 同源伪造 / 隧道控制滥用三个攻击面）。抓到 3 个 P0、
+> 十余个 P1，这一版全部修掉。
+
+- **P0：`/local/*` 的 Host 守卫可被 TCP 型隧道绕过**（安全审查实测）。判据是
+  「Host 必须是回环」，但 TCP 隧道把原始字节流透传，攻击者自填
+  `Host: 127.0.0.1:8765` 就能让三道门全过 —— 实测改公网入口成功，配合
+  `/local/backup/dir` + `/local/backup/run` 可把整库 pg_dump 到攻击者 SMB，
+  与 2026-11-04、11-17 两次 P0 同一后果。**修法：在 Caddy 层直接
+  `handle /local/* { respond 404 }`** —— 托盘和 CLI 直连 8766、不经 Caddy，
+  拦掉对它们零影响。已实测：伪造 Host 打 8765，`/local/*` 全部 404，
+  而 `/api/auth/state`、`/login` 等正常路由照常 200。
+- **`is_public_entry` 的 fail-open**：原来 `if public and …`，PUBLIC_BASE_URL
+  为空时整段跳过 → 隧道送进来的公网流量被判成 LAN，公网登录失败记进 **LAN**
+  锁键，攻击者每 15 分钟发 5 个错密码就能让全家局域网登录持续被锁。
+  改成只认「域名 Host + 回环来源」这个隧道指纹，与是否配过地址无关。
+- **P0：probe 结果从工作线程直接推 WebView2**（集成审查）。CoreWebView2 是 STA
+  对象，跨线程调用要么抛 RPC_E_WRONG_THREAD，要么投递顺序不确定；而异常点
+  正好在建档保存之前 —— 检测通过也不会落库。新增 `SendFromAnyThread`。
+- **P0：保存成功后状态永远不刷新**（集成审查，**老 bug**）。`RunBusy` 收尾时
+  `PushStateAsync(true)` 撞上还没复位的 `_busy`，被函数开头直接 return；
+  而 wanUrl 只在 force 时才重读接口 —— 于是「启用成功」后面板一直显示
+  「未配置」，直到重启托盘。一键接入、清除地址同样中招。修法是把复位提前。
+- **对抗测试抓到的 4 个格式校验绕过**：`https://自己的域名\@evil.com` 被
+  `urlsplit` 解析出的 host 是 **evil.com**（看着像自己的域名，实际连到攻击者）；
+  带 `user:pass@` 的 userinfo；`%2f` 编码斜杠混进 host；超长 label。
+  **现在加了三道闸**：拒绝反斜杠、拒绝 netloc 里的 `@`、主机名字符白名单
+  `[a-z0-9.-]+`（punycode 的 `xn--` 不受影响），再加 RFC 1035 的长度校验。
+- **probe 的 SSRF**（安全审查实测可连通本机 443）：`127.0.0.1.nip.io`
+  这种域名格式合法、但解析到回环地址。新增 `_resolve_public_ips`，
+  用 `is_global` 白名单把 private/loopback/link_local/reserved/CGNAT 全拒掉，
+  且这一步是**阻塞**的（原来是 warn，等于放行）。
+- **probe 用未归一化的 URL 发请求**：`https://example.com.`（合法的 FQDN 表示法）
+  被直接拿去做 SNI → 握手失败 → 用户被引去查证书，方向完全错。
+  格式检查已经把 host 归一化，改为用归一化后的 URL 重建。
+- **隧道状态机**：`tunnel_stop` 原来只认 `state == "running"`，`stop_pending`
+  会掉进 taskkill 强杀**服务**进程（连点两次「停止」就命中），返回还说
+  「程序无法帮你重新启动」而它明明能 sc start 起回来；`_find_service` 返回
+  第一个存在的候选，已停止的服务会遮蔽真正在跑的。现在按状态分派 +
+  优先返回活着的那个 + 只有确实没有服务形态才走进程兜底。
+- **TUN 检测误报**：原来按「Clash 进程在不在」判，但 Clash 系几乎人人常驻。
+  本机实测就是「Clash 在跑、TUN 关着、隧道好好的」被报红色 danger。
+  改成按 **198.18.0.0/15 路由是否存在**判，只有真 TUN 才给红字。
+- **`check_https` 的 401/403 分支是死代码**：`_cf_error_hint` 对这两个码永远
+  返回非空 hint，所以「有响应就算通」的分支从未执行。后果是 Cloudflare 上
+  加了 WAF / Access 规则的域名永远存不进去。
+- **SYSTEM 下的裸 exe 名**：`sc` / `tasklist` / `taskkill` 全部改成
+  `%SystemRoot%\System32\*` 绝对路径（服务以 LocalSystem 运行，裸名会先搜
+  应用目录，给了 PATH 劫持面）。
+- **subprocess 未指定编码**：中文 Windows 的 sc/tasklist 输出是 GBK，而
+  PYTHONUTF8=1 时 `text=True` 按 UTF-8 解码，在 reader 线程抛
+  UnicodeDecodeError（异常被吞、stdout 变空 → 服务被判成「不存在」）。
+- **其它**：`urlsplit` 对 `https://[` 抛 ValueError 导致 500（改为返回 422/失败步骤）；
+  `.trycloudflare.com`（quick tunnel，重启即变）加入拒绝名单；补 HTTP 526/530
+  的映射（原来只在 body 里出现 error code 时才命中）；环境检测四项的 label
+  拆开（原来全叫「环境」，UI 连续四行同名读不出是哪项）；
+  方式二填的域名不再被回填进方式一的输入框（否则点「保存」会静默把
+  mode 改回 frp）；托盘探测超时 45s → 90s（最坏路径约 75s）。
+
+测试：新增 34 项对抗用例（格式绕过矩阵 / 同源伪造 / 隧道控制滥用），
+合计 73 项；服务端 pytest 全绿。
+
 ## 2026-11-17 — 服务端 v4.0.16：十轮审查修复（两条越权 + 整库外泄口 + 事务回滚）
 
 > 对服务端与 App 各做五轮针对性代码审查（认证授权 / 文件与路径 / 数据层 /

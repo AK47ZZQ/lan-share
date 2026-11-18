@@ -121,6 +121,22 @@ TEMPLATE = """\
 \t\tfile_server
 \t}}
 
+\t# 🔴 /local/* 是「只给本机托盘 / CLI 用」的免登录配置接口，绝不能让公网碰到。
+\t#
+\t# 为什么必须在 Caddy 这一层就拦死：API 那边的 _require_local 靠 IP + Host
+\t# 判定，但这两个都能被隧道改写 —— TCP 型隧道（frpc type=tcp）把原始字节流
+\t# 原样透传，攻击者可以自填 `Host: 127.0.0.1:8765`，于是「Host 必须是回环」
+\t# 那道门被他一句话绕过去。2026-11-18 三路 review 实测：绕过之后能改公网
+\t# 入口，配合 /local/backup/dir + /local/backup/run 可把整库 pg_dump 到
+\t# 攻击者的 SMB —— 与 2026-11-04、11-17 两次 P0 同一后果，只是换个入口。
+\t#
+\t# 托盘和 CLI 是直连 127.0.0.1:{api_port} 的，根本不经过 Caddy，
+\t# 所以在这里拦掉对它们零影响。
+\t# 注意 handle 是按顺序匹配的，这一段必须在下面的兜底 handle 之前。
+\thandle /local/* {{
+\t\trespond 404
+\t}}
+
 \thandle {{
 \t\treverse_proxy 127.0.0.1:{api_port} {{
 \t\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
