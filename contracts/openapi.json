@@ -7959,6 +7959,23 @@
     "summary": "Get Tunnel"
    }
   },
+  "/local/tunnel/frp": {
+   "get": {
+    "description": "FRP 客户端（frpc）的存活状态，只读。\n\n面板用它显示「方式一现在有没有在跑」。**不提供启停**：frpc 可能是\n樱花启动器这类第三方 GUI 拉起来的，进程归那个程序管，从这里杀会被\n立刻重新拉起（详见 tunnel_ctl.frp_status 的说明）。",
+    "operationId": "get_frp_status_local_tunnel_frp_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Frp Status"
+   }
+  },
   "/local/tunnel/start": {
    "post": {
     "description": "启动本机的 cloudflared 服务（仅服务形态可行）。",
