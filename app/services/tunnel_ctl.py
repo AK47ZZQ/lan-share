@@ -264,3 +264,31 @@ def tunnel_start() -> dict:
 
     detail = (proc.stderr or proc.stdout or "").strip()[:200] or f"状态仍是 {after}"
     return {"ok": False, "method": "service", "detail": detail}
+
+
+def frp_status() -> dict:
+    """看 FRP 客户端（frpc）在不在跑。
+
+    为什么只报状态、不提供启停：LANShare 不管 FRP 客户端的生命周期。
+    现实里它可能是樱花启动器 GUI 拉起来的（本机就是），进程树和守护逻辑
+    都归那个程序管 —— 从这里 taskkill 会被它自动拉起，制造「点了停止
+    但马上又活了」的假象。所以面板只负责如实显示，并由文案指路。
+    """
+    procs = []
+    r = _run([_exe("tasklist.exe"), "/FI", "IMAGENAME eq frpc.exe",
+              "/FO", "CSV", "/NH"])
+    if r.returncode == 0:
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if not line or line.startswith("INFO:"):
+                continue
+            parts = [x.strip('"') for x in line.split('","')]
+            if len(parts) >= 2 and parts[0].lower() == "frpc.exe":
+                procs.append(parts[1])
+    return {
+        "running": bool(procs),
+        "count": len(procs),
+        "pids": procs,
+        # 前端据此显示对应的操作建议，不写死在 HTML 里
+        "managed_by_us": False,
+    }

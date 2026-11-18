@@ -27,6 +27,15 @@ INSTANCE_ID = "instance_id"
 # 保留常量只为一件事 —— 保存主地址时把它写成空串，清掉历史残留值
 # （那条值曾被填成另一条隧道的地址，App 会把它当成能连的备用入口）。
 PUBLIC_BASE_URL_ALT = "public_base_url_alt"
+
+# 两种接入方式各自最后用过的地址。
+#
+# 为什么需要：PUBLIC_BASE_URL 只有一份「当前生效」，用户在 FRP 和 Cloudflare
+# 之间来回切时，切过去就再也看不到另一种方式原来填的是什么 —— 想切回来得
+# 重新查一遍隧道域名。2026-11-18 面板验收时主人指出这个问题。
+# 这两项只用来回填输入框，不参与任何判定。
+PUBLIC_URL_FRP = "public_url_frp"
+PUBLIC_URL_CLOUDFLARE = "public_url_cloudflare"
 NOTIFY_WEBHOOK_URL = "notify_webhook_url"
 NOTIFY_PREFS_PREFIX = "notify_prefs_user_"   # + uid（每用户一个 key）
 HEALTH_REPORT_ENABLED = "health_report_enabled"

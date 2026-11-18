@@ -59,6 +59,13 @@ namespace LanShare
         private string _wanCached = "";
         /// <summary>公网入口的接入方式（frp / cloudflare / 空）。和 _wanCached 一起刷新。</summary>
         private string _wanModeCached = "";
+
+        /// <summary>两种方式各自上次填过的地址（后端 saved 字段原样透传）。
+        /// 让用户在非当前方式那一栏也看得见自己填过什么，切回来不用重查。</summary>
+        private Dictionary<string, object> _wanSavedRaw = new Dictionary<string, object>();
+
+        /// <summary>FRP 客户端(frpc)存活状态，后端随 /local/public-url 一起下发。</summary>
+        private Dictionary<string, object> _wanFrpRaw = new Dictionary<string, object>();
         private bool _pageReady;
         private bool _autoUpdateDone;   // 启动自检只跑一次（导航会重复触发 NavigationCompleted）
         private bool _busy;
@@ -330,6 +337,20 @@ namespace LanShare
                     // mode 用来在状态行显示「已配置 · Cloudflare Tunnel」。
                     // 老后端没有这个字段 → 保持原值（不把已有方式刷成空）。
                     if (d.ContainsKey("mode")) _wanModeCached = Str(d, "mode");
+                    // saved / frp 是嵌套对象，原样透传给前端自己取 ——
+                    // 在 C# 里解嵌套还得担心反序列化出来的实际类型，不值当。
+                    // 注意别用 `x is Dictionary<...> v` 那种写法：托盘用 .NET Framework
+                    // 自带的老 csc 编译，C# 7 的模式匹配语法直接语法错误。
+                    if (d.ContainsKey("saved"))
+                    {
+                        var sv = d["saved"] as Dictionary<string, object>;
+                        if (sv != null) _wanSavedRaw = sv;
+                    }
+                    if (d.ContainsKey("frp"))
+                    {
+                        var fv = d["frp"] as Dictionary<string, object>;
+                        if (fv != null) _wanFrpRaw = fv;
+                    }
                 }
             }
             catch (Exception) { /* 保留上次值 */ }
@@ -353,6 +374,8 @@ namespace LanShare
                 { "lanHint", "正在读取局域网状态…" },
                 { "wanUrl", _wanCached },
                 { "wanMode", _wanModeCached },
+                { "wanSaved", _wanSavedRaw },
+                { "wanFrp", _wanFrpRaw },
                 { "qr", null },
                 { "certTrusted", true },
                 { "backup", FetchBackupState() },

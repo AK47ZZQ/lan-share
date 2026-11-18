@@ -138,8 +138,27 @@ async def get_public_url(request: Request):
         return {"url": "", "mode": "", "available": False,
                 "error": f"读取配置失败：{exc}"}
     mode = _coerce_mode(stored_mode, primary)
+    # 两种方式各自最后用过的地址，供面板在非当前方式那一栏回填，
+    # 让用户看得见「我上次填的是什么」（切回来不用重新查）。
+    saved = {
+        "frp": settings.get_setting(settings.PUBLIC_URL_FRP) or "",
+        "cloudflare": settings.get_setting(settings.PUBLIC_URL_CLOUDFLARE) or "",
+    }
+    # FRP 客户端状态顺手带上：面板要显示「方式一现在有没有在跑」。
+    # 并进同一个响应而不是新开一个端点 —— 面板 5~10 秒刷一次状态，
+    # 多一次往返纯属浪费，而且两边的刷新节奏还会错开。
+    # tasklist 约 30ms，放线程池里跑，别阻塞事件循环。
+    from app.services.tunnel_ctl import frp_status
+
+    try:
+        frp = await run_in_threadpool(frp_status)
+    # 拿不到状态就说拿不到，不能让整个配置读取跟着失败
+    except Exception as exc:
+        frp = {"running": False, "count": 0, "pids": [],
+               "managed_by_us": False, "error": f"读取失败：{exc}"}
+
     return {"url": primary or "", "mode": mode, "available": True, "error": "",
-            "mode_label": _MODE_LABELS.get(mode, "")}
+            "mode_label": _MODE_LABELS.get(mode, ""), "saved": saved, "frp": frp}
 
 
 @router.post("/local/public-url")
@@ -175,14 +194,23 @@ async def set_public_url(request: Request, body: PublicUrlBody):
     try:
         # 原子写：URL / MODE / 清历史备用地址，一次事务一次 commit。
         # 分三次 set_setting 会在中途失败时留下「地址已改、方式没改」的矛盾态。
-        settings.set_settings({
+        payload = {
             settings.PUBLIC_BASE_URL: primary,
             settings.PUBLIC_ACCESS_MODE: mode,
             # 顺手清掉历史备用地址：这个字段已经没有读取方，留着只会在
             # App 的入口清单里冒出一个连不上的旧地址（2026-11-04 实机见过
             # 一个指向另一条隧道端口的僵尸值）。
             settings.PUBLIC_BASE_URL_ALT: "",
-        })
+        }
+        # 按模式各记一份「上次填的地址」，切回来时回填用。
+        # 只写有地址的情况：清空某一栏不应把历史抹掉（用户清的是当前入口，
+        # 不是「我以后再也不填这个方式了」）。
+        if primary:
+            if mode == "frp":
+                payload[settings.PUBLIC_URL_FRP] = primary
+            elif mode == "cloudflare":
+                payload[settings.PUBLIC_URL_CLOUDFLARE] = primary
+        settings.set_settings(payload)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"保存失败：{exc}") from exc
 
@@ -378,3 +406,17 @@ async def start_tunnel(request: Request):
     from app.services.tunnel_ctl import tunnel_start
 
     return await run_in_threadpool(tunnel_start)
+
+
+@router.get("/local/tunnel/frp")
+async def get_frp_status(request: Request):
+    """FRP 客户端（frpc）的存活状态，只读。
+
+    面板用它显示「方式一现在有没有在跑」。**不提供启停**：frpc 可能是
+    樱花启动器这类第三方 GUI 拉起来的，进程归那个程序管，从这里杀会被
+    立刻重新拉起（详见 tunnel_ctl.frp_status 的说明）。
+    """
+    _require_local(request)
+    from app.services.tunnel_ctl import frp_status
+
+    return await run_in_threadpool(frp_status)

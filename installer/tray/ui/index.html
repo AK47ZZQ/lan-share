@@ -443,6 +443,14 @@ button.link {
             <button class="mini" id="wantest">验证</button>
             <button class="mini danger" id="wanclear">清除</button>
           </div>
+          <!-- 隧道域名不要带协议：填 frpc 给你的那串（如 cn-bj.frp.one:35123），
+               带 https:// 会被当成非法域名。这一句和方式二的「不带端口」是
+               两条相反的规矩，并排放着容易填错，所以各自标清楚。 -->
+          <div class="hint">隧道域名不带 https://，端口照抄穿透工具给的那串</div>
+          <!-- FRP 客户端存活状态。面板只管显示、不管启停：frpc 常常是
+               樱花启动器这类第三方 GUI 拉起来的，从这里杀会被立刻重新拉起，
+               点了「停止」却马上又活，比不提供按钮更糟。 -->
+          <div class="hint" id="frpstate"></div>
         </div>
 
         <div class="wanblock">
@@ -1008,12 +1016,36 @@ function render(s) {
   // 后端把 mode 落成默认的 frp，状态行会从 Cloudflare 悄悄变回 FRP，地址却一样。
   var wanEl = document.getElementById('wanaddr');
   var cfEl = document.getElementById('cfhost');
+  // 每种方式各记一份上次填过的地址：非当前方式那一栏也回填，
+  // 用户想切回来时不用重新查隧道域名（2026-11-18 面板验收后补）。
+  var savedWan = s.wanSaved || {};
   if (s.wanMode === 'cloudflare') {
-    if (wanEl && document.activeElement !== wanEl) wanEl.value = '';
+    if (wanEl && document.activeElement !== wanEl) wanEl.value = savedWan.frp || '';
     if (cfEl && document.activeElement !== cfEl) cfEl.value = s.wanUrl || '';
-  } else {
+  } else if (s.wanMode === 'frp') {
     if (wanEl && document.activeElement !== wanEl) wanEl.value = s.wanUrl || '';
-    if (cfEl && document.activeElement !== cfEl) cfEl.value = '';
+    if (cfEl && document.activeElement !== cfEl) cfEl.value = savedWan.cloudflare || '';
+  } else {
+    if (wanEl && document.activeElement !== wanEl) wanEl.value = savedWan.frp || '';
+    if (cfEl && document.activeElement !== cfEl) cfEl.value = savedWan.cloudflare || '';
+  }
+
+  // FRP 客户端状态：只报实情 + 指路，不提供启停按钮（会被第三方 GUI 拉回来）
+  var frpEl = document.getElementById('frpstate');
+  if (frpEl) {
+    var f = s.wanFrp || {};
+    if (f.error) {
+      frpEl.textContent = 'FRP 客户端状态读取失败：' + f.error;
+      frpEl.className = 'hint warn';
+    } else if (f.running) {
+      frpEl.textContent = 'FRP 客户端正在运行（' + (f.pids || []).length
+        + ' 个进程）。停止请用它自己的启动器，面板停不掉它 —— '
+        + '第三方 GUI 会把它重新拉起来。';
+      frpEl.className = 'hint';
+    } else {
+      frpEl.textContent = 'FRP 客户端当前没有运行。要用方式一，先在你的穿透工具里启动隧道。';
+      frpEl.className = 'hint';
+    }
   }
 
   // 证书警告条
