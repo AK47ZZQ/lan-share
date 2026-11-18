@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from urllib.parse import urlsplit
+import posixpath
+import re
 import time
 
 from app.config import (API_RATE_LIMIT, API_RATE_LIMIT_PUB, AUTHCHECK_RATE_LIMIT,
@@ -134,21 +136,62 @@ async def security_middleware(request: Request, call_next):
             # 的白名单让匿名请求把任意体积灌进 TEMP（实测匿名 POST
             # /api/feedback 挂起 = 服务器在等完整 body）。按各端点真实上限
             # + multipart/分片开销收口，chunked / 缺 CL 一律拒
-            if path.startswith("/api/upload/chunk/"):
+            # 🔴 判定必须用**归一化后的精确形状**，不能用 startswith 前缀。
+            #
+            # 2026-11-18 review 抓到的洞：前缀匹配会放行
+            # `/api/upload/chunk/../feedback`（或 %2e%2e 编码）—— 中间件看到
+            # startswith("/api/upload/chunk/") 就放行 chunked，但路由层不做
+            # dot-segment 归一化，请求落到 upload_file 兜底路由
+            # （@router.post("/api/upload/{path:path}")）。而那条路由有
+            # `file: UploadFile = File(...)`，FastAPI 会**先解析完 multipart
+            # 再跑 require_user**，于是变成匿名、无体积上限、单请求可灌
+            # Caddy 上限（25GB）的 TEMP 缓冲 —— 正好是这道闸当初要堵的洞。
+            # 实测：POST /api/upload/chunk/../../healthz 返回 401（真 /healthz 是 200），
+            # 证明 `..` 原样穿过了 Caddy。
+            #
+            # 修法：先 normpath 再 fullmatch 单段形状；归一化后与原串不一致的
+            # （含 `..`、`//` 之类）一律不放行。
+            _norm = posixpath.normpath(path)
+            if (_norm == path and ".." not in path
+                    and re.fullmatch(r"/api/upload/chunk/[^/]+", _norm)):
                 cap = MAX_CHUNK_SIZE + 8 * 1024 * 1024
+                # 🔴 分片端点**放行 chunked**（2026-11-18，实测驱动）
+                #
+                # 为什么必须放行：Cloudflare 会把请求体重新编码成
+                # `Transfer-Encoding: chunked`。这道闸原来一律拒 chunked，
+                # 结果走 CF 隧道时分片上传 100% 失败 —— 实测 1MB 就打回 413
+                # （同一份客户端打本机 40MB/s、打 FRP 5.79MB/s，只有 CF 拒）。
+                # 而 App 在公网只走 CF，等于大文件上传在门外彻底不可用。
+                #
+                # 为什么放行是安全的：这个端点在 uploads.py 里逐块读流时
+                # 按 expected 硬卡 ——
+                #     async for chunk in request.stream():
+                #         size += len(chunk)
+                #         if size > expected: overflow = True; break
+                # 超发立即停止接收并拒收，**不依赖 Content-Length 也能拦住
+                # 灌包**。而且逐块计数的强度**高于**原来的 CL 预检：
+                # Content-Length 是客户端自报值，可以撒谎；累计字节数不会。
+                # 其余端点保持「一律拒 chunked」：它们要么把 body 全量缓冲
+                # （没有流式防线），要么体积上限依赖 CL 预判。
+                allow_chunked = True
             elif path == "/api/feedback":
                 # 3 件附件 × 25MB + multipart 开销（件数耦合 feedback
                 # _MAX_ATTACHMENTS=3，改件数须同步这里）
                 cap = FEEDBACK_MAX_ATTACHMENT_MB * 3 * 1024 * 1024 + 16 * 1024 * 1024
+                allow_chunked = False
             else:
                 cap = MAX_UPLOAD_SIZE + 64 * 1024 * 1024
-            if request.headers.get("transfer-encoding"):
+                allow_chunked = False
+            if request.headers.get("transfer-encoding") and not allow_chunked:
                 return JSONResponse({"detail": "Transfer-Encoding not allowed"},
                                     status_code=413)
-            cl = request.headers.get("content-length")
-            if not cl or not cl.isdigit() or int(cl) > cap:
-                return JSONResponse({"detail": "Payload too large"},
-                                    status_code=413)
+            # chunked 请求没有 CL 可查 —— 放行的那条（分片端点）靠端点内的
+            # 逐块计数兜底；其余端点走到这里时 chunked 已经被上面拦掉了
+            if not request.headers.get("transfer-encoding"):
+                cl = request.headers.get("content-length")
+                if not cl or not cl.isdigit() or int(cl) > cap:
+                    return JSONResponse({"detail": "Payload too large"},
+                                        status_code=413)
         if not big_body:
             # chunked 请求无 Content-Length（R3-P1）：正常 JSON API 客户端从不
             # 使用，直接拒绝，堵住"缺 CL 头绕过 1MB 检查"的口子

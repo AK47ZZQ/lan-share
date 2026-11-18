@@ -13,6 +13,8 @@ import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'parallel_download.dart';
+
 import 'api/api_client.dart';
 import 'api/appver_api.dart';
 import 'api/trust.dart';
@@ -821,116 +823,9 @@ class UpdateService {
     String path, {
     void Function(int received, int total)? onProgress,
     int parts = 8,
-  }) async {
-    var total = 0;
-    var rangeOk = false;
-    try {
-      final head = await dio.head(url);
-      total =
-          int.tryParse(head.headers.value(Headers.contentLengthHeader) ?? '') ??
-          0;
-      final ar = (head.headers.value('accept-ranges') ?? '').toLowerCase();
-      // 太小的包分片没有意义（额外 8 个连接 + 合并开销反而更慢）
-      rangeOk = ar.contains('bytes') && total > (8 << 20);
-    } catch (_) {
-      // HEAD 被拒也走单线程
-    }
-    if (!rangeOk) {
-      await dio.download(url, path, onReceiveProgress: onProgress);
-      return;
-    }
-
-    final chunk = (total + parts - 1) ~/ parts;
-    final temps = <File>[];
-    final gotPerPart = List<int>.filled(parts, 0);
-    var done = 0;
-    onProgress?.call(0, total);
-
-    Future<void> one(int i) async {
-      final start = i * chunk;
-      final end = (start + chunk - 1).clamp(0, total - 1);
-      if (start > end) return;
-      final tmp = File('$path.part$i');
-      temps.add(tmp);
-      final resp = await dio.download(
-        url,
-        tmp.path,
-        options: Options(
-          headers: {'Range': 'bytes=$start-$end'},
-          receiveTimeout: const Duration(minutes: 20),
-        ),
-        onReceiveProgress: (r, _) {
-          done += r - gotPerPart[i];
-          gotPerPart[i] = r;
-          onProgress?.call(done, total);
-        },
-      );
-      // 分片响应必须真是 206（2026-11-17 review）：
-      // 只有 HEAD 阶段查过 accept-ranges，GET 阶段什么都没验。有的 CDN/代理
-      // 对 HEAD 回 accept-ranges: bytes、对 GET 却回 200 + 全量 —— 于是 8 个
-      // 分片各写一份完整包（102MB × 8 = 816MB），进度条跳到 800%，最后
-      // 合并大小不符才报错，而这个 816MB 的残包要等 1 小时后才被清掉。
-      // 低配机直接 ENOSPC，同时还把用户流量打光。
-      if (resp.statusCode != 206) {
-        throw StateError('服务器没有按 Range 返回（分片 $i 期望 206，实得 ${resp.statusCode}）');
-      }
-      final actual = await tmp.length();
-      final expect = end - start + 1;
-      if (actual != expect) {
-        throw StateError('分片 $i 长度不符（期望 $expect，实际 $actual）');
-      }
-    }
-
-    try {
-      await Future.wait([for (var i = 0; i < parts; i++) one(i)]);
-    } catch (e) {
-      for (final t in temps) {
-        try {
-          await t.delete();
-        } catch (_) {}
-      }
-      rethrow;
-    }
-
-    // 合并：流式拼，102MB 级不能整块读进内存（R2-P2 的 OOM 教训）。
-    //
-    // 先写 <path>.tmp 再 rename 到最终路径：同目录 rename 在 NTFS/ext4 上
-    // 都是原子的。原来直接 openWrite(path) 截断写入，中途失败（磁盘满、
-    // 源断流、OOM）会留下一个半截的同名文件，还可能被 cachedInstaller 当成
-    // 缓存命中（它靠 size+sha 判，半截包必然不符所以不会装，但那个残包
-    // 会一直躺着）。2026-11-17 review。
-    final tmpPath = '$path.tmp';
-    final sink = File(tmpPath).openWrite();
-    try {
-      for (final t in temps) {
-        await sink.addStream(t.openRead());
-      }
-      await sink.flush();
-      await sink.close();
-    } catch (e) {
-      try {
-        await sink.close();
-      } catch (_) {}
-      try {
-        await File(tmpPath).delete();
-      } catch (_) {}
-      rethrow;
-    }
-    await File(tmpPath).rename(path);
-    for (final t in temps) {
-      try {
-        await t.delete();
-      } catch (_) {}
-    }
-    final got = await File(path).length();
-    if (got != total) {
-      // 尺寸不符也要删：留着只会占地方，且 purge 要等 1 小时才扫到
-      try {
-        await File(path).delete();
-      } catch (_) {}
-      throw StateError('分片下载合并后大小不符（期望 $total，实际 $got）');
-    }
-  }
+  }) =>
+      // 实现已抽到 parallel_download.dart，与文件下载共用
+      downloadFileParallel(dio, url, path, onProgress: onProgress, parts: parts);
 
   /// 安装包文件名判定（纯函数，单测锚点）：分发约定 lanshare-<版本>.apk
   ///

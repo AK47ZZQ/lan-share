@@ -17,6 +17,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/api/api_client.dart';
+import '../data/parallel_download.dart';
 import '../data/api/upload_client.dart';
 import '../data/local/notify.dart';
 import '../data/local/prefs.dart';
@@ -373,12 +374,46 @@ class TransferEngine extends ChangeNotifier {
   }
 
   // ── 上传 ──────────────────────────────────────────────────
+  /// finish 响应丢失后探测「服务端其实已经收下了」。
+  ///
+  /// 服务端 finish 的顺序是：拼装 → os.replace 落盘 → 删会话 → 返回。所以
+  /// 响应在回程丢的时候，文件已经在目标路径上了，而会话已经没了。此时重试
+  /// finish 得到 404，续传又因为 state 404 从头来 —— 一次网络抖动赔上整个
+  /// 文件。这里用目标文件的 Content-Length 和任务 size 比对来判定。
+  ///
+  /// 只比大小不比内容：真正的内容完整性由服务端 finish 里的 sha256 保证，
+  /// 这个探测只用来回答「那次 finish 到底成没成」。
+  Future<String?> _probeUploadDone(Dio dio, TransferTask t) async {
+    try {
+      final dir = (t.destDir ?? '').trim();
+      final rel = dir.isEmpty
+          ? t.name
+          : '${dir.replaceAll(RegExp(r'^/+|/+$'), '')}/${t.name}';
+      final encoded = rel.split('/').map(Uri.encodeComponent).join('/');
+      final r = await dio.head('/files/$encoded');
+      final size =
+          int.tryParse(r.headers.value(Headers.contentLengthHeader) ?? '');
+      if (t.size > 0 && size == t.size) return rel;
+    } catch (_) {
+      // 探测失败就当没完成，走原来的重试路径
+    }
+    return null;
+  }
+
   Future<void> _runUpload(TransferTask t, CancelToken token) async {
     final f = File(t.localPath);
     if (!f.existsSync()) throw Exception('本地文件不存在');
     if (f.lengthSync() != t.size) {
+      // 本地文件长度变了：不只是改 size —— 会话是按旧 total_size 建的，
+      // 继续用会让客户端算出的分片索引超出服务端范围（400 index out of
+      // range）或末片长度不符（400 got N expected M），而 4xx 会被
+      // _retryOrThrow 直接判死，任务永久卡在 error 且点重试还撞同一个 400。
+      // 所以一并作废会话，按新尺寸重新 init（2026-11-18 review）。
       t.size = f.lengthSync();
       t.sha256 = null; // 文件变了，指纹作废重算
+      t.sid = null;
+      t.received.clear();
+      t.chunkSize = 0;
     }
     final dio = await ApiClient.I.dio();
 
@@ -423,6 +458,22 @@ class TransferEngine extends ChangeNotifier {
           _schedulePersist();
         } else {
           await client.resume();
+          // 分片阶梯变了 → 本地 received 里的索引语义失效。
+          //
+          // 服务端 chunk_size_for 是按 total_size 现算的，历史上从 16MB 升到
+          // 32/64MB。跨过一次服务端改版本，同一个「第 3 片」在新旧阶梯下
+          // 覆盖的字节范围完全不同；而 upload_state 只按文件名枚举 part、
+          // finish 只查片数与总字节，都不校验单片长度 —— 片数恰好凑上时
+          // 会把错位分片拼成「大小正确、内容错乱」的文件，>200MB 还不算
+          // sha（_kHashLimit），静默写入错文件并标 done（2026-11-18 review）。
+          // 宁可重传，不许拼错。
+          if (t.chunkSize > 0 && client.chunkSize != t.chunkSize) {
+            t.sid = null;
+            t.received.clear();
+            t.chunkSize = client.chunkSize;
+            client.reopen();
+            continue;
+          }
           t.chunkSize = client.chunkSize;
         }
         t.received
@@ -446,31 +497,84 @@ class TransferEngine extends ChangeNotifier {
       }
 
       // 2) 补齐缺失分片（服务端原子写，确认过的块不重传）
-      var failed = false;
-      for (final i in client.missingChunks(t.size)) {
-        final bytes = await UploadClient.readChunk(
-            f, i * client.chunkSize, client.chunkLength(t.size, i));
-        _setStatus(t, TransferStatus.uploading);
-        try {
-          await client.postChunk(i, bytes);
-          t.received.add(i);
-          t.attempts = 0;
-          backoff = 0;
-          _touch(t);
-        } on DioException catch (e) {
-          if (token.isCancelled) throw _Paused();
-          if (e.response?.statusCode == 404) {
-            client.reopen();
-            t.sid = null; // 会话没了：重开
-            failed = true;
-            break;
+      //
+      // 2026-11-18：从「一片一片串行 await」改成 N 路并发。
+      // 实测依据：CF 隧道单流 0.52MB/s、8 路 5.83MB/s（下载侧 11 倍收益），
+      // 上传侧此前是串行，等于白白浪费同样能叠加的带宽。
+      //
+      // 并发安全前提（已核对实现）：
+      // - UploadClient.readChunk 每次 `f.open()` 拿独立 RandomAccessFile，
+      //   不同偏移并发读不共享文件游标；
+      // - postChunk 内部自己 `received.add(index)`，不依赖调用方维护；
+      // - Dart 是单线程事件循环，`t.received` / `pending` 的增删不会真的竞争。
+      //
+      // 失败策略：任一 worker 报错就停（不继续灌无效请求），已成功的分片
+      // 留在 t.received 里，下轮 missingChunks 会自动跳过 —— 与串行版语义一致。
+      {
+        final pending = <int>[for (final i in client.missingChunks(t.size)) i];
+        if (pending.isNotEmpty) _setStatus(t, TransferStatus.uploading);
+        var sessionGone = false;
+        var progressed = false;   // 本轮是否有任何一片成功（决定重试预算是否重置）
+        DioException? firstError;
+        // 并发数按**在途字节预算**反推，不是固定 4。
+        // 服务端 chunk_size 按文件大小阶梯下发：≤2GB→5MB、2-5GB→16MB、
+        // 5-10GB→32MB、>10GB→64MB。固定 4 路时 64MB 分片峰值 256MB，
+        // 中低端机 Dart heap 只有 192~256MB —— 大文件上传必 OOM
+        // （2026-11-18 review，正好把「最需要可靠」的路径削掉了）。
+        // 96MB 预算：5MB→4 路、16MB→4 路、32MB→3 路、64MB→1 路（退回串行）。
+        final uploadConcurrency =
+            ((96 << 20) ~/ (client.chunkSize <= 0 ? 1 : client.chunkSize))
+                .clamp(1, 4);
+
+        Future<void> worker() async {
+          while (pending.isNotEmpty) {
+            if (token.isCancelled) throw _Paused();
+            if (sessionGone || firstError != null) return;
+            final i = pending.removeAt(0);
+            final bytes = await UploadClient.readChunk(
+                f, i * client.chunkSize, client.chunkLength(t.size, i));
+            try {
+              await client.postChunk(i, bytes);
+              t.received.add(i);
+              progressed = true;
+              _touch(t);
+            } on DioException catch (e) {
+              if (token.isCancelled) throw _Paused();
+              if (e.response?.statusCode == 404) {
+                sessionGone = true;   // 会话过期：全体停手，外层重开
+              } else {
+                firstError ??= e;     // 首个错误决定退避，别让 N 个 worker 各退各的
+              }
+              return;
+            }
           }
-          backoff = await _retryOrThrow(t, e, backoff, token: token);
-          failed = true;
-          break;
         }
+
+        await Future.wait([
+          for (var w = 0; w < uploadConcurrency; w++) worker()
+        ]);
+
+        if (sessionGone) {
+          client.reopen();
+          t.sid = null;
+          t.received.clear();
+          continue;
+        }
+        if (firstError != null) {
+          // 本轮只要传成功过任何一片，就重置重试预算再退避。
+          // 旧串行版是「每成功一片就清零」，改成并发时挪到了「整轮零错误」
+          // 才清零 —— 弱网下每几百片偶发一次失败，attempts 会单调累加到 8
+          // 被判「连续失败多次」，而任务其实已经 90% 了（review P1）。
+          if (progressed) {
+            t.attempts = 0;
+            backoff = 0;
+          }
+          backoff = await _retryOrThrow(t, firstError!, backoff, token: token);
+          continue;
+        }
+        t.attempts = 0;
+        backoff = 0;
       }
-      if (failed) continue;
 
       // 3) finish（服务端拼装 + sha 校验；大文件耗时长，放宽超时）
       _setStatus(t, TransferStatus.merging);
@@ -483,6 +587,25 @@ class TransferEngine extends ChangeNotifier {
         return;
       } on DioException catch (e) {
         if (token.isCancelled) throw _Paused();
+        // finish 的 404 / 超时很可能意味着「服务端其实已经完成了」：
+        // 服务端是先 os.replace 落盘、再 _drop_session 删会话，最后才返回；
+        // 响应在回程丢了，重试就撞 404。而 _retryOrThrow 把 4xx 直接判死，
+        // 用户点续传又因为 state 404 从头传 —— 一次响应丢失 = 整文件重传，
+        // 64GB 场景能把已完成的成品也移进回收站（2026-11-18 review）。
+        // 先探一下目标是否已经存在且大小相符，相符就直接收工。
+        if (e.response?.statusCode == 404 ||
+            e.type == DioExceptionType.receiveTimeout ||
+            e.type == DioExceptionType.connectionError) {
+          final donePath = await _probeUploadDone(dio, t);
+          if (donePath != null) {
+            t.remotePath = donePath;
+            _setStatus(t, TransferStatus.done);
+            _speed[t.id] = 0;
+            // ignore: discarded_futures
+            _notifyDone(t);
+            return;
+          }
+        }
         backoff = await _retryOrThrow(t, e, backoff, token: token);
       }
     }
@@ -494,6 +617,62 @@ class TransferEngine extends ChangeNotifier {
     final part = File('${t.localPath}.part');
     final url =
         '/preview/${t.remotePath!.split('/').map(Uri.encodeComponent).join('/')}';
+
+    // 大文件且**没有断点**时走分片下载（2026-11-18）。
+    //
+    // 为什么要求「没有断点」：分片下载器用的是自己的 .partN 临时文件，
+    // 它不认 transfer_engine 这边 `.part` 里已攒的字节。硬走分片会把用户
+    // 上次下了一半的进度丢掉重来——比慢更糟。有断点就交给下面的单流续传。
+    //
+    // 阈值 10MB（与探活/分片决策统一）：CF 单流 0.52MB/s 下 10MB 要 19 秒、
+    // 8 路只要 1.7 秒；分区收益足够覆盖额外连接与合并开销（实测 11 倍）。
+    final hasPartial = part.existsSync() && part.lengthSync() > 0;
+    if (!hasPartial && t.size >= (10 << 20)) {
+      try {
+        _setStatus(t, TransferStatus.downloading);
+        await downloadFileParallel(dio, url, t.localPath,
+            onProgress: (received, total) {
+          t.receivedBytes = received;
+          if (t.size <= 0 && total > 0) t.size = total;
+          _touch(t);
+        },
+            // 必须把任务的 CancelToken 传进去：暂停/删除/登出全靠它，
+            // 不传的话分片请求根本不响应取消（2026-11-18 review P0：
+            // 用户点暂停，8 路照跑完还把状态覆盖成 done）
+            cancelToken: token);
+        // 分片下载器已经把文件落到最终路径并校验过总长，这里只收尾
+        t.receivedBytes = File(t.localPath).lengthSync();
+        if (t.size <= 0) t.size = t.receivedBytes;
+        t.status = TransferStatus.done;
+        _speed[t.id] = 0;
+        _schedulePersist();
+        notifyListeners();
+        // ignore: discarded_futures
+        _notifyDone(t);
+        return;
+      } on DioException {
+        if (token.isCancelled) throw _Paused();
+        // 分片失败（比如服务器对 GET 回了 200 而不是 206）就**回退单流**，
+        // 不能让大文件下载因为分片这条路走不通而彻底坏掉。
+        // 清掉分片器可能留下的半成品，交给下面的单流逻辑重来。
+        for (final leftover in Directory(File(t.localPath).parent.path)
+            .listSync()
+            .whereType<File>()) {
+          final n = leftover.path;
+          if (n.startsWith(t.localPath) &&
+              (n.endsWith('.tmp') || n.contains('.part'))) {
+            try {
+              leftover.deleteSync();
+            } catch (_) {}
+          }
+        }
+        // 落到下面的单流路径（backoff 从 0 起）
+      } catch (_) {
+        if (token.isCancelled) throw _Paused();
+        // 同上：任何非 DioException（比如长度校验失败）都回退单流
+      }
+    }
+
     var backoff = 0;
     while (true) {
       var start = part.existsSync() ? part.lengthSync() : 0;

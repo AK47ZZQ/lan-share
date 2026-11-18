@@ -23,14 +23,71 @@ def test_anonymous_chunk_upload_huge_body_413(client, monkeypatch):
     assert r.status_code == 413, "匿名巨型 chunk 应在中间件 413，而非缓冲后再 401"
 
 
-def test_chunked_chunk_upload_rejected(client):
-    """chunked（无 CL）在白名单路径同样拒——堵"缺 CL 绕过上限预检"。"""
+def test_chunked_chunk_upload_allowed_for_cloudflare(client):
+    """分片端点**放行** chunked（2026-11-18 改，实测驱动）。
+
+    为什么改：Cloudflare 会把请求体重新编码成 `Transfer-Encoding: chunked`。
+    原来这道闸一律拒 chunked，结果走 CF 隧道时分片上传 100% 失败 ——
+    实测 1MB 就打回 413（同一份客户端打本机 40MB/s、打 FRP 5.79MB/s，
+    只有 CF 拒）。而 App 在公网只走 CF，等于大文件上传在门外彻底不可用。
+
+    为什么放行是安全的：这个端点在 uploads.py 里逐块读流时按 expected 硬卡
+    （`if size > expected: overflow = True; break`），超发立即停止接收 ——
+    不依赖 Content-Length 也能拦住灌包，强度**高于**原来的 CL 预检
+    （CL 是客户端自报值可以撒谎，累计字节数不会）。
+
+    断言：不再 413，而是放行到端点（无凭据 → 401）。
+    """
     def gen():
         yield b"x" * (1024 * 1024 + 100)
 
     r = client.post("/api/upload/chunk/fakesid?index=0", content=gen(),
                     headers={"Host": "lan.local:8765"})
-    assert r.status_code == 413
+    assert r.status_code != 413, "分片端点应放行 chunked（CF 会把 body 转 chunked）"
+    assert r.status_code in (401, 404), f"应放行到端点，实际 {r.status_code}"
+
+
+def test_chunked_still_rejected_on_other_big_body_endpoints(client):
+    """放行只针对分片端点 —— feedback 等其它大 body 端点仍一律拒 chunked。
+
+    这些端点的体积上限依赖 CL 预判，没有流式逐块防线，放行等于开灌包口子。
+    """
+    def gen():
+        yield b"x" * 1024
+
+    r = client.post("/api/feedback", content=gen(),
+                    headers={"Host": "lan.local:8765",
+                             "Content-Type": "multipart/form-data; boundary=x"})
+    assert r.status_code == 413, "feedback 这类端点必须继续拒 chunked"
+
+
+def test_chunked_dot_segment_cannot_smuggle_into_upload_fallback(client):
+    """`..` 不能让 chunked 放行扩散到 upload_file 兜底路由（2026-11-18 review）。
+
+    洞的形状：
+      POST /api/upload/chunk/../feedback   （或 %2e%2e 编码）
+      中间件按 startswith("/api/upload/chunk/") 放行 chunked
+      路由层不做 dot-segment 归一化 → 落到 POST /api/upload/{path:path} → upload_file
+      而 upload_file 有 `file: UploadFile = File(...)`，FastAPI **先解析 multipart
+      再跑 require_user** → 匿名、无体积上限、单请求可灌 Caddy 的 25GB 进 TEMP。
+
+    实测复现过的旁证：POST /api/upload/chunk/../../healthz 返回 401
+    （真 /healthz 是 200），证明 `..` 原样穿过了 Caddy。
+
+    修法后这些形状必须**在中间件就被拒**（413），绝不能出现「等 body」。
+    """
+    def gen():
+        yield b"x" * 1024
+
+    for bad in ("/api/upload/chunk/../feedback",
+                "/api/upload/chunk/x/y",        # 多段：不是合法分片路由
+                "/api/upload/chunk/",           # 空 sid
+                "/api/upload/chunk/%2e%2e/feedback"):
+        r = client.post(bad, content=gen(),
+                        headers={"Host": "lan.local:8765",
+                                 "Content-Type": "multipart/form-data; boundary=x"})
+        assert r.status_code == 413, (
+            f"{bad} 必须在中间件被 413 拦掉，实际 {r.status_code}")
 
 
 def test_feedback_attachment_over_cap_422_and_no_partial(auth, monkeypatch):

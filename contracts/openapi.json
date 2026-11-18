@@ -1233,6 +1233,25 @@
     "title": "TotpRcBody",
     "type": "object"
    },
+   "TransferTunnelsBody": {
+    "properties": {
+     "mode": {
+      "default": "follow",
+      "title": "Mode",
+      "type": "string"
+     },
+     "tunnels": {
+      "default": [],
+      "items": {
+       "$ref": "#/components/schemas/_TunnelItem"
+      },
+      "title": "Tunnels",
+      "type": "array"
+     }
+    },
+    "title": "TransferTunnelsBody",
+    "type": "object"
+   },
    "UploadInitBody": {
     "properties": {
      "dest_dir": {
@@ -1427,6 +1446,17 @@
      "paths"
     ],
     "title": "ZipBody",
+    "type": "object"
+   },
+   "_TunnelItem": {
+    "properties": {
+     "url": {
+      "default": "",
+      "title": "Url",
+      "type": "string"
+     }
+    },
+    "title": "_TunnelItem",
     "type": "object"
    },
    "app__api__admin_ops__PublicUrlBody": {
@@ -7940,6 +7970,58 @@
      }
     },
     "summary": "Local Qr"
+   }
+  },
+  "/local/transfer-tunnels": {
+   "get": {
+    "description": "读传输隧道配置。\n\n返回 mode=\"follow\" 时 tunnels 一定是空的（两者表达同一件事，\n不让「custom 但列表为空」这种自相矛盾的状态流到前端）。",
+    "operationId": "get_transfer_tunnels_local_transfer_tunnels_get",
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     }
+    },
+    "summary": "Get Transfer Tunnels"
+   },
+   "post": {
+    "description": "保存传输隧道。\n\n逐条校验 + **同源校验**：这些地址必须指向本机这台服务端。\n不同源的话 App 会把文件下载请求发到别人的服务器 —— 下到的不是自己的文件，\n而且会把会话 Cookie 一起送过去。\n\n同源判定复用 /api/instance-id（4.0.17 加的，只回 UUID 不回别的）。",
+    "operationId": "set_transfer_tunnels_local_transfer_tunnels_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TransferTunnelsBody"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      },
+      "description": "Successful Response"
+     },
+     "422": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      },
+      "description": "Validation Error"
+     }
+    },
+    "summary": "Set Transfer Tunnels"
    }
   },
   "/local/tunnel": {

@@ -1,3 +1,4 @@
+import '../parallel_download.dart';
 // 通用文件通道 API（T7 裸 dio 收编第一批：从 notes_page/rich_note_editor
 // 抽出 UI 层手拼请求；文件页/笔记页等域共用）。
 // UI 层从此不再 import dio：错误文案统一走 errors.dart 的 errDetail()。
@@ -132,9 +133,14 @@ class FilesApi {
 
   /// 经同一底座下载文件到本地（zip 产物用；带 Bearer 走 baseUrl，
   /// 相对地址如 /preview/... 直接可下）
-  static Future<void> downloadTo(String url, String savePath) async {
+  ///
+  /// 2026-11-18：改走分片下载（≥10MB 才分，阈值在 downloadFileParallel 里）。
+  /// 实测 CF 隧道单流 0.52MB/s、8 路 5.83MB/s —— 大文件走同一条路能快 11 倍。
+  /// 小文件自动回落单流，行为与之前一致。
+  static Future<void> downloadTo(String url, String savePath,
+      {void Function(int received, int total)? onProgress}) async {
     final dio = await _dio();
-    await dio.download(url, savePath);
+    await downloadFileParallel(dio, url, savePath, onProgress: onProgress);
   }
 
   /// 单请求文本上传（笔记编辑器用；大文件走 upload_client 分片通道）。

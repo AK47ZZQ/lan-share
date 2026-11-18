@@ -610,10 +610,17 @@ def app_entries(request: Request):
         cached = dict(_ENTRIES_CACHE[0][1])
         cached["cert_sha256"] = _cert_fingerprint(host)   # 指纹随 host 变，不缓存
         return cached
+    # 传输隧道：上传 / 下载共用的可选入口。空数组 = 跟随主入口。
+    # 并进入口清单而不是单开端点 —— App 本来就要拉这一次，
+    # 多一个字段零成本；单开端点等于多一次往返且两边可能不同步。
+    from app.services.transfer_tunnels import load as _load_tunnels
+
+    _mode, _tunnels = _load_tunnels()
     resp = {"public": get_setting(PUBLIC_BASE_URL) or None,
             # 备用入口已删除（2026-11-04）。字段不再下发，App 拿不到就只显示
             # 一个入口，不需要重新发版。
             "lan": _lan_addresses(),
+            "transfer_tunnels": _tunnels,
             "cert_sha256": _cert_fingerprint(host)}
     _ENTRIES_CACHE[:] = [(now, resp)]
     return resp

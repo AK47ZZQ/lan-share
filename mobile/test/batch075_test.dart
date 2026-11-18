@@ -107,6 +107,16 @@ void main() {
       expect(isHiddenLocalEntry('movie.mp4.part'), isTrue);
       expect(isHiddenLocalEntry('movie.part.mp4'), isFalse);
       expect(isHiddenLocalEntry('照片.jpg'), isFalse);
+
+      // 2026-11-18：分片下载上线后必须同时隐藏 .part0..N 与 .tmp，
+      // 否则 ≥10MB 下载一开始「本地文件」里就冒出 9 个垃圾条目，
+      // 用户能删掉正在写的分片（= 下载失败重来）
+      expect(isHiddenLocalEntry('movie.mp4.part0'), isTrue);
+      expect(isHiddenLocalEntry('movie.mp4.part7'), isTrue);
+      expect(isHiddenLocalEntry('movie.mp4.tmp'), isTrue);
+      // 用户自己的文件不能被误伤（后缀正则而非 contains）
+      expect(isHiddenLocalEntry('movie.part.mp4'), isFalse);
+      expect(isHiddenLocalEntry('part1.mp4'), isFalse);
     });
 
     TransferTask task(String id, String localPath,

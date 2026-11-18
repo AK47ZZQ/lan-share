@@ -408,6 +408,127 @@ async def start_tunnel(request: Request):
     return await run_in_threadpool(tunnel_start)
 
 
+@router.get("/local/transfer-tunnels")
+async def get_transfer_tunnels(request: Request):
+    """读传输隧道配置。
+
+    返回 mode="follow" 时 tunnels 一定是空的（两者表达同一件事，
+    不让「custom 但列表为空」这种自相矛盾的状态流到前端）。
+    """
+    _require_local(request)
+    from app.services.transfer_tunnels import MAX_TUNNELS, load
+
+    mode, tunnels = load()
+    return {"mode": mode, "tunnels": tunnels, "max": MAX_TUNNELS}
+
+
+class _TunnelItem(BaseModel):
+    url: str = ""
+
+
+class TransferTunnelsBody(BaseModel):
+    mode: str = "follow"
+    tunnels: list[_TunnelItem] = []
+
+
+@router.post("/local/transfer-tunnels")
+async def set_transfer_tunnels(request: Request, body: TransferTunnelsBody):
+    """保存传输隧道。
+
+    逐条校验 + **同源校验**：这些地址必须指向本机这台服务端。
+    不同源的话 App 会把文件下载请求发到别人的服务器 —— 下到的不是自己的文件，
+    而且会把会话 Cookie 一起送过去。
+
+    同源判定复用 /api/instance-id（4.0.17 加的，只回 UUID 不回别的）。
+    """
+    _require_local(request)
+
+    from app.services.transfer_tunnels import (
+        MAX_TUNNELS, _bad, load, normalize, save,
+    )
+
+    mode = "custom" if (body.mode or "").strip().lower() == "custom" else "follow"
+
+    # mode=follow 时忽略列表（等价于「关掉这个功能」）
+    if mode == "follow":
+        save([])
+        _clear_entries_cache()
+        return {"ok": True, "mode": "follow", "tunnels": []}
+
+    urls = [i.url for i in body.tunnels if (i.url or "").strip()]
+    if not urls:
+        # custom 但没填地址 —— 退回 follow，别留悬空状态
+        save([])
+        _clear_entries_cache()
+        return {"ok": True, "mode": "follow", "tunnels": [],
+                "note": "没有填地址，已退回「跟随主入口」"}
+    if len(urls) > MAX_TUNNELS:
+        raise HTTPException(status_code=422,
+                            detail=f"最多 {MAX_TUNNELS} 条")
+
+    clean: list[str] = []
+    for raw in urls:
+        ok, detail, hint = _bad(raw)
+        if not ok:
+            raise HTTPException(status_code=422,
+                                detail=f"{raw}：{hint or detail}")
+        norm = normalize(raw)
+        if norm in clean:          # 重复项直接去重，不报错
+            continue
+        clean.append(norm)
+
+    # 同源校验：逐个问 /api/instance-id，和本机 UUID 比对
+    local_id = settings.ensure_instance_id()
+    from app.services.public_probe import _http_get
+
+    checked: list[str] = []
+    for url in clean:
+        status, body_bytes, err = await run_in_threadpool(
+            _http_get, f"{url}/api/instance-id", 8)
+        if err:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{url}：连不上（{err}）。"
+                       f"如果这条隧道现在没开，可以先启动它再保存")
+        if status != 200:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{url}：/api/instance-id 返回 {status}")
+        try:
+            import json as _json
+
+            remote_id = _json.loads(body_bytes).get("instance_id", "")
+        # 返回体不是 JSON 就说明指向的不是 LANShare
+        except Exception:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{url}：响应的不是 LANShare 实例标识接口") from None
+        if remote_id != local_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{url}：指向的是另一台服务器"
+                       f"（实例标识 {remote_id[:8]}… ≠ 本机 {local_id[:8]}…）。"
+                       f"传输隧道必须是本机的另一个入口")
+        checked.append(url)
+
+    save(checked)
+    _clear_entries_cache()
+    mode2, tunnels2 = load()
+    return {"ok": True, "mode": mode2, "tunnels": tunnels2}
+
+
+def _clear_entries_cache() -> None:
+    """清 /api/app/entries 的 60 秒缓存，让 App 立刻拿到新列表。
+    与 set_public_url 里的做法一致（那边有详细说明）。"""
+    try:
+        from app.api.appver import _ENTRIES_CACHE
+
+        _ENTRIES_CACHE.clear()
+    # 缓存清不掉不影响保存结果
+    except Exception:
+        pass
+
+
 @router.get("/local/tunnel/frp")
 async def get_frp_status(request: Request):
     """FRP 客户端（frpc）的存活状态，只读。

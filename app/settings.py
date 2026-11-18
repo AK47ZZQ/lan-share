@@ -36,6 +36,19 @@ PUBLIC_BASE_URL_ALT = "public_base_url_alt"
 # 这两项只用来回填输入框，不参与任何判定。
 PUBLIC_URL_FRP = "public_url_frp"
 PUBLIC_URL_CLOUDFLARE = "public_url_cloudflare"
+
+# 传输隧道：上传和下载共用的另一组入口地址（JSON 数组）。
+#
+# 为什么要它：控制流量（登录/列目录，几 KB）和文件传输流量（几十 MB 起）对网络的
+# 容忍度完全不同。实测同一条 CF 隧道下行 0.38MB/s、延迟 2.3s，而国内 FRP
+# 1.47MB/s、0.17s —— 差 3.9 倍。让大文件挤同一条窄路毫无道理。
+# **上传和下载都走这组地址** —— 上传用的分片请求天然可以换源，
+# 比下载的 Range 续传还简单。
+# 空数组 = 跟随主入口（行为和没有这个功能时完全一致）。
+# 这些地址必须指向**同一台服务端**（保存时比对 instance-id 强校验），
+# 不允许外部存储/第三方镜像 —— 那会引入「这份字节和本机的是不是同一份」的
+# 校验难题，属于另一个产品。
+TRANSFER_TUNNELS = "transfer_tunnels"
 NOTIFY_WEBHOOK_URL = "notify_webhook_url"
 NOTIFY_PREFS_PREFIX = "notify_prefs_user_"   # + uid（每用户一个 key）
 HEALTH_REPORT_ENABLED = "health_report_enabled"
