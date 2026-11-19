@@ -140,6 +140,10 @@ def test_probe_ok_end_to_end(monkeypatch):
         return 404, b"", ""
 
     monkeypatch.setattr(public_probe, "_http_get", fake_get)
+    # SSRF 闸（_resolve_public_ips）在 check_dns 之前跑，且用的是真 DNS。
+    # 不钉它，这条「不联网」的用例会随 DNS 抖动随机变红（2026-11-19 实测）。
+    monkeypatch.setattr(public_probe, "_resolve_public_ips",
+                        lambda h: (["172.67.1.1"], ""))
     monkeypatch.setattr(public_probe, "check_dns",
                         lambda h: (True, "解析到 172.67.1.1（Cloudflare 边缘）", ""))
 
@@ -154,6 +158,8 @@ def test_probe_ok_end_to_end(monkeypatch):
 def test_env_check_never_blocks(monkeypatch):
     """环境检测的任何结果都不能让 probe.ok 变 false —— 这是硬约束。"""
     local_id = settings.ensure_instance_id()
+    monkeypatch.setattr(public_probe, "_resolve_public_ips",
+                        lambda h: (["172.67.1.1"], ""))
     monkeypatch.setattr(public_probe, "check_dns", lambda h: (True, "ok", ""))
     monkeypatch.setattr(
         public_probe, "_http_get",
