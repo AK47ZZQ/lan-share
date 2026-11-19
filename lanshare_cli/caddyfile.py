@@ -137,6 +137,19 @@ TEMPLATE = """\
 \t\trespond 404
 \t}}
 
+\t# ── WebDAV 暂时关闭（2026-11-19 主人：用不上）──
+\t#
+\t# 只从入口屏蔽，代码与测试原样保留（app/api/webdav.py、tests/test_webdav_*）。
+\t# 要恢复：删掉下面两个 handle 块后重新 install（或手改 conf/Caddyfile 再重启
+\t# caddy）。/dav 与 /dav/... 都要拦 —— 精确 handle 优先于下面的兜底反代。
+\t# 注意：API 直连 127.0.0.1:{api_port} 仍可达，那是仅本机的回环面。
+\thandle /dav {{
+\t\trespond 404
+\t}}
+\thandle /dav/* {{
+\t\trespond 404
+\t}}
+
 \thandle {{
 \t\treverse_proxy 127.0.0.1:{api_port} {{
 \t\t\t# 告诉后端这是 HTTPS，Cookie 才会加 Secure 位
