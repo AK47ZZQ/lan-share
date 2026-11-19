@@ -9,10 +9,10 @@
   <p>Works without a public IP. No NAS to buy. Your photos never sit in someone else's datacenter.</p>
 
   [![CI](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml/badge.svg)](https://github.com/AK47ZZQ/lan-share/actions/workflows/ci.yml)
-  ![server](https://img.shields.io/badge/server-v3.70-2563eb)
-  ![app](https://img.shields.io/badge/app-v1.1.17%2B124-2563eb)
+  ![server](https://img.shields.io/badge/server-v4.0.19-2563eb)
+  ![app](https://img.shields.io/badge/app-v4.1.9%2B149-2563eb)
   ![platform](https://img.shields.io/badge/platform-Windows%20%C2%B7%20Web%20%C2%B7%20Android-64748b)
-  ![tests](https://img.shields.io/badge/tests-560%20passed-16a34a)
+  ![tests](https://img.shields.io/badge/tests-1333%20passed-16a34a)
   ![license](https://img.shields.io/badge/license-PolyForm--Noncommercial-orange)
 </div>
 
