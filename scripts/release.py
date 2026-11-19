@@ -580,8 +580,14 @@ def smoke_app(apk: Path) -> None:
         import time
         time.sleep(5)
     if not online:
-        warn(f"没有在线模拟器，跳过冒烟。要真冒烟请先起 `{AVD}`")
-        return
+        # 铁律不能靠 warn 保住。2026-11-19 发 4.1.11 时这里只 warn 一句就
+        # 静默跳过了 —— 包照发、告警淹没在 10 步输出里，最后得人工补冒烟。
+        # 要么把模拟器起起来，要么在命令行显式写 --skip-smoke（有据可查）。
+        raise Abort(
+            f"没有在线模拟器 —— 冒烟是铁律，不能静默跳过。\n"
+            f"    先起 `{AVD}`（约 35 秒到 sys.boot_completed），"
+            f"或确实发不了时显式加 --skip-smoke。"
+        )
 
     _adb("uninstall", PACKAGE)
     install = _adb("install", "-r", str(apk), timeout=600)
