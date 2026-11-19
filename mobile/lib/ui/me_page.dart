@@ -56,7 +56,6 @@ class _MePageState extends ConsumerState<MePage> {
   String _cacheSize = '';
   String _appCacheSize = '';
   String _version = '';
-  bool? _webdavSet; // WebDAV 独立密码是否已设置（0.8.0）
 
   @override
   void initState() {
@@ -82,12 +81,6 @@ class _MePageState extends ConsumerState<MePage> {
   Future<void> _load() async {
     _server = await Prefs.lastAddress();
     if (mounted) setState(() {});
-    try {
-      final webdavSet = await AccountApi.webdavPwdStatus();
-      if (mounted) setState(() => _webdavSet = webdavSet);
-    } catch (_) {
-      /* 端点不可用保持未知 */
-    }
     try {
       final pi = await PackageInfo.fromPlatform();
       if (mounted) setState(() => _version = pi.version);
@@ -495,70 +488,6 @@ class _MePageState extends ConsumerState<MePage> {
       setState(() {});
     } catch (e) {
       showToast('修改失败：${_detail(e)}');
-    }
-  }
-
-  /// WebDAV 独立密码：设置/轮换/清除。独立于登录密码，客户端挂载用。
-  Future<void> _webdavDialog() async {
-    final curCtrl = TextEditingController();
-    final newCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('WebDAV 独立密码'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _webdavSet == true
-                    ? '已启用：WebDAV 挂载只认独立密码，登录密码对 /dav/ 无效。'
-                    : '未设置：WebDAV 挂载目前使用登录密码。',
-                style: const TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: Gap.xs),
-              TextField(
-                controller: curCtrl,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: '当前登录密码'),
-              ),
-              TextField(
-                controller: newCtrl,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'WebDAV 新密码（至少 8 位，留空=清除）',
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    final newPwd = newCtrl.text;
-    if (newPwd.isNotEmpty && newPwd.length < 8) {
-      showToast('WebDAV 密码至少 8 位（留空=清除）');
-      return;
-    }
-    try {
-      final setNow = await AccountApi.setWebdavPwd(curCtrl.text, newPwd);
-      if (!mounted) return;
-      setState(() => _webdavSet = setNow);
-      showToast(
-        setNow ? 'WebDAV 独立密码已生效（挂载客户端需改用新密码）' : '已清除：WebDAV 回退用登录密码挂载',
-      );
-    } catch (e) {
-      showToast('保存失败：${_detail(e)}');
     }
   }
 
@@ -1280,18 +1209,6 @@ class _MePageState extends ConsumerState<MePage> {
                 title: const Text('修改用户名'),
                 subtitle: const Text('私人目录同步改名，需密码确认'),
                 onTap: _changeUsername,
-              ),
-              ListTile(
-                leading: const Icon(Icons.storage_outlined),
-                title: const Text('WebDAV 独立密码'),
-                subtitle: Text(
-                  _webdavSet == null
-                      ? '读取中…'
-                      : _webdavSet!
-                      ? '已启用：挂载只认独立密码'
-                      : '未设置：挂载目前用登录密码',
-                ),
-                onTap: _webdavDialog,
               ),
               ListTile(
                 leading: const Icon(Icons.qr_code_2),

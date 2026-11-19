@@ -104,7 +104,7 @@ async function delUser(u: AdminUser) {
           <option value="admin">admin</option><option value="member">member</option><option value="guest">guest</option>
         </select>
         <button v-if="u.username !== me?.username" class="btn ghost sm" title="以此成员的视角浏览（只读预览）" @click="viewAs(u.username)">👁 视角</button>
-        <button class="btn ghost sm" title="修改用户名/重置密码/两步验证/WebDAV 密码" @click="credModal = u">✏️ 账号</button>
+        <button class="btn ghost sm" title="修改用户名/重置密码/两步验证" @click="credModal = u">✏️ 账号</button>
         <button class="btn ghost sm" title="设置私人空间配额" @click="openQuota(u)">📏 配额</button>
         <button class="btn ghost sm" title="导出该成员数据（私人空间+直传子树 zip）" @click="exportUser(u)">📦 导出</button>
         <button v-if="u.username !== me?.username" class="btn ghost sm" title="一键下线该成员的全部 Web 会话与 App 设备（紧急操作）" @click="kickMember(u)">🚪 踢下线</button>

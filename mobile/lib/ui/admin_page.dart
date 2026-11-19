@@ -111,7 +111,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
   }
 
   /// allowEmpty=true 时"留空提交"返回 ''（区别于取消的 null）——
-  /// 清配额/清 WebDAV 密码等"空值有语义"的流程用（0.8.1 审查修复）
+  /// 清配额等"空值有语义"的流程用（0.8.1 审查修复）
   Future<String?> _prompt(String title, String label,
       {String initial = '',
       bool obscure = false,
@@ -220,24 +220,6 @@ class _AdminPageState extends ConsumerState<AdminPage>
                         okMsg: '已更新');
                   }),
               ListTile(
-                  leading: const Icon(Icons.key_outlined),
-                  title: Text(u.webdavSet ? '重置 WebDAV 密码' : '设置 WebDAV 密码'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final v = await _prompt('WebDAV 独立密码',
-                        '至少 8 位，留空提交=清除',
-                        obscure: true, okText: '保存', allowEmpty: true);
-                    if (v == null) return;
-                    if (v.isNotEmpty && v.length < 8) {
-                      showToast('密码至少 8 位（留空提交=清除）');
-                      return;
-                    }
-                    await _run(() => AdminApi.setWebdavPassword(u.id, v),
-                        okMsg: v.isEmpty
-                            ? '已清除 WebDAV 独立密码'
-                            : 'WebDAV 密码已更新');
-                  }),
-              ListTile(
                   leading: Icon(u.isActive
                       ? Icons.block_outlined
                       : Icons.check_circle_outline),
@@ -313,7 +295,7 @@ class _AdminPageState extends ConsumerState<AdminPage>
       final newPwd = await _prompt('重置密码 — ${u.username}', '新密码（至少 8 位）',
           obscure: true);
       if (newPwd == null) return;
-      // 与改自己密码/WebDAV 密码同款下限（R1-P3）：短密码提交到服务端只会
+      // 与改自己密码同款下限（R1-P3）：短密码提交到服务端只会
       // 得到一条 400，当场反馈更直观
       if (newPwd.length < 8) {
         showToast('密码至少 8 位');

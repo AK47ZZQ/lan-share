@@ -71,7 +71,7 @@ Photo backup is the main draw. It uploads as you shoot, and the home screen tell
 
 Photos are grouped by month using the EXIF capture date, shown in a three-column waterfall. You can switch between photos and videos, and the calendar in the corner jumps straight to a given month.
 
-Passwords, a separate WebDAV password, pairing codes, recovery codes, authenticator setup and app lock all live on one "account and security" page instead of scattered across menus.
+Passwords, pairing codes, recovery codes, authenticator setup and app lock all live on one "account and security" page instead of scattered across menus.
 
 The phone and the web share one backend and one set of permissions. Delete something on the phone and it's gone after a refresh on the web.
 
@@ -158,7 +158,7 @@ check.bat                                     # run this after touching the back
 |---|---|---|
 | Web (Vue 3) | `https://<IP>:8765` | Application login |
 | Public (tunnel) | `https://<your-tunnel-host>:<port>` | Same, full feature parity |
-| WebDAV | `https://<IP>:8765/dav/` | Basic (member account) |
+| WebDAV | — | Temporarily disabled: `/dav` returns 404; code and endpoints are kept and can be restored by removing the Caddyfile block |
 | Health probe | `/healthz` | Unauthenticated, LAN only |
 
 The probe is deliberately not exposed to the internet. It reports internal state, and internal state isn't something strangers should be able to scan. Tunnel setup is covered in [docs/OPERATIONS.md](docs/OPERATIONS.md).

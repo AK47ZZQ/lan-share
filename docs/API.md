@@ -149,6 +149,10 @@ family 清单 member+admin 全可见可协作；guest 无待办能力（403）�
 
 ## WebDAV（`/dav/`）
 
+> **2026-11-19 起暂时关闭**：生成的 Caddyfile 在兜底反代前拦截 `/dav` 与 `/dav/*`
+> 并返回 404；API 代码与下方协议行为保留。恢复只需删掉这两个 handle 块后重装
+> 或重启 Caddy。托管 Web/App 里的入口已同步收起。
+
 认证：会话 Cookie 或 `Authorization: Basic base64(user:pass)`（复用 scrypt 校验与防爆破锁定）。
 
 | 方法 | 行为 |

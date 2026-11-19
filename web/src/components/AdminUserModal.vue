@@ -35,34 +35,6 @@ async function doPwd() {
   } catch (e) { pwdErr.value = (e as Error).message } finally { pwdBusy.value = false }
 }
 
-// WebDAV 独立密码
-const davPwd = ref('')
-const davBusy = ref(false)
-function genDavPwd() {
-  const chars = 'abcdefghjkmnpqrstuvwxyzACDEFGHJKLMNPQRSTUVWXYZ23456789'
-  const arr = crypto.getRandomValues(new Uint8Array(14))
-  davPwd.value = Array.from(arr, v => chars[v % chars.length]).join('')
-}
-async function saveDav() {
-  davBusy.value = true
-  try {
-    await api.adminSetWebdavPwd(props.user.id, davPwd.value)
-    await navigator.clipboard?.writeText(davPwd.value).catch(() => {})
-    toast(`WebDAV 密码已更新并复制到剪贴板（密码会留在剪贴板历史，请尽快粘贴到安全渠道发送）`, 'ok')
-    davPwd.value = ''
-    emit('changed')
-  } catch (e) { toast((e as Error).message, 'err') } finally { davBusy.value = false }
-}
-async function clearDav() {
-  if (!(await confirmDlg(`清除「${props.user.username}」的 WebDAV 独立密码？之后 WebDAV 回退用登录密码挂载。`, { okText: '清除' }))) return
-  davBusy.value = true
-  try {
-    await api.adminSetWebdavPwd(props.user.id, '')
-    toast('已清除', 'ok')
-    emit('changed')
-  } catch (e) { toast((e as Error).message, 'err') } finally { davBusy.value = false }
-}
-
 // 仅解除两步验证（不动密码、不登出）
 const totpBusy = ref(false)
 async function clearTotp() {
@@ -120,23 +92,6 @@ async function clearTotp() {
             <button class="btn danger sm" :disabled="totpBusy" @click="clearTotp">
               {{ totpBusy ? '提交中…' : '解除两步验证' }}
             </button>
-          </div>
-        </div>
-
-        <div style="height:1px;background:var(--line);margin:16px 0" />
-
-        <div style="display:grid;gap:9px">
-          <div style="font-size:13.5px;font-weight:600">🗄️ WebDAV 独立密码</div>
-          <p style="font-size:12px;color:var(--text-3);margin:0">
-            {{ props.user.webdav_set
-              ? '已设置：该成员的 WebDAV 只认独立密码，登录密码无法挂载。只影响 WebDAV，不登出网页会话。'
-              : '未设置：WebDAV 目前用登录密码挂载。' }}
-          </p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input v-model="davPwd" type="text" placeholder="WebDAV 新密码（至少 8 位）" autocomplete="off" style="flex:1;min-width:170px" />
-            <button class="btn ghost sm" @click="genDavPwd">🎲 随机</button>
-            <button class="btn sm" :disabled="davBusy || davPwd.length < 8" @click="saveDav">保存</button>
-            <button v-if="props.user.webdav_set" class="btn danger sm" :disabled="davBusy" @click="clearDav">清除</button>
           </div>
         </div>
 
