@@ -151,9 +151,11 @@ async def security_middleware(request: Request, call_next):
             #
             # 修法：先 normpath 再 fullmatch 单段形状；归一化后与原串不一致的
             # （含 `..`、`//` 之类）一律不放行。
-            _norm = posixpath.normpath(path)
-            if (_norm == path and ".." not in path
-                    and re.fullmatch(r"/api/upload/chunk/[^/]+", _norm)):
+            # 名字别叫 _norm：同一函数上方已有一个内部函数 _norm（Host 归一化），
+            # 复用会让 mypy 把这里的 str 赋值报成「赋给 Callable」（2026-11-19 门禁）。
+            _norm_path = posixpath.normpath(path)
+            if (_norm_path == path and ".." not in path
+                    and re.fullmatch(r"/api/upload/chunk/[^/]+", _norm_path)):
                 cap = MAX_CHUNK_SIZE + 8 * 1024 * 1024
                 # 🔴 分片端点**放行 chunked**（2026-11-18，实测驱动）
                 #
