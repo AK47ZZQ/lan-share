@@ -1383,7 +1383,7 @@ def refresh_changelog_artifacts(target: str) -> None:
         except Exception as exc:                      # noqa: BLE001
             warn(f"{name} 失败（不影响发版）：{exc}")
 
-    paths = [CHANGELOG]
+    paths = [CHANGELOG, ROOT / "docs" / "CHANGELOG-INDEX.md"]
     if ARCHIVE_DIR.is_dir():
         paths += sorted(ARCHIVE_DIR.glob("CHANGELOG-archive-*.md"))
     try:
