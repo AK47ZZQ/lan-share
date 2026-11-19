@@ -30,7 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "CHANGELOG.md"
 ARCHIVE_DIR = ROOT / "docs" / "changelog"
-INDEX = ROOT / "docs" / "_internal" / "项目记忆" / "17-更新历史索引.md"
+INDEX = ROOT / "docs" / "CHANGELOG-INDEX.md"
 
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 # 版本号两段和三段都有：服务端是 `v3.92`，App 是 `v4.1.10+150`。

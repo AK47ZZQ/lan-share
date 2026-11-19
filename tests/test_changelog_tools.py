@@ -268,14 +268,18 @@ def test_全量拼接按新到旧(rel):
 
 
 def test_真仓库的索引是最新的(idx):
-    """改了 CHANGELOG 却忘了重建索引 → 这里红。
+    """改了 CHANGELOG 却忘了重建索引 → 这里红（CI 也跑这条）。
 
-    索引是 AI 会话查历史的唯一入口（禁止全文读 CHANGELOG），脱节等于没有。
-    `release.py` 收尾会自动重建，手动改完 CHANGELOG 记得跑一次
-    `python scripts/changelog_index.py`。
+    索引是 AI 会话查历史的唯一入口（`AGENTS.md §4.2.1` 禁止全文读
+    CHANGELOG），脱节了等于没有。`release.py` 收尾会自动重建；手动改完
+    CHANGELOG 记得跑一次 `python scripts/changelog_index.py`。
+
+    ⚠️ 索引必须放在**公开目录** `docs/CHANGELOG-INDEX.md`：放
+    `docs/_internal/` 的话那目录是 gitignore 的，CI checkout 里根本没有这个
+    文件，这条测试就永远是「索引不存在」——2026-11-19 实测踩过一次。
     """
     fresh = idx.render(idx.collect())
-    index_path = ROOT / "docs" / "_internal" / "项目记忆" / "17-更新历史索引.md"
+    index_path = ROOT / "docs" / "CHANGELOG-INDEX.md"
     assert index_path.is_file(), f"索引不存在：{index_path}"
     assert index_path.read_text(encoding="utf-8") == fresh, \
         "索引已过期，跑 python scripts/changelog_index.py"
