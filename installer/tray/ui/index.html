@@ -453,7 +453,11 @@ button.link {
           <div class="hint" id="frpstate"></div>
         </div>
 
-        <div class="wanblock">
+        <!-- 2026-11-18 主人决定：Cloudflare Tunnel 入口整体下线，只留樱花 FRP + R2 下载。
+             实测 CF 比 FRP 慢 25~53 倍（首字节 3.39s vs 0.064s，回源绕洛杉矶），
+             图片预览这种小请求最吃亏。C# 侧的探测/启停逻辑全部保留没删，
+             只是界面这栏收起来 —— 哪天要重新评估，把下面 display:none 去掉即可。 -->
+        <div class="wanblock" style="display:none">
           <div class="wanblock-title">方式二：Cloudflare Tunnel</div>
           <div class="addr">
             <input id="cfhost" value="" placeholder="https://你的域名（不带端口）">
