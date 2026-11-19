@@ -59,6 +59,8 @@ PACKAGE = "app.lanshare.lanshare_app"
 ISS = ROOT / "installer" / "lanshare.iss"
 PUBSPEC = ROOT / "mobile" / "pubspec.yaml"
 CHANGELOG = ROOT / "CHANGELOG.md"
+# 2026-11-19 起 CHANGELOG 滚动归档：主文件只留最近 50 条，更早的按季度切到这里。
+ARCHIVE_DIR = ROOT / "docs" / "changelog"
 HANDOFF = ROOT / "HANDOFF.md"
 OUT = ROOT / "build" / "out"
 
@@ -326,7 +328,7 @@ def commit_if_changed(paths: list[Path], message: str) -> bool:
     git("add", *[str(p) for p in paths])
     staged = git("diff", "--cached", "--name-only")
     if not staged.strip():
-        ok("版本号无变化，跳过提交")
+        ok("无变化，跳过提交")
         return False
     run_checked([
         "git", "-c", "user.name=Hermes",
@@ -1056,7 +1058,7 @@ def sync_update_manifest(line: str, version: str, artifact: Path | None) -> None
             ok(f"产物已复制到 {target.name}")
         artifact = target
 
-    hist = parse_update_history(CHANGELOG.read_text(encoding="utf-8"), line)
+    hist = parse_update_history(read_changelog_full(), line)
     if not hist:
         warn(f"CHANGELOG 里没解析出任何 {line} 线版本，清单保持原样")
         return
@@ -1306,7 +1308,7 @@ def cmd_check(args) -> int:
 
 def cmd_server(args) -> int:
     ver = args.version
-    total = 8
+    total = 9
     step(1, total, "前置检查")
     check_git_clean()
     check_privacy()
@@ -1345,16 +1347,83 @@ def cmd_server(args) -> int:
     sync_update_manifest("server", target, exe)
     sync_r2("server")
 
+    step(9, total, "收口文档索引")
+    refresh_changelog_artifacts(target)
+
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")
     return 0
+
+
+def refresh_changelog_artifacts(target: str) -> None:
+    """重建「更新历史索引」并在主文件过长时滚动归档，然后把变更提交掉。
+
+    为什么跟着发版跑：CHANGELOG 每发一版就多一条，索引不重建就脱节 ——
+    而 AI 会话查历史全靠索引（`AGENTS.md §4.2.1` 明令禁止全文读 CHANGELOG），
+    脱节了等于没有。
+
+    为什么要提交：发版前 `check_git_clean()` 卡着工作区必须干净，这里产生的
+    变更自己不收尾，下一次发版的前置检查就会直接红。索引在
+    `docs/_internal/` 里（gitignore），提交的只有 CHANGELOG 和分片。
+
+    两件都不属于发版主链路：失败只 warn，绝不挡住发版。
+    """
+    for name in ("changelog_archive.py", "changelog_index.py"):
+        script = ROOT / "scripts" / name
+        if not script.is_file():
+            continue
+        try:
+            res = run([sys.executable, str(script)], timeout=180)
+            out = (res.stdout or "").strip().splitlines()
+            tail = out[-1] if out else f"rc={res.returncode}"
+            if res.returncode == 0:
+                ok(f"{name}：{tail}")
+            else:
+                warn(f"{name} 失败（不影响发版）：{tail}")
+        except Exception as exc:                      # noqa: BLE001
+            warn(f"{name} 失败（不影响发版）：{exc}")
+
+    paths = [CHANGELOG]
+    if ARCHIVE_DIR.is_dir():
+        paths += sorted(ARCHIVE_DIR.glob("CHANGELOG-archive-*.md"))
+    try:
+        if any(p.is_file() for p in paths):
+            commit_if_changed(paths, f"docs(changelog): {target} 归档与索引收口")
+    except Exception as exc:                          # noqa: BLE001
+        warn(f"文档变更提交失败（不影响发版）：{exc}")
+
+
+def read_changelog_full() -> str:
+    """`CHANGELOG.md` + 全部分片 → 一份全量文本（新到旧）。
+
+    为什么不能只读主文件（2026-11-19）：`CHANGELOG.md` 现在滚动归档，只留
+    最近 50 条。`sync_to_local_server` / `sync_update_manifest` 都靠 CHANGELOG
+    生成更新历史 —— 只读主文件会让 `versions.json` 和 R2 清单里的 history
+    从 100+ 条掉到 20 多条，而且**一点报错都没有**，用户只是发现「历史变短了」。
+
+    每个文件开头（主文件的 ARCHIVES 注释、分片的 `# CHANGELOG 归档` + 说明段）
+    都削掉：它们不是条目，留着会被算进上一个条目的正文。
+    """
+    pieces: list[str] = []
+    paths = [CHANGELOG]
+    if ARCHIVE_DIR.is_dir():
+        # 文件名带季度，倒序即新到旧 —— 和主文件的顺序接得上
+        paths += sorted(ARCHIVE_DIR.glob("CHANGELOG-archive-*.md"), reverse=True)
+    for path in paths:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        m = re.search(r"^## ", text, flags=re.M)
+        if m:
+            pieces.append(text[m.start():])
+    return "\n\n".join(pieces)
 
 
 def cmd_app(args) -> int:
     cur_ver, cur_build = read_app_version()
     target = args.version or cur_ver
     new_build = cur_build if target == cur_ver else cur_build + 1
-    total = 9
+    total = 10
 
     step(1, total, "前置检查")
     check_git_clean()
@@ -1399,7 +1468,7 @@ def cmd_app(args) -> int:
 
     step(8, total, "同步到本机服务端（更新镜像）")
     # 历史从完整 CHANGELOG 生成，不是只取当前版本 —— 服务端要能给出全部历史
-    history = parse_changelog_history(CHANGELOG.read_text(encoding="utf-8"))
+    history = parse_changelog_history(read_changelog_full())
     sync_to_local_server(apk, history)
 
     step(9, total, "同步更新源清单")
@@ -1407,6 +1476,9 @@ def cmd_app(args) -> int:
     # 同一个源但不同落点：那个给 /api/app/history，这个给 App 的「自定义更新地址」。
     sync_update_manifest("app", target, apk)
     sync_r2("app")
+
+    step(10, total, "收口文档索引")
+    refresh_changelog_artifacts(target)
 
     say(f"\n完成：{url}")
     say("别忘了 push 代码：git push origin main")

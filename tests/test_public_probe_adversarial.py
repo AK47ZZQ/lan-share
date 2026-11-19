@@ -8,6 +8,7 @@ A3 隧道控制滥用  —— 会真的执行 sc / taskkill，误判就是误杀
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -151,8 +152,23 @@ class _FakeProc:
         self.stderr = err
 
 
+def _force_windows(monkeypatch):
+    """把 tunnel_ctl 内部的平台判断钉成 Windows。
+
+    tunnel_start / tunnel_stop / tunnel_status 都以 `sys.platform != "win32"`
+    早退，而 GitHub Actions 跑在 Linux 上：不钉住的话这些用例在 CI 里永远只
+    测到「当前平台不支持」那一行早退，真正的服务/进程分支一次都没被执行
+    （2026-11-19 连续 5 次 CI 全红就是这么来的）。
+
+    只替换模块内的 `sys` 名字（tunnel_ctl 里只有 sys.platform 一处用法），
+    不动全局 sys.platform，也不影响其它测试。
+    """
+    monkeypatch.setattr(tunnel_ctl, "sys", SimpleNamespace(platform="win32"))
+
+
 def test_stop_does_not_touch_service_when_none(monkeypatch):
     """没有服务时不能瞎发 sc stop（会停掉同名的别人的服务）。"""
+    _force_windows(monkeypatch)
     calls = []
     monkeypatch.setattr(tunnel_ctl, "_find_service", lambda: ("", ""))
     monkeypatch.setattr(tunnel_ctl, "_process_running", lambda: (False, 0))
@@ -165,6 +181,7 @@ def test_stop_does_not_touch_service_when_none(monkeypatch):
 
 def test_stop_service_failure_is_reported(monkeypatch):
     """sc stop 失败要如实上报，不能当作成功。"""
+    _force_windows(monkeypatch)
     monkeypatch.setattr(tunnel_ctl, "_find_service", lambda: ("LANShareTunnel", "running"))
     monkeypatch.setattr(tunnel_ctl, "_service_state", lambda n: "running")
     monkeypatch.setattr(tunnel_ctl, "_run", lambda args, timeout=20:
@@ -176,6 +193,7 @@ def test_stop_service_failure_is_reported(monkeypatch):
 
 def test_stop_verifies_state_after_command(monkeypatch):
     """下发了 stop 但状态没变，不能报成功。"""
+    _force_windows(monkeypatch)
     monkeypatch.setattr(tunnel_ctl, "_find_service", lambda: ("LANShareTunnel", "running"))
     monkeypatch.setattr(tunnel_ctl, "_service_state", lambda n: "running")  # 一直 running
     monkeypatch.setattr(tunnel_ctl, "_run", lambda args, timeout=20: _FakeProc())
@@ -186,6 +204,7 @@ def test_stop_verifies_state_after_command(monkeypatch):
 
 def test_kill_process_reports_irreversibility(monkeypatch):
     """杀掉前台进程后必须明说「程序没法帮你重新启动」。"""
+    _force_windows(monkeypatch)
     seq = {"n": 0}
 
     def fake_running():
@@ -196,19 +215,18 @@ def test_kill_process_reports_irreversibility(monkeypatch):
     monkeypatch.setattr(tunnel_ctl, "_process_running", fake_running)
     monkeypatch.setattr(tunnel_ctl, "_run", lambda args, timeout=15: _FakeProc())
     res = tunnel_ctl.tunnel_stop()
-    if tunnel_ctl.sys.platform == "win32":
-        assert res["ok"] is True
-        assert res["method"] == "process"
-        assert "无法" in res["detail"] and "重新启动" in res["detail"]
+    assert res["ok"] is True
+    assert res["method"] == "process"
+    assert "无法" in res["detail"] and "重新启动" in res["detail"]
 
 
 def test_start_refuses_when_no_service(monkeypatch):
+    _force_windows(monkeypatch)
     monkeypatch.setattr(tunnel_ctl, "_find_service", lambda: ("", ""))
     monkeypatch.setattr(tunnel_ctl, "_process_running", lambda: (False, 0))
     res = tunnel_ctl.tunnel_start()
-    if tunnel_ctl.sys.platform == "win32":
-        assert res["ok"] is False
-        assert "没有安装" in res["detail"] or "无法启动" in res["detail"]
+    assert res["ok"] is False
+    assert "没有安装" in res["detail"] or "无法启动" in res["detail"]
 
 
 def test_service_state_parse_survives_localized_output(monkeypatch):

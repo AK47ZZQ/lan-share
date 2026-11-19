@@ -37,7 +37,22 @@ class AppverApi {
     return File(savePath);
   }
 
-  /// 拉仓库里的 CHANGELOG.md（更新历史的数据源）。
+  /// 拉仓库里的更新历史（`CHANGELOG.md` + 历史分片）。
+  ///
+  /// ## 为什么要补拉分片
+  ///
+  /// 2026-11-19 起 `CHANGELOG.md` 滚动归档：主文件只留最近 50 条（约 150KB），
+  /// 更早的按季度切到 `docs/changelog/CHANGELOG-archive-YYYYQN.md`。
+  /// 不补拉的话，这条兜底路径的历史会从 187 条缩到 50 条。
+  ///
+  /// 主文件**顶部**有一行机器可读索引：
+  ///
+  ///     <!-- ARCHIVES: docs/changelog/CHANGELOG-archive-2026Q4.md ... -->
+  ///
+  /// 必须在顶部：markdown 没有元数据概念，写在末尾的注释会被 `^## ` 切块
+  /// 逻辑算进最后一个条目的正文（实测让末条多出 100 字并显示到更新说明里）。
+  ///
+  /// 分片拉不到就**只返回主文件** —— 历史短一截好过整页空着，调用方不该感知。
   ///
   /// ## 为什么不用 Release 列表
   ///
@@ -61,18 +76,76 @@ class AppverApi {
       },
     ));
     try {
+      final main = await _fetchRepoText(dio, 'CHANGELOG.md');
+      if (main == null || main.isEmpty) return null;
+
+      final shards = archiveShardsOf(main);
+      if (shards.isEmpty) return main; // 还没归档过：行为和以前完全一致
+
+      // 并发拉，单个失败返回 null 直接略过（不因为一个分片拖垮整页历史）
+      final parts = await Future.wait(shards
+          .take(_maxArchiveShards)
+          .map((p) => _fetchRepoText(dio, p)));
+
+      final buf = StringBuffer(main);
+      for (final part in parts) {
+        if (part == null) continue;
+        final body = afterFirstH2(part);
+        if (body.isEmpty) continue;
+        buf
+          ..write('\n\n')
+          ..write(body);
+      }
+      return buf.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 最多补拉几个历史分片。
+  ///
+  /// 一个季度约 250KB，全拉一遍会到 MB 级，而这条路本来就只是兜底
+  /// （主源是 R2 清单里的 history 数组，19KB）。覆盖最近一年够了。
+  static const _maxArchiveShards = 4;
+
+  /// 拉仓库里任意文件的文本（contents API + base64）。
+  ///
+  /// 文件超过 1MB 时 GitHub 不返回 `content`，这里会拿到空串并返回 null，
+  /// 调用方按「这个文件没有」处理即可。
+  static Future<String?> _fetchRepoText(Dio dio, String path) async {
+    try {
       final r = await dio.get(
-        'https://api.github.com/repos/AK47ZZQ/lan-share/contents/CHANGELOG.md',
+        'https://api.github.com/repos/AK47ZZQ/lan-share/contents/$path',
       );
       final data = r.data;
       if (data is! Map) return null;
       final b64 = '${data['content'] ?? ''}'.replaceAll(RegExp(r'\s'), '');
       if (b64.isEmpty) return null;
-      final bytes = base64Decode(b64);
-      return utf8.decode(bytes, allowMalformed: true);
+      return utf8.decode(base64Decode(b64), allowMalformed: true);
     } catch (_) {
       return null;
     }
+  }
+
+  /// 主文件顶部的 `<!-- ARCHIVES: a b c -->` → 分片路径（新到旧，脚本已排好）。
+  ///
+  /// 公开是为了让 `test/update_github_test.dart` 能直接测 —— 这段解析一旦
+  /// 出错，App 会静默丢掉全部早期历史，属于「坏了没人发现」的典型。
+  static List<String> archiveShardsOf(String md) {
+    final m = RegExp(r'<!--\s*ARCHIVES:(.*?)-->').firstMatch(md);
+    if (m == null) return const [];
+    return m
+        .group(1)!
+        .split(RegExp(r'\s+'))
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  /// 分片开头是 `# CHANGELOG 归档 · 2026Q3` + 说明段落，都不是条目。
+  /// 从第一个 `## ` 截起，否则这几行会被算进上一条的正文。
+  static String afterFirstH2(String md) {
+    final m = RegExp(r'^## ', multiLine: true).firstMatch(md);
+    return m == null ? '' : md.substring(m.start);
   }
 
   /// 拉 GitHub 上所有 `app-` 前缀的 Release（新到旧），更新历史用。

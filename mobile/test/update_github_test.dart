@@ -6,6 +6,7 @@
 // 到服务端），绝不能拼出一个 sha256 为空的 UpdateInfo——下载层是
 // fail-closed 的，没有校验值就拒装，提前在这里挡掉能给出更清楚的行为。
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lanshare_app/data/api/appver_api.dart';
 import 'package:lanshare_app/data/update_service.dart';
 import 'package:lanshare_app/data/update_source.dart';
 
@@ -274,6 +275,85 @@ void _changelogTests() {
       final items = UpdateService.parseChangelog(md);
       expect(items.first.version, '1.1.22');
       expect(items.last.version, '1.1.20');
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────
+  // 2026-11-19：CHANGELOG.md 滚动归档后，主文件只留最近 50 条，更早的在
+  // docs/changelog/CHANGELOG-archive-YYYYQN.md，靠主文件顶部的 ARCHIVES 注释
+  // 串起来。这一段坏了的表现是「更新历史悄悄变短」，没有任何报错 ——
+  // 所以每一步都要钉住。
+  // ──────────────────────────────────────────────────────────────
+  const mainWithArchives = '''
+<!-- ARCHIVES: docs/changelog/CHANGELOG-archive-2026Q4.md docs/changelog/CHANGELOG-archive-2026Q3.md -->
+
+## 2026-11-19 — App v4.1.10+150：收起 WebDAV 入口
+
+- 只做减法
+
+## 2026-11-01 — App v1.1.22：修 GUI 检查更新
+
+- 修好了
+''';
+
+  const shard = '''
+# CHANGELOG 归档 · 2026Q3
+
+> 从仓库根 `CHANGELOG.md` 滚动切下来的历史条目（新到旧）。
+> App 的更新历史兜底路径会拉这个文件，所以格式必须与主文件完全一致。
+> 由 `scripts/changelog_archive.py` 生成，别手改。
+
+## 2026-09-01 — App v0.4.4+8：照片时间线重构
+
+- 细节
+
+## 2026-09-01 — App v0.4.3+7：图片提速
+
+- 细节
+''';
+
+  group('CHANGELOG 分片拼接（滚动归档）', () {
+    test('顶部 ARCHIVES 注释能解析出分片路径，且保持新到旧', () {
+      expect(AppverApi.archiveShardsOf(mainWithArchives), [
+        'docs/changelog/CHANGELOG-archive-2026Q4.md',
+        'docs/changelog/CHANGELOG-archive-2026Q3.md',
+      ]);
+    });
+
+    test('没有 ARCHIVES 注释 → 空列表（老格式向后兼容）', () {
+      expect(AppverApi.archiveShardsOf('## 2026-11-19 — App v4.1.10：x'), isEmpty);
+    });
+
+    test('ARCHIVES 路径里的多余空白不影响解析', () {
+      const md = '<!--   ARCHIVES:   a.md    b.md   -->\n\n## 2026-11-19 — App v9.9.9：x\n';
+      expect(AppverApi.archiveShardsOf(md), ['a.md', 'b.md']);
+    });
+
+    test('分片的标题和说明段必须被剥掉', () {
+      final body = AppverApi.afterFirstH2(shard);
+      expect(body, startsWith('## 2026-09-01'));
+      expect(body, isNot(contains('CHANGELOG 归档')));
+      expect(body, isNot(contains('兜底路径')));
+    });
+
+    test('没有 `## ` 的分片返回空串，不会污染上一条', () {
+      expect(AppverApi.afterFirstH2('# 只有标题\n\n没有条目'), isEmpty);
+    });
+
+    test('主文件 + 分片拼起来能解析出全部条目（顺序不变）', () {
+      final merged = '$mainWithArchives\n\n${AppverApi.afterFirstH2(shard)}';
+      final versions =
+          UpdateService.parseChangelog(merged).map((e) => e.version).toList();
+      expect(versions, ['4.1.10', '1.1.22', '0.4.4', '0.4.3']);
+    });
+
+    test('顶部 HTML 注释不会被算进任何一条的正文', () {
+      final items = UpdateService.parseChangelog(mainWithArchives);
+      expect(items, hasLength(2));
+      for (final e in items) {
+        expect(e.notes, isNot(contains('ARCHIVES')),
+            reason: '${e.version} 的正文里混进了注释');
+      }
     });
   });
 
