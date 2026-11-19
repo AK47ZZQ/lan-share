@@ -137,6 +137,10 @@ class TestSyncManifest:
         cl = tmp_path / "CHANGELOG.md"
         cl.write_text(changelog, encoding="utf-8")
         monkeypatch.setattr(rel, "CHANGELOG", cl)
+        # 2026-11-19：sync_update_manifest 改走 read_changelog_full()，它会
+        # 额外读 ARCHIVE_DIR。不隔离的话这里会读到真仓库的分片，历史条数
+        # 直接变成 48 条而不是 SAMPLE 的 2 条。
+        monkeypatch.setattr(rel, "ARCHIVE_DIR", tmp_path / "no-archive")
         monkeypatch.setattr(rel, "find_install_dir", lambda: inst)
         return inst
 
@@ -169,6 +173,33 @@ class TestSyncManifest:
         second = (inst / "updates" / "index.json").read_text(encoding="utf-8")
         assert first == second
         assert len(json.loads(second)["history"]) == 2      # SAMPLE 里 server 就两条
+
+    def test_history_includes_archive_shards(self, rel, tmp_path, monkeypatch):
+        """归档分片里的历史必须进清单 —— 否则 R2 清单会静默腰斩。
+
+        2026-11-19 实测：只读主文件时 App 版本从 104 条掉到 8 条。
+        """
+        inst = self._setup(rel, tmp_path, monkeypatch)
+        arc = tmp_path / "docs" / "changelog"
+        arc.mkdir(parents=True)
+        (arc / "CHANGELOG-archive-2026Q3.md").write_text(
+            "# CHANGELOG 归档 · 2026Q3\n\n"
+            "> 这段说明属于文件头，不该混进任何条目的正文\n\n"
+            "## 2026-09-01 — 服务端 v3.70：老版本的样子\n\n- 老细节\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(rel, "ARCHIVE_DIR", arc)
+
+        exe = inst / "updates" / "LANShare-Setup-4.0.11.exe"
+        exe.write_bytes(b"x")
+        rel.sync_update_manifest("server", "4.0.11", exe)
+
+        data = json.loads(
+            (inst / "updates" / "index.json").read_text(encoding="utf-8"))
+        versions = [h["version"] for h in data["history"]]
+        assert "3.70" in versions, "分片里的版本没进清单"
+        for h in data["history"]:
+            assert "文件头" not in h["notes"], f"{h['version']} 的正文混进了分片说明"
 
     def test_old_manifest_backed_up(self, rel, tmp_path, monkeypatch):
         """生产目录里的文件，覆盖前必须留 .bak。"""
