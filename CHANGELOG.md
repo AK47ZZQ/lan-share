@@ -1,5 +1,41 @@
 <!-- ARCHIVES: docs/changelog/CHANGELOG-archive-2026Q4.md docs/changelog/CHANGELOG-archive-2026Q3.md -->
 
+## 2026-11-20 — App v4.1.12+152：更新失败不再无路可走
+
+> 「手机端更新不了，弹了一屏英文。」这一版摘掉了更新链路上最容易坏的一环，
+> 并且保证：就算更新再次失败，你也拿得到安装包手动装上。
+
+### 根因：取更新包目录不该绕 JNI
+
+点「更新」后报的是 `ClassNotFoundException: Landroid/content/Context;`，
+进度条一点没动。原因是更新流程**第一句**就要取 App 私有目录来存安装包，而
+`path_provider` 的 Android 实现从 2.3 起改成走 `package:jni` 去拿系统
+`Context` —— 个别机型、开了「应用分身 / 隐私空间」的环境里这一步会直接抛
+异常，整条更新链就此卡死。
+
+现在目录改由 App 自己的 Kotlin 通道给（`io.flutter.util.PathUtils.getDataDirectory`，
+返回 `filesDir/app_flutter`，**与原来同一个位置**，老安装包不会失联），
+完全不经过 JNI；通道不可用（旧原生层 / 非 Android）才回退原实现。
+
+### 失败时给一句人话 + 一条兜底路
+
+- 不再把半屏 Java 栈塞进气泡，只显示一句可读的原因；
+- 更新失败弹窗里直接给一条手动下载地址，**「打开浏览器」一键去下载**，
+  也可复制 —— 自动更新再坏，也不会被永久卡在老版本上（清单里有直链就用
+  直链，只认 https；没有才退到发布页）；
+- 「拉起安装器」的返回值以前被丢弃（表现是进度条走完、然后什么都没发生），
+  现在权限不足 / 没有可用安装器 / 身份校验不过都会明确提示；
+- 两个更新入口（登录页、关于页）共用同一个出口 `showUpdateErrorDialog`，
+  不会再出现「一个页面有兜底、另一个页面没有」。
+
+### 测试
+
+- 新增 `mobile/test/update_dir_native_test.dart`（5 项）：只走原生通道、
+  落盘位置不变、通道缺失时回退、报错裁剪。
+- 新增 `mobile/test/update_error_dialog_test.dart`（3 项）：https 直链优先、
+  明文直链被丢弃、无直链回退发布页。
+- `flutter test` **340** 项全绿（+8），`dart analyze` 零问题。
+
 ## 2026-11-19 — App v4.1.11+151：更新历史补拉归档分片
 
 > 「更新历史怎么少了一大截？」——这一版把兜底数据源接回来，顺带修掉一个
