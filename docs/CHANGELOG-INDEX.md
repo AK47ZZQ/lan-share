@@ -59,7 +59,6 @@
 | 2026-11-01 | 服务端 | 3.84 | GUI 点开关没反应、中文乱码、打开就卡 | `CHANGELOG.md` |
 | 2026-11-01 | 服务端 | 3.83 | 装到 D 盘却写 C 盘、卸载崩掉半途而废 | `CHANGELOG.md` |
 | 2026-11-01 | 服务端 | 3.82 | 证书没签给 127.0.0.1、开局域网卡 UAC、检查更新报 SSL | `CHANGELOG.md` |
-| 2026-11-01 | 服务端 | 3.80 | 修安装器崩溃、更新镜像落地、发版脚本加固 | `CHANGELOG.md` |
 | 2026-11-01 | App | 1.1.23 | 关于页去掉内网 IP、更新历史能滑到底、加 VPN 提示 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-11-01 | App | 3.79 | 修 GUI 检查更新、说明精简、历史可展开 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-11-01 | App | 3.78 | 发版固化、登录页不再卡、反馈脱敏、历史改走 GitHub | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
@@ -67,6 +66,7 @@
 | 2026-11-01 | App | 3.77 | 更新源统一到 GitHub：修掉「检查更新没反应」 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-11-01 | 服务端 | 3.73 | 托盘没进包、控制面板换 WebView2、证书信任 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-11-01 | 服务端 | — | 服务端成为更新镜像源 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
+| 2026-11-01 | 服务端 | 3.80 | 修安装器崩溃、更新镜像落地、发版脚本加固 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-10-31 | 服务端 | — | 修掉 6 个问题 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-10-31 | 服务端 | — | 让程序自己装自己 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
 | 2026-10-30 | App | 1.1.17+124 | 双更新源 + 登录页不再预填地址 | `docs/changelog/CHANGELOG-archive-2026Q4.md` |
