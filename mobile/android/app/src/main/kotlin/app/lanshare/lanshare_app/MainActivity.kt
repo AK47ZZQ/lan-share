@@ -72,6 +72,8 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
                 when (call.method) {
                     "verify" -> result.success(
                         call.argument<String>("path")?.let { verifyApkIdentity(it) })
+                    "documentsDir" -> result.success(
+                        try { documentsDir() } catch (_: Exception) { null })
                     else -> result.notImplemented()
                 }
             }
@@ -182,6 +184,26 @@ class MainActivity : io.flutter.embedding.android.FlutterFragmentActivity() {
             grantResults[0] == PackageManager.PERMISSION_GRANTED
         r.success(mapOf("granted" to granted))
     }
+
+    /**
+     * App 私有数据目录（更新包落盘根）。
+     *
+     * 与 path_provider 的 `getApplicationDocumentsDirectory()` **落在同一个
+     * 目录**：引擎 `io.flutter.util.PathUtils.getDataDirectory` 取
+     * `getFilesDir() + "/app_flutter"`，path_provider 走
+     * `getDir("flutter", MODE_PRIVATE)`，而 `ContextImpl.getDir` 对以
+     * `app_` 开头的名字就是拼到 filesDir 下 —— 两边都是
+     * `filesDir/app_flutter`，所以老版本下载过的安装包不会因为这次改动
+     * 而"消失"。
+     *
+     * 为什么要多这一条通道（2026-11-20）：path_provider 的 Android 实现自
+     * 2.3 起改走 `package:jni` 去拿 `android.content.Context`，个别机型/分身
+     * 环境下 JNI 查系统类会抛 `ClassNotFoundException: Landroid/content/Context;`
+     * —— 用户实测"点更新立刻报错、进度条一点没动"。更新包放哪这件事没有
+     * 任何理由绕 JNI：embedding 自带 PathUtils 就够，而且同步返回、无异步。
+     */
+    private fun documentsDir(): String =
+        io.flutter.util.PathUtils.getDataDirectory(this)
 
     /**
      * 读目标 APK 的包名与签名，与自身比对。

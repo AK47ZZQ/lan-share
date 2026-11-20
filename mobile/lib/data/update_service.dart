@@ -731,14 +731,33 @@ class UpdateService {
     return 0;
   }
 
+  /// App 私有数据根目录：**先问自家 Kotlin 通道，拿不到才回退 path_provider**。
+  ///
+  /// 2026-11-20 事故：path_provider 的 Android 实现自 2.3 起改走 `package:jni`
+  /// 取 `android.content.Context`，个别机型/分身环境下 JNI 查系统类会抛
+  /// `ClassNotFoundException: Landroid/content/Context;`。而它正是
+  /// `download()` 的**第一句**，用户看到的就是「点更新立刻报错、进度条一点
+  /// 没动」，更新链彻底卡死。
+  ///
+  /// 目录这件事不值得绕 JNI：`lanshare/apk` 通道的 `documentsDir` 直接返回
+  /// `filesDir/app_flutter`（与 path_provider 同源，不是新位置），同步、无
+  /// 异步、不碰 FFI。回退分支留给老原生层与非 Android 构建。
+  static Future<String> documentsRoot() async {
+    try {
+      final p = await _apkChannel.invokeMethod<String>('documentsDir');
+      if (p != null && p.isNotEmpty) return p;
+    } catch (_) {
+      // 通道缺失（旧原生层）或平台不是 Android —— 走下面的回退
+    }
+    return (await getApplicationDocumentsDirectory()).path;
+  }
+
   /// 更新包落盘目录：Downloads 下的独立 updates 子目录（v0.16.0 二轮
   /// 审查 P2）。共享空间里任何人都可能上传名叫 lanshare-x.y.z.apk 的普通
   /// 文件——更新包与用户下载混放会让 purgeInstallers 把用户特意下载留存
   /// 的安装包静默清掉；隔离子目录后 purge 只扫自家地盘。
-  static Future<Directory> _updateDir() async {
-    final dl = Directory(
-      '${(await getApplicationDocumentsDirectory()).path}/Downloads',
-    );
+  static Future<Directory> updateDir() async {
+    final dl = Directory('${await documentsRoot()}/Downloads');
     final dir = Directory('${dl.path}/updates');
     if (!dir.existsSync()) dir.createSync(recursive: true);
     return dir;
@@ -752,7 +771,7 @@ class UpdateService {
     UpdateInfo info, {
     void Function(int received, int total)? onProgress,
   }) async {
-    final dir = await _updateDir();
+    final dir = await updateDir();
     // 版本号消毒：只留白名单字符，防 path 拼接注入（version 来自服务端 JSON）
     final safeVer = info.version.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
     final path = '${dir.path}/lanshare-$safeVer.apk';
@@ -850,7 +869,7 @@ class UpdateService {
   static Future<String?> cachedInstaller(UpdateInfo info) async {
     if (info.sha256 == null || info.sha256!.isEmpty) return null;
     try {
-      final dir = await _updateDir();
+      final dir = await updateDir();
       final safeVer = info.version.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '');
       final f = File('${dir.path}/lanshare-$safeVer.apk');
       if (!f.existsSync()) return null;
@@ -879,7 +898,7 @@ class UpdateService {
     Duration minAge = const Duration(hours: 1),
   }) async {
     try {
-      final dir = await _updateDir();
+      final dir = await updateDir();
       final now = DateTime.now();
       var freed = 0;
       await for (final e in dir.list(followLinks: false)) {
@@ -904,6 +923,38 @@ class UpdateService {
   /// 原来这里直接 `await` 把结果丢了，用户看到的就是「进度条走完，
   /// 然后什么都没发生」—— 没有报错、没有提示，只能靠猜。
   static const _apkChannel = MethodChannel('lanshare/apk');
+
+  /// 自动更新彻底走不通时给用户的手动入口（公开、免登录、无凭据）。
+  ///
+  /// 2026-11-20 事故之后加：更新链路再出问题，用户至少还能用浏览器装上
+  /// 新版，而不是被永久卡在老版本上——那正是这次最难受的地方。
+  ///
+  /// 注意这只是**最后一道**：`download()` 拿到的清单里若带了直链
+  /// （`UpdateInfo.url`，R2/自定义源那条路），界面应该优先给那条 —— 它在
+  /// 国内可达性是实测过的；GitHub 只作清单也没给出直链时的兜底。
+  static const manualDownloadUrl =
+      'https://github.com/AK47ZZQ/lan-share/releases/latest';
+
+  /// 把异常压成一行给人看的说明。
+  ///
+  /// `$e` 的原样输出对用户零信息量：平台异常会带上整段 Java 栈与
+  /// `DexPathList[...]` 路径串。这里只保留「到第一个 Java 栈帧之前、
+  /// 去掉 DexPathList 尾巴」的那一句，超过 140 字再截断。
+  static String shortError(Object e) {
+    var head = e.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    // `package:jni` 的前缀对用户没有意义，留着只会让人以为要懂 Java
+    const jniPrefix = 'Exception in Java: ';
+    if (head.startsWith(jniPrefix)) {
+      head = head.substring(jniPrefix.length);
+    }
+    for (final marker in [' at ', ' on path:']) {
+      final i = head.indexOf(marker);
+      if (i > 0) head = head.substring(0, i);
+    }
+    if (head.isEmpty) return '未知原因';
+    if (head.length > 140) head = '${head.substring(0, 140)}…';
+    return head;
+  }
 
   /// 装之前校验 APK 身份：包名与签名都必须和本 App 一致。
   ///

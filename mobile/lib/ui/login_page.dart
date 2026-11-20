@@ -9,6 +9,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open_filex/open_filex.dart' show ResultType;
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../data/api/api_client.dart';
@@ -28,6 +29,7 @@ import 'scan_page.dart';
 import 'theme/app_theme.dart';
 import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
+import 'widgets/update_error_dialog.dart';
 import 'widgets/server_picker.dart'
     show normalizeServerUrl, shortHost, showServerPicker;
 
@@ -130,12 +132,33 @@ class _LoginPageState extends ConsumerState<LoginPage>
       });
       if (!mounted) return;
       setState(() => _updating = false);
-      await UpdateService.install(path);
+      // 拉起安装器只是「请求」，结果必须回显（about_page 一直是这么做的）。
+      // 这里原来直接 await 丢掉返回值，等于「进度条走完，然后什么都没发生」。
+      final res = await UpdateService.install(path);
+      if (!mounted) return;
+      if (res.type != ResultType.done) {
+        showUpdateErrorDialog(
+          context,
+          switch (res.type) {
+            ResultType.permissionDenied =>
+              '没有「安装未知应用」权限。到 系统设置 → 应用 → LAN Share → '
+                  '安装未知应用 里允许后重试。',
+            ResultType.noAppToOpen => '系统里没有可用的安装程序，无法打开安装包。',
+            ResultType.fileNotFound => '安装包已不存在，请重新下载。',
+            // 身份校验失败走这里：install() 已经把包删了，消息本身就是结论，
+            // 再套一层「无法拉起安装程序」会误导
+            _ => res.message.trim().isEmpty ? '无法拉起系统安装程序。' : res.message,
+          },
+          link: info.url,
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _updating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('更新失败：$e')),
+      showUpdateErrorDialog(
+        context,
+        UpdateService.shortError(e),
+        link: info.url,
       );
     }
   }

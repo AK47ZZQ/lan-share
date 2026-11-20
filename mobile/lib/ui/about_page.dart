@@ -13,6 +13,7 @@ import 'update_history_page.dart';
 import '../transfer/transfer_task.dart' show humanSize;
 import 'theme/design_tokens.dart';
 import 'widgets/brand.dart';
+import 'widgets/update_error_dialog.dart';
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -103,9 +104,24 @@ class _AboutPageState extends State<AboutPage> {
     }
   }
 
+  /// 防重入：连点「立即更新」会并发跑 purgeInstallers + download，
+  /// 两个下载写同一个 `lanshare-<ver>.apk`，最坏是半截包互相覆盖。
+  /// 登录页一直有 `_updating` 闸，这里此前没有（2026-11-20 三轮 review 补）。
+  bool _busy = false;
+
   Future<void> _downloadAndInstall() async {
     final remote = _remote;
     if (remote == null || !remote.available) return;
+    if (_busy) return;
+    _busy = true;
+    try {
+      await _doDownloadAndInstall(remote);
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _doDownloadAndInstall(UpdateInfo remote) async {
     final onPublic = isPublicAddress(await Prefs.lastAddress());
     if (!mounted) return;
     // 公网入口下载整包 APK（几十 MB）吃隧道月流量，先确认（2026-09-03）
@@ -150,21 +166,30 @@ class _AboutPageState extends State<AboutPage> {
       final res = await UpdateService.install(path);
       if (!mounted) return;
       if (res.type != ResultType.done) {
-        final hint = switch (res.type) {
-          ResultType.permissionDenied =>
-            '没有「安装未知应用」权限。到系统设置 → 应用 → LAN Share → 安装未知应用，允许后重试。',
-          ResultType.noAppToOpen => '系统里没有可用的安装程序，无法打开安装包。',
-          ResultType.fileNotFound => '安装包已不存在，请重新下载。',
-          _ => '无法拉起安装程序：${res.message}',
-        };
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(hint)));
+        showUpdateErrorDialog(
+          context,
+          switch (res.type) {
+            ResultType.permissionDenied =>
+              '没有「安装未知应用」权限。到 系统设置 → 应用 → LAN Share → '
+                  '安装未知应用 里允许后重试。',
+            ResultType.noAppToOpen => '系统里没有可用的安装程序，无法打开安装包。',
+            ResultType.fileNotFound => '安装包已不存在，请重新下载。',
+            // 身份校验失败：install() 已删包，消息本身就是结论
+            _ => res.message.trim().isEmpty ? '无法拉起系统安装程序。' : res.message,
+          },
+          link: remote.url,
+        );
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _progress = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('下载失败，请稍后重试')));
+      // 「下载失败，请稍后重试」会把真因（权限/签名/网络/平台异常）全糊掉，
+      // 2026-11-20 那次更新卡死就是被这种兜底语句拖了两天没定位。
+      showUpdateErrorDialog(
+        context,
+        UpdateService.shortError(e),
+        link: remote.url,
+      );
     }
   }
 
